@@ -151,7 +151,7 @@ function CreateAutomationModal({ onClose, onSubmit }: { onClose: () => void; onS
             <select
               className="input"
               value={form.actions[0]?.type || 'notify_user'}
-              onChange={(e) => setForm({ ...form, actions: [{ type: e.target.value, config: {} }] })}
+              onChange={(e) => setForm({ ...form, actions: [{ type: e.target.value, config: { message: '' } }] })}
             >
               {['notify_user', 'send_email', 'send_whatsapp', 'assign_lead', 'change_status', 'add_tag', 'create_task'].map((a) => (
                 <option key={a} value={a}>{a.replace('_', ' ')}</option>
