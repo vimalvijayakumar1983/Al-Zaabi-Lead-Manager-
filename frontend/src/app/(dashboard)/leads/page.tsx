@@ -203,7 +203,14 @@ function CreateLeadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
-      ...form,
+      firstName: form.firstName,
+      lastName: form.lastName,
+      email: form.email || null,
+      phone: form.phone || null,
+      company: form.company || null,
+      source: form.source || undefined,
+      productInterest: form.productInterest || null,
+      location: form.location || null,
       budget: form.budget ? parseFloat(form.budget) : null,
     });
   };
