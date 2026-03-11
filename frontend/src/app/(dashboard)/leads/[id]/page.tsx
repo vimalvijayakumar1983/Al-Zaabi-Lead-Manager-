@@ -46,6 +46,8 @@ export default function LeadDetailPage() {
   const [editForm, setEditForm] = useState<any>({});
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showCommModal, setShowCommModal] = useState(false);
+  const [showEmailComposer, setShowEmailComposer] = useState(false);
+  const [showConvertModal, setShowConvertModal] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const refreshLead = useCallback(async () => {
@@ -134,6 +136,27 @@ export default function LeadDetailPage() {
     try {
       await api.logCommunication({ ...commData, leadId: lead!.id });
       setShowCommModal(false);
+      await refreshLead();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleSendEmail = async (emailData: { to: string; subject: string; body: string }) => {
+    try {
+      await api.sendEmail({ leadId: lead!.id, ...emailData });
+      setShowEmailComposer(false);
+      await refreshLead();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleConvertToWon = async () => {
+    if (!lead) return;
+    try {
+      await api.updateLead(lead.id, { status: 'WON' });
+      setShowConvertModal(false);
       await refreshLead();
     } catch (err: any) {
       alert(err.message);
@@ -383,10 +406,16 @@ export default function LeadDetailPage() {
                 Add Note
               </button>
               {lead.email && (
-                <a href={`mailto:${lead.email}`} className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors">
+                <button onClick={() => setShowEmailComposer(true)} className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors">
                   <svg className="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                  Email
-                </a>
+                  Send Email
+                </button>
+              )}
+              {lead.status !== 'WON' && lead.status !== 'LOST' && (
+                <button onClick={() => setShowConvertModal(true)} className="flex items-center gap-2 p-2.5 rounded-lg border border-green-200 text-sm text-green-700 bg-green-50 hover:bg-green-100 hover:border-green-300 transition-colors col-span-2">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                  Convert to Won Deal
+                </button>
               )}
             </div>
           </div>
@@ -608,6 +637,35 @@ export default function LeadDetailPage() {
 
       {/* Log Communication Modal */}
       {showCommModal && <LogCommModal onClose={() => setShowCommModal(false)} onSubmit={handleLogComm} leadEmail={lead.email} />}
+
+      {/* Email Composer Modal */}
+      {showEmailComposer && lead.email && (
+        <EmailComposerModal
+          onClose={() => setShowEmailComposer(false)}
+          onSend={handleSendEmail}
+          toEmail={lead.email}
+          leadName={`${lead.firstName} ${lead.lastName}`}
+        />
+      )}
+
+      {/* Convert Lead Modal */}
+      {showConvertModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="card w-full max-w-sm p-6">
+            <div className="text-center mb-4">
+              <div className="mx-auto h-12 w-12 rounded-full bg-green-100 flex items-center justify-center mb-3">
+                <svg className="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">Convert to Won Deal</h2>
+              <p className="text-sm text-gray-500 mt-1">Mark <strong>{lead.firstName} {lead.lastName}</strong> as a won deal? This will update the status to WON.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowConvertModal(false)} className="btn-secondary flex-1">Cancel</button>
+              <button onClick={handleConvertToWon} className="btn-primary flex-1 bg-green-600 hover:bg-green-700">Convert</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -752,6 +810,71 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={submitting} className="btn-primary">
               {submitting ? 'Creating...' : 'Create Task'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Log Communication Modal ─────────────────────────────────────
+
+// ─── Email Composer Modal ─────────────────────────────────────
+
+function EmailComposerModal({ onClose, onSend, toEmail, leadName }: {
+  onClose: () => void;
+  onSend: (data: { to: string; subject: string; body: string }) => Promise<void>;
+  toEmail: string;
+  leadName: string;
+}) {
+  const [form, setForm] = useState({ to: toEmail, subject: '', body: '' });
+  const [sending, setSending] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSending(true);
+    try {
+      await onSend(form);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="card w-full max-w-lg">
+        <div className="flex items-center justify-between p-5 border-b">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Compose Email</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Send an email to {leadName}</p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400">
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div>
+            <label className="label">To</label>
+            <input type="email" className="input bg-gray-50" value={form.to} readOnly />
+          </div>
+          <div>
+            <label className="label">Subject *</label>
+            <input className="input" required value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="e.g. Follow up on our conversation" />
+          </div>
+          <div>
+            <label className="label">Message *</label>
+            <textarea className="input" rows={8} required value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })}
+              placeholder={`Hi ${leadName.split(' ')[0]},\n\n`} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+            <button type="submit" disabled={sending} className="btn-primary gap-1.5">
+              {sending ? (
+                <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Sending...</>
+              ) : (
+                <><svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>Send Email</>
+              )}
             </button>
           </div>
         </form>
