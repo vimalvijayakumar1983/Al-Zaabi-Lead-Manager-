@@ -1,0 +1,152 @@
+const { Router } = require('express');
+const { z } = require('zod');
+const { prisma } = require('../config/database');
+const { authenticate, authorize, orgScope } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+
+const router = Router();
+router.use(authenticate, orgScope);
+
+// ─── Get Pipeline Stages ─────────────────────────────────────────
+router.get('/stages', async (req, res, next) => {
+  try {
+    const stages = await prisma.pipelineStage.findMany({
+      where: { organizationId: req.orgId },
+      orderBy: { order: 'asc' },
+      include: {
+        _count: { select: { leads: true } },
+        leads: {
+          where: { isArchived: false },
+          orderBy: { stageOrder: 'asc' },
+          include: {
+            assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
+            tags: { include: { tag: true } },
+          },
+        },
+      },
+    });
+    res.json(stages);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Create Pipeline Stage ───────────────────────────────────────
+router.post('/stages', authorize('ADMIN', 'MANAGER'), validate(z.object({
+  name: z.string().min(1),
+  color: z.string().optional(),
+  isWonStage: z.boolean().optional(),
+  isLostStage: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const maxOrder = await prisma.pipelineStage.aggregate({
+      where: { organizationId: req.orgId },
+      _max: { order: true },
+    });
+
+    const stage = await prisma.pipelineStage.create({
+      data: {
+        ...req.validated,
+        order: (maxOrder._max.order ?? -1) + 1,
+        organizationId: req.orgId,
+      },
+    });
+    res.status(201).json(stage);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Update Pipeline Stage ───────────────────────────────────────
+router.put('/stages/:id', authorize('ADMIN', 'MANAGER'), validate(z.object({
+  name: z.string().min(1).optional(),
+  color: z.string().optional(),
+  order: z.number().int().optional(),
+})), async (req, res, next) => {
+  try {
+    const stage = await prisma.pipelineStage.update({
+      where: { id: req.params.id },
+      data: req.validated,
+    });
+    res.json(stage);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Move Lead in Pipeline (drag-and-drop) ───────────────────────
+router.post('/move', validate(z.object({
+  leadId: z.string().uuid(),
+  stageId: z.string().uuid(),
+  order: z.number().int().min(0),
+})), async (req, res, next) => {
+  try {
+    const { leadId, stageId, order } = req.validated;
+
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: req.orgId },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const stage = await prisma.pipelineStage.findFirst({
+      where: { id: stageId, organizationId: req.orgId },
+    });
+    if (!stage) return res.status(404).json({ error: 'Stage not found' });
+
+    // Determine status based on stage
+    let newStatus = lead.status;
+    if (stage.isWonStage) newStatus = 'WON';
+    else if (stage.isLostStage) newStatus = 'LOST';
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.lead.update({
+        where: { id: leadId },
+        data: {
+          stageId,
+          stageOrder: order,
+          status: newStatus,
+          wonAt: stage.isWonStage && !lead.wonAt ? new Date() : lead.wonAt,
+          lostAt: stage.isLostStage && !lead.lostAt ? new Date() : lead.lostAt,
+        },
+      });
+
+      if (stageId !== lead.stageId) {
+        await tx.leadActivity.create({
+          data: {
+            leadId,
+            userId: req.user.id,
+            type: 'STAGE_CHANGE',
+            description: `Moved to "${stage.name}"`,
+          },
+        });
+      }
+
+      return result;
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Reorder Stages ──────────────────────────────────────────────
+router.post('/stages/reorder', authorize('ADMIN', 'MANAGER'), validate(z.object({
+  stageIds: z.array(z.string().uuid()),
+})), async (req, res, next) => {
+  try {
+    const { stageIds } = req.validated;
+
+    await prisma.$transaction(
+      stageIds.map((id, index) =>
+        prisma.pipelineStage.update({ where: { id }, data: { order: index } })
+      )
+    );
+
+    res.json({ message: 'Stages reordered' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+module.exports = router;
