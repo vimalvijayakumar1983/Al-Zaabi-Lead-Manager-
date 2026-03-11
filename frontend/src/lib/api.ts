@@ -94,6 +94,13 @@ class ApiClient {
     return this.request<any>(`/leads/${id}`, { method: 'DELETE' });
   }
 
+  async bulkUpdateLeads(leadIds: string[], data: any) {
+    return this.request<any>('/leads/bulk', {
+      method: 'PATCH',
+      body: JSON.stringify({ leadIds, data }),
+    });
+  }
+
   async addLeadNote(leadId: string, content: string) {
     return this.request<any>(`/leads/${leadId}/notes`, {
       method: 'POST',

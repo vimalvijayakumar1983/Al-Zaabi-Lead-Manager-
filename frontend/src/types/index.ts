@@ -46,6 +46,7 @@ export interface Lead {
   campaign?: string;
   website?: string;
   customData?: Record<string, unknown>;
+  lostReason?: string;
   aiSummary?: string;
   conversionProb?: number;
   stageId?: string;
