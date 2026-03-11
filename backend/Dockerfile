@@ -31,4 +31,4 @@ ENV NODE_ENV=production
 EXPOSE 4000
 
 # Run migrations and start server
-CMD ["sh", "-c", "npx prisma migrate deploy 2>/dev/null; node src/index.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node prisma/seed.js; node src/index.js"]
