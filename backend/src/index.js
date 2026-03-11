@@ -29,7 +29,7 @@ const server = createServer(app);
 // ─── Global Middleware ───────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
-  origin: config.frontendUrl,
+  origin: config.frontendUrl.split(',').map(u => u.trim()),
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
