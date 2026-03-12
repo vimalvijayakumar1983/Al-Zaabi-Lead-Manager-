@@ -38,6 +38,8 @@ import {
   RefreshCw,
   Ban,
   RotateCcw,
+  Upload,
+  ImageIcon,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -1198,26 +1200,61 @@ export default function DivisionsPage() {
             />
           </div>
           <div>
-            <label className="label">Logo URL</label>
-            <input
-              type="url"
-              className="input"
-              value={formLogo}
-              onChange={(e) => setFormLogo(e.target.value)}
-              placeholder="https://example.com/logo.png"
-            />
-            {formLogo && (
-              <div className="mt-2 flex items-center gap-2">
+            <label className="label">Division Logo</label>
+            {formLogo ? (
+              <div className="flex items-center gap-3 p-3 rounded-xl border border-border-subtle bg-surface-secondary/30">
                 <img
                   src={formLogo}
                   alt="Logo preview"
-                  className="h-10 w-10 rounded-lg object-cover border border-border-subtle"
+                  className="h-14 w-14 rounded-xl object-cover border border-border-subtle"
                   onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
+                    (e.target as HTMLImageElement).src = '';
                   }}
                 />
-                <span className="text-xs text-text-tertiary">Preview</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-text-primary truncate">Logo uploaded</p>
+                  <p className="text-xs text-text-tertiary">Click remove to change</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFormLogo('')}
+                  className="btn-icon h-8 w-8 text-red-500 hover:bg-red-50"
+                  title="Remove logo"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
+            ) : (
+              <label className="group flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-border-subtle hover:border-brand-400 hover:bg-brand-50/30 cursor-pointer transition-colors">
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (file.size > 2 * 1024 * 1024) {
+                      setModalError('Logo file must be under 2MB');
+                      return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      setFormLogo(reader.result as string);
+                    };
+                    reader.readAsDataURL(file);
+                    e.target.value = '';
+                  }}
+                />
+                <div className="h-10 w-10 rounded-full bg-brand-50 flex items-center justify-center mb-2 group-hover:bg-brand-100 transition-colors">
+                  <Upload className="h-5 w-5 text-brand-500" />
+                </div>
+                <span className="text-sm font-medium text-text-secondary group-hover:text-brand-600">
+                  Click to upload logo
+                </span>
+                <span className="text-xs text-text-tertiary mt-0.5">
+                  PNG, JPG, SVG up to 2MB
+                </span>
+              </label>
             )}
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -1265,19 +1302,19 @@ export default function DivisionsPage() {
             </div>
           </div>
           <div className="rounded-xl overflow-hidden border border-border-subtle">
-            <div className="h-3" style={{ backgroundColor: formPrimaryColor }} />
-            <div className="p-3 flex items-center gap-3" style={{ backgroundColor: formSecondaryColor }}>
+            <div className="h-1.5" style={{ backgroundColor: formPrimaryColor }} />
+            <div className="px-3 py-2 flex items-center gap-2.5" style={{ backgroundColor: formSecondaryColor }}>
               {formLogo ? (
-                <img src={formLogo} alt="" className="h-8 w-8 rounded-lg object-cover" />
+                <img src={formLogo} alt="" className="h-6 w-6 rounded-md object-cover" />
               ) : (
                 <div
-                  className="h-8 w-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                  className="h-6 w-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold"
                   style={{ backgroundColor: formPrimaryColor }}
                 >
                   {formName.charAt(0).toUpperCase() || 'D'}
                 </div>
               )}
-              <span className="text-sm font-medium text-white">
+              <span className="text-xs font-medium text-white">
                 {formTradeName || formName || 'Division Preview'}
               </span>
             </div>
