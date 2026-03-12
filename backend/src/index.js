@@ -31,7 +31,17 @@ const server = createServer(app);
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({
-  origin: config.frontendUrl.split(',').map(u => u.trim()),
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    const allowed = config.frontendUrl.split(',').map(u => u.trim().replace(/\/$/, ''));
+    const normalized = origin.replace(/\/$/, '');
+    // Check exact match or Vercel preview deployments
+    if (allowed.includes(normalized) || /\.vercel\.app$/.test(normalized)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
