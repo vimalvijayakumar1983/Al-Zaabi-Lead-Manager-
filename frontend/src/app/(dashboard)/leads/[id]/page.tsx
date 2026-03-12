@@ -837,8 +837,17 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
     type: 'FOLLOW_UP_CALL',
     priority: 'MEDIUM',
     dueAt: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+    assigneeId: '',
   });
   const [submitting, setSubmitting] = useState(false);
+  const [users, setUsers] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
+
+  useEffect(() => {
+    Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]) => {
+      setUsers(Array.isArray(userList) ? userList : []);
+      if (me?.id) setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
+    }).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -886,6 +895,15 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
                 ))}
               </select>
             </div>
+          </div>
+          <div>
+            <label className="label">Assign To *</label>
+            <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
+              <option value="">Select assignee...</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="label">Due Date *</label>
