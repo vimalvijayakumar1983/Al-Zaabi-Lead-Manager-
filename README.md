@@ -219,7 +219,7 @@ npm run dev            # Starts on port 3000
 
 ### Automated Production Deployment (GitHub Actions)
 
-This repository includes `.github/workflows/deploy-production.yml` for automated backend deployment to Railway.
+This repository includes `.github/workflows/deploy-production.yml` for automated production deployment.
 
 **Trigger**
 - Push to `main`
@@ -227,16 +227,22 @@ This repository includes `.github/workflows/deploy-production.yml` for automated
 
 **What it does**
 1. Runs backend unit tests (`npm test -- --runInBand`).
-2. If tests pass, deploys backend service to the Railway **Production** environment using Railway CLI.
+2. Runs frontend production build check (`npm run build`).
+3. Deploys backend to Railway **Production** environment.
+4. Deploys frontend to Vercel **Production** (uses `--prod`, not preview).
 
 **Required GitHub Secrets**
-- `RAILWAY_TOKEN`
-- `RAILWAY_PROJECT_ID`
-- `RAILWAY_BACKEND_SERVICE`
+- Backend (Railway):
+  - `RAILWAY_TOKEN`
+  - `RAILWAY_PROJECT_ID`
+  - `RAILWAY_BACKEND_SERVICE`
+- Frontend (Vercel):
+  - `VERCEL_TOKEN`
+  - `VERCEL_ORG_ID`
+  - `VERCEL_PROJECT_ID`
 
-> After adding these secrets, merges to `main` will auto-deploy the backend to production.
-
-> In Railway, ensure the service **Production Branch** is set to `main` so GitHub app preview builds do not become your primary release path.
+> In Railway, ensure the service **Production Branch** is `main`.
+> In Vercel, ensure **Production Branch** is `main` and this project is linked to the same GitHub repository.
 
 ### Docker Deployment
 
