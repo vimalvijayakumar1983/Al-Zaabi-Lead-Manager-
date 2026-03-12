@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore } from '@/lib/permissions';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
+import { GlobalSearch } from './components/global-search';
 import { Bell, HelpCircle, ShieldAlert } from 'lucide-react';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
@@ -124,7 +125,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             )}
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <GlobalSearch />
             <button className="btn-icon relative" title="Notifications">
               <Bell className="h-4.5 w-4.5" />
               <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
