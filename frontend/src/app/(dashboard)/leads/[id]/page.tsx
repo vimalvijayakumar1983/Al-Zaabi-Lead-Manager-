@@ -52,10 +52,30 @@ export default function LeadDetailPage() {
   const [saving, setSaving] = useState(false);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
+  const [fullUsers, setFullUsers] = useState<User[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
 
   useEffect(() => {
     api.getCustomFields().then(setCustomFields).catch(() => {});
   }, []);
+
+  // Fetch users for assignment panel
+  useEffect(() => {
+    Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]: [any, any]) => {
+      setFullUsers(Array.isArray(userList) ? userList : []);
+      setCurrentUserId(me?.id || '');
+    }).catch(() => {});
+  }, []);
+
+  // Fetch assignment history
+  useEffect(() => {
+    if (lead?.id) {
+      api.request<AssignmentHistoryEntry[]>(`/leads/${lead.id}/assignment-history`)
+        .then(setAssignmentHistory)
+        .catch(() => setAssignmentHistory([]));
+    }
+  }, [lead?.id]);
 
   const refreshLead = useCallback(async () => {
     const data = await api.getLead(id);
