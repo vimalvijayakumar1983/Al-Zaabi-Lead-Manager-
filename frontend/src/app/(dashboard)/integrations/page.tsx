@@ -496,8 +496,8 @@ export default function IntegrationsPage() {
     try {
       setLoading(true);
       const [integrationsData, apiKeysData] = await Promise.all([
-        api.getIntegrations() as Promise<Integration[]>,
-        api.getApiKeys() as Promise<ApiKeyItem[]>,
+        api.getIntegrations() as unknown as Promise<Integration[]>,
+        api.getApiKeys() as unknown as Promise<ApiKeyItem[]>,
       ]);
       setIntegrations(integrationsData);
       setApiKeys(apiKeysData);
@@ -528,7 +528,7 @@ export default function IntegrationsPage() {
       const allLogs: IntegrationLog[] = [];
       for (const intg of integrations.filter((i) => i.status !== 'disconnected')) {
         try {
-          const l = (await api.getIntegrationLogs(intg.id, { limit: 10 })) as IntegrationLog[];
+          const l = (await api.getIntegrationLogs(intg.id, { limit: 10 })) as unknown as IntegrationLog[];
           allLogs.push(...l);
         } catch {
           // skip
@@ -591,7 +591,7 @@ export default function IntegrationsPage() {
     setSelectedIntegration(intg);
     setTestResult(null);
     try {
-      const detail = (await api.getIntegration(intg.id)) as {
+      const detail = (await api.getIntegration(intg.id)) as unknown as {
         integration: Integration;
         logs: IntegrationLog[];
       };
@@ -771,7 +771,7 @@ export default function IntegrationsPage() {
     try {
       setTesting(true);
       setTestResult(null);
-      const result = (await api.testIntegration(integrationId)) as {
+      const result = (await api.testIntegration(integrationId)) as unknown as {
         success: boolean;
         message: string;
       };
@@ -839,7 +839,7 @@ export default function IntegrationsPage() {
     try {
       setSaving(true);
       const divId = widgetConfig.divisionId || (selectedDivision !== 'all' ? selectedDivision : '');
-      const result = (await api.generateWidget(divId)) as {
+      const result = (await api.generateWidget(divId)) as unknown as {
         code: string;
         previewUrl: string;
       };
@@ -871,7 +871,7 @@ export default function IntegrationsPage() {
     if (!newKeyName.trim()) return;
     try {
       setSaving(true);
-      const result = (await api.generateApiKey(newKeyName)) as {
+      const result = (await api.generateApiKey(newKeyName)) as unknown as {
         apiKey: string;
         endpoint: string;
       };
