@@ -227,15 +227,16 @@ This repository includes `.github/workflows/deploy-production.yml` for automated
 
 **What it does**
 1. Runs backend unit tests (`npm test -- --runInBand`).
-2. If tests pass, deploys backend service to Railway using Railway CLI.
+2. If tests pass, deploys backend service to the Railway **Production** environment using Railway CLI.
 
 **Required GitHub Secrets**
 - `RAILWAY_TOKEN`
 - `RAILWAY_PROJECT_ID`
-- `RAILWAY_ENVIRONMENT_ID`
 - `RAILWAY_BACKEND_SERVICE`
 
 > After adding these secrets, merges to `main` will auto-deploy the backend to production.
+
+> In Railway, ensure the service **Production Branch** is set to `main` so GitHub app preview builds do not become your primary release path.
 
 ### Docker Deployment
 
