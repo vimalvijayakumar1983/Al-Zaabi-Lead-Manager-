@@ -26,12 +26,25 @@ async function createPipelineStages(orgId) {
 }
 
 async function main() {
-  // Skip if already seeded
-  const existingOrg = await prisma.organization.findFirst();
-  if (existingOrg) {
-    console.log('Database already seeded, skipping.');
+  // Skip if multi-tenant already seeded (check for GROUP org)
+  const existingGroup = await prisma.organization.findFirst({ where: { type: 'GROUP' } });
+  if (existingGroup) {
+    console.log('Multi-tenant already seeded, skipping.');
     return;
   }
+
+  // Clean up any pre-existing single-tenant data
+  console.log('Cleaning up pre-existing data for multi-tenant seed...');
+  await prisma.leadTag.deleteMany({});
+  await prisma.leadActivity.deleteMany({});
+  await prisma.lead.deleteMany({});
+  await prisma.task.deleteMany({});
+  await prisma.campaign.deleteMany({});
+  await prisma.automationRule.deleteMany({});
+  await prisma.tag.deleteMany({});
+  await prisma.pipelineStage.deleteMany({});
+  await prisma.user.deleteMany({});
+  await prisma.organization.deleteMany({});
 
   console.log('Seeding multi-tenant database...');
 
