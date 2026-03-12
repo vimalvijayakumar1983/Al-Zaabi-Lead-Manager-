@@ -568,7 +568,6 @@ class ApiClient {
   async resetDivisionUserPassword(divisionId: string, userId: string, newPassword: string) {
     return this.request<any>(`/divisions/${divisionId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
   }
-}
 
 
 
