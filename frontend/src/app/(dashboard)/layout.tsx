@@ -18,6 +18,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/campaigns': { title: 'Campaigns', description: 'Marketing campaign management' },
   '/team': { title: 'Team', description: 'Team members and access control' },
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
+  '/import': { title: 'Import Center', description: 'Import data from files' },
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -75,6 +76,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/campaigns': 'campaigns',
     '/team': 'team',
     '/settings': 'settings',
+    '/import': 'leads',
   };
 
   const requiredPermission = routePermissions[basePath];

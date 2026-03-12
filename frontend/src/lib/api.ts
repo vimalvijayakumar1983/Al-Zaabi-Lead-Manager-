@@ -188,6 +188,88 @@ class ApiClient {
     return this.request<any>(`/users/permissions/user/${userId}`, { method: 'PUT', body: JSON.stringify({ permissions }) });
   }
 
+  // Import
+  async getImportFields(module: string) {
+    return this.request<{ module: string; fields: any[] }>(`/import/fields/${module}`);
+  }
+
+  async importPreview(file: File, module: string) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('module', module);
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/preview`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Preview failed');
+    return data;
+  }
+
+  async importExecute(file: File, options: {
+    module: string;
+    fieldMapping: Record<string, string>;
+    duplicateAction: string;
+    duplicateField?: string;
+    assignToId?: string;
+    defaultStatus?: string;
+    defaultSource?: string;
+  }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('module', options.module);
+    formData.append('fieldMapping', JSON.stringify(options.fieldMapping));
+    formData.append('duplicateAction', options.duplicateAction);
+    if (options.duplicateField) formData.append('duplicateField', options.duplicateField);
+    if (options.assignToId) formData.append('assignToId', options.assignToId);
+    if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
+    if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/execute`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Import failed');
+    return data;
+  }
+
+  async importValidate(file: File, options: { module: string; fieldMapping: Record<string, string>; duplicateField?: string }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('module', options.module);
+    formData.append('fieldMapping', JSON.stringify(options.fieldMapping));
+    if (options.duplicateField) formData.append('duplicateField', options.duplicateField);
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/validate`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Validation failed');
+    return data;
+  }
+
+  async getImportHistory(page = 1) {
+    return this.request<any>(`/import/history?page=${page}`);
+  }
+
+  async getImportDetails(id: string) {
+    return this.request<any>(`/import/history/${id}`);
+  }
+
+  async undoImport(id: string) {
+    return this.request<any>(`/import/undo/${id}`, { method: 'POST' });
+  }
+
+  getImportTemplateUrl(module: string) {
+    return `${API_URL}/import/template/${module}`;
+  }
+
   // Campaigns
   async getCampaigns(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';

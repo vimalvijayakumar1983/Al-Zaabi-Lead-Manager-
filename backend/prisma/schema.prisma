@@ -28,6 +28,7 @@ model Organization {
   tags              Tag[]
   webhooks          Webhook[]
   auditLogs         AuditLog[]
+  importHistory     ImportHistory[]
 
   @@map("organizations")
 }
@@ -66,6 +67,7 @@ model User {
   createdTasks   Task[]          @relation("TaskCreator")
   communications Communication[]
   auditLogs      AuditLog[]
+  imports        ImportHistory[]
 
   @@index([organizationId])
   @@map("users")
@@ -486,6 +488,45 @@ model Webhook {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("webhooks")
+}
+
+// ─── Import History ─────────────────────────────────────────────
+
+model ImportHistory {
+  id              String       @id @default(uuid())
+  module          String       // leads, campaigns
+  fileName        String
+  fileSize        Int
+  totalRows       Int          @default(0)
+  importedCount   Int          @default(0)
+  skippedCount    Int          @default(0)
+  updatedCount    Int          @default(0)
+  duplicateCount  Int          @default(0)
+  status          ImportStatus @default(PROCESSING)
+  fieldMapping    Json         @default("{}") // { csvColumn: crmField }
+  duplicateAction String       @default("skip") // skip, overwrite, clone
+  duplicateField  String?      // email, phone, etc.
+  errors          Json         @default("[]")
+  importedIds     Json         @default("[]") // array of created record IDs for undo
+  undoneAt        DateTime?
+  createdAt       DateTime     @default(now())
+  completedAt     DateTime?
+
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  userId          String?
+  user            User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("import_history")
+}
+
+enum ImportStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+  UNDONE
 }
 
 // ─── Audit Logs ──────────────────────────────────────────────────

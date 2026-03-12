@@ -22,6 +22,7 @@ import {
   Settings,
   ChevronDown,
   Sparkles,
+  Upload,
 } from 'lucide-react';
 
 const navItems = [
@@ -33,6 +34,7 @@ const navItems = [
   { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
   { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
+  { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'leads' },
 ];
 
 export default function Sidebar() {
