@@ -1,4 +1,4 @@
-import type { Organization } from '@/types';
+import type { Organization, DivisionUser, DivisionStats } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -402,7 +402,7 @@ class ApiClient {
     return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
   }
 
-  // Division management
+  // ─── Division Management ─────────────────────────────────────────
   async getDivisions(): Promise<Organization[]> {
     return this.request<Organization[]>('/divisions');
   }
@@ -421,6 +421,36 @@ class ApiClient {
 
   async deleteDivision(id: string): Promise<void> {
     return this.request<void>(`/divisions/${id}`, { method: 'DELETE' });
+  }
+
+  // ─── Division Users & Stats (NEW) ────────────────────────────────
+  async getDivisionUsers(divisionId: string, params?: { search?: string; role?: string; isActive?: string }): Promise<DivisionUser[]> {
+    const queryParams = new URLSearchParams();
+    if (params?.search) queryParams.set('search', params.search);
+    if (params?.role) queryParams.set('role', params.role);
+    if (params?.isActive) queryParams.set('isActive', params.isActive);
+    const qs = queryParams.toString();
+    return this.request<DivisionUser[]>(`/divisions/${divisionId}/users${qs ? '?' + qs : ''}`);
+  }
+
+  async getDivisionStats(divisionId: string): Promise<DivisionStats> {
+    return this.request<DivisionStats>(`/divisions/${divisionId}/stats`);
+  }
+
+  async inviteDivisionUser(divisionId: string, data: { email: string; firstName: string; lastName: string; role: string; password: string }) {
+    return this.request<any>(`/divisions/${divisionId}/users/invite`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async transferDivisionUser(divisionId: string, data: { userId: string; targetDivisionId: string }) {
+    return this.request<any>(`/divisions/${divisionId}/users/transfer`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateDivisionUser(divisionId: string, userId: string, data: any) {
+    return this.request<any>(`/divisions/${divisionId}/users/${userId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async resetDivisionUserPassword(divisionId: string, userId: string, newPassword: string) {
+    return this.request<any>(`/divisions/${divisionId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
   }
 }
 

@@ -36,6 +36,38 @@ export interface AuthResponse {
   divisions?: Organization[];
 }
 
+// ─── Division User ──────────────────────────────────────────────
+export interface DivisionUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  avatar?: string;
+  phone?: string;
+  isActive: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
+  organizationId: string;
+  _count: {
+    assignedLeads: number;
+    tasks: number;
+  };
+}
+
+// ─── Division Stats ─────────────────────────────────────────────
+export interface DivisionStats {
+  totalLeads: number;
+  totalUsers: number;
+  activeUsers: number;
+  leadsByStage: Array<{ stage: string; count: number; value: number; color: string }>;
+  totalPipelineValue: number;
+  conversionRate: number;
+  avgLeadValue: number;
+  recentLeads: Array<{ id: string; name: string; company: string; value: number; createdAt: string }>;
+  topPerformers: Array<{ id: string; name: string; wonLeads: number; totalValue: number }>;
+}
+
 // ─── Lead ────────────────────────────────────────────────────────
 export type LeadSource =
   | 'WEBSITE_FORM' | 'LANDING_PAGE' | 'WHATSAPP' | 'FACEBOOK_ADS'
