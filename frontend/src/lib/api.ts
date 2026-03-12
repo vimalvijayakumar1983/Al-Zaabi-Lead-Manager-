@@ -656,6 +656,10 @@ class ApiClient {
       body: JSON.stringify(rules),
     });
   }
+
+  async getAssignmentHistory(leadId: string) {
+    return this.request<any[]>(\`/leads/\${leadId}/assignment-history\`);
+  }
 }
 
 export const api = new ApiClient();
