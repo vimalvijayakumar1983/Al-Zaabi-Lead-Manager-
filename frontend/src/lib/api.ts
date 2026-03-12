@@ -487,7 +487,13 @@ class ApiClient {
     return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  // Notification preferences moved to /notifications/preferences
+  async getNotificationPreferences() {
+    return this.request<any>('/settings/notifications');
+  }
+
+  async updateNotificationPreferences(data: Record<string, boolean>) {
+    return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
+  }
 
   async getAuditLog() {
     return this.request<any[]>('/settings/audit-log');
@@ -611,12 +617,12 @@ class ApiClient {
     });
   }
 
-  async getNotificationPreferences() {
-    return this.request<NotificationPreferences>('/notifications/preferences');
+  async getNotificationPrefs() {
+    return this.request<any>('/notifications/preferences');
   }
 
-  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
-    return this.request<NotificationPreferences>('/notifications/preferences', {
+  async updateNotificationPrefs(data: Partial<NotificationPreferences>) {
+    return this.request<any>('/notifications/preferences', {
       method: 'PUT',
       body: JSON.stringify(data),
     });

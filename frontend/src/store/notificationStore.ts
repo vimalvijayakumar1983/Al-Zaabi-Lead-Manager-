@@ -339,7 +339,7 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
   fetchPreferences: async () => {
     try {
-      const prefs = await api.getNotificationPreferences();
+      const prefs = await api.getNotificationPrefs();
       set({ preferences: prefs });
     } catch (error) {
       console.error('Failed to fetch notification preferences:', error);
@@ -348,7 +348,7 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
   updatePreferences: async (prefs) => {
     try {
-      const updated = await api.updateNotificationPreferences(prefs);
+      const updated = await api.updateNotificationPrefs(prefs);
       set({ preferences: updated });
     } catch (error) {
       console.error('Failed to update notification preferences:', error);
