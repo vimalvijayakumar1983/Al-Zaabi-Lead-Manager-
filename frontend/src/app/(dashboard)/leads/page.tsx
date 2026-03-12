@@ -594,7 +594,7 @@ export default function LeadsPage() {
           <StatCard label="Qualified" value={stats.leadsByStatus?.find((s: any) => s.status === 'QUALIFIED')?._count?.status || 0} color="cyan" />
           <StatCard label="Won" value={stats.overview.wonLeads} color="green" />
           <StatCard label="Lost" value={stats.overview.lostLeads} color="red" />
-          <StatCard label="Pipeline" value={`$${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
+          <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
         </div>
       )}
 

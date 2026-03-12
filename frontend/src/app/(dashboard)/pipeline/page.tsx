@@ -94,7 +94,7 @@ export default function PipelinePage() {
         <div>
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Pipeline</h1>
           <p className="text-text-secondary text-sm mt-0.5">
-            {totalLeads} leads &middot; ${totalValue.toLocaleString()} total value
+            {totalLeads} leads &middot; AED {totalValue.toLocaleString()} total value
           </p>
         </div>
       </div>
@@ -127,7 +127,7 @@ export default function PipelinePage() {
               {stageValue > 0 && (
                 <div className="flex items-center gap-1 px-1 mb-2">
                   <DollarSign className="h-3 w-3 text-text-tertiary" />
-                  <span className="text-xs font-medium text-text-secondary">${stageValue.toLocaleString()}</span>
+                  <span className="text-xs font-medium text-text-secondary">AED {stageValue.toLocaleString()}</span>
                 </div>
               )}
 
@@ -163,7 +163,7 @@ export default function PipelinePage() {
                       {lead.budget && (
                         <div className="flex items-center gap-1 mb-2">
                           <DollarSign className="h-3 w-3 text-text-tertiary" />
-                          <span className="text-xs font-semibold text-text-primary">{Number(lead.budget).toLocaleString()}</span>
+                          <span className="text-xs font-semibold text-text-primary">AED {Number(lead.budget).toLocaleString()}</span>
                         </div>
                       )}
 

@@ -419,7 +419,7 @@ export default function LeadDetailPage() {
                 <InfoRow label="Source" value={lead.source.replace(/_/g, ' ')} />
                 <InfoRow label="Campaign" value={lead.campaign || '-'} />
                 <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
-                <InfoRow label="Budget" value={lead.budget ? `$${Number(lead.budget).toLocaleString()}` : '-'} />
+                <InfoRow label="Budget" value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
                 <InfoRow label="Stage" value={lead.stage?.name || '-'} />
                 {/* Custom fields */}
                 {customFields.map(cf => {
@@ -429,7 +429,7 @@ export default function LeadDetailPage() {
                   if (val !== undefined && val !== null && val !== '') {
                     if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
                     else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
-                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
                     else display = String(val);
                   }
                   return <InfoRow key={cf.id} label={cf.label} value={display} />;
@@ -825,7 +825,7 @@ function formatTimeAgo(dateStr: string) {
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days < 7) return `${days}d ago`;
-  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return date.toLocaleDateString();
 }
 
 // ─── Create Task Modal ───────────────────────────────────────────
