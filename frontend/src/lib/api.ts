@@ -627,7 +627,6 @@ class ApiClient {
       body: JSON.stringify(data),
     });
   }
-}
 
   // ─── Lead Allocation ────────────────────────────────────────────
   async reassignLead(leadId: string, assignedToId: string, reason?: string) {
@@ -657,7 +656,6 @@ class ApiClient {
       body: JSON.stringify(rules),
     });
   }
-
 }
 
 export const api = new ApiClient();
