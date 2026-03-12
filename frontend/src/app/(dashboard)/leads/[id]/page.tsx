@@ -840,11 +840,11 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
     assigneeId: '',
   });
   const [submitting, setSubmitting] = useState(false);
-  const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
+  const [users, setUsers] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
 
   useEffect(() => {
     Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]) => {
-      setUsers(userList);
+      setUsers(Array.isArray(userList) ? userList : []);
       if (me?.id) setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
     }).catch(() => {});
   }, []);
@@ -901,7 +901,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
             <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
               <option value="">Select assignee...</option>
               {users.map((u) => (
-                <option key={u.id} value={u.id}>{u.name}</option>
+                <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
               ))}
             </select>
           </div>
