@@ -604,7 +604,7 @@ export default function IntegrationsPage() {
   };
 
   const prefillForm = (slug: string, intg: Integration) => {
-    const cfg = intg.config as Record<string, string | boolean | string[]>;
+    const cfg = (intg.config as unknown) as Record<string, string | boolean | string[]>;
     switch (slug) {
       case 'facebook':
         setFbPageId((cfg.pageId as string) ?? '');
@@ -2377,7 +2377,7 @@ export default function IntegrationsPage() {
             {filteredIntegrations
               .filter((i) => i.platform === 'webhooks')
               .map((wh) => {
-                const cfg = wh.config as Record<string, unknown>;
+                const cfg = (wh.config as unknown) as Record<string, unknown>;
                 const webhookUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/${wh.id}`;
                 const events = (cfg.events as string[]) ?? [];
 

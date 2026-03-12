@@ -665,7 +665,7 @@ function CampaignCard({
   const budget = campaign.budget || 0;
   const leads = campaign.leadCount || 0;
   const cpl = computeCPL(budget, leads);
-  const org = (campaign as Record<string, unknown>).organization as { name?: string } | undefined;
+  const org = (campaign as unknown as Record<string, unknown>).organization as { name?: string } | undefined;
   const maxLeads = Math.max(leads, 1);
   const leadBarWidth = Math.min((leads / Math.max(maxLeads, 100)) * 100, 100);
 
@@ -1358,7 +1358,7 @@ export default function CampaignsPage() {
   const fetchStats = useCallback(async () => {
     setStatsLoading(true);
     try {
-      const data = await (api as Record<string, Function>).getCampaignStats();
+      const data = await (api as unknown as Record<string, Function>).getCampaignStats();
       setStats(data as CampaignDashboardStats);
     } catch {
       // Compute from local data as fallback
@@ -1519,7 +1519,7 @@ export default function CampaignsPage() {
       if (formData.targetRevenue) metadata.targetRevenue = Number(formData.targetRevenue);
       if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
-      await (api as Record<string, Function>).createCampaign(payload);
+      await (api as unknown as Record<string, Function>).createCampaign(payload);
       setCreateModalOpen(false);
       addToast('success', `Campaign "${formData.name}" created successfully`);
       fetchCampaigns();
@@ -1558,7 +1558,7 @@ export default function CampaignsPage() {
       if (formData.targetRevenue) metadata.targetRevenue = Number(formData.targetRevenue);
       if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
-      await (api as Record<string, Function>).updateCampaign(editingCampaign.id, payload);
+      await (api as unknown as Record<string, Function>).updateCampaign(editingCampaign.id, payload);
       setEditModalOpen(false);
       setEditingCampaign(null);
       addToast('success', `Campaign "${formData.name}" updated successfully`);
@@ -1576,7 +1576,7 @@ export default function CampaignsPage() {
     if (!deletingCampaign) return;
     setActionLoading(true);
     try {
-      await (api as Record<string, Function>).deleteCampaign(deletingCampaign.id);
+      await (api as unknown as Record<string, Function>).deleteCampaign(deletingCampaign.id);
       setDeleteModalOpen(false);
       const name = deletingCampaign.name;
       setDeletingCampaign(null);
@@ -1599,7 +1599,7 @@ export default function CampaignsPage() {
   async function handleDuplicate(campaign: Campaign) {
     setActionLoading(true);
     try {
-      await (api as Record<string, Function>).duplicateCampaign(campaign.id);
+      await (api as unknown as Record<string, Function>).duplicateCampaign(campaign.id);
       addToast('success', `Campaign "${campaign.name}" duplicated`);
       fetchCampaigns();
       fetchStats();
@@ -1615,7 +1615,7 @@ export default function CampaignsPage() {
     const newStatus = campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
     setActionLoading(true);
     try {
-      await (api as Record<string, Function>).updateCampaign(campaign.id, { status: newStatus });
+      await (api as unknown as Record<string, Function>).updateCampaign(campaign.id, { status: newStatus });
       addToast('success', `Campaign "${campaign.name}" ${newStatus === 'ACTIVE' ? 'resumed' : 'paused'}`);
       fetchCampaigns();
       fetchStats();
@@ -1649,7 +1649,7 @@ export default function CampaignsPage() {
     if (selectedIds.size === 0) return;
     setActionLoading(true);
     try {
-      await (api as Record<string, Function>).bulkUpdateCampaigns(Array.from(selectedIds), { status: 'PAUSED' });
+      await (api as unknown as Record<string, Function>).bulkUpdateCampaigns(Array.from(selectedIds), { status: 'PAUSED' });
       addToast('success', `${selectedIds.size} campaign(s) paused`);
       setSelectedIds(new Set());
       fetchCampaigns();
@@ -1666,7 +1666,7 @@ export default function CampaignsPage() {
     if (selectedIds.size === 0) return;
     setActionLoading(true);
     try {
-      await (api as Record<string, Function>).bulkUpdateCampaigns(Array.from(selectedIds), { status: 'ACTIVE' });
+      await (api as unknown as Record<string, Function>).bulkUpdateCampaigns(Array.from(selectedIds), { status: 'ACTIVE' });
       addToast('success', `${selectedIds.size} campaign(s) resumed`);
       setSelectedIds(new Set());
       fetchCampaigns();
@@ -1686,7 +1686,7 @@ export default function CampaignsPage() {
     try {
       const ids = Array.from(selectedIds);
       for (const id of ids) {
-        await (api as Record<string, Function>).deleteCampaign(id);
+        await (api as unknown as Record<string, Function>).deleteCampaign(id);
       }
       addToast('success', `${ids.length} campaign(s) deleted`);
       setSelectedIds(new Set());
@@ -1718,7 +1718,7 @@ export default function CampaignsPage() {
 
   // ------ Build edit form data from campaign ------
   function buildEditFormData(campaign: Campaign): CampaignFormData {
-    const extra = campaign as Record<string, unknown>;
+    const extra = campaign as unknown as Record<string, unknown>;
     const metadata = (extra.metadata || {}) as Record<string, unknown>;
     return {
       name: campaign.name || '',
@@ -2391,7 +2391,7 @@ export default function CampaignsPage() {
                   </tr>
                 ) : (
                   sortedCampaigns.map((campaign) => {
-                    const org = (campaign as Record<string, unknown>).organization as { name?: string } | undefined;
+                    const org = (campaign as unknown as Record<string, unknown>).organization as { name?: string } | undefined;
                     const cpl = computeCPL(campaign.budget, campaign.leadCount);
                     return (
                       <tr
