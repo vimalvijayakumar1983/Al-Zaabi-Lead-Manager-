@@ -304,14 +304,14 @@ router.get('/:id/users', async (req, res, next) => {
         id: true, email: true, firstName: true, lastName: true,
         role: true, isActive: true, createdAt: true, lastLoginAt: true,
         organizationId: true, avatar: true,
-        _count: { select: { leads: true } },
+        _count: { select: { assignedLeads: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
 
     res.json(users.map(u => ({
       ...u,
-      leadCount: u._count?.leads ?? 0,
+      leadCount: u._count?.assignedLeads ?? 0,
       _count: undefined,
     })));
   } catch (err) {
