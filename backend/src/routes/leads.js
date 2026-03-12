@@ -46,14 +46,31 @@ const leadFilterSchema = paginationSchema.extend({
   assignedToId: z.string().optional(),
   stageId: z.string().optional(),
   tag: z.string().optional(),
+  tags: z.string().optional(), // comma-separated tag names
   minScore: z.coerce.number().optional(),
   maxScore: z.coerce.number().optional(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  company: z.string().optional(),
+  jobTitle: z.string().optional(),
+  location: z.string().optional(),
+  productInterest: z.string().optional(),
+  campaign: z.string().optional(),
+  minBudget: z.coerce.number().optional(),
+  maxBudget: z.coerce.number().optional(),
+  budgetMin: z.coerce.number().optional(),
+  budgetMax: z.coerce.number().optional(),
+  hasEmail: z.string().optional(), // 'true' or 'false'
+  hasPhone: z.string().optional(),
+  conversionMin: z.coerce.number().optional(),
+  conversionMax: z.coerce.number().optional(),
+  customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, minScore, maxScore } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField } = req.validatedQuery;
 
     const where = {
       organizationId: req.orgId,
@@ -79,7 +96,68 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         { email: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search } },
         { company: { contains: search, mode: 'insensitive' } },
+        { jobTitle: { contains: search, mode: 'insensitive' } },
+        { location: { contains: search, mode: 'insensitive' } },
+        { productInterest: { contains: search, mode: 'insensitive' } },
+        { campaign: { contains: search, mode: 'insensitive' } },
+        { website: { contains: search, mode: 'insensitive' } },
+        { tags: { some: { tag: { name: { contains: search, mode: 'insensitive' } } } } },
       ];
+    }
+
+    // Date range
+    if (dateFrom || dateTo) {
+      where.createdAt = {};
+      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+      if (dateTo) where.createdAt.lte = new Date(dateTo + 'T23:59:59.999Z');
+    }
+    // Text field filters
+    if (company) where.company = { contains: company, mode: 'insensitive' };
+    if (jobTitle) where.jobTitle = { contains: jobTitle, mode: 'insensitive' };
+    if (location) where.location = { contains: location, mode: 'insensitive' };
+    if (productInterest) where.productInterest = { contains: productInterest, mode: 'insensitive' };
+    if (campaign) where.campaign = { contains: campaign, mode: 'insensitive' };
+    // Budget range (support both minBudget/maxBudget and budgetMin/budgetMax)
+    const effectiveBudgetMin = budgetMin !== undefined ? budgetMin : minBudget;
+    const effectiveBudgetMax = budgetMax !== undefined ? budgetMax : maxBudget;
+    if (effectiveBudgetMin !== undefined || effectiveBudgetMax !== undefined) {
+      where.budget = {};
+      if (effectiveBudgetMin !== undefined) where.budget.gte = effectiveBudgetMin;
+      if (effectiveBudgetMax !== undefined) where.budget.lte = effectiveBudgetMax;
+    }
+    // Has email/phone
+    if (hasEmail === 'true') where.email = { not: null };
+    if (hasEmail === 'false') where.email = null;
+    if (hasPhone === 'true') where.phone = { not: null };
+    if (hasPhone === 'false') where.phone = null;
+    // Multiple tags (comma-separated)
+    if (tags) {
+      const tagList = tags.split(',').map(t => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        where.tags = { some: { tag: { name: { in: tagList } } } };
+      }
+    }
+    // Conversion probability range
+    if (conversionMin !== undefined || conversionMax !== undefined) {
+      where.conversionProb = {};
+      if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
+      if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
+    }
+    // Custom field filtering (JSON encoded)
+    if (customField) {
+      try {
+        const cfFilters = JSON.parse(customField);
+        // Build path filter for customData JSON field
+        const cfConditions = [];
+        for (const [key, value] of Object.entries(cfFilters)) {
+          if (value !== '' && value !== null && value !== undefined) {
+            cfConditions.push({ customData: { path: [key], string_contains: String(value) } });
+          }
+        }
+        if (cfConditions.length > 0) {
+          where.AND = [...(where.AND || []), ...cfConditions];
+        }
+      } catch { /* ignore invalid JSON */ }
     }
 
     const [leads, total] = await Promise.all([
@@ -98,6 +176,117 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     ]);
 
     res.json(paginatedResponse(leads, total, page, limit));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Global Search ──────────────────────────────────────────────
+router.get('/search/global', async (req, res, next) => {
+  try {
+    const { q } = req.query;
+    if (!q || String(q).trim().length < 2) {
+      return res.json({ leads: [], total: 0 });
+    }
+    const search = String(q).trim();
+
+    const where = {
+      organizationId: req.orgId,
+      isArchived: false,
+      OR: [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search } },
+        { company: { contains: search, mode: 'insensitive' } },
+        { jobTitle: { contains: search, mode: 'insensitive' } },
+        { location: { contains: search, mode: 'insensitive' } },
+        { productInterest: { contains: search, mode: 'insensitive' } },
+        { campaign: { contains: search, mode: 'insensitive' } },
+        { website: { contains: search, mode: 'insensitive' } },
+        { tags: { some: { tag: { name: { contains: search, mode: 'insensitive' } } } } },
+      ],
+    };
+
+    const [leads, total] = await Promise.all([
+      prisma.lead.findMany({
+        where,
+        include: {
+          assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
+          stage: { select: { id: true, name: true, color: true } },
+          tags: { include: { tag: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 20,
+      }),
+      prisma.lead.count({ where }),
+    ]);
+
+    // Compute match context - which field matched
+    const results = leads.map(lead => {
+      const matchFields = [];
+      const lowerSearch = search.toLowerCase();
+      if (lead.firstName?.toLowerCase().includes(lowerSearch)) matchFields.push('name');
+      if (lead.lastName?.toLowerCase().includes(lowerSearch)) matchFields.push('name');
+      if (lead.email?.toLowerCase().includes(lowerSearch)) matchFields.push('email');
+      if (lead.phone?.includes(search)) matchFields.push('phone');
+      if (lead.company?.toLowerCase().includes(lowerSearch)) matchFields.push('company');
+      if (lead.jobTitle?.toLowerCase().includes(lowerSearch)) matchFields.push('jobTitle');
+      if (lead.location?.toLowerCase().includes(lowerSearch)) matchFields.push('location');
+      if (lead.productInterest?.toLowerCase().includes(lowerSearch)) matchFields.push('productInterest');
+      if (lead.campaign?.toLowerCase().includes(lowerSearch)) matchFields.push('campaign');
+      if (lead.website?.toLowerCase().includes(lowerSearch)) matchFields.push('website');
+      const tagMatch = (lead.tags || []).find(t => t.tag.name.toLowerCase().includes(lowerSearch));
+      if (tagMatch) matchFields.push('tag');
+      return { ...lead, matchFields: [...new Set(matchFields)] };
+    });
+
+    res.json({ leads: results, total });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Filter Values (unique values for dynamic filters) ──────────
+router.get('/filter-values', async (req, res, next) => {
+  try {
+    const orgWhere = { organizationId: req.orgId, isArchived: false };
+
+    const [companies, jobTitles, locations, products, campaigns, tags, stages, users] = await Promise.all([
+      prisma.lead.findMany({ where: { ...orgWhere, company: { not: null } }, select: { company: true }, distinct: ['company'], take: 100, orderBy: { company: 'asc' } }),
+      prisma.lead.findMany({ where: { ...orgWhere, jobTitle: { not: null } }, select: { jobTitle: true }, distinct: ['jobTitle'], take: 100, orderBy: { jobTitle: 'asc' } }),
+      prisma.lead.findMany({ where: { ...orgWhere, location: { not: null } }, select: { location: true }, distinct: ['location'], take: 100, orderBy: { location: 'asc' } }),
+      prisma.lead.findMany({ where: { ...orgWhere, productInterest: { not: null } }, select: { productInterest: true }, distinct: ['productInterest'], take: 100, orderBy: { productInterest: 'asc' } }),
+      prisma.lead.findMany({ where: { ...orgWhere, campaign: { not: null } }, select: { campaign: true }, distinct: ['campaign'], take: 100, orderBy: { campaign: 'asc' } }),
+      prisma.tag.findMany({ where: { organizationId: req.orgId }, select: { id: true, name: true, color: true }, orderBy: { name: 'asc' } }),
+      prisma.pipelineStage.findMany({ where: { organizationId: req.orgId }, select: { id: true, name: true, color: true }, orderBy: { order: 'asc' } }),
+      prisma.user.findMany({ where: { organizationId: req.orgId, isActive: true }, select: { id: true, firstName: true, lastName: true }, orderBy: { firstName: 'asc' } }),
+    ]);
+
+    res.json({
+      companies: companies.map(c => c.company).filter(Boolean),
+      jobTitles: jobTitles.map(j => j.jobTitle).filter(Boolean),
+      locations: locations.map(l => l.location).filter(Boolean),
+      products: products.map(p => p.productInterest).filter(Boolean),
+      campaigns: campaigns.map(c => c.campaign).filter(Boolean),
+      tags,
+      stages,
+      users,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Tags List ──────────────────────────────────────────────────
+router.get('/tags', async (req, res, next) => {
+  try {
+    const tags = await prisma.tag.findMany({
+      where: { organizationId: req.orgId },
+      select: { id: true, name: true, color: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json(tags);
   } catch (err) {
     next(err);
   }

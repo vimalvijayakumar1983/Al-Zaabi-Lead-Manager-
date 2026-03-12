@@ -59,6 +59,8 @@ export default function LeadsPage() {
   // Advanced filters
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  const [allTags, setAllTags] = useState<{id: string; name: string; color: string}[]>([]);
+  const [stages, setStages] = useState<{id: string; name: string}[]>([]);
 
   // Custom fields
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
@@ -79,11 +81,28 @@ export default function LeadsPage() {
       if (filters.search) params.search = filters.search;
       if (filters.status) params.status = filters.status;
       if (filters.source) params.source = filters.source;
-      if (filters.assignedToId && filters.assignedToId !== '__unassigned__' && filters.assignedToId !== '__current_user__') {
+      if (filters.assignedToId === '__unassigned__') {
+        params.assignedToId = 'unassigned';
+      } else if (filters.assignedToId && filters.assignedToId !== '__current_user__') {
         params.assignedToId = filters.assignedToId;
       }
       if (filters.minScore) params.minScore = filters.minScore;
       if (filters.maxScore) params.maxScore = filters.maxScore;
+      if (filters.dateFrom) params.dateFrom = filters.dateFrom;
+      if (filters.dateTo) params.dateTo = filters.dateTo;
+      if (filters.company) params.company = filters.company;
+      if (filters.jobTitle) params.jobTitle = filters.jobTitle;
+      if (filters.location) params.location = filters.location;
+      if (filters.campaign) params.campaign = filters.campaign;
+      if (filters.productInterest) params.productInterest = filters.productInterest;
+      if (filters.budgetMin) params.budgetMin = filters.budgetMin;
+      if (filters.budgetMax) params.budgetMax = filters.budgetMax;
+      if (filters.tags) params.tags = filters.tags;
+      if (filters.hasEmail) params.hasEmail = filters.hasEmail;
+      if (filters.hasPhone) params.hasPhone = filters.hasPhone;
+      if (filters.conversionMin) params.conversionMin = filters.conversionMin;
+      if (filters.conversionMax) params.conversionMax = filters.conversionMax;
+      if (filters.stageId) params.stageId = filters.stageId;
       const res: PaginatedResponse<Lead> = await api.getLeads(params);
       setLeads(res.data);
       setPagination(res.pagination as any);
@@ -126,6 +145,10 @@ export default function LeadsPage() {
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
+  useEffect(() => {
+    api.getLeadTags().then((data: any) => setAllTags(data || [])).catch(() => {});
+    api.getPipelineStages().then((data: any) => setStages(data.stages || data || [])).catch(() => {});
+  }, []);
 
   // Close quick action menu on outside click
   useEffect(() => {
@@ -606,7 +629,7 @@ export default function LeadsPage() {
               {/* Search */}
               <div className="relative flex-1 min-w-[200px] max-w-sm">
                 <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                <input type="text" placeholder="Search leads..." className="input pl-9 text-sm"
+                <input type="text" placeholder="Search by name, email, company, phone..." className="input pl-9 text-sm"
                   value={filters.search}
                   onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPagination((p) => ({ ...p, page: 1 })); setActiveViewId('all'); }}
                 />
@@ -663,6 +686,8 @@ export default function LeadsPage() {
               filters={filters}
               onChange={(f) => { setFilters(f); setPagination((p) => ({ ...p, page: 1 })); setActiveViewId('all'); }}
               users={users}
+              tags={allTags}
+              stages={stages}
               onClose={() => setShowAdvancedFilters(false)}
             />
           )}

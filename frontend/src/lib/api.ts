@@ -78,6 +78,18 @@ class ApiClient {
     return this.request<any>(`/leads${query}`);
   }
 
+  async globalSearch(q: string) {
+    return this.request<any>(`/leads/search/global?q=${encodeURIComponent(q)}`);
+  }
+
+  async getLeadTags() {
+    return this.request<any[]>('/leads/tags');
+  }
+
+  async getFilterValues() {
+    return this.request<any>('/leads/filter-values');
+  }
+
   async getLead(id: string) {
     return this.request<any>(`/leads/${id}`);
   }
