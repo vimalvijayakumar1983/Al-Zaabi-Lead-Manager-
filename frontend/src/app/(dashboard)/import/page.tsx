@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import {
@@ -133,6 +134,7 @@ export default function ImportPage() {
 /* ─── Import Wizard ──────────────────────────────────────────────── */
 function ImportWizard() {
   const { user } = useAuthStore();
+  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<WizardStep>('upload');
@@ -816,7 +818,7 @@ function ImportWizard() {
               <Upload className="h-3.5 w-3.5" />
               Import More Data
             </button>
-            <button onClick={() => window.location.href = `/${selectedModule}`} className="btn-secondary">
+            <button onClick={() => router.push(`/${selectedModule}`)} className="btn-secondary">
               View {selectedModule === 'leads' ? 'Leads' : 'Campaigns'}
             </button>
           </div>

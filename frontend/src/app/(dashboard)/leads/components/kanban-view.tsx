@@ -29,7 +29,8 @@ export function KanbanView({ leads, onStatusChange }: KanbanViewProps) {
   const grouped: Record<string, Lead[]> = {};
   for (const s of statusOrder) grouped[s] = [];
   for (const lead of leads) {
-    if (grouped[lead.status]) grouped[lead.status].push(lead);
+    const status = lead.status || 'NEW';
+    if (grouped[status]) grouped[status].push(lead);
   }
 
   const handleDragStart = (e: React.DragEvent, leadId: string) => {
@@ -135,13 +136,13 @@ export function KanbanView({ leads, onStatusChange }: KanbanViewProps) {
                     <div className="flex items-center gap-2 mb-2">
                       <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                         <div className="h-full rounded-full" style={{
-                          width: `${lead.score}%`,
-                          backgroundColor: lead.score >= 70 ? '#22c55e' : lead.score >= 40 ? '#f59e0b' : '#ef4444',
+                          width: `${lead.score ?? 0}%`,
+                          backgroundColor: (lead.score ?? 0) >= 70 ? '#22c55e' : (lead.score ?? 0) >= 40 ? '#f59e0b' : '#ef4444',
                         }} />
                       </div>
                       <span className="text-[10px] font-bold tabular-nums" style={{
-                        color: lead.score >= 70 ? '#16a34a' : lead.score >= 40 ? '#d97706' : '#dc2626'
-                      }}>{lead.score}</span>
+                        color: (lead.score ?? 0) >= 70 ? '#16a34a' : (lead.score ?? 0) >= 40 ? '#d97706' : '#dc2626'
+                      }}>{lead.score ?? 0}</span>
                     </div>
 
                     {/* Meta row */}

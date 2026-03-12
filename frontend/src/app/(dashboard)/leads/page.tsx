@@ -259,7 +259,7 @@ export default function LeadsPage() {
           case 'jobTitle': return l.jobTitle || '';
           case 'status': return l.status;
           case 'source': return l.source;
-          case 'score': return l.score.toString();
+          case 'score': return (l.score ?? 0).toString();
           case 'budget': return l.budget?.toString() || '';
           case 'location': return l.location || '';
           case 'productInterest': return l.productInterest || '';
@@ -363,15 +363,16 @@ export default function LeadsPage() {
       case 'source':
         return <span className="text-sm text-gray-700">{sourceLabels[lead.source] || lead.source}</span>;
       case 'score':
+        const score = lead.score ?? 0;
         return (
           <div className="flex items-center gap-2">
             <div className="w-14 h-2 bg-gray-200 rounded-full overflow-hidden">
               <div className="h-full rounded-full transition-all" style={{
-                width: `${lead.score}%`,
-                backgroundColor: lead.score >= 70 ? '#22c55e' : lead.score >= 40 ? '#f59e0b' : '#ef4444',
+                width: `${score}%`,
+                backgroundColor: score >= 70 ? '#22c55e' : score >= 40 ? '#f59e0b' : '#ef4444',
               }} />
             </div>
-            <span className="text-sm font-semibold tabular-nums" style={{ color: lead.score >= 70 ? '#16a34a' : lead.score >= 40 ? '#d97706' : '#dc2626' }}>{lead.score}</span>
+            <span className="text-sm font-semibold tabular-nums" style={{ color: score >= 70 ? '#16a34a' : score >= 40 ? '#d97706' : '#dc2626' }}>{score}</span>
           </div>
         );
       case 'budget':
@@ -705,7 +706,7 @@ export default function LeadsPage() {
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>
-                          <span className={`badge ${statusColors[lead.status]}`}>{lead.status.replace(/_/g, ' ')}</span>
+                          <span className={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`}>{(lead.status || 'NEW').replace(/_/g, ' ')}</span>
                         </div>
                         <div className="space-y-1.5 text-sm">
                           {lead.email && <p className="text-gray-600 truncate flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8" /></svg>{lead.email}</p>}
@@ -714,9 +715,9 @@ export default function LeadsPage() {
                         <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
                           <div className="flex items-center gap-2">
                             <div className="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full" style={{ width: `${lead.score}%`, backgroundColor: lead.score >= 70 ? '#22c55e' : lead.score >= 40 ? '#f59e0b' : '#ef4444' }} />
+                              <div className="h-full rounded-full" style={{ width: `${lead.score ?? 0}%`, backgroundColor: (lead.score ?? 0) >= 70 ? '#22c55e' : (lead.score ?? 0) >= 40 ? '#f59e0b' : '#ef4444' }} />
                             </div>
-                            <span className="text-xs font-semibold tabular-nums" style={{ color: lead.score >= 70 ? '#16a34a' : lead.score >= 40 ? '#d97706' : '#dc2626' }}>{lead.score}</span>
+                            <span className="text-xs font-semibold tabular-nums" style={{ color: (lead.score ?? 0) >= 70 ? '#16a34a' : (lead.score ?? 0) >= 40 ? '#d97706' : '#dc2626' }}>{lead.score ?? 0}</span>
                           </div>
                           <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}</span>
                         </div>
