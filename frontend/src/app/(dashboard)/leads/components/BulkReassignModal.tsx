@@ -35,9 +35,9 @@ export function BulkReassignModal({
   }, [selectedUserId, reason, onConfirm]);
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className="modal-panel w-full max-w-md"
+        className="modal-panel w-full max-w-md overflow-visible"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
