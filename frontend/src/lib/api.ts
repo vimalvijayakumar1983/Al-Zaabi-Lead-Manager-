@@ -160,6 +160,22 @@ class ApiClient {
     return this.request<any>('/users/invite', { method: 'POST', body: JSON.stringify(data) });
   }
 
+  async updateUser(id: string, data: any) {
+    return this.request<any>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async resetUserPassword(id: string, newPassword: string) {
+    return this.request<any>(`/users/${id}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
+  }
+
+  async deactivateUser(id: string) {
+    return this.request<any>(`/users/${id}`, { method: 'DELETE' });
+  }
+
+  async reactivateUser(id: string) {
+    return this.request<any>(`/users/${id}/reactivate`, { method: 'POST' });
+  }
+
   // Campaigns
   async getCampaigns(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';

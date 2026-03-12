@@ -84,6 +84,39 @@ router.put('/:id', authorize('ADMIN'), validate(z.object({
   }
 });
 
+// ─── Reset User Password (Admin) ─────────────────────────────────
+router.put('/:id/reset-password', authorize('ADMIN'), validate(z.object({
+  newPassword: z.string().min(8).max(128),
+})), async (req, res, next) => {
+  try {
+    const passwordHash = await bcrypt.hash(req.validated.newPassword, 12);
+    await prisma.user.update({
+      where: { id: req.params.id },
+      data: { passwordHash },
+    });
+    res.json({ message: 'Password reset successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Reactivate User ────────────────────────────────────────────
+router.post('/:id/reactivate', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { isActive: true },
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        role: true, isActive: true,
+      },
+    });
+    res.json(user);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Deactivate User ─────────────────────────────────────────────
 router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
