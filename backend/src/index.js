@@ -22,6 +22,7 @@ const analyticsRoutes = require('./routes/analytics');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
 const importRoutes = require('./routes/import');
+const settingsRoutes = require('./routes/settings');
 
 const app = express();
 const server = createServer(app);
@@ -64,6 +65,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/import', importRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);

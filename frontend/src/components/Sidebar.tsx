@@ -177,15 +177,34 @@ export default function Sidebar() {
       </nav>
 
       {/* Settings link */}
-      {!collapsed && (
-        <div className="px-3 pb-1">
-          <div className="divider mb-2" />
-          <button className="nav-item w-full group">
-            <Settings className="h-[18px] w-[18px] text-text-tertiary group-hover:text-text-secondary" />
-            <span className="flex-1 text-left">Settings</span>
-          </button>
-        </div>
-      )}
+      <div className="px-3 pb-1">
+        <div className="divider mb-2" />
+        <Link
+          href="/settings"
+          className={clsx(
+            'group relative flex items-center rounded-lg transition-all duration-150 ease-smooth',
+            collapsed ? 'justify-center p-2.5' : 'gap-3 px-3 py-2',
+            pathname === '/settings'
+              ? 'bg-brand-50 text-brand-700 shadow-xs'
+              : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+          )}
+          title={collapsed ? 'Settings' : undefined}
+        >
+          <Settings className={clsx(
+            'flex-shrink-0 transition-colors',
+            collapsed ? 'h-5 w-5' : 'h-[18px] w-[18px]',
+            pathname === '/settings' ? 'text-brand-600' : 'text-text-tertiary group-hover:text-text-secondary'
+          )} />
+          {!collapsed && <span className="flex-1 text-sm font-medium">Settings</span>}
+          {collapsed && (
+            <div className="absolute left-full ml-2 px-2.5 py-1.5 rounded-lg bg-gray-900 text-white text-xs font-medium
+              opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50 shadow-lg">
+              Settings
+              <div className="absolute top-1/2 -left-1 -mt-1 h-2 w-2 bg-gray-900 rotate-45" />
+            </div>
+          )}
+        </Link>
+      </div>
 
       {/* User info */}
       <div className="p-3 border-t border-border-subtle">

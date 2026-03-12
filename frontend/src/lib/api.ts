@@ -190,6 +190,43 @@ class ApiClient {
   async logCommunication(data: any) {
     return this.request<any>('/communications', { method: 'POST', body: JSON.stringify(data) });
   }
+
+  // Settings
+  async getProfile() {
+    return this.request<any>('/settings/profile');
+  }
+
+  async updateProfile(data: { firstName?: string; lastName?: string; phone?: string | null; avatar?: string | null }) {
+    return this.request<any>('/settings/profile', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async changePassword(data: { currentPassword: string; newPassword: string }) {
+    return this.request<any>('/settings/password', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getOrganization() {
+    return this.request<any>('/settings/organization');
+  }
+
+  async updateOrganization(data: { name?: string; domain?: string | null; settings?: Record<string, any> }) {
+    return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getNotificationPreferences() {
+    return this.request<any>('/settings/notifications');
+  }
+
+  async updateNotificationPreferences(data: Record<string, boolean>) {
+    return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getAuditLog() {
+    return this.request<any[]>('/settings/audit-log');
+  }
+
+  async deleteAccount(password: string) {
+    return this.request<any>('/settings/account', { method: 'DELETE', body: JSON.stringify({ password }) });
+  }
 }
 
 export const api = new ApiClient();

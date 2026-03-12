@@ -16,6 +16,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/automations': { title: 'Automations', description: 'Workflow automation rules' },
   '/campaigns': { title: 'Campaigns', description: 'Marketing campaign management' },
   '/team': { title: 'Team', description: 'Team members and access control' },
+  '/settings': { title: 'Settings', description: 'Account and organization preferences' },
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
