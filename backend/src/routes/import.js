@@ -647,4 +647,155 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
   }
 });
 
+// ─── 9. Export data as CSV ───────────────────────────────────────
+router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { module } = req.params;
+    const { status, source, assignedToId, search } = req.query;
+
+    if (module === 'leads') {
+      const where = { organizationId: req.orgId, isArchived: false };
+      if (status) where.status = status;
+      if (source) where.source = source;
+      if (assignedToId) where.assignedToId = assignedToId;
+      if (search) {
+        where.OR = [
+          { firstName: { contains: search, mode: 'insensitive' } },
+          { lastName: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+          { company: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      const leads = await prisma.lead.findMany({
+        where,
+        include: {
+          assignedTo: { select: { firstName: true, lastName: true, email: true } },
+          stage: { select: { name: true } },
+          tags: { include: { tag: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50000,
+      });
+
+      const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Company', 'Job Title',
+        'Source', 'Status', 'Score', 'Budget', 'Product Interest', 'Location', 'Campaign',
+        'Website', 'Pipeline Stage', 'Assigned To', 'Tags', 'Created At'];
+
+      const escapeCSV = (val) => {
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const rows = leads.map(l => [
+        l.firstName, l.lastName, l.email || '', l.phone || '',
+        l.company || '', l.jobTitle || '', l.source, l.status,
+        l.score, l.budget ? parseFloat(l.budget) : '',
+        l.productInterest || '', l.location || '', l.campaign || '',
+        l.website || '', l.stage?.name || '',
+        l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '',
+        (l.tags || []).map(t => t.tag.name).join(', '),
+        new Date(l.createdAt).toISOString().split('T')[0],
+      ].map(escapeCSV));
+
+      const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const timestamp = new Date().toISOString().split('T')[0];
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=leads-export-${timestamp}.csv`);
+      res.send('\uFEFF' + csv); // BOM for Excel compatibility
+    } else if (module === 'campaigns') {
+      const campaigns = await prisma.campaign.findMany({
+        where: { organizationId: req.orgId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const headers = ['Name', 'Type', 'Status', 'Budget', 'Start Date', 'End Date', 'Created At'];
+      const escapeCSV = (val) => {
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const rows = campaigns.map(c => [
+        c.name, c.type, c.status, c.budget ? parseFloat(c.budget) : '',
+        c.startDate ? new Date(c.startDate).toISOString().split('T')[0] : '',
+        c.endDate ? new Date(c.endDate).toISOString().split('T')[0] : '',
+        new Date(c.createdAt).toISOString().split('T')[0],
+      ].map(escapeCSV));
+
+      const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const timestamp = new Date().toISOString().split('T')[0];
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=campaigns-export-${timestamp}.csv`);
+      res.send('\uFEFF' + csv);
+    } else {
+      return res.status(400).json({ error: `Unknown module: ${module}` });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── 10. Export error rows from an import ───────────────────────
+router.get('/history/:id/errors-csv', async (req, res, next) => {
+  try {
+    const record = await prisma.importHistory.findFirst({
+      where: { id: req.params.id, organizationId: req.orgId },
+    });
+
+    if (!record) {
+      return res.status(404).json({ error: 'Import record not found' });
+    }
+
+    const errors = record.errors || [];
+    if (errors.length === 0) {
+      return res.status(400).json({ error: 'No errors to export' });
+    }
+
+    // Build CSV from error data
+    const escapeCSV = (val) => {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    // Collect all columns from error data
+    const allCols = new Set();
+    for (const err of errors) {
+      if (err.data) {
+        Object.keys(err.data).forEach(k => allCols.add(k));
+      }
+    }
+    const cols = ['Row', 'Error', ...Array.from(allCols)];
+
+    const rows = errors.map(err => {
+      const row = [err.row, err.error || err.message || ''];
+      for (const col of allCols) {
+        row.push(err.data?.[col] || '');
+      }
+      return row.map(escapeCSV);
+    });
+
+    const csv = [cols.join(','), ...rows.map(r => r.join(','))].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=import-errors-${record.id.slice(0, 8)}.csv`);
+    res.send('\uFEFF' + csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

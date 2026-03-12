@@ -270,6 +270,31 @@ class ApiClient {
     return `${API_URL}/import/template/${module}`;
   }
 
+  async exportData(module: string, filters?: Record<string, string>) {
+    const params = filters ? '?' + new URLSearchParams(filters).toString() : '';
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/export/${module}${params}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Export failed');
+    }
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = res.headers.get('Content-Disposition')?.split('filename=')[1] || `${module}-export.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  getErrorsCsvUrl(importId: string) {
+    return `${API_URL}/import/history/${importId}/errors-csv`;
+  }
+
   // Campaigns
   async getCampaigns(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';

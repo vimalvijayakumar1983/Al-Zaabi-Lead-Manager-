@@ -77,16 +77,17 @@ const MODULES = [
 
 export default function ImportPage() {
   const { user } = useAuthStore();
-  const [tab, setTab] = useState<'import' | 'history'>('import');
+  const isAdminOrManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const [tab, setTab] = useState<'import' | 'export' | 'history'>('import');
 
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Import Center</h1>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Import / Export Center</h1>
           <p className="text-text-secondary text-sm mt-0.5">
-            Import data from CSV, Excel, and more
+            Import and export data across your CRM
           </p>
         </div>
       </div>
@@ -100,8 +101,19 @@ export default function ImportPage() {
           }`}
         >
           <Upload className="h-4 w-4 inline mr-2 -mt-0.5" />
-          New Import
+          Import
         </button>
+        {isAdminOrManager && (
+          <button
+            onClick={() => setTab('export')}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              tab === 'export' ? 'border-brand-500 text-brand-700' : 'border-transparent text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            <Download className="h-4 w-4 inline mr-2 -mt-0.5" />
+            Export
+          </button>
+        )}
         <button
           onClick={() => setTab('history')}
           className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
@@ -109,11 +121,11 @@ export default function ImportPage() {
           }`}
         >
           <Clock className="h-4 w-4 inline mr-2 -mt-0.5" />
-          Import History
+          History
         </button>
       </div>
 
-      {tab === 'import' ? <ImportWizard /> : <ImportHistoryTab />}
+      {tab === 'import' ? <ImportWizard /> : tab === 'export' ? <ExportTab /> : <ImportHistoryTab />}
     </div>
   );
 }
@@ -814,6 +826,141 @@ function ImportWizard() {
   );
 }
 
+/* ─── Export Tab ─────────────────────────────────────────────────── */
+function ExportTab() {
+  const [exportModule, setExportModule] = useState('leads');
+  const [exporting, setExporting] = useState(false);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [users, setUsers] = useState<any[]>([]);
+
+  useEffect(() => {
+    api.getUsers().then(setUsers).catch(() => {});
+  }, []);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      await api.exportData(exportModule, filters);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Module Selection */}
+      <div className="card p-6">
+        <h3 className="text-sm font-semibold text-text-primary mb-4">Select Module to Export</h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {MODULES.map((mod) => {
+            const Icon = mod.icon;
+            return (
+              <button
+                key={mod.key}
+                onClick={() => { setExportModule(mod.key); setFilters({}); }}
+                className={`p-4 rounded-lg border text-left transition-all duration-150 ${
+                  exportModule === mod.key
+                    ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500'
+                    : 'border-border hover:border-border-strong hover:bg-surface-secondary'
+                }`}
+              >
+                <Icon className={`h-5 w-5 mb-2 ${exportModule === mod.key ? 'text-brand-600' : 'text-text-tertiary'}`} />
+                <p className={`text-sm font-semibold ${exportModule === mod.key ? 'text-brand-700' : 'text-text-primary'}`}>{mod.label}</p>
+                <p className="text-2xs text-text-tertiary mt-0.5">Export as CSV</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Filters (Leads only) */}
+      {exportModule === 'leads' && (
+        <div className="card p-6">
+          <h3 className="text-sm font-semibold text-text-primary mb-1">Filter Data (Optional)</h3>
+          <p className="text-2xs text-text-tertiary mb-4">Leave blank to export all records</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Status</label>
+              <select
+                value={filters.status || ''}
+                onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                className="input"
+              >
+                <option value="">All Statuses</option>
+                <option value="NEW">New</option>
+                <option value="CONTACTED">Contacted</option>
+                <option value="QUALIFIED">Qualified</option>
+                <option value="PROPOSAL_SENT">Proposal Sent</option>
+                <option value="NEGOTIATION">Negotiation</option>
+                <option value="WON">Won</option>
+                <option value="LOST">Lost</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Source</label>
+              <select
+                value={filters.source || ''}
+                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
+                className="input"
+              >
+                <option value="">All Sources</option>
+                <option value="WEBSITE_FORM">Website Form</option>
+                <option value="FACEBOOK_ADS">Facebook Ads</option>
+                <option value="GOOGLE_ADS">Google Ads</option>
+                <option value="CSV_IMPORT">CSV Import</option>
+                <option value="REFERRAL">Referral</option>
+                <option value="EMAIL">Email</option>
+                <option value="PHONE">Phone</option>
+                <option value="MANUAL">Manual</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Assigned To</label>
+              <select
+                value={filters.assignedToId || ''}
+                onChange={(e) => setFilters({ ...filters, assignedToId: e.target.value })}
+                className="input"
+              >
+                <option value="">All Users</option>
+                {users.map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className="label">Search</label>
+            <input
+              className="input max-w-sm"
+              placeholder="Search by name, email, or company..."
+              value={filters.search || ''}
+              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Export Action */}
+      <div className="card p-6 text-center">
+        <div className="h-14 w-14 rounded-2xl bg-brand-50 flex items-center justify-center mx-auto mb-4">
+          <Download className="h-6 w-6 text-brand-600" />
+        </div>
+        <h3 className="text-sm font-semibold text-text-primary mb-1">Ready to Export</h3>
+        <p className="text-2xs text-text-tertiary mb-4">
+          Your data will be exported as a CSV file with UTF-8 encoding (Excel compatible).
+        </p>
+        <button onClick={handleExport} disabled={exporting} className="btn-primary">
+          <Download className="h-4 w-4" />
+          {exporting ? 'Exporting...' : `Export ${exportModule === 'leads' ? 'Leads' : 'Campaigns'}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Import History Tab ─────────────────────────────────────────── */
 function ImportHistoryTab() {
   const { user } = useAuthStore();
@@ -1068,7 +1215,18 @@ function ImportDetailModal({ importRecord, onClose }: { importRecord: ImportHist
           {/* Errors */}
           {errors.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-text-primary mb-2">Errors ({errors.length})</h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-semibold text-text-primary">Errors ({errors.length})</h4>
+                <a
+                  href={api.getErrorsCsvUrl(importRecord.id)}
+                  className="text-2xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Download className="h-3 w-3" />
+                  Download Error Rows CSV
+                </a>
+              </div>
               <div className="space-y-1 max-h-40 overflow-y-auto">
                 {errors.map((err: any, i: number) => (
                   <div key={i} className="flex items-start gap-2 p-2 rounded bg-red-50 text-2xs text-red-700">
