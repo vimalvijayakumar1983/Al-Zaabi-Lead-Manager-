@@ -60,7 +60,7 @@ export default function CommandPalette() {
       )
     : commands;
 
-  const categories = [...new Set(filtered.map((c) => c.category))];
+  const categories = Array.from(new Set(filtered.map((c) => c.category)));
 
   // Open/close with Cmd+K
   useEffect(() => {
