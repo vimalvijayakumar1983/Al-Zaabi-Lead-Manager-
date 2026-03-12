@@ -429,7 +429,7 @@ export default function LeadDetailPage() {
                   if (val !== undefined && val !== null && val !== '') {
                     if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
                     else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
-                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
+                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
                     else display = String(val);
                   }
                   return <InfoRow key={cf.id} label={cf.label} value={display} />;
@@ -670,7 +670,7 @@ export default function LeadDetailPage() {
                             <span className="text-xs text-gray-500">{task.type.replace(/_/g, ' ')}</span>
                             <span className="text-gray-300">·</span>
                             <span className={`text-xs ${isOverdue ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
-                              {isOverdue ? 'Overdue · ' : ''}Due {new Date(task.dueAt).toLocaleDateString()}
+                              {isOverdue ? 'Overdue · ' : ''}Due {new Date(task.dueAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
                             </span>
                           </div>
                         </div>
@@ -825,7 +825,7 @@ function formatTimeAgo(dateStr: string) {
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 // ─── Create Task Modal ───────────────────────────────────────────
@@ -836,7 +836,12 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
     description: '',
     type: 'FOLLOW_UP_CALL',
     priority: 'MEDIUM',
-    dueAt: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+    dueAt: (() => {
+      const d = new Date(Date.now() + 86400000);
+      d.setSeconds(0, 0);
+      const tzOffsetMs = d.getTimezoneOffset() * 60000;
+      return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+    })(),
     assigneeId: '',
   });
   const [submitting, setSubmitting] = useState(false);
@@ -906,8 +911,8 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
             </select>
           </div>
           <div>
-            <label className="label">Due Date *</label>
-            <input type="date" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
+            <label className="label">Due Date & Time *</label>
+            <input type="datetime-local" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>

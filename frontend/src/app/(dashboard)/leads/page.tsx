@@ -311,8 +311,8 @@ export default function LeadsPage() {
           case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
           case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
-          case 'createdAt': return new Date(l.createdAt).toLocaleDateString();
-          case 'updatedAt': return new Date(l.updatedAt).toLocaleDateString();
+          case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           default:
             if (c.id.startsWith('cf_')) {
               const fn = c.id.slice(3);
@@ -472,9 +472,9 @@ export default function LeadsPage() {
           </div>
         ) : <span className="text-xs text-gray-400">-</span>;
       case 'createdAt':
-        return <span className="text-sm text-gray-500">{new Date(lead.createdAt).toLocaleDateString()}</span>;
+        return <span className="text-sm text-gray-500">{new Date(lead.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
       case 'updatedAt':
-        return <span className="text-sm text-gray-500">{new Date(lead.updatedAt).toLocaleDateString()}</span>;
+        return <span className="text-sm text-gray-500">{new Date(lead.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
       case 'actions':
         return (
           <div className="relative">
@@ -534,7 +534,7 @@ export default function LeadsPage() {
             case 'URL':
               return <a href={String(value)} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-600 hover:underline truncate block max-w-[180px]">{String(value)}</a>;
             case 'DATE':
-              return <span className="text-sm text-gray-700">{new Date(String(value)).toLocaleDateString()}</span>;
+              return <span className="text-sm text-gray-700">{new Date(String(value)).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
             case 'NUMBER':
               return (
                 <InlineEdit value={String(value)} onSave={async (v) => {
