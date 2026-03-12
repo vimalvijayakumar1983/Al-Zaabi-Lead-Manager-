@@ -162,6 +162,7 @@ enum LeadSource {
   WHATSAPP
   FACEBOOK_ADS
   GOOGLE_ADS
+  TIKTOK_ADS
   MANUAL
   CSV_IMPORT
   API
@@ -356,6 +357,7 @@ model Campaign {
   type           CampaignType
   status         CampaignStatus @default(DRAFT)
   budget         Decimal?       @db.Decimal(12, 2)
+  description    String?
   startDate      DateTime?
   endDate        DateTime?
   metadata       Json           @default("{}")
@@ -376,6 +378,8 @@ enum CampaignType {
   WHATSAPP
   LANDING_PAGE
   REFERRAL
+  TIKTOK_ADS
+  WEBSITE_FORM
   OTHER
 }
 
