@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/authStore';
 import type { Organization } from '@/types';
 import {
   Building2,
@@ -44,23 +45,15 @@ export default function DivisionsPage() {
   const [formPrimaryColor, setFormPrimaryColor] = useState('#6366f1');
   const [formSecondaryColor, setFormSecondaryColor] = useState('#1e293b');
 
-  // Check authorization on mount
+  // Get user from auth store
+  const { user } = useAuthStore();
+
+  // Check authorization based on auth store
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const userData = localStorage.getItem('user');
-      if (userData) {
-        const user = JSON.parse(userData);
-        if (user.role === 'SUPER_ADMIN') {
-          setAuthorized(true);
-          return;
-        }
-      }
-    } catch {
-      // ignore
+    if (user) {
+      setAuthorized(user.role === 'SUPER_ADMIN');
     }
-    setAuthorized(false);
-  }, []);
+  }, [user]);
 
   const fetchDivisions = useCallback(async () => {
     setLoading(true);
