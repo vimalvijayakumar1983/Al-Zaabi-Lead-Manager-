@@ -15,6 +15,33 @@ export interface Organization {
   updatedAt?: string;
 }
 
+export interface DivisionUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'SALES_REP' | 'VIEWER';
+  avatar?: string;
+  phone?: string;
+  isActive: boolean;
+  lastLoginAt?: string;
+  createdAt?: string;
+  leadsCount?: number;
+  tasksCount?: number;
+  wonLeads?: number;
+  _count?: { assignedLeads: number; tasks: number };
+}
+
+export interface DivisionStats {
+  totalLeads: number;
+  totalPipelineValue: number;
+  conversionRate: number;
+  avgLeadValue: number;
+  leadsByStage: { name: string; count: number; color: string }[];
+  topPerformers: { id: string; name: string; wonLeads: number; totalValue: number }[];
+  recentLeads: { id: string; name: string; company?: string; value: number; status: string; createdAt: string }[];
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────
 export interface User {
   id: string;
