@@ -84,8 +84,20 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       where.organizationId = divisionId;
     }
 
-    if (status) where.status = status;
-    if (source) where.source = source;
+    if (status) {
+      if (status.includes(',')) {
+        where.status = { in: status.split(',').map(s => s.trim()) };
+      } else {
+        where.status = status;
+      }
+    }
+    if (source) {
+      if (source.includes(',')) {
+        where.source = { in: source.split(',').map(s => s.trim()) };
+      } else {
+        where.source = source;
+      }
+    }
     if (assignedToId) where.assignedToId = assignedToId;
     if (stageId) where.stageId = stageId;
     if (minScore !== undefined || maxScore !== undefined) {

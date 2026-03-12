@@ -1,125 +1,943 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/authStore';
 import type { Task, PaginatedResponse } from '@/types';
-import { CheckCircle2, Circle, Clock, AlertTriangle, Plus, Calendar, User2, X } from 'lucide-react';
+import {
+  CheckCircle2,
+  Circle,
+  Clock,
+  AlertTriangle,
+  Plus,
+  Calendar,
+  User2,
+  X,
+  Search,
+  SlidersHorizontal,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  LayoutList,
+  LayoutGrid,
+  Loader2,
+  Filter,
+  ListTodo,
+  CalendarDays,
+  Target,
+  ChevronDown,
+  Hash,
+  RefreshCw,
+  Timer,
+} from 'lucide-react';
 
-const priorityConfig: Record<string, { bg: string; text: string; ring: string; dot: string; label: string }> = {
-  LOW: { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', dot: 'bg-gray-400', label: 'Low' },
-  MEDIUM: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10', dot: 'bg-blue-500', label: 'Medium' },
-  HIGH: { bg: 'bg-orange-50', text: 'text-orange-700', ring: 'ring-orange-600/10', dot: 'bg-orange-500', label: 'High' },
-  URGENT: { bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-600/10', dot: 'bg-red-500', label: 'Urgent' },
+// ─── Constants ──────────────────────────────────────────────────────
+const priorityConfig: Record<string, { bg: string; text: string; ring: string; dot: string; label: string; order: number }> = {
+  LOW: { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', dot: 'bg-gray-400', label: 'Low', order: 0 },
+  MEDIUM: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10', dot: 'bg-blue-500', label: 'Medium', order: 1 },
+  HIGH: { bg: 'bg-orange-50', text: 'text-orange-700', ring: 'ring-orange-600/10', dot: 'bg-orange-500', label: 'High', order: 2 },
+  URGENT: { bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-600/10', dot: 'bg-red-500', label: 'Urgent', order: 3 },
 };
 
+const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
+  PENDING: { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' },
+  IN_PROGRESS: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'In Progress' },
+  COMPLETED: { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Completed' },
+};
+
+const TASK_TYPES = ['FOLLOW_UP_CALL', 'EMAIL', 'MEETING', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'] as const;
+
+const TYPE_LABELS: Record<string, string> = {
+  FOLLOW_UP_CALL: 'Follow-up Call',
+  EMAIL: 'Email',
+  MEETING: 'Meeting',
+  WHATSAPP: 'WhatsApp',
+  DEMO: 'Demo',
+  PROPOSAL: 'Proposal',
+  OTHER: 'Other',
+};
+
+type SortField = 'dueAt' | 'createdAt' | 'priority' | 'status' | 'title';
+type ViewMode = 'list' | 'card';
+type DatePreset = 'all' | 'today' | 'tomorrow' | 'this-week' | 'next-week' | 'this-month' | 'overdue' | 'custom';
+
+// ─── Helper Functions ───────────────────────────────────────────────
+function getStartOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function getEndOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function getStartOfWeek(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  d.setDate(d.getDate() - day);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function getEndOfWeek(date: Date): Date {
+  const d = getStartOfWeek(date);
+  d.setDate(d.getDate() + 6);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function formatDateTime(dateStr: string): string {
+  return new Date(dateStr).toLocaleString('en-AE', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatDateShort(dateStr: string): string {
+  return new Date(dateStr).toLocaleString('en-AE', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function isOverdue(task: Task): boolean {
+  return new Date(task.dueAt) < new Date() && task.status !== 'COMPLETED';
+}
+
+// ─── Filter Badge ───────────────────────────────────────────────────
+function FilterBadge({ label, color, onRemove }: { label: string; color?: string; onRemove: () => void }) {
+  const colorClasses = color || 'bg-brand-50 text-brand-700 ring-brand-200';
+  return (
+    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ring-1 transition-all hover:opacity-80 ${colorClasses}`}>
+      {label}
+      <button
+        onClick={onRemove}
+        className="ml-0.5 h-3.5 w-3.5 rounded-full flex items-center justify-center hover:bg-black/10 transition-colors"
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </span>
+  );
+}
+
+// ─── Multi-Select Chips ─────────────────────────────────────────────
+function ChipGroup({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: Array<{ key: string; label: string; dot?: string }>;
+  selected: string[];
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((opt) => {
+        const isSelected = selected.includes(opt.key);
+        return (
+          <button
+            key={opt.key}
+            onClick={() => onToggle(opt.key)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+              isSelected
+                ? 'bg-brand-50 text-brand-700 border-brand-300 ring-1 ring-brand-100'
+                : 'bg-white text-text-secondary border-border-subtle hover:border-border-strong hover:text-text-primary'
+            }`}
+          >
+            {opt.dot && (
+              <span className={`h-2 w-2 rounded-full ${opt.dot}`} />
+            )}
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Stats Card ─────────────────────────────────────────────────────
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  color,
+  badge,
+  onClick,
+  active,
+}: {
+  label: string;
+  value: number;
+  icon: React.ElementType;
+  color: string;
+  badge?: string;
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition-all text-left w-full ${
+        active
+          ? 'bg-brand-50 border-brand-200 ring-1 ring-brand-100 shadow-sm'
+          : 'bg-white border-border-subtle hover:border-border-strong hover:shadow-sm'
+      } ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
+    >
+      <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 ${color}`}>
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-2xl font-bold text-text-primary leading-none">{value}</p>
+        <p className="text-xs text-text-secondary mt-0.5">{label}</p>
+      </div>
+      {badge && (
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ─── Main Tasks Page ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
 export default function TasksPage() {
+  const { user: currentUser } = useAuthStore();
+
+  // ── Data ──────────────────────────────────────────────────────────
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'pending' | 'overdue'>('all');
+  const [totalFromApi, setTotalFromApi] = useState(0);
+  const [page, setPage] = useState(1);
+  const [teamMembers, setTeamMembers] = useState<any[]>([]);
+
+  // ── Search (debounced) ────────────────────────────────────────────
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Filters ───────────────────────────────────────────────────────
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
+  const [priorityFilters, setPriorityFilters] = useState<string[]>([]);
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [assigneeFilter, setAssigneeFilter] = useState('ALL');
+  const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  const [customDateFrom, setCustomDateFrom] = useState('');
+  const [customDateTo, setCustomDateTo] = useState('');
+  const [leadSearch, setLeadSearch] = useState('');
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+
+  // ── Sort & View ───────────────────────────────────────────────────
+  const [sortField, setSortField] = useState<SortField>('dueAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+
+  // ── Task Form ─────────────────────────────────────────────────────
   const [showForm, setShowForm] = useState(false);
 
+  // ── Debounced search ──────────────────────────────────────────────
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setSearchQuery(searchInput);
+    }, 300);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchInput]);
+
+  // ── Fetch team members ────────────────────────────────────────────
+  useEffect(() => {
+    api.getUsers().then(setTeamMembers).catch(() => {});
+  }, []);
+
+  // ── Build API params & fetch ──────────────────────────────────────
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string | number> = { limit: 50 };
-      if (filter === 'pending') params.status = 'PENDING';
-      if (filter === 'overdue') params.overdue = 1;
+      const params: Record<string, string | number> = { page, limit: 100 };
+
+      // API-supported filters
+      if (searchQuery) params.search = searchQuery;
+
+      // If only one status selected, send to API
+      if (statusFilters.length === 1) {
+        params.status = statusFilters[0];
+      }
+
+      if (priorityFilters.length === 1) {
+        params.priority = priorityFilters[0];
+      }
+
+      if (sortField) params.sortBy = sortField;
+      if (sortDir) params.sortOrder = sortDir;
+
+      // Check if overdue-only filter
+      if (datePreset === 'overdue') {
+        params.overdue = 1;
+      }
+
       const res: PaginatedResponse<Task> = await api.getTasks(params);
       setTasks(res.data);
+      setTotalFromApi(res.total || res.data.length);
+    } catch (err) {
+      console.error('Failed to fetch tasks:', err);
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [page, searchQuery, statusFilters, priorityFilters, sortField, sortDir, datePreset]);
 
-  useEffect(() => { fetchTasks(); }, [fetchTasks]);
+  useEffect(() => {
+    fetchTasks();
+  }, [fetchTasks]);
 
+  // ── Client-side filtering (for filters not supported by API) ──────
+  const filteredTasks = useMemo(() => {
+    let result = tasks;
+
+    // Multi-status filter (client-side for multi-select)
+    if (statusFilters.length > 1) {
+      result = result.filter((t) => statusFilters.includes(t.status));
+    }
+
+    // Multi-priority filter (client-side for multi-select)
+    if (priorityFilters.length > 1) {
+      result = result.filter((t) => priorityFilters.includes(t.priority));
+    }
+
+    // Type filter
+    if (typeFilter !== 'ALL') {
+      result = result.filter((t) => t.type === typeFilter);
+    }
+
+    // Assignee filter
+    if (assigneeFilter === 'ME' && currentUser) {
+      result = result.filter((t) => t.assigneeId === currentUser.id || t.assignee?.id === currentUser.id);
+    } else if (assigneeFilter === 'UNASSIGNED') {
+      result = result.filter((t) => !t.assigneeId && !t.assignee);
+    } else if (assigneeFilter !== 'ALL') {
+      result = result.filter((t) => t.assigneeId === assigneeFilter || t.assignee?.id === assigneeFilter);
+    }
+
+    // Date range filter
+    if (datePreset !== 'all' && datePreset !== 'overdue') {
+      const now = new Date();
+      let start: Date | null = null;
+      let end: Date | null = null;
+
+      switch (datePreset) {
+        case 'today':
+          start = getStartOfDay(now);
+          end = getEndOfDay(now);
+          break;
+        case 'tomorrow': {
+          const tomorrow = new Date(now);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          start = getStartOfDay(tomorrow);
+          end = getEndOfDay(tomorrow);
+          break;
+        }
+        case 'this-week':
+          start = getStartOfWeek(now);
+          end = getEndOfWeek(now);
+          break;
+        case 'next-week': {
+          const nextWeek = new Date(now);
+          nextWeek.setDate(nextWeek.getDate() + 7);
+          start = getStartOfWeek(nextWeek);
+          end = getEndOfWeek(nextWeek);
+          break;
+        }
+        case 'this-month':
+          start = new Date(now.getFullYear(), now.getMonth(), 1);
+          end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+          break;
+        case 'custom':
+          if (customDateFrom) start = new Date(customDateFrom);
+          if (customDateTo) end = getEndOfDay(new Date(customDateTo));
+          break;
+      }
+
+      if (start || end) {
+        result = result.filter((t) => {
+          const due = new Date(t.dueAt);
+          if (start && due < start) return false;
+          if (end && due > end) return false;
+          return true;
+        });
+      }
+    }
+
+    // Overdue filter (add completed check on client)
+    if (datePreset === 'overdue') {
+      result = result.filter((t) => isOverdue(t));
+    }
+
+    // Lead name search
+    if (leadSearch.trim()) {
+      const q = leadSearch.toLowerCase();
+      result = result.filter((t) => {
+        if (!t.lead) return false;
+        const name = `${t.lead.firstName || ''} ${t.lead.lastName || ''}`.toLowerCase();
+        return name.includes(q);
+      });
+    }
+
+    // Full-text client search (for description and lead name not covered by API)
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (t) =>
+          t.title.toLowerCase().includes(q) ||
+          (t.description && t.description.toLowerCase().includes(q)) ||
+          (t.lead && `${t.lead.firstName || ''} ${t.lead.lastName || ''}`.toLowerCase().includes(q))
+      );
+    }
+
+    return result;
+  }, [tasks, statusFilters, priorityFilters, typeFilter, assigneeFilter, datePreset, customDateFrom, customDateTo, leadSearch, searchQuery, currentUser]);
+
+  // ── Computed stats ────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const now = new Date();
+    const todayStart = getStartOfDay(now);
+    const todayEnd = getEndOfDay(now);
+    const weekEnd = getEndOfWeek(now);
+
+    return {
+      total: tasks.length,
+      pending: tasks.filter((t) => t.status === 'PENDING').length,
+      overdue: tasks.filter((t) => isOverdue(t)).length,
+      completedToday: tasks.filter(
+        (t) => t.status === 'COMPLETED' && t.completedAt && new Date(t.completedAt) >= todayStart && new Date(t.completedAt) <= todayEnd
+      ).length,
+      dueThisWeek: tasks.filter((t) => {
+        const due = new Date(t.dueAt);
+        return t.status !== 'COMPLETED' && due >= todayStart && due <= weekEnd;
+      }).length,
+    };
+  }, [tasks]);
+
+  // ── Active filter count ───────────────────────────────────────────
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (searchQuery) count++;
+    if (statusFilters.length > 0) count++;
+    if (priorityFilters.length > 0) count++;
+    if (typeFilter !== 'ALL') count++;
+    if (assigneeFilter !== 'ALL') count++;
+    if (datePreset !== 'all') count++;
+    if (leadSearch) count++;
+    return count;
+  }, [searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, datePreset, leadSearch]);
+
+  const hasAnyFilter = activeFilterCount > 0;
+
+  const clearAllFilters = () => {
+    setSearchInput('');
+    setSearchQuery('');
+    setStatusFilters([]);
+    setPriorityFilters([]);
+    setTypeFilter('ALL');
+    setAssigneeFilter('ALL');
+    setDatePreset('all');
+    setCustomDateFrom('');
+    setCustomDateTo('');
+    setLeadSearch('');
+  };
+
+  // ── Toggle helpers ────────────────────────────────────────────────
+  const toggleStatus = (s: string) => {
+    setStatusFilters((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]);
+  };
+
+  const togglePriority = (p: string) => {
+    setPriorityFilters((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]);
+  };
+
+  // ── Task actions ──────────────────────────────────────────────────
   const handleComplete = async (taskId: string) => {
     await api.completeTask(taskId);
     fetchTasks();
   };
 
-  const completedCount = tasks.filter(t => t.status === 'COMPLETED').length;
-  const overdueCount = tasks.filter(t => t.status !== 'COMPLETED' && new Date(t.dueAt) < new Date()).length;
+  // ── Sort label ────────────────────────────────────────────────────
+  const sortLabels: Record<SortField, string> = {
+    dueAt: 'Due Date',
+    createdAt: 'Created Date',
+    priority: 'Priority',
+    status: 'Status',
+    title: 'Title',
+  };
 
+  const datePresetLabels: Record<DatePreset, string> = {
+    all: 'Any Time',
+    today: 'Today',
+    tomorrow: 'Tomorrow',
+    'this-week': 'This Week',
+    'next-week': 'Next Week',
+    'this-month': 'This Month',
+    overdue: 'Overdue',
+    custom: 'Custom Range',
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ── Render ────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════
   return (
     <div className="space-y-5 animate-fade-in">
+      {/* ── Page Header ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Tasks</h1>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight flex items-center gap-2">
+            <ListTodo className="h-7 w-7 text-brand-500" />
+            Tasks
+          </h1>
           <p className="text-text-secondary text-sm mt-0.5">
-            {tasks.length} tasks &middot; {completedCount} completed
-            {overdueCount > 0 && <span className="text-red-600"> &middot; {overdueCount} overdue</span>}
+            Manage and track your team&apos;s tasks
           </p>
         </div>
-        <button onClick={() => setShowForm(true)} className="btn-primary">
-          <Plus className="h-4 w-4" />
-          New Task
-        </button>
-      </div>
-
-      {/* Filter Tabs */}
-      <div className="flex gap-1 bg-surface-tertiary rounded-lg p-1 w-fit">
-        {([
-          { key: 'all' as const, label: 'All Tasks' },
-          { key: 'pending' as const, label: 'Pending' },
-          { key: 'overdue' as const, label: 'Overdue' },
-        ]).map((f) => (
+        <div className="flex items-center gap-2">
           <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-150 ${
-              filter === f.key
-                ? 'bg-white shadow-soft text-text-primary'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
+            onClick={fetchTasks}
+            className="btn-icon h-9 w-9"
+            title="Refresh"
           >
-            {f.label}
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-        ))}
+          <button onClick={() => setShowForm(true)} className="btn-primary">
+            <Plus className="h-4 w-4" />
+            New Task
+          </button>
+        </div>
       </div>
 
-      {/* Task List */}
-      <div className="space-y-2">
-        {loading ? (
-          <div className="space-y-2">
-            {[1,2,3,4,5].map(i => (
-              <div key={i} className="card p-4 flex items-center gap-4">
-                <div className="skeleton h-5 w-5 rounded" />
-                <div className="flex-1"><div className="skeleton h-4 w-48 mb-2" /><div className="skeleton h-3 w-32" /></div>
-                <div className="skeleton h-5 w-16 rounded-md" />
-                <div className="skeleton h-4 w-20" />
-              </div>
-            ))}
+      {/* ═══ Stats Row ════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <StatCard
+          label="Total Tasks"
+          value={stats.total}
+          icon={ListTodo}
+          color="bg-gray-100 text-gray-600"
+          onClick={() => clearAllFilters()}
+          active={!hasAnyFilter}
+        />
+        <StatCard
+          label="Pending"
+          value={stats.pending}
+          icon={Clock}
+          color="bg-amber-100 text-amber-600"
+          onClick={() => {
+            clearAllFilters();
+            setStatusFilters(['PENDING']);
+          }}
+          active={statusFilters.length === 1 && statusFilters[0] === 'PENDING' && activeFilterCount === 1}
+        />
+        <StatCard
+          label="Overdue"
+          value={stats.overdue}
+          icon={AlertTriangle}
+          color="bg-red-100 text-red-600"
+          badge={stats.overdue > 0 ? `${stats.overdue}!` : undefined}
+          onClick={() => {
+            clearAllFilters();
+            setDatePreset('overdue');
+          }}
+          active={datePreset === 'overdue' && activeFilterCount === 1}
+        />
+        <StatCard
+          label="Completed Today"
+          value={stats.completedToday}
+          icon={CheckCircle2}
+          color="bg-emerald-100 text-emerald-600"
+          onClick={() => {
+            clearAllFilters();
+            setStatusFilters(['COMPLETED']);
+            setDatePreset('today');
+          }}
+          active={statusFilters.includes('COMPLETED') && datePreset === 'today'}
+        />
+        <StatCard
+          label="Due This Week"
+          value={stats.dueThisWeek}
+          icon={CalendarDays}
+          color="bg-blue-100 text-blue-600"
+          onClick={() => {
+            clearAllFilters();
+            setDatePreset('this-week');
+          }}
+          active={datePreset === 'this-week' && activeFilterCount === 1}
+        />
+      </div>
+
+      {/* ═══ Search & Filter Toolbar ══════════════════════════════════ */}
+      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-md -mx-4 px-4 py-3 sm:-mx-6 sm:px-6 border-b border-border-subtle/50 space-y-3">
+        {/* Row 1: Search + Controls */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              type="text"
+              className="input pl-9 pr-9 w-full"
+              placeholder="Search tasks by title, description, or lead name..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+            {searchInput && (
+              <button
+                onClick={() => { setSearchInput(''); setSearchQuery(''); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
-        ) : tasks.length === 0 ? (
-          <div className="card">
-            <div className="empty-state">
-              <div className="empty-state-icon">
-                <CheckCircle2 className="h-6 w-6" />
+
+          <div className="flex items-center gap-2">
+            {/* Filter Toggle */}
+            <button
+              onClick={() => setShowFilterPanel(!showFilterPanel)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
+                showFilterPanel || hasAnyFilter
+                  ? 'bg-brand-50 text-brand-700 border-brand-200'
+                  : 'bg-white text-text-secondary border-border-subtle hover:border-border-strong'
+              }`}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="h-5 min-w-[20px] px-1 rounded-full bg-brand-600 text-white text-[10px] font-bold flex items-center justify-center">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+
+            {/* Sort */}
+            <div className="relative group">
+              <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-border-subtle bg-white text-text-secondary hover:border-border-strong transition-all">
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{sortLabels[sortField]}</span>
+              </button>
+              <div className="absolute top-full right-0 mt-1 z-50 w-48 bg-white rounded-xl shadow-lg border border-border-subtle py-1 hidden group-hover:block">
+                {(Object.entries(sortLabels) as [SortField, string][]).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSortField(key)}
+                    className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                      sortField === key
+                        ? 'bg-brand-50 text-brand-700 font-medium'
+                        : 'text-text-primary hover:bg-surface-secondary'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              <p className="text-sm font-medium text-text-primary">No tasks found</p>
-              <p className="text-xs text-text-tertiary mt-1 mb-3">
-                {filter === 'overdue' ? 'No overdue tasks - great job!' : 'Create your first task to get started'}
-              </p>
-              {filter === 'all' && (
-                <button onClick={() => setShowForm(true)} className="btn-primary text-sm">Create Task</button>
+            </div>
+
+            {/* Sort Direction */}
+            <button
+              onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
+              className="btn-icon h-9 w-9"
+              title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+            >
+              {sortDir === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
+            </button>
+
+            {/* View Toggle */}
+            <div className="flex items-center rounded-lg border border-border-subtle overflow-hidden">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`p-2 transition-colors ${
+                  viewMode === 'list' ? 'bg-brand-50 text-brand-700' : 'bg-white text-text-tertiary hover:text-text-primary'
+                }`}
+                title="List view"
+              >
+                <LayoutList className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setViewMode('card')}
+                className={`p-2 transition-colors ${
+                  viewMode === 'card' ? 'bg-brand-50 text-brand-700' : 'bg-white text-text-tertiary hover:text-text-primary'
+                }`}
+                title="Card view"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Row 2: Filter Panel */}
+        {showFilterPanel && (
+          <div className="space-y-3 pt-3 border-t border-border-subtle/50 animate-fade-in">
+            {/* Status Chips */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider w-16 flex-shrink-0">Status</span>
+              <ChipGroup
+                options={[
+                  { key: 'PENDING', label: 'Pending' },
+                  { key: 'IN_PROGRESS', label: 'In Progress' },
+                  { key: 'COMPLETED', label: 'Completed' },
+                ]}
+                selected={statusFilters}
+                onToggle={toggleStatus}
+              />
+            </div>
+
+            {/* Priority Chips */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider w-16 flex-shrink-0">Priority</span>
+              <ChipGroup
+                options={[
+                  { key: 'URGENT', label: 'Urgent', dot: 'bg-red-500' },
+                  { key: 'HIGH', label: 'High', dot: 'bg-orange-500' },
+                  { key: 'MEDIUM', label: 'Medium', dot: 'bg-blue-500' },
+                  { key: 'LOW', label: 'Low', dot: 'bg-gray-400' },
+                ]}
+                selected={priorityFilters}
+                onToggle={togglePriority}
+              />
+            </div>
+
+            {/* Row: Type + Assignee + Date + Lead */}
+            <div className="flex flex-wrap items-end gap-3">
+              {/* Type */}
+              <div className="min-w-[160px]">
+                <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider block mb-1">Type</label>
+                <select
+                  className="input py-1.5 text-sm w-full"
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                >
+                  <option value="ALL">All Types</option>
+                  {TASK_TYPES.map((t) => (
+                    <option key={t} value={t}>{TYPE_LABELS[t] || t.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Assignee */}
+              <div className="min-w-[160px]">
+                <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider block mb-1">Assignee</label>
+                <select
+                  className="input py-1.5 text-sm w-full"
+                  value={assigneeFilter}
+                  onChange={(e) => setAssigneeFilter(e.target.value)}
+                >
+                  <option value="ALL">All Assignees</option>
+                  <option value="ME">Me</option>
+                  <option value="UNASSIGNED">Unassigned</option>
+                  {teamMembers.map((u: any) => (
+                    <option key={u.id} value={u.id}>
+                      {u.firstName} {u.lastName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Date Preset */}
+              <div className="min-w-[160px]">
+                <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider block mb-1">Due Date</label>
+                <select
+                  className="input py-1.5 text-sm w-full"
+                  value={datePreset}
+                  onChange={(e) => setDatePreset(e.target.value as DatePreset)}
+                >
+                  {(Object.entries(datePresetLabels) as [DatePreset, string][]).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Custom Date Range */}
+              {datePreset === 'custom' && (
+                <>
+                  <div>
+                    <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider block mb-1">From</label>
+                    <input
+                      type="date"
+                      className="input py-1.5 text-sm"
+                      value={customDateFrom}
+                      onChange={(e) => setCustomDateFrom(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider block mb-1">To</label>
+                    <input
+                      type="date"
+                      className="input py-1.5 text-sm"
+                      value={customDateTo}
+                      onChange={(e) => setCustomDateTo(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Lead Name */}
+              <div className="min-w-[160px]">
+                <label className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider block mb-1">Related Lead</label>
+                <div className="relative">
+                  <Target className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary" />
+                  <input
+                    type="text"
+                    className="input pl-8 py-1.5 text-sm w-full"
+                    placeholder="Filter by lead..."
+                    value={leadSearch}
+                    onChange={(e) => setLeadSearch(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Row 3: Active Filter Badges + Results Count */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {searchQuery && (
+              <FilterBadge
+                label={`Search: "${searchQuery}"`}
+                onRemove={() => { setSearchInput(''); setSearchQuery(''); }}
+              />
+            )}
+            {statusFilters.map((s) => (
+              <FilterBadge
+                key={s}
+                label={statusConfig[s]?.label || s}
+                color={`${statusConfig[s]?.bg || 'bg-gray-50'} ${statusConfig[s]?.text || 'text-gray-700'} ring-gray-200`}
+                onRemove={() => toggleStatus(s)}
+              />
+            ))}
+            {priorityFilters.map((p) => (
+              <FilterBadge
+                key={p}
+                label={priorityConfig[p]?.label || p}
+                color={`${priorityConfig[p]?.bg || 'bg-gray-50'} ${priorityConfig[p]?.text || 'text-gray-700'} ${priorityConfig[p]?.ring || 'ring-gray-200'}`}
+                onRemove={() => togglePriority(p)}
+              />
+            ))}
+            {typeFilter !== 'ALL' && (
+              <FilterBadge
+                label={`Type: ${TYPE_LABELS[typeFilter] || typeFilter}`}
+                onRemove={() => setTypeFilter('ALL')}
+              />
+            )}
+            {assigneeFilter !== 'ALL' && (
+              <FilterBadge
+                label={`Assignee: ${
+                  assigneeFilter === 'ME' ? 'Me' :
+                  assigneeFilter === 'UNASSIGNED' ? 'Unassigned' :
+                  teamMembers.find((u: any) => u.id === assigneeFilter)?.firstName || assigneeFilter
+                }`}
+                onRemove={() => setAssigneeFilter('ALL')}
+              />
+            )}
+            {datePreset !== 'all' && (
+              <FilterBadge
+                label={`Date: ${datePresetLabels[datePreset]}`}
+                color="bg-blue-50 text-blue-700 ring-blue-200"
+                onRemove={() => { setDatePreset('all'); setCustomDateFrom(''); setCustomDateTo(''); }}
+              />
+            )}
+            {leadSearch && (
+              <FilterBadge
+                label={`Lead: "${leadSearch}"`}
+                onRemove={() => setLeadSearch('')}
+              />
+            )}
+            {hasAnyFilter && (
+              <button
+                onClick={clearAllFilters}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-red-600 hover:bg-red-50 border border-red-200 transition-all"
+              >
+                <X className="h-3 w-3" />
+                Clear All
+              </button>
+            )}
+          </div>
+
+          {/* Results Count */}
+          {!loading && (
+            <p className="text-xs text-text-tertiary font-medium flex-shrink-0">
+              Showing <span className="text-text-primary font-semibold">{filteredTasks.length}</span> of{' '}
+              <span className="text-text-primary font-semibold">{tasks.length}</span> tasks
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ═══ Task List / Grid ═════════════════════════════════════════ */}
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="card p-4 flex items-center gap-4">
+              <div className="skeleton h-5 w-5 rounded" />
+              <div className="flex-1">
+                <div className="skeleton h-4 w-48 mb-2" />
+                <div className="skeleton h-3 w-32" />
+              </div>
+              <div className="skeleton h-5 w-16 rounded-md" />
+              <div className="skeleton h-4 w-20" />
+            </div>
+          ))}
+        </div>
+      ) : filteredTasks.length === 0 ? (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon">
+              <CheckCircle2 className="h-6 w-6" />
+            </div>
+            <p className="text-sm font-medium text-text-primary">No tasks found</p>
+            <p className="text-xs text-text-tertiary mt-1 mb-3">
+              {hasAnyFilter
+                ? 'Try adjusting your filters or search query'
+                : 'Create your first task to get started'}
+            </p>
+            <div className="flex items-center gap-2">
+              {hasAnyFilter && (
+                <button onClick={clearAllFilters} className="text-sm text-brand-600 hover:text-brand-700 font-medium">
+                  Clear all filters
+                </button>
+              )}
+              {!hasAnyFilter && (
+                <button onClick={() => setShowForm(true)} className="btn-primary text-sm">
+                  Create Task
+                </button>
               )}
             </div>
           </div>
-        ) : (
-          tasks.map((task) => {
-            const isOverdue = new Date(task.dueAt) < new Date() && task.status !== 'COMPLETED';
+        </div>
+      ) : viewMode === 'list' ? (
+        /* ── List View ──────────────────────────────────────────────── */
+        <div className="space-y-2">
+          {filteredTasks.map((task) => {
+            const taskOverdue = isOverdue(task);
             const isCompleted = task.status === 'COMPLETED';
             const priority = priorityConfig[task.priority] || priorityConfig.MEDIUM;
-            const dueDate = new Date(task.dueAt);
+            const status = statusConfig[task.status];
 
             return (
               <div
                 key={task.id}
                 className={`card p-4 flex items-center gap-4 transition-all duration-150 group ${
-                  isOverdue ? 'border-red-200 bg-red-50/30' : isCompleted ? 'opacity-60' : 'hover:shadow-card-hover'
+                  taskOverdue
+                    ? 'border-red-200 bg-red-50/30'
+                    : isCompleted
+                    ? 'opacity-60'
+                    : 'hover:shadow-card-hover'
                 }`}
               >
+                {/* Completion Toggle */}
                 <button
                   onClick={() => handleComplete(task.id)}
                   className={`h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
@@ -131,14 +949,19 @@ export default function TasksPage() {
                   {isCompleted && <CheckCircle2 className="h-3 w-3" />}
                 </button>
 
+                {/* Content */}
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'}`}>
+                  <p
+                    className={`text-sm font-medium ${
+                      isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'
+                    }`}
+                  >
                     {task.title}
                   </p>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
                       <Calendar className="h-3 w-3" />
-                      {task.type.replace(/_/g, ' ')}
+                      {TYPE_LABELS[task.type] || task.type.replace(/_/g, ' ')}
                     </span>
                     {task.lead && (
                       <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
@@ -147,46 +970,163 @@ export default function TasksPage() {
                       </span>
                     )}
                     {task.assignee && (
-                      <span className="text-xs text-text-tertiary">&middot; {task.assignee.firstName}</span>
+                      <span className="text-xs text-text-tertiary">
+                        &middot; {task.assignee.firstName}
+                      </span>
+                    )}
+                    {status && (
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${status.bg} ${status.text}`}>
+                        {status.label}
+                      </span>
                     )}
                   </div>
                 </div>
 
+                {/* Priority Badge */}
                 <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
                   {priority.label}
                 </span>
 
+                {/* Due Date */}
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {isOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500" />}
-                  <Clock className={`h-3.5 w-3.5 ${isOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
-                  <span className={`text-xs font-medium ${isOverdue ? 'text-red-600' : 'text-text-secondary'}`}>
-                    {dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  {taskOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500" />}
+                  <Clock className={`h-3.5 w-3.5 ${taskOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
+                  <span
+                    className={`text-xs font-medium ${
+                      taskOverdue ? 'text-red-600' : 'text-text-secondary'
+                    }`}
+                  >
+                    {formatDateShort(task.dueAt)}
                   </span>
                 </div>
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      ) : (
+        /* ── Card View ──────────────────────────────────────────────── */
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {filteredTasks.map((task) => {
+            const taskOverdue = isOverdue(task);
+            const isCompleted = task.status === 'COMPLETED';
+            const priority = priorityConfig[task.priority] || priorityConfig.MEDIUM;
+            const status = statusConfig[task.status];
 
+            return (
+              <div
+                key={task.id}
+                className={`rounded-xl border p-4 transition-all ${
+                  taskOverdue
+                    ? 'border-red-200 bg-red-50/30'
+                    : isCompleted
+                    ? 'border-border-subtle bg-white opacity-60'
+                    : 'border-border-subtle bg-white hover:shadow-md'
+                }`}
+              >
+                {/* Card Header */}
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring} text-[10px]`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
+                    {priority.label}
+                  </span>
+                  <button
+                    onClick={() => handleComplete(task.id)}
+                    className={`h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                      isCompleted
+                        ? 'bg-emerald-500 border-emerald-500 text-white'
+                        : 'border-border-strong hover:border-brand-500 hover:bg-brand-50'
+                    }`}
+                  >
+                    {isCompleted && <CheckCircle2 className="h-3 w-3" />}
+                  </button>
+                </div>
+
+                {/* Title */}
+                <p
+                  className={`text-sm font-medium mb-2 line-clamp-2 ${
+                    isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'
+                  }`}
+                >
+                  {task.title}
+                </p>
+
+                {/* Description snippet */}
+                {task.description && (
+                  <p className="text-xs text-text-tertiary line-clamp-2 mb-3">
+                    {task.description}
+                  </p>
+                )}
+
+                {/* Meta */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                    <Calendar className="h-3 w-3 flex-shrink-0" />
+                    <span>{TYPE_LABELS[task.type] || task.type.replace(/_/g, ' ')}</span>
+                  </div>
+                  {task.lead && (
+                    <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                      <Target className="h-3 w-3 flex-shrink-0" />
+                      <span className="truncate">{task.lead.firstName} {task.lead.lastName}</span>
+                    </div>
+                  )}
+                  {task.assignee && (
+                    <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+                      <User2 className="h-3 w-3 flex-shrink-0" />
+                      <span>{task.assignee.firstName} {task.assignee.lastName}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-border-subtle">
+                  {status && (
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${status.bg} ${status.text}`}>
+                      {status.label}
+                    </span>
+                  )}
+                  <div className="flex items-center gap-1">
+                    {taskOverdue && <AlertTriangle className="h-3 w-3 text-red-500" />}
+                    <Clock className={`h-3 w-3 ${taskOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
+                    <span className={`text-[11px] font-medium ${taskOverdue ? 'text-red-600' : 'text-text-secondary'}`}>
+                      {formatDateShort(task.dueAt)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ═══ Create Task Modal ════════════════════════════════════════ */}
       {showForm && <CreateTaskModal onClose={() => setShowForm(false)} onCreated={fetchTasks} />}
     </div>
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// ─── Create Task Modal ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
 function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState({
-    title: '', type: 'FOLLOW_UP_CALL', priority: 'MEDIUM', dueAt: '',
-    assigneeId: '', description: '',
+    title: '',
+    type: 'FOLLOW_UP_CALL',
+    priority: 'MEDIUM',
+    dueAt: '',
+    assigneeId: '',
+    description: '',
   });
   const [users, setUsers] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.getUsers().then(setUsers);
+    api.getUsers().then(setUsers).catch(() => {});
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaving(true);
     try {
       await api.createTask({
         ...form,
@@ -196,6 +1136,8 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
       onCreated();
     } catch (err: any) {
       alert(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -205,51 +1147,100 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
       <div className="modal-panel w-full max-w-md relative z-50">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h2 className="text-lg font-semibold text-text-primary">New Task</h2>
-          <button onClick={onClose} className="btn-icon"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} className="btn-icon">
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
             <label className="label">Title *</label>
-            <input className="input" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Follow up with client" />
+            <input
+              className="input"
+              required
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="Follow up with client"
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Type</label>
-              <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-                {['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'].map((t) => (
-                  <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+              <select
+                className="input"
+                value={form.type}
+                onChange={(e) => setForm({ ...form, type: e.target.value })}
+              >
+                {TASK_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {TYPE_LABELS[t] || t.replace(/_/g, ' ')}
+                  </option>
                 ))}
               </select>
             </div>
             <div>
               <label className="label">Priority</label>
-              <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+              <select
+                className="input"
+                value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: e.target.value })}
+              >
                 {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
-                  <option key={p} value={p}>{p}</option>
+                  <option key={p} value={p}>
+                    {priorityConfig[p]?.label || p}
+                  </option>
                 ))}
               </select>
             </div>
           </div>
           <div>
-            <label className="label">Due Date *</label>
-            <input type="datetime-local" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
+            <label className="label">Due Date & Time *</label>
+            <input
+              type="datetime-local"
+              className="input"
+              required
+              value={form.dueAt}
+              onChange={(e) => setForm({ ...form, dueAt: e.target.value })}
+            />
           </div>
           <div>
             <label className="label">Assign To *</label>
-            <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
+            <select
+              className="input"
+              required
+              value={form.assigneeId}
+              onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}
+            >
               <option value="">Select team member...</option>
               {users.map((u: any) => (
-                <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                <option key={u.id} value={u.id}>
+                  {u.firstName} {u.lastName}
+                </option>
               ))}
             </select>
           </div>
           <div>
             <label className="label">Description</label>
-            <textarea className="input" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Optional notes..." />
+            <textarea
+              className="input"
+              rows={2}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="Optional notes..."
+            />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" className="btn-primary">Create Task</button>
+            <button type="button" onClick={onClose} className="btn-secondary">
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary flex items-center gap-2" disabled={saving}>
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Creating...
+                </>
+              ) : (
+                'Create Task'
+              )}
+            </button>
           </div>
         </form>
       </div>

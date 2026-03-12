@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -40,6 +40,10 @@ import {
   RotateCcw,
   Upload,
   ImageIcon,
+  ArrowUpDown,
+  SlidersHorizontal,
+  Hash,
+  Calendar,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -60,6 +64,12 @@ const ROLE_LABELS: Record<string, string> = {
   SALES_REP: 'Sales Rep',
   VIEWER: 'Viewer',
 };
+
+type DivisionStatusFilter = 'ALL' | 'ACTIVE' | 'EMPTY';
+type DivisionUserCountFilter = 'ALL' | '0' | '1-5' | '5-10' | '10+';
+type DivisionLeadCountFilter = 'ALL' | 'NONE' | '1-10' | '10-50' | '50+';
+type DivisionSortKey = 'name-asc' | 'name-desc' | 'most-users' | 'most-leads' | 'highest-pipeline' | 'newest' | 'oldest';
+type UserStatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
 function formatAED(value: number): string {
   if (value >= 1_000_000) return `AED ${(value / 1_000_000).toFixed(1)}M`;
@@ -115,6 +125,215 @@ function StageBar({ stages }: { stages: Array<{ stage: string; count: number; va
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── Filter Badge ───────────────────────────────────────────────────
+function FilterBadge({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 ring-1 ring-brand-200 transition-all hover:bg-brand-100">
+      {label}
+      <button
+        onClick={onRemove}
+        className="ml-0.5 h-3.5 w-3.5 rounded-full flex items-center justify-center hover:bg-brand-200 transition-colors"
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </span>
+  );
+}
+
+// ─── Dropdown Wrapper ───────────────────────────────────────────────
+function FilterDropdown({
+  label,
+  icon: Icon,
+  value,
+  isActive,
+  children,
+}: {
+  label: string;
+  icon: React.ElementType;
+  value: string;
+  isActive: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    if (open) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
+          isActive
+            ? 'bg-brand-50 text-brand-700 border-brand-200 ring-1 ring-brand-100'
+            : 'bg-white text-text-secondary border-border-subtle hover:border-border-strong hover:text-text-primary'
+        }`}
+      >
+        <Icon className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">{label}:</span>
+        <span className={`${isActive ? 'font-semibold' : ''}`}>{value}</span>
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 min-w-[200px] bg-white rounded-xl shadow-lg border border-border-subtle py-1 animate-fade-in">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Per-Division User Filter Controls ──────────────────────────────
+function UserFilterBar({
+  divisionId,
+  roleFilters,
+  statusFilter,
+  onRoleToggle,
+  onStatusChange,
+  onClearAll,
+  hasActiveFilters,
+}: {
+  divisionId: string;
+  roleFilters: string[];
+  statusFilter: UserStatusFilter;
+  onRoleToggle: (role: string) => void;
+  onStatusChange: (status: UserStatusFilter) => void;
+  onClearAll: () => void;
+  hasActiveFilters: boolean;
+}) {
+  const [showRoleDropdown, setShowRoleDropdown] = useState(false);
+  const roleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowRoleDropdown(false);
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      if (roleRef.current && !roleRef.current.contains(e.target as Node)) setShowRoleDropdown(false);
+    };
+    if (showRoleDropdown) {
+      document.addEventListener('keydown', handleEscape);
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('keydown', handleEscape);
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [showRoleDropdown]);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Role Multi-Select */}
+      <div ref={roleRef} className="relative">
+        <button
+          onClick={() => setShowRoleDropdown(!showRoleDropdown)}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+            roleFilters.length > 0
+              ? 'bg-blue-50 text-blue-700 border-blue-200'
+              : 'bg-white text-text-secondary border-border-subtle hover:border-border-strong'
+          }`}
+        >
+          <Shield className="h-3 w-3" />
+          Roles
+          {roleFilters.length > 0 && (
+            <span className="h-4 min-w-[16px] px-1 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center">
+              {roleFilters.length}
+            </span>
+          )}
+          <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showRoleDropdown ? 'rotate-180' : ''}`} />
+        </button>
+        {showRoleDropdown && (
+          <div className="absolute top-full left-0 mt-1 z-50 w-48 bg-white rounded-xl shadow-lg border border-border-subtle py-1 animate-fade-in">
+            {ROLES.map((r) => (
+              <label
+                key={r}
+                className="flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-surface-secondary cursor-pointer transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  checked={roleFilters.includes(r)}
+                  onChange={() => onRoleToggle(r)}
+                  className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                />
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${ROLE_COLORS[r]?.bg || 'bg-gray-100'} ${ROLE_COLORS[r]?.text || 'text-gray-600'}`}>
+                  {ROLE_LABELS[r]}
+                </span>
+              </label>
+            ))}
+            {roleFilters.length > 0 && (
+              <div className="border-t border-border-subtle mt-1 pt-1">
+                <button
+                  onClick={() => { roleFilters.forEach(r => onRoleToggle(r)); }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  Clear roles
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Status Filter */}
+      <div className="flex items-center gap-0.5 rounded-lg border border-border-subtle bg-white p-0.5">
+        {(['ALL', 'ACTIVE', 'INACTIVE'] as UserStatusFilter[]).map((s) => (
+          <button
+            key={s}
+            onClick={() => onStatusChange(s)}
+            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+              statusFilter === s
+                ? s === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' : s === 'INACTIVE' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-text-primary'
+                : 'text-text-tertiary hover:text-text-secondary'
+            }`}
+          >
+            {s === 'ALL' ? 'All' : s === 'ACTIVE' ? 'Active' : 'Inactive'}
+          </button>
+        ))}
+      </div>
+
+      {/* Active Filter Badges */}
+      {hasActiveFilters && (
+        <>
+          <div className="h-4 w-px bg-border-subtle" />
+          {roleFilters.map((r) => (
+            <FilterBadge key={r} label={ROLE_LABELS[r] || r} onRemove={() => onRoleToggle(r)} />
+          ))}
+          {statusFilter !== 'ALL' && (
+            <FilterBadge
+              label={statusFilter === 'ACTIVE' ? 'Active Users' : 'Inactive Users'}
+              onRemove={() => onStatusChange('ALL')}
+            />
+          )}
+          <button
+            onClick={onClearAll}
+            className="text-xs text-red-600 hover:text-red-700 font-medium hover:underline transition-colors"
+          >
+            Clear all
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -213,9 +432,17 @@ export default function DivisionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Global search/filter
+  // ── Global Division Filters ──────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState<DivisionStatusFilter>('ALL');
+  const [userCountFilter, setUserCountFilter] = useState<DivisionUserCountFilter>('ALL');
+  const [leadCountFilter, setLeadCountFilter] = useState<DivisionLeadCountFilter>('ALL');
+  const [sortKey, setSortKey] = useState<DivisionSortKey>('name-asc');
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+
+  // Per-division user filters
+  const [divisionRoleFilters, setDivisionRoleFilters] = useState<Record<string, string[]>>({});
+  const [divisionStatusFilters, setDivisionStatusFilters] = useState<Record<string, UserStatusFilter>>({});
 
   // Expanded panels per division
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
@@ -352,9 +579,32 @@ export default function DivisionsPage() {
     }
   };
 
-  // ── Filter Divisions ──────────────────────────────────────────────
+  // ── Count Active Division Filters ─────────────────────────────────
+  const activeDivisionFilterCount = useMemo(() => {
+    let count = 0;
+    if (searchQuery.trim()) count++;
+    if (statusFilter !== 'ALL') count++;
+    if (userCountFilter !== 'ALL') count++;
+    if (leadCountFilter !== 'ALL') count++;
+    if (sortKey !== 'name-asc') count++;
+    return count;
+  }, [searchQuery, statusFilter, userCountFilter, leadCountFilter, sortKey]);
+
+  const hasAnyDivisionFilter = activeDivisionFilterCount > 0;
+
+  const clearAllDivisionFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('ALL');
+    setUserCountFilter('ALL');
+    setLeadCountFilter('ALL');
+    setSortKey('name-asc');
+  };
+
+  // ── Filter & Sort Divisions ───────────────────────────────────────
   const filteredDivisions = useMemo(() => {
     let result = divisions;
+
+    // Full-text search across name, tradeName
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
@@ -363,8 +613,69 @@ export default function DivisionsPage() {
           (d.tradeName && d.tradeName.toLowerCase().includes(q))
       );
     }
-    return result;
-  }, [divisions, searchQuery]);
+
+    // Status filter
+    if (statusFilter === 'ACTIVE') {
+      result = result.filter((d) => (d._count?.users ?? 0) > 0);
+    } else if (statusFilter === 'EMPTY') {
+      result = result.filter((d) => (d._count?.users ?? 0) === 0);
+    }
+
+    // User count filter
+    if (userCountFilter !== 'ALL') {
+      result = result.filter((d) => {
+        const count = d._count?.users ?? 0;
+        switch (userCountFilter) {
+          case '0': return count === 0;
+          case '1-5': return count >= 1 && count <= 5;
+          case '5-10': return count >= 5 && count <= 10;
+          case '10+': return count > 10;
+          default: return true;
+        }
+      });
+    }
+
+    // Lead count filter
+    if (leadCountFilter !== 'ALL') {
+      result = result.filter((d) => {
+        const count = d._count?.leads ?? 0;
+        switch (leadCountFilter) {
+          case 'NONE': return count === 0;
+          case '1-10': return count >= 1 && count <= 10;
+          case '10-50': return count >= 10 && count <= 50;
+          case '50+': return count > 50;
+          default: return true;
+        }
+      });
+    }
+
+    // Sort
+    const sorted = [...result].sort((a, b) => {
+      switch (sortKey) {
+        case 'name-asc':
+          return a.name.localeCompare(b.name);
+        case 'name-desc':
+          return b.name.localeCompare(a.name);
+        case 'most-users':
+          return (b._count?.users ?? 0) - (a._count?.users ?? 0);
+        case 'most-leads':
+          return (b._count?.leads ?? 0) - (a._count?.leads ?? 0);
+        case 'highest-pipeline': {
+          const aVal = divisionStats[a.id]?.totalPipelineValue ?? 0;
+          const bVal = divisionStats[b.id]?.totalPipelineValue ?? 0;
+          return bVal - aVal;
+        }
+        case 'newest':
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        case 'oldest':
+          return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+        default:
+          return 0;
+      }
+    });
+
+    return sorted;
+  }, [divisions, searchQuery, statusFilter, userCountFilter, leadCountFilter, sortKey, divisionStats]);
 
   // ── Division Create/Edit ──────────────────────────────────────────
   const openCreateModal = () => {
@@ -551,10 +862,15 @@ export default function DivisionsPage() {
     }
   };
 
-  // ── Sort Users Helper ─────────────────────────────────────────────
+  // ── Sort Users Helper (enhanced with per-division role + status filters) ──
   const getSortedUsers = (divisionId: string, users: DivisionUser[]): DivisionUser[] => {
     const localSearch = (divisionUsersSearch[divisionId] || '').toLowerCase();
+    const roleFilters = divisionRoleFilters[divisionId] || [];
+    const userStatusFilter = divisionStatusFilters[divisionId] || 'ALL';
+
     let filtered = users;
+
+    // Text search
     if (localSearch) {
       filtered = filtered.filter(
         (u) =>
@@ -562,14 +878,24 @@ export default function DivisionsPage() {
           u.email.toLowerCase().includes(localSearch)
       );
     }
-    if (roleFilter !== 'ALL') {
-      filtered = filtered.filter((u) => u.role === roleFilter);
+
+    // Per-division role multi-select filter
+    if (roleFilters.length > 0) {
+      filtered = filtered.filter((u) => roleFilters.includes(u.role));
     }
-    const sortKey = divisionUsersSortKey[divisionId] || 'name';
+
+    // Per-division status filter
+    if (userStatusFilter === 'ACTIVE') {
+      filtered = filtered.filter((u) => u.isActive);
+    } else if (userStatusFilter === 'INACTIVE') {
+      filtered = filtered.filter((u) => !u.isActive);
+    }
+
+    const sortKeyVal = divisionUsersSortKey[divisionId] || 'name';
     const sortDir = divisionUsersSortDir[divisionId] || 'asc';
     const sorted = [...filtered].sort((a, b) => {
       let cmp = 0;
-      switch (sortKey) {
+      switch (sortKeyVal) {
         case 'name':
           cmp = `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
           break;
@@ -587,6 +913,9 @@ export default function DivisionsPage() {
           break;
         case 'status':
           cmp = Number(b.isActive) - Number(a.isActive);
+          break;
+        case 'lastLogin':
+          cmp = new Date(a.lastLoginAt || 0).getTime() - new Date(b.lastLoginAt || 0).getTime();
           break;
         default:
           cmp = 0;
@@ -607,8 +936,41 @@ export default function DivisionsPage() {
     }
   };
 
+  // ── Per-division filter helpers ───────────────────────────────────
+  const toggleDivisionRoleFilter = (divisionId: string, role: string) => {
+    setDivisionRoleFilters((prev) => {
+      const current = prev[divisionId] || [];
+      const next = current.includes(role) ? current.filter((r) => r !== role) : [...current, role];
+      return { ...prev, [divisionId]: next };
+    });
+  };
+
+  const setDivisionStatusFilter = (divisionId: string, status: UserStatusFilter) => {
+    setDivisionStatusFilters((prev) => ({ ...prev, [divisionId]: status }));
+  };
+
+  const clearDivisionUserFilters = (divisionId: string) => {
+    setDivisionRoleFilters((prev) => ({ ...prev, [divisionId]: [] }));
+    setDivisionStatusFilters((prev) => ({ ...prev, [divisionId]: 'ALL' }));
+  };
+
+  const hasDivisionUserFilters = (divisionId: string): boolean => {
+    return (divisionRoleFilters[divisionId] || []).length > 0 || (divisionStatusFilters[divisionId] || 'ALL') !== 'ALL';
+  };
+
   // ── Computed ──────────────────────────────────────────────────────
   const divisionToDelete = divisions.find((d) => d.id === deletingId);
+
+  // Sort label helper
+  const sortLabels: Record<DivisionSortKey, string> = {
+    'name-asc': 'Name A–Z',
+    'name-desc': 'Name Z–A',
+    'most-users': 'Most Users',
+    'most-leads': 'Most Leads',
+    'highest-pipeline': 'Highest Pipeline',
+    'newest': 'Newest First',
+    'oldest': 'Oldest First',
+  };
 
   // ═══════════════════════════════════════════════════════════════════
   // ── Render: Access Denied ─────────────────────────────────────────
@@ -669,30 +1031,200 @@ export default function DivisionsPage() {
         </button>
       </div>
 
-      {/* ── Search & Filter Bar ──────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
-          <input
-            type="text"
-            className="input pl-9 w-full"
-            placeholder="Search divisions..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-text-tertiary" />
-          <select
-            className="input py-2 pr-8"
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
+      {/* ═══ Sticky Search & Filter Bar ═══════════════════════════════ */}
+      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-md -mx-4 px-4 py-3 sm:-mx-6 sm:px-6 border-b border-border-subtle/50 space-y-3">
+        {/* Row 1: Search + Filter Toggle + Sort */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              type="text"
+              className="input pl-9 w-full"
+              placeholder="Search divisions by name or trade name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary hover:text-text-primary transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          {/* Filter Panel Toggle */}
+          <button
+            onClick={() => setShowFilterPanel(!showFilterPanel)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
+              showFilterPanel || hasAnyDivisionFilter
+                ? 'bg-brand-50 text-brand-700 border-brand-200'
+                : 'bg-white text-text-secondary border-border-subtle hover:border-border-strong'
+            }`}
           >
-            <option value="ALL">All Roles</option>
-            {ROLES.map((r) => (
-              <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+            <SlidersHorizontal className="h-4 w-4" />
+            Filters
+            {activeDivisionFilterCount > 0 && (
+              <span className="h-5 min-w-[20px] px-1 rounded-full bg-brand-600 text-white text-[10px] font-bold flex items-center justify-center">
+                {activeDivisionFilterCount}
+              </span>
+            )}
+          </button>
+
+          {/* Sort Dropdown */}
+          <FilterDropdown
+            label="Sort"
+            icon={ArrowUpDown}
+            value={sortLabels[sortKey]}
+            isActive={sortKey !== 'name-asc'}
+          >
+            {(Object.entries(sortLabels) as [DivisionSortKey, string][]).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setSortKey(key)}
+                className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                  sortKey === key
+                    ? 'bg-brand-50 text-brand-700 font-medium'
+                    : 'text-text-primary hover:bg-surface-secondary'
+                }`}
+              >
+                {label}
+              </button>
             ))}
-          </select>
+          </FilterDropdown>
+        </div>
+
+        {/* Row 2: Collapsible Filter Panel */}
+        {showFilterPanel && (
+          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border-subtle/50 animate-fade-in">
+            {/* Status Filter */}
+            <FilterDropdown
+              label="Status"
+              icon={CheckCircle2}
+              value={statusFilter === 'ALL' ? 'All' : statusFilter === 'ACTIVE' ? 'Active' : 'Empty'}
+              isActive={statusFilter !== 'ALL'}
+            >
+              {([
+                { key: 'ALL' as DivisionStatusFilter, label: 'All Divisions', desc: 'Show all divisions' },
+                { key: 'ACTIVE' as DivisionStatusFilter, label: 'Active', desc: 'Has at least 1 user' },
+                { key: 'EMPTY' as DivisionStatusFilter, label: 'Empty', desc: 'No users assigned' },
+              ]).map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setStatusFilter(opt.key)}
+                  className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                    statusFilter === opt.key
+                      ? 'bg-brand-50 text-brand-700 font-medium'
+                      : 'text-text-primary hover:bg-surface-secondary'
+                  }`}
+                >
+                  <div>{opt.label}</div>
+                  <div className="text-[11px] text-text-tertiary">{opt.desc}</div>
+                </button>
+              ))}
+            </FilterDropdown>
+
+            {/* User Count Filter */}
+            <FilterDropdown
+              label="Users"
+              icon={Users}
+              value={userCountFilter === 'ALL' ? 'Any' : userCountFilter}
+              isActive={userCountFilter !== 'ALL'}
+            >
+              {([
+                { key: 'ALL' as DivisionUserCountFilter, label: 'Any count' },
+                { key: '0' as DivisionUserCountFilter, label: 'No users (0)' },
+                { key: '1-5' as DivisionUserCountFilter, label: '1 – 5 users' },
+                { key: '5-10' as DivisionUserCountFilter, label: '5 – 10 users' },
+                { key: '10+' as DivisionUserCountFilter, label: '10+ users' },
+              ]).map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setUserCountFilter(opt.key)}
+                  className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                    userCountFilter === opt.key
+                      ? 'bg-brand-50 text-brand-700 font-medium'
+                      : 'text-text-primary hover:bg-surface-secondary'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </FilterDropdown>
+
+            {/* Lead Count Filter */}
+            <FilterDropdown
+              label="Leads"
+              icon={Target}
+              value={leadCountFilter === 'ALL' ? 'Any' : leadCountFilter === 'NONE' ? 'None' : leadCountFilter}
+              isActive={leadCountFilter !== 'ALL'}
+            >
+              {([
+                { key: 'ALL' as DivisionLeadCountFilter, label: 'Any count' },
+                { key: 'NONE' as DivisionLeadCountFilter, label: 'No leads (0)' },
+                { key: '1-10' as DivisionLeadCountFilter, label: '1 – 10 leads' },
+                { key: '10-50' as DivisionLeadCountFilter, label: '10 – 50 leads' },
+                { key: '50+' as DivisionLeadCountFilter, label: '50+ leads' },
+              ]).map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setLeadCountFilter(opt.key)}
+                  className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                    leadCountFilter === opt.key
+                      ? 'bg-brand-50 text-brand-700 font-medium'
+                      : 'text-text-primary hover:bg-surface-secondary'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </FilterDropdown>
+
+            {/* Clear All */}
+            {hasAnyDivisionFilter && (
+              <button
+                onClick={clearAllDivisionFilters}
+                className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 border border-red-200 transition-all"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear All
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Row 3: Active Filter Badges + Results Count */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {searchQuery.trim() && (
+              <FilterBadge label={`Search: "${searchQuery}"`} onRemove={() => setSearchQuery('')} />
+            )}
+            {statusFilter !== 'ALL' && (
+              <FilterBadge
+                label={`Status: ${statusFilter === 'ACTIVE' ? 'Active' : 'Empty'}`}
+                onRemove={() => setStatusFilter('ALL')}
+              />
+            )}
+            {userCountFilter !== 'ALL' && (
+              <FilterBadge label={`Users: ${userCountFilter}`} onRemove={() => setUserCountFilter('ALL')} />
+            )}
+            {leadCountFilter !== 'ALL' && (
+              <FilterBadge label={`Leads: ${leadCountFilter === 'NONE' ? 'None' : leadCountFilter}`} onRemove={() => setLeadCountFilter('ALL')} />
+            )}
+            {sortKey !== 'name-asc' && (
+              <FilterBadge label={`Sort: ${sortLabels[sortKey]}`} onRemove={() => setSortKey('name-asc')} />
+            )}
+          </div>
+
+          {/* Results Count */}
+          {!loading && (
+            <p className="text-xs text-text-tertiary font-medium flex-shrink-0">
+              Showing <span className="text-text-primary font-semibold">{filteredDivisions.length}</span> of{' '}
+              <span className="text-text-primary font-semibold">{divisions.length}</span> divisions
+            </p>
+          )}
         </div>
       </div>
 
@@ -736,9 +1268,14 @@ export default function DivisionsPage() {
         <div className="flex flex-col items-center justify-center py-16 bg-white rounded-2xl border border-border-subtle">
           <Search className="h-10 w-10 text-text-tertiary mb-3" />
           <h3 className="text-lg font-semibold text-text-primary mb-1">No divisions found</h3>
-          <p className="text-sm text-text-secondary">
+          <p className="text-sm text-text-secondary mb-3">
             Try adjusting your search or filters.
           </p>
+          {hasAnyDivisionFilter && (
+            <button onClick={clearAllDivisionFilters} className="text-sm text-brand-600 hover:text-brand-700 font-medium">
+              Clear all filters
+            </button>
+          )}
         </div>
       )}
 
@@ -758,6 +1295,9 @@ export default function DivisionsPage() {
             const pipelineVal = stats?.totalPipelineValue ?? 0;
             const convRate = stats?.conversionRate ?? 0;
             const avgLead = stats?.avgLeadValue ?? 0;
+            const divRoleFilters = divisionRoleFilters[division.id] || [];
+            const divStatusFilter = divisionStatusFilters[division.id] || 'ALL';
+            const hasUserFilters = hasDivisionUserFilters(division.id);
 
             return (
               <div
@@ -953,39 +1493,52 @@ export default function DivisionsPage() {
                 {usersExpanded && (
                   <div className="border-t border-border-subtle">
                     {/* User toolbar */}
-                    <div className="px-6 py-3 bg-surface-secondary/30 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 justify-between">
-                      <div className="relative flex-1 max-w-xs">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary" />
-                        <input
-                          type="text"
-                          className="input pl-8 py-1.5 text-sm w-full"
-                          placeholder="Search users..."
-                          value={divisionUsersSearch[division.id] || ''}
-                          onChange={(e) =>
-                            setDivisionUsersSearch((p) => ({ ...p, [division.id]: e.target.value }))
-                          }
-                        />
+                    <div className="px-6 py-3 bg-surface-secondary/30 space-y-2">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 justify-between">
+                        <div className="relative flex-1 max-w-xs">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary" />
+                          <input
+                            type="text"
+                            className="input pl-8 py-1.5 text-sm w-full"
+                            placeholder="Search users..."
+                            value={divisionUsersSearch[division.id] || ''}
+                            onChange={(e) =>
+                              setDivisionUsersSearch((p) => ({ ...p, [division.id]: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => fetchDivisionUsers(division.id)}
+                            className="btn-icon h-8 w-8"
+                            title="Refresh users"
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${usersLoading ? 'animate-spin' : ''}`} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setInviteDiv(division.id);
+                              setInviteForm({ firstName: '', lastName: '', email: '', password: '', role: 'SALES_REP' });
+                              setInviteError('');
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-brand-500 text-white hover:bg-brand-600 transition-colors"
+                          >
+                            <UserPlus className="h-3.5 w-3.5" />
+                            Invite User
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => fetchDivisionUsers(division.id)}
-                          className="btn-icon h-8 w-8"
-                          title="Refresh users"
-                        >
-                          <RefreshCw className={`h-3.5 w-3.5 ${usersLoading ? 'animate-spin' : ''}`} />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setInviteDiv(division.id);
-                            setInviteForm({ firstName: '', lastName: '', email: '', password: '', role: 'SALES_REP' });
-                            setInviteError('');
-                          }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-brand-500 text-white hover:bg-brand-600 transition-colors"
-                        >
-                          <UserPlus className="h-3.5 w-3.5" />
-                          Invite User
-                        </button>
-                      </div>
+
+                      {/* Per-Division Filter Bar */}
+                      <UserFilterBar
+                        divisionId={division.id}
+                        roleFilters={divRoleFilters}
+                        statusFilter={divStatusFilter}
+                        onRoleToggle={(role) => toggleDivisionRoleFilter(division.id, role)}
+                        onStatusChange={(status) => setDivisionStatusFilter(division.id, status)}
+                        onClearAll={() => clearDivisionUserFilters(division.id)}
+                        hasActiveFilters={hasUserFilters}
+                      />
                     </div>
 
                     {/* Users loading */}
@@ -1026,25 +1579,25 @@ export default function DivisionsPage() {
                                 { key: 'status', label: 'Status' },
                                 { key: 'leads', label: 'Leads' },
                                 { key: 'tasks', label: 'Tasks' },
+                                { key: 'lastLogin', label: 'Last Login' },
                               ].map(({ key, label }) => (
                                 <th
                                   key={key}
-                                  className="text-left text-[11px] font-semibold text-text-secondary uppercase tracking-wider px-4 py-2.5 cursor-pointer hover:text-text-primary select-none"
+                                  className="text-left text-[11px] font-semibold text-text-secondary uppercase tracking-wider px-4 py-2.5 cursor-pointer hover:text-text-primary select-none group"
                                   onClick={() => toggleSort(division.id, key)}
                                 >
                                   <span className="flex items-center gap-1">
                                     {label}
-                                    {divisionUsersSortKey[division.id] === key && (
+                                    {divisionUsersSortKey[division.id] === key ? (
                                       divisionUsersSortDir[division.id] === 'asc'
-                                        ? <ChevronUp className="h-3 w-3" />
-                                        : <ChevronDown className="h-3 w-3" />
+                                        ? <ChevronUp className="h-3 w-3 text-brand-500" />
+                                        : <ChevronDown className="h-3 w-3 text-brand-500" />
+                                    ) : (
+                                      <ArrowUpDown className="h-3 w-3 opacity-0 group-hover:opacity-40 transition-opacity" />
                                     )}
                                   </span>
                                 </th>
                               ))}
-                              <th className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider px-4 py-2.5">
-                                Last Login
-                              </th>
                               <th className="text-right text-[11px] font-semibold text-text-secondary uppercase tracking-wider px-4 py-2.5">
                                 Actions
                               </th>
@@ -1109,7 +1662,12 @@ export default function DivisionsPage() {
                                 {/* Last Login */}
                                 <td className="px-4 py-3">
                                   <span className="text-xs text-text-tertiary">
-                                    {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never'}
+                                    {u.lastLoginAt
+                                      ? new Date(u.lastLoginAt).toLocaleString('en-AE', {
+                                          month: 'short', day: 'numeric', year: 'numeric',
+                                          hour: '2-digit', minute: '2-digit',
+                                        })
+                                      : 'Never'}
                                   </span>
                                 </td>
                                 {/* Actions */}
@@ -1144,6 +1702,22 @@ export default function DivisionsPage() {
                         {sortedUsers.length === 0 && users.length > 0 && (
                           <div className="text-center py-6">
                             <p className="text-sm text-text-tertiary">No users match the current filters.</p>
+                            {hasUserFilters && (
+                              <button
+                                onClick={() => clearDivisionUserFilters(division.id)}
+                                className="mt-1 text-xs text-brand-600 hover:text-brand-700 font-medium"
+                              >
+                                Clear user filters
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {/* User results count */}
+                        {users.length > 0 && (
+                          <div className="px-4 py-2 border-t border-border-subtle bg-surface-secondary/10">
+                            <p className="text-[11px] text-text-tertiary">
+                              Showing {sortedUsers.length} of {users.length} users
+                            </p>
                           </div>
                         )}
                       </div>
