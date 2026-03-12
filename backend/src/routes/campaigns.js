@@ -4,6 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 
@@ -387,6 +388,15 @@ router.post('/', validate(createCampaignSchema), async (req, res, next) => {
       ...campaign,
       budget: campaign.budget ? parseFloat(campaign.budget) : null,
     });
+
+    // ── Fire-and-forget notification — notify org admins ──
+    notifyOrgAdmins(targetOrgId, {
+      type: NOTIFICATION_TYPES.CAMPAIGN_STARTED,
+      title: 'New Campaign Created',
+      message: `${req.user.firstName} ${req.user.lastName} created campaign: ${name}`,
+      entityType: 'campaign',
+      entityId: campaign.id,
+    }, req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -544,6 +554,33 @@ router.put('/:id', validate(updateCampaignSchema), async (req, res, next) => {
       ...campaign,
       budget: campaign.budget ? parseFloat(campaign.budget) : null,
     });
+
+    // ── Fire-and-forget notifications ──
+    const campaignName = campaign.name;
+
+    if (req.body.status && req.body.status !== existing.status) {
+      if (req.body.status === 'ACTIVE') {
+        // Campaign activated → notify org admins
+        notifyOrgAdmins(existing.organizationId, {
+          type: NOTIFICATION_TYPES.CAMPAIGN_STARTED,
+          title: 'Campaign Activated',
+          message: `Campaign ${campaignName} is now active`,
+          entityType: 'campaign',
+          entityId: campaign.id,
+        }, req.user.id).catch(() => {});
+      }
+
+      if (req.body.status === 'COMPLETED') {
+        // Campaign completed → notify org admins
+        notifyOrgAdmins(existing.organizationId, {
+          type: NOTIFICATION_TYPES.CAMPAIGN_COMPLETED,
+          title: 'Campaign Completed',
+          message: `Campaign ${campaignName} completed`,
+          entityType: 'campaign',
+          entityId: campaign.id,
+        }, req.user.id).catch(() => {});
+      }
+    }
   } catch (err) {
     next(err);
   }

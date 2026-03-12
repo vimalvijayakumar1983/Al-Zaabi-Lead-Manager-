@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 
@@ -115,6 +116,15 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
     });
 
     res.status(201).json(division);
+
+    // ── Fire-and-forget notification — notify org admins (super admins) ──
+    notifyOrgAdmins(req.user.organizationId, {
+      type: NOTIFICATION_TYPES.DIVISION_CREATED,
+      title: 'New Division Created',
+      message: `${req.user.firstName} ${req.user.lastName} created division: ${name}`,
+      entityType: 'division',
+      entityId: division.id,
+    }, req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }

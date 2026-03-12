@@ -390,3 +390,87 @@ export interface PaginatedResponse<T> {
     hasPrev: boolean;
   };
 }
+
+// ─── Notifications ───────────────────────────────────────────────
+
+export type NotificationType =
+  | 'LEAD_CREATED'
+  | 'LEAD_ASSIGNED'
+  | 'LEAD_STATUS_CHANGED'
+  | 'LEAD_WON'
+  | 'LEAD_LOST'
+  | 'LEAD_SCORE_CHANGED'
+  | 'TASK_ASSIGNED'
+  | 'TASK_DUE_SOON'
+  | 'TASK_OVERDUE'
+  | 'TASK_COMPLETED'
+  | 'PIPELINE_STAGE_CHANGED'
+  | 'CAMPAIGN_STARTED'
+  | 'CAMPAIGN_COMPLETED'
+  | 'CAMPAIGN_BUDGET_ALERT'
+  | 'INTEGRATION_CONNECTED'
+  | 'INTEGRATION_ERROR'
+  | 'INTEGRATION_LEAD_RECEIVED'
+  | 'TEAM_MEMBER_INVITED'
+  | 'TEAM_MEMBER_ROLE_CHANGED'
+  | 'TEAM_MEMBER_DEACTIVATED'
+  | 'DIVISION_CREATED'
+  | 'DIVISION_USER_TRANSFERRED'
+  | 'IMPORT_COMPLETED'
+  | 'IMPORT_FAILED'
+  | 'AUTOMATION_TRIGGERED'
+  | 'AUTOMATION_ERROR'
+  | 'SYSTEM_ANNOUNCEMENT';
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  isRead: boolean;
+  isArchived: boolean;
+  metadata?: Record<string, unknown>;
+  entityType?: string;
+  entityId?: string;
+  userId: string;
+  actorId?: string;
+  actor?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    avatar?: string;
+  };
+  organizationId: string;
+  readAt?: string;
+  createdAt: string;
+}
+
+export interface NotificationFilters {
+  type?: NotificationType;
+  isRead?: boolean;
+  entityType?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface NotificationPreferences {
+  soundEnabled: boolean;
+  desktopEnabled: boolean;
+  emailEnabled: boolean;
+  leads: boolean;
+  tasks: boolean;
+  campaigns: boolean;
+  integrations: boolean;
+  team: boolean;
+  system: boolean;
+}
+
+export interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'warning' | 'info';
+  title: string;
+  message: string;
+  duration?: number;
+  entityType?: string;
+  entityId?: string;
+}

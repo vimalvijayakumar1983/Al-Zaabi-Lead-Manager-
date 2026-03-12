@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -143,6 +144,15 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
     });
 
     res.status(201).json(user);
+
+    // ── Fire-and-forget notification — notify org admins ──
+    notifyOrgAdmins(targetOrgId, {
+      type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED,
+      title: 'New Team Member',
+      message: `${req.user.firstName} ${req.user.lastName} invited ${email}`,
+      entityType: 'user',
+      entityId: user.id,
+    }, req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -172,6 +182,20 @@ router.put('/:id', authorize('ADMIN'), validate(z.object({
       },
     });
     res.json(user);
+
+    // ── Fire-and-forget notification — if role changed, notify the user ──
+    if (req.validated.role && req.validated.role !== existing.role) {
+      createNotification({
+        type: NOTIFICATION_TYPES.TEAM_MEMBER_ROLE_CHANGED,
+        title: 'Role Updated',
+        message: `Your role has been changed to ${req.validated.role}`,
+        userId: req.params.id,
+        actorId: req.user.id,
+        entityType: 'user',
+        entityId: req.params.id,
+        organizationId: existing.organizationId,
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
@@ -240,6 +264,15 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
       data: { isActive: false },
     });
     res.json({ message: 'User deactivated' });
+
+    // ── Fire-and-forget notification — notify org admins ──
+    notifyOrgAdmins(existing.organizationId, {
+      type: NOTIFICATION_TYPES.TEAM_MEMBER_DEACTIVATED,
+      title: 'Team Member Deactivated',
+      message: `${req.user.firstName} ${req.user.lastName} deactivated ${existing.firstName} ${existing.lastName}`,
+      entityType: 'user',
+      entityId: existing.id,
+    }, req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }

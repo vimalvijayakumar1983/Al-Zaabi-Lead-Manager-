@@ -5,6 +5,7 @@ const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { notifyUser } = require('../websocket/server');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -109,6 +110,20 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
     }
 
     res.status(201).json(task);
+
+    // ── Fire-and-forget notification ──
+    if (data.assigneeId && data.assigneeId !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.TASK_ASSIGNED,
+        title: 'New Task Assigned',
+        message: `${req.user.firstName} ${req.user.lastName} assigned you task: ${task.title}`,
+        userId: data.assigneeId,
+        actorId: req.user.id,
+        entityType: 'task',
+        entityId: task.id,
+        organizationId: req.user.organizationId,
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
@@ -167,6 +182,20 @@ router.post('/:id/complete', async (req, res, next) => {
     }
 
     res.json(task);
+
+    // ── Fire-and-forget notification — notify task creator ──
+    if (task.createdById && task.createdById !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.TASK_COMPLETED,
+        title: 'Task Completed',
+        message: `${req.user.firstName} ${req.user.lastName} completed task: ${task.title}`,
+        userId: task.createdById,
+        actorId: req.user.id,
+        entityType: 'task',
+        entityId: task.id,
+        organizationId: req.user.organizationId,
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }

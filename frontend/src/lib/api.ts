@@ -2,7 +2,8 @@ import type {
   Organization, DivisionUser, DivisionStats,
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
-  ApiKey, WidgetConfig
+  ApiKey, WidgetConfig,
+  AppNotification, NotificationPreferences
 } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
@@ -486,13 +487,7 @@ class ApiClient {
     return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  async getNotificationPreferences() {
-    return this.request<any>('/settings/notifications');
-  }
-
-  async updateNotificationPreferences(data: Record<string, boolean>) {
-    return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
-  }
+  // Notification preferences moved to /notifications/preferences
 
   async getAuditLog() {
     return this.request<any[]>('/settings/audit-log');
@@ -572,6 +567,60 @@ class ApiClient {
 
   async resetDivisionUserPassword(divisionId: string, userId: string, newPassword: string) {
     return this.request<any>(`/divisions/${divisionId}/users/${userId}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
+  }
+}
+
+
+
+  // ─── Notifications ───────────────────────────────────────────────
+
+  async getNotifications(params?: Record<string, string | number>) {
+    const query = params
+      ? '?' + new URLSearchParams(params as Record<string, string>).toString()
+      : '';
+    return this.request<{
+      data: AppNotification[];
+      pagination: { page: number; limit: number; total: number; totalPages: number };
+    }>(`/notifications${query}`);
+  }
+
+  async getUnreadCount() {
+    return this.request<{ count: number }>('/notifications/unread-count');
+  }
+
+  async markNotificationRead(id: string) {
+    return this.request<{ success: boolean }>(`/notifications/${id}/read`, {
+      method: 'POST',
+    });
+  }
+
+  async markAllNotificationsRead() {
+    return this.request<{ success: boolean }>('/notifications/read-all', {
+      method: 'POST',
+    });
+  }
+
+  async archiveNotification(id: string) {
+    return this.request<{ success: boolean }>(`/notifications/${id}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteNotification(id: string) {
+    return this.request<{ success: boolean }>(`/notifications/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getNotificationPreferences() {
+    return this.request<NotificationPreferences>('/notifications/preferences');
+  }
+
+  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
+    return this.request<NotificationPreferences>('/notifications/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
   }
 }
 

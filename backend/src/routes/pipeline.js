@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -135,6 +136,20 @@ router.post('/move', validate(z.object({
     });
 
     res.json(updated);
+
+    // ── Fire-and-forget notification — notify lead owner ──
+    if (stageId !== lead.stageId && lead.assignedToId && lead.assignedToId !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.PIPELINE_STAGE_CHANGED,
+        title: 'Lead Moved',
+        message: `${lead.firstName} ${lead.lastName} moved to ${stage.name}`,
+        userId: lead.assignedToId,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: leadId,
+        organizationId: lead.organizationId,
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }

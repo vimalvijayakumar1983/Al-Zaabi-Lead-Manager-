@@ -6,6 +6,7 @@ const { Readable } = require('stream');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -473,6 +474,33 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       totalRows: rows.length,
       errors: errors.slice(0, 50),
     });
+
+    // ── Fire-and-forget notification — notify the importing user ──
+    if (errors.length === 0 || imported > 0) {
+      createNotification({
+        type: NOTIFICATION_TYPES.IMPORT_COMPLETED,
+        title: 'Import Complete',
+        message: `Imported ${imported} ${module} records${updated > 0 ? `, updated ${updated}` : ''}${skipped > 0 ? `, skipped ${skipped}` : ''}`,
+        userId: req.user.id,
+        actorId: req.user.id,
+        entityType: 'import',
+        entityId: importRecord?.id || null,
+        organizationId: req.user.organizationId,
+      }).catch(() => {});
+    }
+
+    if (errors.length > 0 && imported === 0) {
+      createNotification({
+        type: NOTIFICATION_TYPES.IMPORT_FAILED,
+        title: 'Import Failed',
+        message: `Import failed: ${errors.length} errors, ${skipped} rows skipped`,
+        userId: req.user.id,
+        actorId: req.user.id,
+        entityType: 'import',
+        entityId: importRecord?.id || null,
+        organizationId: req.user.organizationId,
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }

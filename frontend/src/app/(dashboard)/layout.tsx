@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore } from '@/lib/permissions';
+import { useNotificationStore } from '@/store/notificationStore';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
+import NotificationCenter from '@/components/NotificationCenter';
+import { ToastProvider } from '@/components/ToastProvider';
 import { GlobalSearch } from './components/global-search';
 import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown } from 'lucide-react';
 
@@ -17,7 +20,6 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/analytics': { title: 'Analytics', description: 'Reports and performance metrics' },
   '/automations': { title: 'Automations', description: 'Workflow automation rules' },
   '/campaigns': { title: 'Campaigns', description: 'Marketing campaign management' },
-  '/integrations': { title: 'Integrations', description: 'Connect lead sources and manage data flow' },
   '/team': { title: 'Team', description: 'Team members and access control' },
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
   '/import': { title: 'Import Center', description: 'Import data from files' },
@@ -29,6 +31,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const { isAuthenticated, isLoading, loadUser, user } = useAuthStore();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Notification Center state
+  const [notifOpen, setNotifOpen] = useState(false);
+  const bellRef = useRef<HTMLButtonElement>(null);
+  const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket } =
+    useNotificationStore();
 
   // Organization branding state
   const [orgBranding, setOrgBranding] = useState<{
@@ -107,6 +115,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isLoading, isAuthenticated, router]);
 
+  // Connect WebSocket and fetch unread count when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      const token = localStorage.getItem('token');
+      if (token) {
+        connectWebSocket(token);
+        fetchUnreadCount();
+      }
+    }
+    return () => disconnectWebSocket();
+  }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
+
   // Detect sidebar collapse from CSS variable
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -155,7 +175,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/analytics': 'analytics',
     '/automations': 'automations',
     '/campaigns': 'campaigns',
-    '/integrations': 'settings',
     '/team': 'team',
     '/settings': 'settings',
     '/import': 'leads',
@@ -233,10 +252,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
           <div className="flex items-center gap-2">
             <GlobalSearch />
-            <button className="btn-icon relative" title="Notifications">
+            <button
+              ref={bellRef}
+              className="btn-icon relative"
+              title="Notifications"
+              onClick={() => setNotifOpen(!notifOpen)}
+            >
               <Bell className="h-4.5 w-4.5" />
-              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 h-4.5 min-w-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ring-2 ring-white px-1">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
             </button>
+            <NotificationCenter
+              isOpen={notifOpen}
+              onClose={() => setNotifOpen(false)}
+              anchorRef={bellRef}
+            />
             <button className="btn-icon" title="Help">
               <HelpCircle className="h-4.5 w-4.5" />
             </button>
@@ -245,6 +278,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Page content */}
         <div className="p-6">{children}</div>
+
+        {/* Toast notifications */}
+        <ToastProvider />
       </main>
     </div>
   );

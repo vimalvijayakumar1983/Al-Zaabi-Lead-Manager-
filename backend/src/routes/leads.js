@@ -8,6 +8,7 @@ const { calculateLeadScore, predictConversion } = require('../utils/leadScoring'
 const { detectDuplicates } = require('../utils/duplicateDetection');
 const { createAuditLog } = require('../middleware/auditLog');
 const { notifyUser } = require('../websocket/server');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -427,7 +428,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
       return created;
     });
 
-    // Notify assigned user
+    // Notify assigned user (websocket — existing)
     if (lead.assignedToId && lead.assignedToId !== req.user.id) {
       notifyUser(lead.assignedToId, {
         type: 'lead_assigned',
@@ -446,6 +447,30 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     });
 
     res.status(201).json(lead);
+
+    // ── Fire-and-forget notifications ──
+    // Notify assigned user (if different from creator)
+    if (lead.assignedToId && lead.assignedToId !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+        title: 'New Lead Assigned',
+        message: `${req.user.firstName} ${req.user.lastName} assigned lead ${lead.firstName} ${lead.lastName} to you`,
+        userId: lead.assignedToId,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: lead.id,
+        organizationId: targetOrgId,
+      }).catch(() => {});
+    }
+
+    // Notify org admins about new lead
+    notifyOrgAdmins(targetOrgId, {
+      type: NOTIFICATION_TYPES.LEAD_CREATED,
+      title: 'New Lead Created',
+      message: `${req.user.firstName} ${req.user.lastName} created lead ${lead.firstName} ${lead.lastName}`,
+      entityType: 'lead',
+      entityId: lead.id,
+    }, req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -559,6 +584,85 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     });
 
     res.json(lead);
+
+    // ── Fire-and-forget notifications ──
+    const leadName = `${lead.firstName} ${lead.lastName}`;
+    const actorName = `${req.user.firstName} ${req.user.lastName}`;
+
+    // Status changed notification
+    if (data.status && data.status !== existing.status) {
+      // General status change → notify lead owner
+      if (existing.assignedToId && existing.assignedToId !== req.user.id) {
+        createNotification({
+          type: NOTIFICATION_TYPES.LEAD_STATUS_CHANGED,
+          title: 'Lead Status Changed',
+          message: `${actorName} changed ${leadName} status to ${data.status}`,
+          userId: existing.assignedToId,
+          actorId: req.user.id,
+          entityType: 'lead',
+          entityId: lead.id,
+          organizationId: existing.organizationId,
+        }).catch(() => {});
+      }
+
+      // Won → notify team
+      if (data.status === 'WON' && existing.status !== 'WON') {
+        notifyTeamMembers(existing.organizationId, {
+          type: NOTIFICATION_TYPES.LEAD_WON,
+          title: '🎉 Lead Won!',
+          message: `${leadName} marked as Won by ${actorName}`,
+          entityType: 'lead',
+          entityId: lead.id,
+        }, req.user.id).catch(() => {});
+      }
+
+      // Lost → notify lead owner
+      if (data.status === 'LOST' && existing.status !== 'LOST') {
+        if (existing.assignedToId && existing.assignedToId !== req.user.id) {
+          createNotification({
+            type: NOTIFICATION_TYPES.LEAD_LOST,
+            title: 'Lead Lost',
+            message: `${leadName} marked as Lost`,
+            userId: existing.assignedToId,
+            actorId: req.user.id,
+            entityType: 'lead',
+            entityId: lead.id,
+            organizationId: existing.organizationId,
+          }).catch(() => {});
+        }
+      }
+    }
+
+    // Assignment changed → notify new assignee
+    if (data.assignedToId && data.assignedToId !== existing.assignedToId) {
+      createNotification({
+        type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+        title: 'Lead Assigned to You',
+        message: `${actorName} assigned ${leadName} to you`,
+        userId: data.assignedToId,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: lead.id,
+        organizationId: existing.organizationId,
+      }).catch(() => {});
+    }
+
+    // Score changed significantly (>10 points) → notify lead owner
+    if (existing.score !== null && updateData.score !== undefined) {
+      const scoreDiff = Math.abs((updateData.score || 0) - (existing.score || 0));
+      if (scoreDiff > 10 && existing.assignedToId) {
+        createNotification({
+          type: NOTIFICATION_TYPES.LEAD_SCORE_CHANGED,
+          title: 'Lead Score Updated',
+          message: `${leadName} score updated to ${updateData.score}`,
+          userId: existing.assignedToId,
+          actorId: req.user.id,
+          entityType: 'lead',
+          entityId: lead.id,
+          organizationId: existing.organizationId,
+        }).catch(() => {});
+      }
+    }
   } catch (err) {
     next(err);
   }
@@ -645,6 +749,15 @@ router.patch('/bulk', validate(z.object({
     });
 
     res.json({ message: `${leadIds.length} leads updated` });
+
+    // ── Fire-and-forget notification ──
+    notifyOrgAdmins(req.user.organizationId, {
+      type: NOTIFICATION_TYPES.LEAD_STATUS_CHANGED,
+      title: 'Bulk Lead Update',
+      message: `${req.user.firstName} ${req.user.lastName} updated ${leadIds.length} leads`,
+      entityType: 'lead',
+      entityId: null,
+    }, req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }

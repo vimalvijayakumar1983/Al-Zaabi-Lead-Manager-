@@ -26,6 +26,7 @@ const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
 const integrationsRoutes = require('./routes/integrations');
 const publicLeadsRoutes = require('./routes/public-leads');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 const server = createServer(app);
@@ -82,6 +83,7 @@ app.use('/api/import', importRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/integrations', integrationsRoutes);
 app.use('/api/public', publicLeadsRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);
