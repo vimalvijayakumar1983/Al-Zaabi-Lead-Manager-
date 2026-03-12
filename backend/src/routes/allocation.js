@@ -193,17 +193,18 @@ router.get('/stats', validateQuery(statsQuerySchema), async (req, res, next) => 
  */
 router.post(
   '/auto-allocate',
-  authorize('ADMIN', 'MANAGER'),
+  authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'),
   validate(autoAllocateBodySchema),
   async (req, res, next) => {
     try {
       const { maxCount } = req.validated;
-      const orgId = req.orgId;
+      const orgIds = req.orgIds;
+      const orgId = req.orgId || (orgIds && orgIds.length > 0 ? orgIds[0] : null);
 
       // Fetch unassigned, non-archived leads
       const unassignedLeads = await prisma.lead.findMany({
         where: {
-          organizationId: orgId,
+          organizationId: { in: orgIds },
           assignedToId: null,
           isArchived: false,
           status: { notIn: ['WON', 'LOST'] },
@@ -212,6 +213,7 @@ router.post(
         take: maxCount,
         select: {
           id: true,
+          organizationId: true,
           firstName: true,
           lastName: true,
           source: true,
@@ -231,7 +233,7 @@ router.post(
 
       for (const lead of unassignedLeads) {
         try {
-          const assigneeId = await autoAssign(orgId, lead);
+          const assigneeId = await autoAssign(lead.organizationId, lead);
           if (!assigneeId) continue;
 
           const updated = await prisma.$transaction(async (tx) => {
@@ -359,12 +361,13 @@ router.get('/rules', async (req, res, next) => {
  */
 router.put(
   '/rules',
-  authorize('ADMIN'),
+  authorize('SUPER_ADMIN', 'ADMIN'),
   validate(allocationRulesSchema),
   async (req, res, next) => {
     try {
       const rules = req.validated;
-      const orgId = req.orgId;
+      const orgIds = req.orgIds;
+      const orgId = req.orgId || (orgIds && orgIds.length > 0 ? orgIds[0] : null);
 
       // Validate that assignToId references exist and belong to the org
       if (rules.sourceRules.length > 0) {
