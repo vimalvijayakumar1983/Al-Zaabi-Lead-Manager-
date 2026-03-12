@@ -38,30 +38,38 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
-    // 1. Disconnect WebSocket first (prevents reconnect attempts with null token)
+    // 1. Set logging-out flag FIRST to prevent 401 handler and layout
+    //    useEffect from doing competing redirects
+    if (typeof window !== 'undefined') {
+      (window as any).__loggingOut = true;
+    }
+
+    // 2. Disconnect WebSocket first (prevents reconnect attempts with null token)
     try {
       useNotificationStore.getState().disconnectWebSocket();
     } catch {
       // Ignore errors during cleanup
     }
 
-    // 2. Clear auth token
+    // 3. Clear auth token
     api.setToken(null);
 
-    // 3. Clear all stored session data
+    // 4. Clear all stored session data
     if (typeof window !== 'undefined') {
       localStorage.removeItem('organization');
       localStorage.removeItem('divisions');
       localStorage.removeItem('activeDivisionId');
     }
 
-    // 4. Clear Zustand state
-    set({ user: null, isAuthenticated: false });
-
-    // 5. Hard redirect to login (avoids race conditions with soft navigation)
+    // 5. Hard redirect BEFORE clearing Zustand state.
+    //    This prevents React from re-rendering with isAuthenticated=false
+    //    (which used to cause hooks-order crashes before the layout fix).
     if (typeof window !== 'undefined') {
       window.location.href = '/login';
     }
+
+    // 6. Clear Zustand state (for non-browser / SSR contexts)
+    set({ user: null, isAuthenticated: false });
   },
 
   loadUser: async () => {

@@ -39,6 +39,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket } =
     useNotificationStore();
 
+  // IMPORTANT: usePermissionsStore must be called here at the top level,
+  // BEFORE any conditional returns. React requires hooks to always be
+  // called in the same order on every render. Moving this after a
+  // conditional return (like `if (!isAuthenticated) return null`) causes
+  // "Rendered fewer hooks than expected" crashes during sign-out.
+  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
+
   // Organization branding state
   const [orgBranding, setOrgBranding] = useState<{
     name: string;
@@ -112,6 +119,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
+      // Check if we're in the middle of a logout - skip soft redirect
+      // since logout() does a hard redirect via window.location.href
+      if (typeof window !== 'undefined' && (window as any).__loggingOut) {
+        return;
+      }
       router.replace('/login');
     }
   }, [isLoading, isAuthenticated, router]);
@@ -193,7 +205,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   };
 
   const requiredPermission = routePermissions[basePath];
-  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
+  // hasPermission and permissionsLoaded come from the hook called at the top
   const hasAccess = !requiredPermission || !user || !permissionsLoaded ||
     hasPermission(user.id, user.role, requiredPermission);
 

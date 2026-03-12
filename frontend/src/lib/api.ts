@@ -45,7 +45,9 @@ class ApiClient {
 
     if (res.status === 401) {
       this.setToken(null);
-      if (typeof window !== 'undefined') {
+      // If we're already logging out, don't do a competing redirect.
+      // The logout() function handles its own redirect.
+      if (typeof window !== 'undefined' && !(window as any).__loggingOut) {
         window.location.href = '/login';
       }
       throw new Error('Unauthorized');
