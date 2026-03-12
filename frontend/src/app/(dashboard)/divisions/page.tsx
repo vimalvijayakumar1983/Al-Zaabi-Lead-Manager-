@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import type { Organization } from '@/lib/types';
+import type { Organization } from '@/types';
 import {
   Building2,
   Plus,
