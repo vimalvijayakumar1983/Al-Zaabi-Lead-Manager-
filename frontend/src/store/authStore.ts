@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
 import { usePermissionsStore } from '@/lib/permissions';
+import { useNotificationStore } from '@/store/notificationStore';
 import type { User } from '@/types';
 
 interface AuthState {
@@ -35,8 +36,30 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    // 1. Disconnect WebSocket first (prevents reconnect attempts with null token)
+    try {
+      useNotificationStore.getState().disconnectWebSocket();
+    } catch {
+      // Ignore errors during cleanup
+    }
+
+    // 2. Clear auth token
     api.setToken(null);
+
+    // 3. Clear all stored session data
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('organization');
+      localStorage.removeItem('divisions');
+      localStorage.removeItem('activeDivisionId');
+    }
+
+    // 4. Clear Zustand state
     set({ user: null, isAuthenticated: false });
+
+    // 5. Hard redirect to login (avoids race conditions with soft navigation)
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
   },
 
   loadUser: async () => {
