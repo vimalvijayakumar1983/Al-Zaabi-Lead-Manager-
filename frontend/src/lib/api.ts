@@ -658,7 +658,7 @@ class ApiClient {
   }
 
   async getAssignmentHistory(leadId: string) {
-    return this.request<any[]>(\`/leads/\${leadId}/assignment-history\`);
+    return this.request<any[]>(`/leads/${leadId}/assignment-history`);
   }
 }
 
