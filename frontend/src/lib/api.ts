@@ -46,7 +46,8 @@ class ApiClient {
     const data = await res.json();
 
     if (!res.ok) {
-      throw new Error(data.error || 'Request failed');
+      const details = data.details?.map((d: any) => `${d.field}: ${d.message}`).join(', ');
+      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Request failed'));
     }
 
     return data;
@@ -91,6 +92,13 @@ class ApiClient {
 
   async deleteLead(id: string) {
     return this.request<any>(`/leads/${id}`, { method: 'DELETE' });
+  }
+
+  async bulkUpdateLeads(leadIds: string[], data: any) {
+    return this.request<any>('/leads/bulk', {
+      method: 'PATCH',
+      body: JSON.stringify({ leadIds, data }),
+    });
   }
 
   async addLeadNote(leadId: string, content: string) {
@@ -152,6 +160,145 @@ class ApiClient {
     return this.request<any>('/users/invite', { method: 'POST', body: JSON.stringify(data) });
   }
 
+  async updateUser(id: string, data: any) {
+    return this.request<any>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async resetUserPassword(id: string, newPassword: string) {
+    return this.request<any>(`/users/${id}/reset-password`, { method: 'PUT', body: JSON.stringify({ newPassword }) });
+  }
+
+  async deactivateUser(id: string) {
+    return this.request<any>(`/users/${id}`, { method: 'DELETE' });
+  }
+
+  async reactivateUser(id: string) {
+    return this.request<any>(`/users/${id}/reactivate`, { method: 'POST' });
+  }
+
+  async getPermissions() {
+    return this.request<{ rolePermissions: Record<string, Record<string, boolean>>; userOverrides: Record<string, Record<string, boolean>>; defaults: Record<string, Record<string, boolean>> }>('/users/permissions');
+  }
+
+  async updateRolePermissions(rolePermissions: Record<string, Record<string, boolean>>) {
+    return this.request<any>('/users/permissions/roles', { method: 'PUT', body: JSON.stringify({ rolePermissions }) });
+  }
+
+  async updateUserPermissions(userId: string, permissions: Record<string, boolean> | null) {
+    return this.request<any>(`/users/permissions/user/${userId}`, { method: 'PUT', body: JSON.stringify({ permissions }) });
+  }
+
+  // Import
+  async getImportFields(module: string) {
+    return this.request<{ module: string; fields: any[] }>(`/import/fields/${module}`);
+  }
+
+  async importPreview(file: File, module: string) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('module', module);
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/preview`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Preview failed');
+    return data;
+  }
+
+  async importExecute(file: File, options: {
+    module: string;
+    fieldMapping: Record<string, string>;
+    duplicateAction: string;
+    duplicateField?: string;
+    assignToId?: string;
+    defaultStatus?: string;
+    defaultSource?: string;
+  }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('module', options.module);
+    formData.append('fieldMapping', JSON.stringify(options.fieldMapping));
+    formData.append('duplicateAction', options.duplicateAction);
+    if (options.duplicateField) formData.append('duplicateField', options.duplicateField);
+    if (options.assignToId) formData.append('assignToId', options.assignToId);
+    if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
+    if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/execute`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Import failed');
+    return data;
+  }
+
+  async importValidate(file: File, options: { module: string; fieldMapping: Record<string, string>; duplicateField?: string }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('module', options.module);
+    formData.append('fieldMapping', JSON.stringify(options.fieldMapping));
+    if (options.duplicateField) formData.append('duplicateField', options.duplicateField);
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/import/validate`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Validation failed');
+    return data;
+  }
+
+  async getImportHistory(page = 1) {
+    return this.request<any>(`/import/history?page=${page}`);
+  }
+
+  async getImportDetails(id: string) {
+    return this.request<any>(`/import/history/${id}`);
+  }
+
+  async undoImport(id: string) {
+    return this.request<any>(`/import/undo/${id}`, { method: 'POST' });
+  }
+
+  private async authenticatedDownload(path: string, fallbackFilename: string) {
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Download failed');
+    }
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = res.headers.get('Content-Disposition')?.split('filename=')[1] || fallbackFilename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  async downloadImportTemplate(module: string) {
+    return this.authenticatedDownload(`/import/template/${module}`, `${module}-import-template.csv`);
+  }
+
+  async exportData(module: string, filters?: Record<string, string>) {
+    const params = filters ? '?' + new URLSearchParams(filters).toString() : '';
+    return this.authenticatedDownload(`/import/export/${module}${params}`, `${module}-export.csv`);
+  }
+
+  async downloadErrorsCsv(importId: string) {
+    return this.authenticatedDownload(`/import/history/${importId}/errors-csv`, `import-errors.csv`);
+  }
+
   // Campaigns
   async getCampaigns(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
@@ -181,6 +328,64 @@ class ApiClient {
 
   async logCommunication(data: any) {
     return this.request<any>('/communications', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Settings
+  async getProfile() {
+    return this.request<any>('/settings/profile');
+  }
+
+  async updateProfile(data: { firstName?: string; lastName?: string; phone?: string | null; avatar?: string | null }) {
+    return this.request<any>('/settings/profile', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async changePassword(data: { currentPassword: string; newPassword: string }) {
+    return this.request<any>('/settings/password', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getOrganization() {
+    return this.request<any>('/settings/organization');
+  }
+
+  async updateOrganization(data: { name?: string; domain?: string | null; settings?: Record<string, any> }) {
+    return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getNotificationPreferences() {
+    return this.request<any>('/settings/notifications');
+  }
+
+  async updateNotificationPreferences(data: Record<string, boolean>) {
+    return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getAuditLog() {
+    return this.request<any[]>('/settings/audit-log');
+  }
+
+  async deleteAccount(password: string) {
+    return this.request<any>('/settings/account', { method: 'DELETE', body: JSON.stringify({ password }) });
+  }
+
+  // Custom Fields
+  async getCustomFields() {
+    return this.request<any[]>('/settings/custom-fields');
+  }
+
+  async createCustomField(data: { label: string; type: string; options?: string[]; isRequired?: boolean }) {
+    return this.request<any>('/settings/custom-fields', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateCustomField(id: string, data: { label?: string; type?: string; options?: string[] | null; isRequired?: boolean }) {
+    return this.request<any>(`/settings/custom-fields/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async reorderCustomFields(fieldIds: string[]) {
+    return this.request<any>('/settings/custom-fields-reorder', { method: 'PUT', body: JSON.stringify({ fieldIds }) });
+  }
+
+  async deleteCustomField(id: string) {
+    return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
   }
 }
 

@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { Sparkles } from 'lucide-react';
 
 export default function HomePage() {
   const router = useRouter();
@@ -19,8 +20,11 @@ export default function HomePage() {
   }, [isLoading, isAuthenticated, router]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
+    <div className="min-h-screen flex flex-col items-center justify-center bg-surface-secondary">
+      <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-glow animate-pulse-soft">
+        <Sparkles className="h-6 w-6 text-white" />
+      </div>
+      <p className="mt-4 text-sm text-text-tertiary">Loading LeadFlow...</p>
     </div>
   );
 }

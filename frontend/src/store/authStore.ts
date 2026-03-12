@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
+import { usePermissionsStore } from '@/lib/permissions';
 import type { User } from '@/types';
 
 interface AuthState {
@@ -21,12 +22,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     const { token, user } = await api.login(email, password);
     api.setToken(token);
     set({ user, isAuthenticated: true });
+    usePermissionsStore.getState().loadPermissions();
   },
 
   register: async (data) => {
     const { token, user } = await api.register(data);
     api.setToken(token);
     set({ user, isAuthenticated: true });
+    usePermissionsStore.getState().loadPermissions();
   },
 
   logout: () => {
@@ -43,6 +46,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
       const user = await api.getMe();
       set({ user, isAuthenticated: true, isLoading: false });
+      usePermissionsStore.getState().loadPermissions();
     } catch {
       set({ user: null, isAuthenticated: false, isLoading: false });
     }

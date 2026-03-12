@@ -3,72 +3,267 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { usePermissionsStore } from '@/lib/permissions';
 import { clsx } from 'clsx';
+import { useState, useEffect } from 'react';
+import {
+  LayoutDashboard,
+  Users,
+  Kanban,
+  CheckSquare,
+  BarChart3,
+  Zap,
+  Megaphone,
+  UserCog,
+  Search,
+  ChevronsLeft,
+  ChevronsRight,
+  LogOut,
+  Settings,
+  ChevronDown,
+  Sparkles,
+  Upload,
+} from 'lucide-react';
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-  { href: '/leads', label: 'Leads', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
-  { href: '/pipeline', label: 'Pipeline', icon: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2' },
-  { href: '/tasks', label: 'Tasks', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
-  { href: '/analytics', label: 'Analytics', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
-  { href: '/automations', label: 'Automations', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
-  { href: '/campaigns', label: 'Campaigns', icon: 'M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z' },
-  { href: '/team', label: 'Team', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: '1', permission: 'dashboard' },
+  { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null, permission: 'leads' },
+  { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
+  { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
+  { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
+  { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
+  { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'leads' },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
+  const { hasPermission } = usePermissionsStore();
+  const [collapsed, setCollapsed] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
+  const visibleNavItems = navItems.filter((item) =>
+    !user || hasPermission(user.id, user.role, item.permission)
+  );
+  const canAccessSettings = !user || hasPermission(user.id, user.role, 'settings');
+
+  // Keyboard shortcut: Cmd+B to toggle sidebar
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        setCollapsed((c) => !c);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Close user menu on outside click
+  useEffect(() => {
+    if (!showUserMenu) return;
+    const handler = () => setShowUserMenu(false);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, [showUserMenu]);
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-200 flex flex-col">
+    <aside
+      className={clsx(
+        'fixed inset-y-0 left-0 z-30 flex flex-col bg-white border-r border-border transition-all duration-300 ease-smooth',
+        collapsed ? 'w-[var(--sidebar-collapsed-width)]' : 'w-[var(--sidebar-width)]'
+      )}
+    >
       {/* Logo */}
-      <div className="h-16 flex items-center px-6 border-b border-gray-100">
-        <h1 className="text-xl font-bold text-brand-600">LeadFlow</h1>
+      <div className="h-14 flex items-center justify-between px-4 border-b border-border-subtle">
+        <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0">
+          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center flex-shrink-0 shadow-soft">
+            <Sparkles className="h-4 w-4 text-white" />
+          </div>
+          {!collapsed && (
+            <span className="text-lg font-bold text-text-primary tracking-tight animate-fade-in">
+              LeadFlow
+            </span>
+          )}
+        </Link>
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className={clsx(
+            'btn-icon h-7 w-7 flex-shrink-0',
+            collapsed && 'mx-auto'
+          )}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+        </button>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-4 px-3">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={clsx(
-                'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors mb-1',
-                isActive
-                  ? 'bg-brand-50 text-brand-700'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              )}
-            >
-              <svg className="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-              </svg>
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* User info */}
-      <div className="p-4 border-t border-gray-100">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-full bg-brand-100 flex items-center justify-center text-sm font-medium text-brand-700">
-            {user?.firstName?.[0]}{user?.lastName?.[0]}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-900 truncate">
-              {user?.firstName} {user?.lastName}
-            </p>
-            <p className="text-xs text-gray-500 truncate">{user?.role}</p>
-          </div>
-          <button onClick={logout} className="text-gray-400 hover:text-gray-600" title="Sign out">
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-            </svg>
+      {/* Search trigger */}
+      {!collapsed && (
+        <div className="px-3 pt-3 pb-1">
+          <button
+            onClick={() => {
+              const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true });
+              window.dispatchEvent(event);
+            }}
+            className="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-secondary px-3 py-2
+              text-sm text-text-tertiary hover:bg-surface-tertiary hover:border-border-strong transition-all duration-150"
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span className="flex-1 text-left">Search...</span>
+            <kbd className="kbd">&#8984;K</kbd>
           </button>
         </div>
+      )}
+
+      {collapsed && (
+        <div className="px-3 pt-3 pb-1">
+          <button
+            onClick={() => {
+              const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true });
+              window.dispatchEvent(event);
+            }}
+            className="btn-icon w-full"
+            title="Search (⌘K)"
+          >
+            <Search className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto scrollbar-thin py-2 px-3">
+        <div className="space-y-0.5">
+          {visibleNavItems.map((item) => {
+            const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={clsx(
+                  'group relative flex items-center rounded-lg transition-all duration-150 ease-smooth',
+                  collapsed ? 'justify-center p-2.5' : 'gap-3 px-3 py-2',
+                  isActive
+                    ? 'bg-brand-50 text-brand-700 shadow-xs'
+                    : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+                )}
+                title={collapsed ? item.label : undefined}
+              >
+                <Icon className={clsx(
+                  'flex-shrink-0 transition-colors',
+                  collapsed ? 'h-5 w-5' : 'h-[18px] w-[18px]',
+                  isActive ? 'text-brand-600' : 'text-text-tertiary group-hover:text-text-secondary'
+                )} />
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-sm font-medium">{item.label}</span>
+                    {item.badge && (
+                      <span className="badge bg-brand-100 text-brand-700 ring-brand-200">
+                        {item.badge}
+                      </span>
+                    )}
+                    <span className="kbd opacity-0 group-hover:opacity-100 transition-opacity">
+                      {item.shortcut}
+                    </span>
+                  </>
+                )}
+
+                {/* Collapsed tooltip */}
+                {collapsed && (
+                  <div className="absolute left-full ml-2 px-2.5 py-1.5 rounded-lg bg-gray-900 text-white text-xs font-medium
+                    opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50 shadow-lg">
+                    {item.label}
+                    <div className="absolute top-1/2 -left-1 -mt-1 h-2 w-2 bg-gray-900 rotate-45" />
+                  </div>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* Settings link */}
+      {canAccessSettings && <div className="px-3 pb-1">
+        <div className="divider mb-2" />
+        <Link
+          href="/settings"
+          className={clsx(
+            'group relative flex items-center rounded-lg transition-all duration-150 ease-smooth',
+            collapsed ? 'justify-center p-2.5' : 'gap-3 px-3 py-2',
+            pathname === '/settings'
+              ? 'bg-brand-50 text-brand-700 shadow-xs'
+              : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+          )}
+          title={collapsed ? 'Settings' : undefined}
+        >
+          <Settings className={clsx(
+            'flex-shrink-0 transition-colors',
+            collapsed ? 'h-5 w-5' : 'h-[18px] w-[18px]',
+            pathname === '/settings' ? 'text-brand-600' : 'text-text-tertiary group-hover:text-text-secondary'
+          )} />
+          {!collapsed && <span className="flex-1 text-sm font-medium">Settings</span>}
+          {collapsed && (
+            <div className="absolute left-full ml-2 px-2.5 py-1.5 rounded-lg bg-gray-900 text-white text-xs font-medium
+              opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50 shadow-lg">
+              Settings
+              <div className="absolute top-1/2 -left-1 -mt-1 h-2 w-2 bg-gray-900 rotate-45" />
+            </div>
+          )}
+        </Link>
+      </div>}
+
+      {/* User info */}
+      <div className="p-3 border-t border-border-subtle">
+        <div
+          className={clsx(
+            'flex items-center rounded-lg transition-all duration-150 cursor-pointer hover:bg-surface-tertiary',
+            collapsed ? 'justify-center p-2' : 'gap-3 px-2 py-1.5'
+          )}
+          onClick={(e) => { e.stopPropagation(); setShowUserMenu(!showUserMenu); }}
+        >
+          <div className={clsx(
+            'rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center font-semibold text-white flex-shrink-0 shadow-soft',
+            collapsed ? 'h-9 w-9 text-sm' : 'h-8 w-8 text-xs'
+          )}>
+            {user?.firstName?.[0]}{user?.lastName?.[0]}
+          </div>
+          {!collapsed && (
+            <>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-text-primary truncate">
+                  {user?.firstName} {user?.lastName}
+                </p>
+                <p className="text-2xs text-text-tertiary truncate capitalize">
+                  {user?.role?.toLowerCase()?.replace('_', ' ')}
+                </p>
+              </div>
+              <ChevronDown className={clsx(
+                'h-4 w-4 text-text-tertiary transition-transform',
+                showUserMenu && 'rotate-180'
+              )} />
+            </>
+          )}
+        </div>
+
+        {/* User menu dropdown */}
+        {showUserMenu && (
+          <div className={clsx(
+            'absolute bottom-16 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-50',
+            collapsed ? 'left-[var(--sidebar-collapsed-width)] ml-2 w-48' : 'left-3 right-3'
+          )}>
+            <button
+              onClick={logout}
+              className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-600
+                hover:bg-red-50 transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

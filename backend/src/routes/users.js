@@ -8,6 +8,78 @@ const { validate } = require('../middleware/validate');
 const router = Router();
 router.use(authenticate, orgScope);
 
+// Default permission matrix
+const DEFAULT_PERMISSIONS = {
+  ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true },
+  MANAGER: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, deleteData: false, exportData: true },
+  SALES_REP: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
+  VIEWER: { dashboard: true, leads: true, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
+};
+
+// ─── Get Permissions Config ─────────────────────────────────────
+router.get('/permissions', async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
+    const rolePermissions = settings.rolePermissions || DEFAULT_PERMISSIONS;
+    const userOverrides = settings.userPermissionOverrides || {};
+    res.json({ rolePermissions, userOverrides, defaults: DEFAULT_PERMISSIONS });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Update Role Permissions ────────────────────────────────────
+router.put('/permissions/roles', authorize('ADMIN'), validate(z.object({
+  rolePermissions: z.record(z.record(z.boolean())),
+})), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
+    const updated = { ...settings, rolePermissions: req.validated.rolePermissions };
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: updated },
+    });
+    res.json({ rolePermissions: req.validated.rolePermissions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Update User Permission Overrides ───────────────────────────
+router.put('/permissions/user/:userId', authorize('ADMIN'), validate(z.object({
+  permissions: z.record(z.boolean()).nullable(),
+})), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
+    const overrides = settings.userPermissionOverrides || {};
+    if (req.validated.permissions === null) {
+      delete overrides[req.params.userId];
+    } else {
+      overrides[req.params.userId] = req.validated.permissions;
+    }
+    const updated = { ...settings, userPermissionOverrides: overrides };
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: updated },
+    });
+    res.json({ userId: req.params.userId, permissions: req.validated.permissions });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── List Users ──────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
@@ -76,6 +148,39 @@ router.put('/:id', authorize('ADMIN'), validate(z.object({
       select: {
         id: true, email: true, firstName: true, lastName: true,
         role: true, isActive: true, phone: true,
+      },
+    });
+    res.json(user);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Reset User Password (Admin) ─────────────────────────────────
+router.put('/:id/reset-password', authorize('ADMIN'), validate(z.object({
+  newPassword: z.string().min(8).max(128),
+})), async (req, res, next) => {
+  try {
+    const passwordHash = await bcrypt.hash(req.validated.newPassword, 12);
+    await prisma.user.update({
+      where: { id: req.params.id },
+      data: { passwordHash },
+    });
+    res.json({ message: 'Password reset successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Reactivate User ────────────────────────────────────────────
+router.post('/:id/reactivate', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { isActive: true },
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        role: true, isActive: true,
       },
     });
     res.json(user);

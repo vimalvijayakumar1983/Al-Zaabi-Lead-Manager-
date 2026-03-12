@@ -4,6 +4,13 @@ const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 
 async function main() {
+  // Skip if already seeded
+  const existingOrg = await prisma.organization.findFirst();
+  if (existingOrg) {
+    console.log('Database already seeded, skipping.');
+    return;
+  }
+
   console.log('Seeding database...');
 
   // Create organization

@@ -30,7 +30,7 @@ Thumbs.db
 *.swo
 
 # Prisma
-backend/prisma/migrations/
+# migrations must be committed for deployment
 
 # Testing
 coverage/

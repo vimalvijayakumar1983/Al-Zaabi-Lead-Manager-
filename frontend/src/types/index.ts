@@ -46,6 +46,7 @@ export interface Lead {
   campaign?: string;
   website?: string;
   customData?: Record<string, unknown>;
+  lostReason?: string;
   aiSummary?: string;
   conversionProb?: number;
   stageId?: string;
@@ -144,6 +145,19 @@ export interface Attachment {
   size: number;
   url: string;
   createdAt: string;
+}
+
+// ─── Custom Field ───────────────────────────────────────────────
+export type FieldType = 'TEXT' | 'NUMBER' | 'DATE' | 'SELECT' | 'MULTI_SELECT' | 'BOOLEAN' | 'URL' | 'EMAIL' | 'PHONE';
+
+export interface CustomField {
+  id: string;
+  name: string;
+  label: string;
+  type: FieldType;
+  options?: string[];
+  isRequired: boolean;
+  order: number;
 }
 
 // ─── Campaign ────────────────────────────────────────────────────

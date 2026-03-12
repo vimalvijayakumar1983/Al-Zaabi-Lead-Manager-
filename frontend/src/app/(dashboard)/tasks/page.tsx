@@ -3,12 +3,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 import type { Task, PaginatedResponse } from '@/types';
+import { CheckCircle2, Circle, Clock, AlertTriangle, Plus, Calendar, User2, X } from 'lucide-react';
 
-const priorityColors: Record<string, string> = {
-  LOW: 'bg-gray-100 text-gray-800',
-  MEDIUM: 'bg-blue-100 text-blue-800',
-  HIGH: 'bg-orange-100 text-orange-800',
-  URGENT: 'bg-red-100 text-red-800',
+const priorityConfig: Record<string, { bg: string; text: string; ring: string; dot: string; label: string }> = {
+  LOW: { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', dot: 'bg-gray-400', label: 'Low' },
+  MEDIUM: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10', dot: 'bg-blue-500', label: 'Medium' },
+  HIGH: { bg: 'bg-orange-50', text: 'text-orange-700', ring: 'ring-orange-600/10', dot: 'bg-orange-500', label: 'High' },
+  URGENT: { bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-600/10', dot: 'bg-red-500', label: 'Urgent' },
 };
 
 export default function TasksPage() {
@@ -37,25 +38,42 @@ export default function TasksPage() {
     fetchTasks();
   };
 
+  const completedCount = tasks.filter(t => t.status === 'COMPLETED').length;
+  const overdueCount = tasks.filter(t => t.status !== 'COMPLETED' && new Date(t.dueAt) < new Date()).length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Tasks</h1>
-          <p className="text-gray-500 mt-1">Manage follow-ups and activities</p>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Tasks</h1>
+          <p className="text-text-secondary text-sm mt-0.5">
+            {tasks.length} tasks &middot; {completedCount} completed
+            {overdueCount > 0 && <span className="text-red-600"> &middot; {overdueCount} overdue</span>}
+          </p>
         </div>
-        <button onClick={() => setShowForm(true)} className="btn-primary">+ New Task</button>
+        <button onClick={() => setShowForm(true)} className="btn-primary">
+          <Plus className="h-4 w-4" />
+          New Task
+        </button>
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
-        {(['all', 'pending', 'overdue'] as const).map((f) => (
+      <div className="flex gap-1 bg-surface-tertiary rounded-lg p-1 w-fit">
+        {([
+          { key: 'all' as const, label: 'All Tasks' },
+          { key: 'pending' as const, label: 'Pending' },
+          { key: 'overdue' as const, label: 'Overdue' },
+        ]).map((f) => (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${filter === f ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-150 ${
+              filter === f.key
+                ? 'bg-white shadow-soft text-text-primary'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            {f.label}
           </button>
         ))}
       </div>
@@ -63,38 +81,88 @@ export default function TasksPage() {
       {/* Task List */}
       <div className="space-y-2">
         {loading ? (
-          <div className="flex items-center justify-center h-32"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" /></div>
+          <div className="space-y-2">
+            {[1,2,3,4,5].map(i => (
+              <div key={i} className="card p-4 flex items-center gap-4">
+                <div className="skeleton h-5 w-5 rounded" />
+                <div className="flex-1"><div className="skeleton h-4 w-48 mb-2" /><div className="skeleton h-3 w-32" /></div>
+                <div className="skeleton h-5 w-16 rounded-md" />
+                <div className="skeleton h-4 w-20" />
+              </div>
+            ))}
+          </div>
         ) : tasks.length === 0 ? (
-          <div className="card p-8 text-center text-gray-500">No tasks found</div>
+          <div className="card">
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <CheckCircle2 className="h-6 w-6" />
+              </div>
+              <p className="text-sm font-medium text-text-primary">No tasks found</p>
+              <p className="text-xs text-text-tertiary mt-1 mb-3">
+                {filter === 'overdue' ? 'No overdue tasks - great job!' : 'Create your first task to get started'}
+              </p>
+              {filter === 'all' && (
+                <button onClick={() => setShowForm(true)} className="btn-primary text-sm">Create Task</button>
+              )}
+            </div>
+          </div>
         ) : (
           tasks.map((task) => {
             const isOverdue = new Date(task.dueAt) < new Date() && task.status !== 'COMPLETED';
+            const isCompleted = task.status === 'COMPLETED';
+            const priority = priorityConfig[task.priority] || priorityConfig.MEDIUM;
+            const dueDate = new Date(task.dueAt);
+
             return (
-              <div key={task.id} className={`card p-4 flex items-center gap-4 ${isOverdue ? 'border-red-200' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={task.status === 'COMPLETED'}
-                  onChange={() => handleComplete(task.id)}
-                  className="h-5 w-5 rounded border-gray-300 text-brand-600"
-                />
+              <div
+                key={task.id}
+                className={`card p-4 flex items-center gap-4 transition-all duration-150 group ${
+                  isOverdue ? 'border-red-200 bg-red-50/30' : isCompleted ? 'opacity-60' : 'hover:shadow-card-hover'
+                }`}
+              >
+                <button
+                  onClick={() => handleComplete(task.id)}
+                  className={`h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                    isCompleted
+                      ? 'bg-emerald-500 border-emerald-500 text-white'
+                      : 'border-border-strong hover:border-brand-500 hover:bg-brand-50'
+                  }`}
+                >
+                  {isCompleted && <CheckCircle2 className="h-3 w-3" />}
+                </button>
+
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${task.status === 'COMPLETED' ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                  <p className={`text-sm font-medium ${isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'}`}>
                     {task.title}
                   </p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs text-gray-500">{task.type.replace('_', ' ')}</span>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
+                      <Calendar className="h-3 w-3" />
+                      {task.type.replace(/_/g, ' ')}
+                    </span>
                     {task.lead && (
-                      <span className="text-xs text-gray-500">&middot; {task.lead.firstName} {task.lead.lastName}</span>
+                      <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
+                        <User2 className="h-3 w-3" />
+                        {task.lead.firstName} {task.lead.lastName}
+                      </span>
                     )}
                     {task.assignee && (
-                      <span className="text-xs text-gray-500">&middot; {task.assignee.firstName}</span>
+                      <span className="text-xs text-text-tertiary">&middot; {task.assignee.firstName}</span>
                     )}
                   </div>
                 </div>
-                <span className={`badge ${priorityColors[task.priority]}`}>{task.priority}</span>
-                <span className={`text-xs ${isOverdue ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
-                  {isOverdue ? 'Overdue: ' : ''}{new Date(task.dueAt).toLocaleDateString()}
+
+                <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring}`}>
+                  {priority.label}
                 </span>
+
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {isOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500" />}
+                  <Clock className={`h-3.5 w-3.5 ${isOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
+                  <span className={`text-xs font-medium ${isOverdue ? 'text-red-600' : 'text-text-secondary'}`}>
+                    {dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
+                </div>
               </div>
             );
           })
@@ -132,23 +200,24 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="card w-full max-w-md mx-4">
-        <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold">New Task</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">&times;</button>
+    <div className="modal">
+      <div className="overlay" onClick={onClose} />
+      <div className="modal-panel w-full max-w-md relative z-50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+          <h2 className="text-lg font-semibold text-text-primary">New Task</h2>
+          <button onClick={onClose} className="btn-icon"><X className="h-4 w-4" /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
             <label className="label">Title *</label>
-            <input className="input" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+            <input className="input" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Follow up with client" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Type</label>
               <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'].map((t) => (
-                  <option key={t} value={t}>{t.replace('_', ' ')}</option>
+                  <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
                 ))}
               </select>
             </div>
@@ -168,7 +237,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
           <div>
             <label className="label">Assign To *</label>
             <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
-              <option value="">Select...</option>
+              <option value="">Select team member...</option>
               {users.map((u: any) => (
                 <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
               ))}
@@ -176,9 +245,9 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
           </div>
           <div>
             <label className="label">Description</label>
-            <textarea className="input" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            <textarea className="input" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Optional notes..." />
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button type="submit" className="btn-primary">Create Task</button>
           </div>
