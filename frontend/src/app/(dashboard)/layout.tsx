@@ -8,7 +8,7 @@ import { useNotificationStore } from '@/store/notificationStore';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
 import NotificationCenter from '@/components/NotificationCenter';
-import { ToastProvider } from '@/components/ToastProvider';
+import ToastProvider from '@/components/ToastProvider';
 import { GlobalSearch } from './components/global-search';
 import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown } from 'lucide-react';
 
