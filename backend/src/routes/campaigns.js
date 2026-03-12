@@ -358,7 +358,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
 
 router.post('/', validate(createCampaignSchema), async (req, res, next) => {
   try {
-    const { name, type, status, budget, startDate, endDate, metadata, organizationId } =
+    const { name, type, status, budget, description, startDate, endDate, metadata, organizationId } =
       req.body;
 
     const targetOrgId = organizationId || req.orgId;
@@ -409,7 +409,7 @@ router.post('/:id/duplicate', async (req, res, next) => {
         type: original.type,
         status: 'DRAFT',
         budget: original.budget,
-        // description not in schema
+        description: original.description,
         startDate: original.startDate,
         endDate: original.endDate,
         metadata: original.metadata || {},
@@ -512,7 +512,8 @@ router.put('/:id', validate(updateCampaignSchema), async (req, res, next) => {
     if (req.body.type !== undefined) updateData.type = req.body.type;
     if (req.body.status !== undefined) updateData.status = req.body.status;
     if (req.body.budget !== undefined) updateData.budget = req.body.budget;
-        if (req.body.startDate !== undefined) {
+        if (req.body.description !== undefined) updateData.description = req.body.description;
+    if (req.body.startDate !== undefined) {
       updateData.startDate = req.body.startDate ? new Date(req.body.startDate) : null;
     }
     if (req.body.endDate !== undefined) {
