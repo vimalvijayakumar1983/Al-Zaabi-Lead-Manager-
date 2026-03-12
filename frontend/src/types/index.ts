@@ -211,17 +211,143 @@ export interface CustomField {
   order: number;
 }
 
-// ─── Campaign ────────────────────────────────────────────────────
+// ─── Campaign (UPDATED - replaces existing Campaign interface) ────────────────
+
+export type CampaignType =
+  | 'FACEBOOK_ADS'
+  | 'GOOGLE_ADS'
+  | 'EMAIL'
+  | 'WHATSAPP'
+  | 'LANDING_PAGE'
+  | 'REFERRAL'
+  | 'TIKTOK_ADS'
+  | 'WEBSITE_FORM'
+  | 'OTHER';
+
+export type CampaignStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED';
+
 export interface Campaign {
   id: string;
   name: string;
-  type: string;
-  status: string;
+  type: CampaignType;
+  status: CampaignStatus;
   budget?: number;
+  description?: string;
   startDate?: string;
   endDate?: string;
+  metadata?: {
+    utm_source?: string;
+    utm_medium?: string;
+    utm_campaign?: string;
+    utm_content?: string;
+    utm_term?: string;
+    targetLeads?: number;
+    targetConversions?: number;
+    targetRevenue?: number;
+    [key: string]: unknown;
+  };
+  organizationId?: string;
+  organization?: { id: string; name: string };
+  // Enriched fields from API
   leadCount?: number;
+  wonLeads?: number;
+  totalLeadValue?: number;
+  costPerLead?: number;
+  conversionRate?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
+
+// ─── Campaign Dashboard Stats ─────────────────────────────────────
+
+export interface CampaignDashboardStats {
+  totalCampaigns: number;
+  activeCampaigns: number;
+  totalBudget: number;
+  totalLeads: number;
+  avgCostPerLead: number;
+  bestPerforming: { id: string; name: string; leadCount: number } | null;
+  byType: { type: string; count: number; leads: number }[];
+  byStatus: { status: string; count: number }[];
+}
+
+// ─── Integration ──────────────────────────────────────────────────
+
+export type IntegrationPlatform =
+  | 'facebook'
+  | 'google'
+  | 'tiktok'
+  | 'whatsapp'
+  | 'email'
+  | 'website'
+  | 'webhook'
+  | 'zapier';
+
+export type IntegrationStatus = 'connected' | 'disconnected' | 'error' | 'syncing';
+
+export interface Integration {
+  id: string;
+  platform: IntegrationPlatform;
+  status: IntegrationStatus;
+  credentials?: Record<string, unknown>;
+  config: Record<string, unknown>;
+  lastSyncAt?: string;
+  organizationId: string;
+  createdBy?: string;
+  campaignId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Integration Log ──────────────────────────────────────────────
+
+export interface IntegrationLog {
+  id: string;
+  integrationId: string;
+  action: string;
+  payload?: Record<string, unknown>;
+  status: 'success' | 'failed';
+  leadId?: string;
+  errorMessage?: string;
+  createdAt: string;
+}
+
+// ─── Integration Platform Info ────────────────────────────────────
+
+export interface IntegrationPlatformInfo {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  status: 'available' | 'coming_soon';
+  requiresOAuth: boolean;
+  color: string;
+}
+
+// ─── API Key ──────────────────────────────────────────────────────
+
+export interface ApiKey {
+  id: string;
+  key: string;
+  name: string;
+  organizationId: string;
+  isActive: boolean;
+  lastUsedAt?: string;
+  createdAt: string;
+}
+
+// ─── Widget Config ────────────────────────────────────────────────
+
+export interface WidgetConfig {
+  fields: string[];
+  formTitle: string;
+  submitButtonText: string;
+  successMessage: string;
+  backgroundColor: string;
+  buttonColor: string;
+  divisionId: string;
+}
+
 
 // ─── Automation ──────────────────────────────────────────────────
 export interface AutomationRule {

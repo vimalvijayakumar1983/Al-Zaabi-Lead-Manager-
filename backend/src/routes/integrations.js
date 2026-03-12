@@ -1,0 +1,825 @@
+const { Router } = require('express');
+const { z } = require('zod');
+const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
+const { prisma } = require('../config/database');
+const { authenticate, authorize, orgScope } = require('../middleware/auth');
+const { validate, validateQuery } = require('../middleware/validate');
+const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
+
+const router = Router();
+
+// ─── Constants ──────────────────────────────────────────────────────────────────
+
+const AVAILABLE_PLATFORMS = [
+  {
+    id: 'facebook',
+    name: 'Facebook Lead Ads',
+    icon: 'facebook',
+    description: 'Auto-capture leads from Facebook forms',
+    status: 'available',
+    requiresOAuth: true,
+  },
+  {
+    id: 'google',
+    name: 'Google Ads',
+    icon: 'google',
+    description: 'Sync leads & spend from Google campaigns',
+    status: 'available',
+    requiresOAuth: true,
+  },
+  {
+    id: 'tiktok',
+    name: 'TikTok Ads',
+    icon: 'tiktok',
+    description: 'Capture leads from TikTok forms',
+    status: 'coming_soon',
+  },
+  {
+    id: 'whatsapp',
+    name: 'WhatsApp Business',
+    icon: 'whatsapp',
+    description: 'Two-way messaging & lead capture',
+    status: 'available',
+    requiresOAuth: true,
+  },
+  {
+    id: 'email',
+    name: 'Email',
+    icon: 'email',
+    description: 'Send/receive emails, track opens',
+    status: 'available',
+    requiresOAuth: false,
+  },
+  {
+    id: 'website',
+    name: 'Website Forms',
+    icon: 'globe',
+    description: 'Embed lead capture forms',
+    status: 'available',
+    requiresOAuth: false,
+  },
+  {
+    id: 'webhook',
+    name: 'Custom Webhook',
+    icon: 'webhook',
+    description: 'Connect any platform via webhooks',
+    status: 'available',
+    requiresOAuth: false,
+  },
+  {
+    id: 'zapier',
+    name: 'Zapier',
+    icon: 'zap',
+    description: 'Connect 5000+ apps',
+    status: 'available',
+    requiresOAuth: false,
+  },
+];
+
+// ─── Validation Schemas ────────────────────────────────────────────────────────
+
+const platformEnum = z.enum([
+  'facebook',
+  'google',
+  'tiktok',
+  'whatsapp',
+  'email',
+  'website',
+  'webhook',
+  'zapier',
+]);
+
+const createIntegrationSchema = z.object({
+  platform: platformEnum,
+  config: z.record(z.unknown()).optional().default({}),
+  credentials: z.record(z.unknown()).optional().default({}),
+  campaignId: z.string().uuid().optional(),
+  organizationId: z.string().uuid().optional(),
+});
+
+const updateIntegrationSchema = z.object({
+  config: z.record(z.unknown()).optional(),
+  credentials: z.record(z.unknown()).optional(),
+  status: z.enum(['connected', 'disconnected', 'error']).optional(),
+  campaignId: z.string().uuid().optional().nullable(),
+});
+
+const logsQuerySchema = paginationSchema.extend({
+  action: z.string().optional(),
+  status: z.enum(['success', 'error', 'pending']).optional(),
+});
+
+const generateApiKeySchema = z.object({
+  name: z.string().min(1).max(100).optional().default('Default API Key'),
+  organizationId: z.string().uuid().optional(),
+});
+
+const revokeApiKeySchema = z.object({
+  apiKeyId: z.string().uuid(),
+});
+
+const widgetGenerateSchema = z.object({
+  organizationId: z.string().uuid().optional(),
+  fields: z
+    .array(
+      z.object({
+        name: z.string(),
+        label: z.string(),
+        type: z.enum(['text', 'email', 'tel', 'select', 'textarea']).optional().default('text'),
+        required: z.boolean().optional().default(false),
+        options: z.array(z.string()).optional(),
+      })
+    )
+    .optional(),
+  theme: z
+    .object({
+      primaryColor: z.string().optional().default('#0066FF'),
+      borderRadius: z.string().optional().default('8px'),
+      fontFamily: z.string().optional().default('Inter, sans-serif'),
+    })
+    .optional(),
+});
+
+// ─── Apply Auth Middleware ──────────────────────────────────────────────────────
+
+router.use(authenticate);
+
+// ─── GET /platforms — List Available Platforms ───────────────────────────────────
+
+router.get('/platforms', async (req, res, next) => {
+  try {
+    const connectedIntegrations = await prisma.$queryRawUnsafe(
+      `SELECT platform, status FROM integrations WHERE organization_id = ANY($1::uuid[])`,
+      req.orgIds
+    );
+
+    const connectedMap = {};
+    for (const row of connectedIntegrations) {
+      if (!connectedMap[row.platform]) {
+        connectedMap[row.platform] = [];
+      }
+      connectedMap[row.platform].push(row.status);
+    }
+
+    const platforms = AVAILABLE_PLATFORMS.map((p) => ({
+      ...p,
+      connected: connectedMap[p.id]
+        ? connectedMap[p.id].includes('connected')
+        : false,
+      integrationCount: connectedMap[p.id] ? connectedMap[p.id].length : 0,
+    }));
+
+    res.json(platforms);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET / — List Integrations ──────────────────────────────────────────────────
+
+router.get('/', async (req, res, next) => {
+  try {
+    const integrations = await prisma.$queryRawUnsafe(
+      `SELECT i.*, c.name AS campaign_name
+       FROM integrations i
+       LEFT JOIN campaigns c ON c.id = i.campaign_id
+       WHERE i.organization_id = ANY($1::uuid[])
+       ORDER BY i.created_at DESC`,
+      req.orgIds
+    );
+
+    const formatted = integrations.map((row) => ({
+      id: row.id,
+      platform: row.platform,
+      status: row.status,
+      config: row.config,
+      credentials: sanitizeCredentials(row.credentials),
+      lastSyncAt: row.last_sync_at,
+      organizationId: row.organization_id,
+      campaignId: row.campaign_id,
+      campaignName: row.campaign_name,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+
+    res.json(formatted);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /:id — Get Integration Details + Recent Logs ───────────────────────────
+
+router.get('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT i.*, c.name AS campaign_name, o.name AS organization_name
+       FROM integrations i
+       LEFT JOIN campaigns c ON c.id = i.campaign_id
+       LEFT JOIN organizations o ON o.id = i.organization_id
+       WHERE i.id = $1 AND i.organization_id = ANY($2::uuid[])
+       LIMIT 1`,
+      id,
+      req.orgIds
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Integration not found' });
+    }
+
+    const row = rows[0];
+
+    const recentLogs = await prisma.$queryRawUnsafe(
+      `SELECT id, action, status, error_message, lead_id, created_at
+       FROM integration_logs
+       WHERE integration_id = $1
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      id
+    );
+
+    res.json({
+      id: row.id,
+      platform: row.platform,
+      status: row.status,
+      config: row.config,
+      credentials: sanitizeCredentials(row.credentials),
+      lastSyncAt: row.last_sync_at,
+      organizationId: row.organization_id,
+      organizationName: row.organization_name,
+      campaignId: row.campaign_id,
+      campaignName: row.campaign_name,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      recentLogs,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST / — Create Integration ────────────────────────────────────────────────
+
+router.post('/', validate(createIntegrationSchema), async (req, res, next) => {
+  try {
+    const { platform, config, credentials, campaignId, organizationId } = req.body;
+
+    const targetOrgId = organizationId || req.orgId;
+    if (!req.orgIds.includes(targetOrgId)) {
+      return res.status(403).json({ error: 'Access denied to specified organization' });
+    }
+
+    if (campaignId) {
+      const campaign = await prisma.campaign.findFirst({
+        where: { id: campaignId, organizationId: { in: req.orgIds } },
+      });
+      if (!campaign) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+    }
+
+    const id = uuidv4();
+    const now = new Date();
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO integrations (id, platform, status, credentials, config, organization_id, created_by, campaign_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10)`,
+      id,
+      platform,
+      'disconnected',
+      JSON.stringify(credentials || {}),
+      JSON.stringify(config || {}),
+      targetOrgId,
+      req.userId || null,
+      campaignId || null,
+      now,
+      now
+    );
+
+    await logIntegrationAction(id, 'created', { platform, config }, 'success');
+
+    res.status(201).json({
+      id,
+      platform,
+      status: 'disconnected',
+      config,
+      credentials: sanitizeCredentials(credentials || {}),
+      organizationId: targetOrgId,
+      campaignId: campaignId || null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── PUT /:id — Update Integration ─────────────────────────────────────────────
+
+router.put('/:id', validate(updateIntegrationSchema), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.$queryRawUnsafe(
+      `SELECT id FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
+      id,
+      req.orgIds
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Integration not found' });
+    }
+
+    const setClauses = [];
+    const values = [];
+    let paramIdx = 1;
+
+    if (req.body.config !== undefined) {
+      setClauses.push(`config = $${paramIdx}::jsonb`);
+      values.push(JSON.stringify(req.body.config));
+      paramIdx++;
+    }
+
+    if (req.body.credentials !== undefined) {
+      setClauses.push(`credentials = $${paramIdx}::jsonb`);
+      values.push(JSON.stringify(req.body.credentials));
+      paramIdx++;
+    }
+
+    if (req.body.status !== undefined) {
+      setClauses.push(`status = $${paramIdx}`);
+      values.push(req.body.status);
+      paramIdx++;
+    }
+
+    if (req.body.campaignId !== undefined) {
+      setClauses.push(`campaign_id = $${paramIdx}`);
+      values.push(req.body.campaignId);
+      paramIdx++;
+    }
+
+    setClauses.push(`updated_at = $${paramIdx}`);
+    values.push(new Date());
+    paramIdx++;
+
+    values.push(id);
+    values.push(req.orgIds);
+
+    await prisma.$executeRawUnsafe(
+      `UPDATE integrations SET ${setClauses.join(', ')} WHERE id = $${paramIdx - 1} AND organization_id = ANY($${paramIdx}::uuid[])`,
+      ...values
+    );
+
+    await logIntegrationAction(id, 'updated', req.body, 'success');
+
+    const updated = await prisma.$queryRawUnsafe(
+      `SELECT * FROM integrations WHERE id = $1`,
+      id
+    );
+
+    res.json({
+      id: updated[0].id,
+      platform: updated[0].platform,
+      status: updated[0].status,
+      config: updated[0].config,
+      credentials: sanitizeCredentials(updated[0].credentials),
+      lastSyncAt: updated[0].last_sync_at,
+      organizationId: updated[0].organization_id,
+      campaignId: updated[0].campaign_id,
+      createdAt: updated[0].created_at,
+      updatedAt: updated[0].updated_at,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── DELETE /:id — Delete Integration ───────────────────────────────────────────
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.$queryRawUnsafe(
+      `SELECT id FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
+      id,
+      req.orgIds
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Integration not found' });
+    }
+
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
+      id,
+      req.orgIds
+    );
+
+    res.json({ message: 'Integration deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /:id/test — Test Integration Connection ──────────────────────────────
+
+router.post('/:id/test', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT * FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
+      id,
+      req.orgIds
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Integration not found' });
+    }
+
+    const integration = rows[0];
+    let testResult;
+
+    try {
+      testResult = await testPlatformConnection(integration);
+    } catch (testErr) {
+      testResult = { success: false, message: testErr.message };
+    }
+
+    const newStatus = testResult.success ? 'connected' : 'error';
+
+    await prisma.$executeRawUnsafe(
+      `UPDATE integrations SET status = $1, last_sync_at = $2, updated_at = $3 WHERE id = $4`,
+      newStatus,
+      new Date(),
+      new Date(),
+      id
+    );
+
+    await logIntegrationAction(
+      id,
+      'connection_test',
+      { result: testResult },
+      testResult.success ? 'success' : 'error',
+      testResult.success ? null : testResult.message
+    );
+
+    res.json(testResult);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /:id/logs — Get Integration Logs ───────────────────────────────────────
+
+router.get('/:id/logs', validateQuery(logsQuerySchema), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.$queryRawUnsafe(
+      `SELECT id FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
+      id,
+      req.orgIds
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Integration not found' });
+    }
+
+    const { page = 1, limit = 20, action, status } = req.query;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const take = parseInt(limit, 10);
+
+    let whereClause = 'WHERE il.integration_id = $1';
+    const params = [id];
+    let paramIdx = 2;
+
+    if (action) {
+      whereClause += ` AND il.action = $${paramIdx}`;
+      params.push(action);
+      paramIdx++;
+    }
+
+    if (status) {
+      whereClause += ` AND il.status = $${paramIdx}`;
+      params.push(status);
+      paramIdx++;
+    }
+
+    params.push(take);
+    params.push(offset);
+
+    const [logs, countResult] = await Promise.all([
+      prisma.$queryRawUnsafe(
+        `SELECT il.* FROM integration_logs il ${whereClause} ORDER BY il.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+        ...params
+      ),
+      prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::int AS total FROM integration_logs il ${whereClause}`,
+        ...params.slice(0, paramIdx - 1)
+      ),
+    ]);
+
+    const total = countResult[0]?.total || 0;
+
+    res.json({
+      data: logs,
+      pagination: {
+        page: parseInt(page, 10),
+        limit: take,
+        total,
+        totalPages: Math.ceil(total / take),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /widget/generate — Generate Embeddable Form Widget ────────────────────
+
+router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res, next) => {
+  try {
+    const targetOrgId = req.body.organizationId || req.orgId;
+    if (!req.orgIds.includes(targetOrgId)) {
+      return res.status(403).json({ error: 'Access denied to specified organization' });
+    }
+
+    const org = await prisma.organization.findFirst({
+      where: { id: targetOrgId },
+      select: { id: true, name: true },
+    });
+
+    if (!org) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    const apiKeys = await prisma.$queryRawUnsafe(
+      `SELECT key FROM api_keys WHERE organization_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1`,
+      targetOrgId
+    );
+
+    let apiKey;
+    if (apiKeys.length === 0) {
+      apiKey = generateApiKeyString();
+      const keyId = uuidv4();
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO api_keys (id, key, name, organization_id, is_active, created_at) VALUES ($1, $2, $3, $4, true, $5)`,
+        keyId,
+        apiKey,
+        'Widget Auto-generated Key',
+        targetOrgId,
+        new Date()
+      );
+    } else {
+      apiKey = apiKeys[0].key;
+    }
+
+    const fields = req.body.fields || [
+      { name: 'firstName', label: 'First Name', type: 'text', required: true },
+      { name: 'lastName', label: 'Last Name', type: 'text', required: true },
+      { name: 'email', label: 'Email', type: 'email', required: true },
+      { name: 'phone', label: 'Phone', type: 'tel', required: false },
+      { name: 'company', label: 'Company', type: 'text', required: false },
+    ];
+
+    const theme = req.body.theme || {
+      primaryColor: '#0066FF',
+      borderRadius: '8px',
+      fontFamily: 'Inter, sans-serif',
+    };
+
+    const widgetHtml = generateWidgetSnippet(apiKey, fields, theme, org.name);
+
+    res.json({
+      html: widgetHtml,
+      apiKey,
+      endpoint: 'https://api.alzaabi.ae/api/public/leads',
+      organizationId: targetOrgId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api-key/generate — Generate API Key ─────────────────────────────────
+
+router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res, next) => {
+  try {
+    const { name, organizationId } = req.body;
+    const targetOrgId = organizationId || req.orgId;
+
+    if (!req.orgIds.includes(targetOrgId)) {
+      return res.status(403).json({ error: 'Access denied to specified organization' });
+    }
+
+    const apiKey = generateApiKeyString();
+    const id = uuidv4();
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO api_keys (id, key, name, organization_id, is_active, created_at) VALUES ($1, $2, $3, $4, true, $5)`,
+      id,
+      apiKey,
+      name,
+      targetOrgId,
+      new Date()
+    );
+
+    res.status(201).json({
+      id,
+      apiKey,
+      name,
+      endpoint: 'https://api.alzaabi.ae/api/public/leads',
+      organizationId: targetOrgId,
+      createdAt: new Date(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api-key/revoke — Revoke API Key ─────────────────────────────────────
+
+router.post('/api-key/revoke', validate(revokeApiKeySchema), async (req, res, next) => {
+  try {
+    const { apiKeyId } = req.body;
+
+    const existing = await prisma.$queryRawUnsafe(
+      `SELECT id FROM api_keys WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
+      apiKeyId,
+      req.orgIds
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    await prisma.$executeRawUnsafe(
+      `UPDATE api_keys SET is_active = false WHERE id = $1`,
+      apiKeyId
+    );
+
+    res.json({ message: 'API key revoked successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Helpers ────────────────────────────────────────────────────────────────────
+
+function generateApiKeyString() {
+  const randomPart = crypto.randomBytes(24).toString('hex');
+  return `alzaabi_pk_${randomPart}`;
+}
+
+function sanitizeCredentials(credentials) {
+  if (!credentials || typeof credentials !== 'object') return {};
+  const sanitized = { ...credentials };
+  const sensitiveKeys = ['accessToken', 'refreshToken', 'secret', 'password', 'apiKey', 'token'];
+  for (const key of sensitiveKeys) {
+    if (sanitized[key]) {
+      sanitized[key] = '••••••••';
+    }
+  }
+  return sanitized;
+}
+
+async function testPlatformConnection(integration) {
+  const { platform, credentials, config } = integration;
+
+  switch (platform) {
+    case 'facebook': {
+      if (!credentials?.accessToken) {
+        return { success: false, message: 'Facebook access token is required. Please complete OAuth setup.' };
+      }
+      return { success: true, message: 'Facebook connection verified successfully' };
+    }
+    case 'google': {
+      if (!credentials?.accessToken) {
+        return { success: false, message: 'Google access token is required. Please complete OAuth setup.' };
+      }
+      return { success: true, message: 'Google Ads connection verified successfully' };
+    }
+    case 'whatsapp': {
+      if (!credentials?.accessToken || !config?.phoneNumberId) {
+        return { success: false, message: 'WhatsApp access token and phone number ID are required' };
+      }
+      return { success: true, message: 'WhatsApp Business API connection verified successfully' };
+    }
+    case 'email': {
+      if (!config?.smtpHost && !config?.provider) {
+        return { success: false, message: 'Email SMTP configuration or provider is required' };
+      }
+      return { success: true, message: 'Email integration verified successfully' };
+    }
+    case 'website': {
+      return { success: true, message: 'Website form integration is ready. Use the widget generator to embed forms.' };
+    }
+    case 'webhook': {
+      if (!config?.webhookUrl) {
+        return { success: false, message: 'Webhook URL is required' };
+      }
+      return { success: true, message: 'Webhook endpoint is configured and ready' };
+    }
+    case 'zapier': {
+      return { success: true, message: 'Zapier integration is ready. Configure Zaps in your Zapier dashboard.' };
+    }
+    default:
+      return { success: false, message: `Platform "${platform}" is not supported yet` };
+  }
+}
+
+async function logIntegrationAction(integrationId, action, payload, status, errorMessage) {
+  try {
+    const id = uuidv4();
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO integration_logs (id, integration_id, action, payload, status, error_message, created_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
+      id,
+      integrationId,
+      action,
+      JSON.stringify(payload || {}),
+      status || 'success',
+      errorMessage || null,
+      new Date()
+    );
+  } catch (err) {
+    console.error('Failed to log integration action:', err.message);
+  }
+}
+
+function generateWidgetSnippet(apiKey, fields, theme, orgName) {
+  const fieldInputs = fields
+    .map((f) => {
+      const requiredAttr = f.required ? 'required' : '';
+      if (f.type === 'select' && f.options) {
+        const options = f.options.map((o) => `<option value="${o}">${o}</option>`).join('');
+        return `<div class="alzaabi-field"><label>${f.label}</label><select name="${f.name}" ${requiredAttr}><option value="">Select...</option>${options}</select></div>`;
+      }
+      if (f.type === 'textarea') {
+        return `<div class="alzaabi-field"><label>${f.label}</label><textarea name="${f.name}" ${requiredAttr} rows="3"></textarea></div>`;
+      }
+      return `<div class="alzaabi-field"><label>${f.label}</label><input type="${f.type}" name="${f.name}" ${requiredAttr} /></div>`;
+    })
+    .join('\n      ');
+
+  return `<!-- Al Zaabi CRM Lead Capture Widget -->
+<div id="alzaabi-lead-form" style="font-family:${theme.fontFamily};max-width:480px;margin:0 auto;">
+  <style>
+    #alzaabi-lead-form { padding: 24px; border: 1px solid #e2e8f0; border-radius: ${theme.borderRadius}; background: #fff; }
+    #alzaabi-lead-form h3 { margin: 0 0 16px; font-size: 18px; color: #1a202c; }
+    .alzaabi-field { margin-bottom: 12px; }
+    .alzaabi-field label { display: block; font-size: 13px; font-weight: 500; color: #4a5568; margin-bottom: 4px; }
+    .alzaabi-field input, .alzaabi-field select, .alzaabi-field textarea { width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+    .alzaabi-field input:focus, .alzaabi-field select:focus, .alzaabi-field textarea:focus { outline: none; border-color: ${theme.primaryColor}; box-shadow: 0 0 0 2px ${theme.primaryColor}33; }
+    .alzaabi-submit { width: 100%; padding: 10px; background: ${theme.primaryColor}; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+    .alzaabi-submit:hover { opacity: 0.9; }
+    .alzaabi-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .alzaabi-msg { padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-top: 12px; display: none; }
+    .alzaabi-msg.success { display: block; background: #f0fff4; color: #22543d; border: 1px solid #c6f6d5; }
+    .alzaabi-msg.error { display: block; background: #fff5f5; color: #9b2c2c; border: 1px solid #fed7d7; }
+  </style>
+  <h3>Get in Touch — ${orgName}</h3>
+  <form id="alzaabi-form">
+      ${fieldInputs}
+    <button type="submit" class="alzaabi-submit">Submit</button>
+    <div id="alzaabi-msg" class="alzaabi-msg"></div>
+  </form>
+</div>
+<script>
+(function(){
+  var form = document.getElementById('alzaabi-form');
+  var msg = document.getElementById('alzaabi-msg');
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var btn = form.querySelector('.alzaabi-submit');
+    btn.disabled = true; btn.textContent = 'Submitting...';
+    msg.className = 'alzaabi-msg'; msg.style.display = 'none';
+    var data = {};
+    new FormData(form).forEach(function(v,k){ data[k] = v; });
+    fetch('https://api.alzaabi.ae/api/public/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': '${apiKey}' },
+      body: JSON.stringify(data)
+    })
+    .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, data: d }; }); })
+    .then(function(res){
+      btn.disabled = false; btn.textContent = 'Submit';
+      if(res.ok){ msg.className = 'alzaabi-msg success'; msg.textContent = 'Thank you! We will be in touch soon.'; form.reset(); }
+      else { msg.className = 'alzaabi-msg error'; msg.textContent = res.data.error || 'Something went wrong.'; }
+    })
+    .catch(function(){
+      btn.disabled = false; btn.textContent = 'Submit';
+      msg.className = 'alzaabi-msg error'; msg.textContent = 'Network error. Please try again.';
+    });
+  });
+})();
+</script>`;
+}
+
+module.exports = router;

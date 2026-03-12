@@ -1,4 +1,9 @@
-import type { Organization, DivisionUser, DivisionStats } from '@/types';
+import type {
+  Organization, DivisionUser, DivisionStats,
+  Campaign, CampaignDashboardStats,
+  Integration, IntegrationLog, IntegrationPlatformInfo,
+  ApiKey, WidgetConfig
+} from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -318,6 +323,121 @@ class ApiClient {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
     return this.request<any>(`/campaigns${query}`);
   }
+
+  // ─── Campaigns (Enhanced) ───────────────────────────────────────
+
+  async createCampaign(data: Partial<Campaign>) {
+    return this.request<Campaign>('/campaigns', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateCampaign(id: string, data: Partial<Campaign>) {
+    return this.request<Campaign>(`/campaigns/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCampaign(id: string) {
+    return this.request<void>(`/campaigns/${id}`, { method: 'DELETE' });
+  }
+
+  async duplicateCampaign(id: string) {
+    return this.request<Campaign>(`/campaigns/${id}/duplicate`, { method: 'POST' });
+  }
+
+  async getCampaignStats() {
+    return this.request<CampaignDashboardStats>('/campaigns/stats');
+  }
+
+  async bulkUpdateCampaigns(ids: string[], data: { status?: string }) {
+    return this.request<void>('/campaigns/bulk-update', {
+      method: 'POST',
+      body: JSON.stringify({ ids, data }),
+    });
+  }
+
+  async bulkDeleteCampaigns(ids: string[]) {
+    return this.request<void>('/campaigns/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  // ─── Integrations ──────────────────────────────────────────────
+
+  async getIntegrations() {
+    return this.request<Integration[]>('/integrations');
+  }
+
+  async getIntegration(id: string) {
+    return this.request<{ integration: Integration; logs: IntegrationLog[] }>(
+      `/integrations/${id}`,
+    );
+  }
+
+  async createIntegration(data: Partial<Integration>) {
+    return this.request<Integration>('/integrations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateIntegration(id: string, data: Partial<Integration>) {
+    return this.request<Integration>(`/integrations/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteIntegration(id: string) {
+    return this.request<void>(`/integrations/${id}`, { method: 'DELETE' });
+  }
+
+  async testIntegration(id: string) {
+    return this.request<{ success: boolean; message: string }>(
+      `/integrations/${id}/test`,
+      { method: 'POST' },
+    );
+  }
+
+  async getIntegrationLogs(id: string, params?: Record<string, string | number>) {
+    const query = params
+      ? '?' + new URLSearchParams(params as Record<string, string>).toString()
+      : '';
+    return this.request<IntegrationLog[]>(`/integrations/${id}/logs${query}`);
+  }
+
+  async getIntegrationPlatforms() {
+    return this.request<IntegrationPlatformInfo[]>('/integrations/platforms');
+  }
+
+  // ─── Widget & API Keys ─────────────────────────────────────────
+
+  async generateWidget(config: WidgetConfig) {
+    return this.request<{ code: string; previewUrl: string }>(
+      '/integrations/widget/generate',
+      { method: 'POST', body: JSON.stringify(config) },
+    );
+  }
+
+  async generateApiKey(name: string) {
+    return this.request<{ apiKey: string; endpoint: string }>(
+      '/integrations/api-key/generate',
+      { method: 'POST', body: JSON.stringify({ name }) },
+    );
+  }
+
+  async revokeApiKey(id: string) {
+    return this.request<void>(`/integrations/api-key/${id}/revoke`, { method: 'POST' });
+  }
+
+  async getApiKeys() {
+    return this.request<ApiKey[]>('/integrations/api-keys');
+  }
+
 
   // Automations
   async getAutomations() {

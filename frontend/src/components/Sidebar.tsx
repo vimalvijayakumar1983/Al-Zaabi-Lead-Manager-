@@ -24,6 +24,7 @@ import {
   Sparkles,
   Upload,
   Building2,
+  Plug2,
 } from 'lucide-react';
 
 const navItems = [
@@ -34,6 +35,7 @@ const navItems = [
   { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
   { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
+  { href: '/integrations', label: 'Integrations', icon: Plug2, permission: 'settings' },
   { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
   { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'leads' },
   { href: '/divisions', label: 'Divisions', icon: Building2, shortcut: '0', permission: 'divisions', divisionOnly: true },

@@ -24,6 +24,8 @@ const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
+const integrationsRoutes = require('./routes/integrations');
+const publicLeadsRoutes = require('./routes/public-leads');
 
 const app = express();
 const server = createServer(app);
@@ -78,6 +80,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/integrations', integrationsRoutes);
+app.use('/api/public', publicLeadsRoutes);
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);
