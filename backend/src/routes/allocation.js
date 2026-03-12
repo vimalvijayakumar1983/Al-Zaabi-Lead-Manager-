@@ -233,7 +233,18 @@ router.post(
 
       for (const lead of unassignedLeads) {
         try {
-          const assigneeId = await autoAssign(lead.organizationId, lead);
+          // Try assigning within the lead's own org first
+          let assigneeId = await autoAssign(lead.organizationId, lead);
+
+          // If no eligible users in lead's org (e.g., lead is in parent org),
+          // try other orgs in scope (divisions)
+          if (!assigneeId && orgIds.length > 1) {
+            for (const altOrgId of orgIds) {
+              if (altOrgId === lead.organizationId) continue;
+              assigneeId = await autoAssign(altOrgId, lead);
+              if (assigneeId) break;
+            }
+          }
           if (!assigneeId) continue;
 
           const updated = await prisma.$transaction(async (tx) => {
