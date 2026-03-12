@@ -1376,8 +1376,7 @@ function CreateLeadModal({
   );
 }
 
-export default CreateLeadModal;
-export { CreateLeadModal };
+
 
 
 function SectionHeader({ icon, title }: { icon: string; title: string }) {
