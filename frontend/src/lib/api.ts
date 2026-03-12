@@ -176,6 +176,18 @@ class ApiClient {
     return this.request<any>(`/users/${id}/reactivate`, { method: 'POST' });
   }
 
+  async getPermissions() {
+    return this.request<{ rolePermissions: Record<string, Record<string, boolean>>; userOverrides: Record<string, Record<string, boolean>>; defaults: Record<string, Record<string, boolean>> }>('/users/permissions');
+  }
+
+  async updateRolePermissions(rolePermissions: Record<string, Record<string, boolean>>) {
+    return this.request<any>('/users/permissions/roles', { method: 'PUT', body: JSON.stringify({ rolePermissions }) });
+  }
+
+  async updateUserPermissions(userId: string, permissions: Record<string, boolean> | null) {
+    return this.request<any>(`/users/permissions/user/${userId}`, { method: 'PUT', body: JSON.stringify({ permissions }) });
+  }
+
   // Campaigns
   async getCampaigns(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';

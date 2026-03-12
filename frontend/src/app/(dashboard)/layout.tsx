@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { usePermissionsStore } from '@/lib/permissions';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
-import { Bell, HelpCircle } from 'lucide-react';
+import { Bell, HelpCircle, ShieldAlert } from 'lucide-react';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
@@ -62,6 +63,42 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const basePath = '/' + (pathname?.split('/')[1] || '');
   const pageInfo = pageTitles[basePath];
+
+  // Route-to-permission mapping
+  const routePermissions: Record<string, string> = {
+    '/dashboard': 'dashboard',
+    '/leads': 'leads',
+    '/pipeline': 'pipeline',
+    '/tasks': 'tasks',
+    '/analytics': 'analytics',
+    '/automations': 'automations',
+    '/campaigns': 'campaigns',
+    '/team': 'team',
+    '/settings': 'settings',
+  };
+
+  const requiredPermission = routePermissions[basePath];
+  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
+  const hasAccess = !requiredPermission || !user || !permissionsLoaded ||
+    hasPermission(user.id, user.role, requiredPermission);
+
+  if (!hasAccess) {
+    return (
+      <div className="min-h-screen bg-surface-secondary">
+        <Sidebar />
+        <main className="transition-all duration-300 ease-smooth pl-[var(--sidebar-width)]">
+          <div className="flex flex-col items-center justify-center min-h-screen -mt-14">
+            <div className="h-16 w-16 rounded-2xl bg-red-50 flex items-center justify-center mb-4">
+              <ShieldAlert className="h-8 w-8 text-red-500" />
+            </div>
+            <h2 className="text-xl font-bold text-text-primary mb-1">Access Denied</h2>
+            <p className="text-sm text-text-secondary mb-4">You don&apos;t have permission to access this page.</p>
+            <button onClick={() => router.push('/dashboard')} className="btn-primary">Go to Dashboard</button>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-surface-secondary">

@@ -3,12 +3,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { usePermissionsStore, FEATURES } from '@/lib/permissions';
 import type { User } from '@/types';
 import {
   UserPlus, X, Shield, Users as UsersIcon, Crown, Eye,
   MoreHorizontal, Pencil, Key, UserX, UserCheck, Search,
   Mail, Phone, Calendar, BarChart3, CheckCircle2, XCircle,
-  AlertTriangle, ChevronDown, Filter,
+  AlertTriangle, ChevronDown, Filter, RotateCcw, Save,
 } from 'lucide-react';
 
 const roleConfig: Record<string, { bg: string; text: string; ring: string; icon: React.ComponentType<{ className?: string }>; label: string; description: string }> = {
@@ -16,13 +17,6 @@ const roleConfig: Record<string, { bg: string; text: string; ring: string; icon:
   MANAGER: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10', icon: Shield, label: 'Manager', description: 'Manage leads, tasks, team members, and view analytics' },
   SALES_REP: { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-600/10', icon: UsersIcon, label: 'Sales Rep', description: 'Work with assigned leads, create tasks, and log activities' },
   VIEWER: { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', icon: Eye, label: 'Viewer', description: 'Read-only access to leads, pipeline, and analytics' },
-};
-
-const permissionMatrix: Record<string, Record<string, boolean>> = {
-  ADMIN: { leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, delete: true },
-  MANAGER: { leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, delete: false },
-  SALES_REP: { leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, delete: false },
-  VIEWER: { leads: true, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, team: false, settings: false, invite: false, delete: false },
 };
 
 export default function TeamPage() {
@@ -482,6 +476,11 @@ function InviteModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
 /* ─── Edit Member Modal ──────────────────────────────────────────── */
 function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () => void; onSaved: () => void }) {
+  const { user: currentUser } = useAuthStore();
+  const { rolePermissions, userOverrides, loadPermissions } = usePermissionsStore();
+  const isAdmin = currentUser?.role === 'ADMIN';
+
+  const [tab, setTab] = useState<'details' | 'permissions'>('details');
   const [form, setForm] = useState<{ firstName: string; lastName: string; role: string; phone: string }>({
     firstName: user.firstName,
     lastName: user.lastName,
@@ -490,6 +489,11 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  // User-level permission overrides
+  const existingOverrides = userOverrides[user.id] || {};
+  const [permOverrides, setPermOverrides] = useState<Record<string, boolean | undefined>>({ ...existingOverrides });
+  const [savingPerms, setSavingPerms] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -511,6 +515,46 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
     }
   };
 
+  const handleSavePerms = async () => {
+    setSavingPerms(true);
+    setError('');
+    try {
+      // Filter out undefined values (features with no override)
+      const cleanOverrides: Record<string, boolean> = {};
+      let hasOverrides = false;
+      for (const [key, val] of Object.entries(permOverrides)) {
+        if (typeof val === 'boolean') {
+          cleanOverrides[key] = val;
+          hasOverrides = true;
+        }
+      }
+      await api.updateUserPermissions(user.id, hasOverrides ? cleanOverrides : null);
+      await loadPermissions();
+      setError('');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingPerms(false);
+    }
+  };
+
+  const cycleOverride = (feature: string) => {
+    if (!isAdmin) return;
+    const current = permOverrides[feature];
+    // Cycle: undefined (inherit) -> true (grant) -> false (deny) -> undefined
+    if (current === undefined) {
+      setPermOverrides({ ...permOverrides, [feature]: true });
+    } else if (current === true) {
+      setPermOverrides({ ...permOverrides, [feature]: false });
+    } else {
+      const copy = { ...permOverrides };
+      delete copy[feature];
+      setPermOverrides(copy);
+    }
+  };
+
+  const rolePermsForUser = rolePermissions[form.role] || {};
+
   return (
     <div className="modal">
       <div className="overlay" onClick={onClose} />
@@ -522,74 +566,181 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
           </div>
           <button onClick={onClose} className="btn-icon"><X className="h-4 w-4" /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-secondary">
-            <div className="h-12 w-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-soft">
-              {form.firstName[0]}{form.lastName[0]}
-            </div>
-            <div>
-              <p className="font-semibold text-text-primary">{form.firstName} {form.lastName}</p>
-              <p className="text-sm text-text-secondary">{user.email}</p>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">First Name</label>
-              <input className="input" required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Last Name</label>
-              <input className="input" required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
-            </div>
-          </div>
-
-          <div>
-            <label className="label">Phone</label>
-            <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+971 50 123 4567" />
-          </div>
-
-          <div>
-            <label className="label">Role</label>
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(roleConfig).map(([key, config]) => {
-                const Icon = config.icon;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setForm({ ...form, role: key })}
-                    className={`p-3 rounded-lg border text-left transition-all duration-150 ${
-                      form.role === key
-                        ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500'
-                        : 'border-border hover:border-border-strong hover:bg-surface-secondary'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <Icon className={`h-3.5 w-3.5 ${form.role === key ? 'text-brand-600' : config.text}`} />
-                      <span className={`text-sm font-medium ${form.role === key ? 'text-brand-700' : 'text-text-primary'}`}>{config.label}</span>
-                    </div>
-                    <p className="text-2xs text-text-tertiary line-clamp-1">{config.description.split(',')[0]}</p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-              {error}
-            </div>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={saving} className="btn-primary">
-              {saving ? 'Saving...' : 'Save Changes'}
+        {/* Tabs */}
+        {isAdmin && (
+          <div className="flex border-b border-border-subtle px-6">
+            <button
+              onClick={() => setTab('details')}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                tab === 'details' ? 'border-brand-500 text-brand-700' : 'border-transparent text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              Details
+            </button>
+            <button
+              onClick={() => setTab('permissions')}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                tab === 'permissions' ? 'border-brand-500 text-brand-700' : 'border-transparent text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              Permission Overrides
             </button>
           </div>
-        </form>
+        )}
+
+        {tab === 'details' ? (
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-secondary">
+              <div className="h-12 w-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-soft">
+                {form.firstName[0]}{form.lastName[0]}
+              </div>
+              <div>
+                <p className="font-semibold text-text-primary">{form.firstName} {form.lastName}</p>
+                <p className="text-sm text-text-secondary">{user.email}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">First Name</label>
+                <input className="input" required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Last Name</label>
+                <input className="input" required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Phone</label>
+              <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+971 50 123 4567" />
+            </div>
+
+            <div>
+              <label className="label">Role</label>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(roleConfig).map(([key, config]) => {
+                  const Icon = config.icon;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setForm({ ...form, role: key })}
+                      className={`p-3 rounded-lg border text-left transition-all duration-150 ${
+                        form.role === key
+                          ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500'
+                          : 'border-border hover:border-border-strong hover:bg-surface-secondary'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Icon className={`h-3.5 w-3.5 ${form.role === key ? 'text-brand-600' : config.text}`} />
+                        <span className={`text-sm font-medium ${form.role === key ? 'text-brand-700' : 'text-text-primary'}`}>{config.label}</span>
+                      </div>
+                      <p className="text-2xs text-text-tertiary line-clamp-1">{config.description.split(',')[0]}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {error && tab === 'details' && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+              <button type="submit" disabled={saving} className="btn-primary">
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="p-6 space-y-4">
+            <div className="p-3 rounded-lg bg-amber-50 ring-1 ring-amber-200">
+              <div className="flex gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-800">
+                  Click a feature to cycle through: <strong>Inherit from role</strong> &rarr; <strong>Grant</strong> &rarr; <strong>Deny</strong>.
+                  Overrides apply only to this user, regardless of their role.
+                </p>
+              </div>
+            </div>
+
+            <div className="card overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="table-header">
+                    <th className="table-cell text-left">Feature</th>
+                    <th className="table-cell text-center">Role Default</th>
+                    <th className="table-cell text-center">Override</th>
+                    <th className="table-cell text-center">Effective</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-subtle">
+                  {FEATURES.map((feature) => {
+                    const roleDefault = rolePermsForUser[feature.key] ?? false;
+                    const override = permOverrides[feature.key];
+                    const effective = override !== undefined ? override : roleDefault;
+
+                    return (
+                      <tr key={feature.key} className="table-row">
+                        <td className="table-cell text-sm font-medium text-text-primary">{feature.label}</td>
+                        <td className="table-cell text-center">
+                          {roleDefault ? (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-500 mx-auto" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-gray-300 mx-auto" />
+                          )}
+                        </td>
+                        <td className="table-cell text-center">
+                          <button
+                            type="button"
+                            onClick={() => cycleOverride(feature.key)}
+                            className="inline-flex items-center justify-center"
+                          >
+                            {override === undefined ? (
+                              <span className="text-2xs text-text-tertiary px-2 py-0.5 rounded bg-gray-100">Inherit</span>
+                            ) : override ? (
+                              <span className="text-2xs text-emerald-700 px-2 py-0.5 rounded bg-emerald-50 ring-1 ring-emerald-200">Grant</span>
+                            ) : (
+                              <span className="text-2xs text-red-700 px-2 py-0.5 rounded bg-red-50 ring-1 ring-red-200">Deny</span>
+                            )}
+                          </button>
+                        </td>
+                        <td className="table-cell text-center">
+                          {effective ? (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-500 mx-auto" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-red-400 mx-auto" />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {error && tab === 'permissions' && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+              <button onClick={handleSavePerms} disabled={savingPerms} className="btn-primary">
+                <Save className="h-3.5 w-3.5" />
+                {savingPerms ? 'Saving...' : 'Save Overrides'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -701,18 +852,53 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
 
 /* ─── Roles & Access Modal ───────────────────────────────────────── */
 function RolesAccessModal({ onClose }: { onClose: () => void }) {
-  const features = [
-    { key: 'leads', label: 'Leads' },
-    { key: 'pipeline', label: 'Pipeline' },
-    { key: 'tasks', label: 'Tasks' },
-    { key: 'analytics', label: 'Analytics' },
-    { key: 'automations', label: 'Automations' },
-    { key: 'campaigns', label: 'Campaigns' },
-    { key: 'team', label: 'Team Mgmt' },
-    { key: 'settings', label: 'Settings' },
-    { key: 'invite', label: 'Invite Users' },
-    { key: 'delete', label: 'Delete Data' },
-  ];
+  const { user: currentUser } = useAuthStore();
+  const { rolePermissions, loadPermissions } = usePermissionsStore();
+  const isAdmin = currentUser?.role === 'ADMIN';
+
+  const [editPerms, setEditPerms] = useState<Record<string, Record<string, boolean>>>({});
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    // Deep clone current role permissions for editing
+    const clone: Record<string, Record<string, boolean>> = {};
+    for (const role of Object.keys(roleConfig)) {
+      clone[role] = { ...(rolePermissions[role] || {}) };
+    }
+    setEditPerms(clone);
+  }, [rolePermissions]);
+
+  const togglePerm = (role: string, feature: string) => {
+    if (!isAdmin) return;
+    setEditPerms((prev) => ({
+      ...prev,
+      [role]: { ...prev[role], [feature]: !prev[role]?.[feature] },
+    }));
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api.updateRolePermissions(editPerms);
+      await loadPermissions();
+      setDirty(false);
+    } catch (err: any) {
+      alert(err.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    const clone: Record<string, Record<string, boolean>> = {};
+    for (const role of Object.keys(roleConfig)) {
+      clone[role] = { ...(rolePermissions[role] || {}) };
+    }
+    setEditPerms(clone);
+    setDirty(false);
+  };
 
   return (
     <div className="modal">
@@ -721,7 +907,9 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Roles &amp; Access Rights</h2>
-            <p className="text-2xs text-text-tertiary mt-0.5">Overview of permissions for each role</p>
+            <p className="text-2xs text-text-tertiary mt-0.5">
+              {isAdmin ? 'Toggle permissions for each role. Changes apply to all users with that role.' : 'Overview of permissions for each role'}
+            </p>
           </div>
           <button onClick={onClose} className="btn-icon"><X className="h-4 w-4" /></button>
         </div>
@@ -757,12 +945,29 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
-                {features.map((feature) => (
+                {FEATURES.map((feature) => (
                   <tr key={feature.key} className="table-row">
-                    <td className="table-cell text-sm font-medium text-text-primary">{feature.label}</td>
+                    <td className="table-cell">
+                      <div>
+                        <span className="text-sm font-medium text-text-primary">{feature.label}</span>
+                        <span className="text-2xs text-text-tertiary ml-2">{feature.section}</span>
+                      </div>
+                    </td>
                     {Object.keys(roleConfig).map((role) => (
                       <td key={role} className="table-cell text-center">
-                        {permissionMatrix[role]?.[feature.key] ? (
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => togglePerm(role, feature.key)}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${
+                              editPerms[role]?.[feature.key] ? 'bg-brand-500' : 'bg-gray-200'
+                            }`}
+                          >
+                            <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                              editPerms[role]?.[feature.key] ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                            }`} />
+                          </button>
+                        ) : editPerms[role]?.[feature.key] ? (
                           <CheckCircle2 className="h-4 w-4 text-emerald-500 mx-auto" />
                         ) : (
                           <XCircle className="h-4 w-4 text-gray-300 mx-auto" />
@@ -776,8 +981,21 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-border-subtle flex justify-end">
-          <button onClick={onClose} className="btn-secondary">Close</button>
+        <div className="px-6 py-4 border-t border-border-subtle flex justify-end gap-2">
+          {isAdmin && dirty && (
+            <button onClick={handleReset} className="btn-secondary">
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset
+            </button>
+          )}
+          {isAdmin && dirty ? (
+            <button onClick={handleSave} disabled={saving} className="btn-primary">
+              <Save className="h-3.5 w-3.5" />
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          ) : (
+            <button onClick={onClose} className="btn-secondary">Close</button>
+          )}
         </div>
       </div>
     </div>

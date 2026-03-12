@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { usePermissionsStore } from '@/lib/permissions';
 import { clsx } from 'clsx';
 import { useState, useEffect } from 'react';
 import {
@@ -24,21 +25,27 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: '1' },
-  { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null },
-  { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3' },
-  { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4' },
-  { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5' },
-  { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6' },
-  { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7' },
-  { href: '/team', label: 'Team', icon: UserCog, shortcut: '8' },
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: '1', permission: 'dashboard' },
+  { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null, permission: 'leads' },
+  { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
+  { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
+  { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
+  { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
+  const { hasPermission } = usePermissionsStore();
   const [collapsed, setCollapsed] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+
+  const visibleNavItems = navItems.filter((item) =>
+    !user || hasPermission(user.id, user.role, item.permission)
+  );
+  const canAccessSettings = !user || hasPermission(user.id, user.role, 'settings');
 
   // Keyboard shortcut: Cmd+B to toggle sidebar
   useEffect(() => {
@@ -127,7 +134,7 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto scrollbar-thin py-2 px-3">
         <div className="space-y-0.5">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
             const Icon = item.icon;
             return (
@@ -177,7 +184,7 @@ export default function Sidebar() {
       </nav>
 
       {/* Settings link */}
-      <div className="px-3 pb-1">
+      {canAccessSettings && <div className="px-3 pb-1">
         <div className="divider mb-2" />
         <Link
           href="/settings"
@@ -204,7 +211,7 @@ export default function Sidebar() {
             </div>
           )}
         </Link>
-      </div>
+      </div>}
 
       {/* User info */}
       <div className="p-3 border-t border-border-subtle">
