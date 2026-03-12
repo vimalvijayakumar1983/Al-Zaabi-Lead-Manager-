@@ -37,7 +37,7 @@ export interface DivisionStats {
   totalPipelineValue: number;
   conversionRate: number;
   avgLeadValue: number;
-  leadsByStage: { name: string; count: number; color: string }[];
+  leadsByStage: { stage: string; count: number; value: number; color: string }[];
   topPerformers: { id: string; name: string; wonLeads: number; totalValue: number }[];
   recentLeads: { id: string; name: string; company?: string; value: number; status: string; createdAt: string }[];
 }
