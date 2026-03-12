@@ -304,7 +304,7 @@ router.get('/:id/users', async (req, res, next) => {
         id: true, email: true, firstName: true, lastName: true,
         role: true, isActive: true, createdAt: true, lastLoginAt: true,
         organizationId: true, avatar: true,
-        _count: { select: { assignedLeads: true } },
+        _count: { select: { assignedLeads: true, tasks: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -312,10 +312,12 @@ router.get('/:id/users', async (req, res, next) => {
     res.json(users.map(u => ({
       ...u,
       leadCount: u._count?.assignedLeads ?? 0,
+      taskCount: u._count?.tasks ?? 0,
       _count: undefined,
     })));
   } catch (err) {
-    next(err);
+    console.error('Division users list error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to load users', detail: err?.message || String(err) });
   }
 });
 
