@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import type { Lead, CustomField } from '@/types';
+import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
+import { ReassignmentPanel } from '../components/ReassignmentPanel';
 
 const statusColors: Record<string, string> = {
   NEW: 'bg-indigo-100 text-indigo-800 border-indigo-200',
@@ -522,6 +523,18 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {/* Assignment Panel */}
+          <ReassignmentPanel
+            lead={lead}
+            users={fullUsers as User[]}
+            currentUserId={currentUserId}
+            onReassign={async (leadId: string, assignedToId: string, reason?: string) => {
+              await api.reassignLead(leadId, assignedToId, reason);
+              fetchLead();
+            }}
+            assignmentHistory={assignmentHistory}
+          />
+
           {/* Meta Info */}
           <div className="card p-4">
             <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
@@ -530,7 +543,7 @@ export default function LeadDetailPage() {
             </h3>
             <InfoRow label="Created" value={new Date(lead.createdAt).toLocaleString()} />
             <InfoRow label="Updated" value={new Date(lead.updatedAt).toLocaleString()} />
-            {lead.assignedTo && <InfoRow label="Assigned To" value={`${lead.assignedTo.firstName} ${lead.assignedTo.lastName}`} />}
+
           </div>
         </div>
 
@@ -846,10 +859,15 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
   });
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
+  const [fullUsers, setFullUsers] = useState<User[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
 
   useEffect(() => {
     Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]) => {
       setUsers(Array.isArray(userList) ? userList : []);
+      setFullUsers(Array.isArray(userList) ? userList : []);
+      setCurrentUserId(me?.id || '');
       if (me?.id) setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
     }).catch(() => {});
   }, []);

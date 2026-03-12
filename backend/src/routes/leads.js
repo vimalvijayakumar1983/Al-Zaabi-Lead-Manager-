@@ -9,6 +9,7 @@ const { detectDuplicates } = require('../utils/duplicateDetection');
 const { createAuditLog } = require('../middleware/auditLog');
 const { notifyUser } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { autoAssign } = require('../services/leadAssignment');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -358,6 +359,34 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     // Determine target org: SUPER_ADMIN can target a division
     const targetOrgId = (req.isSuperAdmin && data.divisionId) ? data.divisionId : req.orgId;
     delete data.divisionId;
+
+
+    // Auto-assign if no assignee specified
+    if (!data.assignedToId) {
+      try {
+        const orgSettings = await prisma.organization.findUnique({
+          where: { id: targetOrgId },
+          select: { settings: true }
+        });
+        const rules = (orgSettings?.settings)?.allocationRules;
+        if (rules?.autoAssignOnCreate !== false) {
+          // Check source-specific rules first
+          if (rules?.sourceRules?.length > 0 && data.source) {
+            const sourceRule = rules.sourceRules.find(r => r.source === data.source);
+            if (sourceRule?.assignToId) {
+              data.assignedToId = sourceRule.assignToId;
+            }
+          }
+          // Fall back to auto-assign (round-robin / workload-based)
+          if (!data.assignedToId) {
+            const assigneeId = await autoAssign(targetOrgId, data);
+            if (assigneeId) data.assignedToId = assigneeId;
+          }
+        }
+      } catch (autoAssignErr) {
+        // Non-critical: continue without auto-assignment
+      }
+    }
 
     // Duplicate detection
     const duplicates = await detectDuplicates(targetOrgId, {
@@ -735,6 +764,104 @@ router.post('/:id/notes', validate(z.object({
 });
 
 // ─── Bulk Update Leads ───────────────────────────────────────────
+
+// ---------------------------------------------------------------------------
+// POST /:id/reassign — Reassign a lead to a different team member
+// ---------------------------------------------------------------------------
+
+router.post('/:id/reassign', validate(z.object({
+  assignedToId: z.string().uuid(),
+  reason: z.string().max(500).optional(),
+})), async (req, res, next) => {
+  try {
+    const { assignedToId, reason } = req.validated;
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      include: { assignedTo: { select: { id: true, firstName: true, lastName: true } } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const previousAssignee = lead.assignedTo;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.lead.update({
+        where: { id: req.params.id },
+        data: { assignedToId },
+        include: {
+          assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
+          stage: { select: { id: true, name: true, color: true } },
+        },
+      });
+
+      const prevName = previousAssignee ? `${previousAssignee.firstName} ${previousAssignee.lastName}` : 'Unassigned';
+      const newName = `${result.assignedTo.firstName} ${result.assignedTo.lastName}`;
+
+      await tx.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          userId: req.user.id,
+          type: 'ASSIGNMENT_CHANGED',
+          description: reason
+            ? `Reassigned from ${prevName} to ${newName}. Reason: ${reason}`
+            : `Reassigned from ${prevName} to ${newName}`,
+          metadata: {
+            previousAssigneeId: previousAssignee?.id || null,
+            newAssigneeId: assignedToId,
+            reason: reason || null,
+          },
+        },
+      });
+
+      return result;
+    });
+
+    // Notify new assignee
+    if (assignedToId !== req.user.id) {
+      notifyUser(assignedToId, {
+        type: 'lead_assigned',
+        lead: { id: updated.id, firstName: updated.firstName, lastName: updated.lastName },
+      });
+      createNotification({
+        type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+        title: 'Lead Reassigned to You',
+        message: `${req.user.firstName} ${req.user.lastName} reassigned ${updated.firstName} ${updated.lastName} to you${reason ? '. Reason: ' + reason : ''}`,
+        userId: assignedToId,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: updated.id,
+        organizationId: lead.organizationId,
+      }).catch(() => {});
+    }
+
+    // Notify previous assignee
+    if (previousAssignee && previousAssignee.id !== req.user.id && previousAssignee.id !== assignedToId) {
+      createNotification({
+        type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+        title: 'Lead Reassigned',
+        message: `${req.user.firstName} ${req.user.lastName} reassigned ${updated.firstName} ${updated.lastName} to another team member${reason ? '. Reason: ' + reason : ''}`,
+        userId: previousAssignee.id,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: updated.id,
+        organizationId: lead.organizationId,
+      }).catch(() => {});
+    }
+
+    await createAuditLog({
+      userId: req.user.id,
+      organizationId: lead.organizationId,
+      action: 'REASSIGN',
+      entity: 'Lead',
+      entityId: lead.id,
+      oldData: { assignedToId: previousAssignee?.id },
+      newData: { assignedToId, reason },
+      req,
+    });
+
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
 router.patch('/bulk', validate(z.object({
   leadIds: z.array(z.string().uuid()).min(1).max(100),
   data: updateLeadSchema,

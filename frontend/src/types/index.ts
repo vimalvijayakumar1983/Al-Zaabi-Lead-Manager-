@@ -474,3 +474,59 @@ export interface Toast {
   entityType?: string;
   entityId?: string;
 }
+
+
+// ─── Lead Allocation Types ────────────────────────────────────────
+
+export type AllocationMethod = 'round_robin' | 'workload_based' | 'manual';
+
+export interface SourceAllocationRule {
+  source: string;
+  assignToId: string;
+}
+
+export interface AllocationRules {
+  method: AllocationMethod;
+  autoAssignOnCreate: boolean;
+  maxLeadsPerUser: number;
+  sourceRules: SourceAllocationRule[];
+}
+
+export interface WorkloadUser {
+  id: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  activeLeads: number;
+  totalLeads: number;
+  wonLeads: number;
+  lostLeads: number;
+  conversionRate: number;
+  utilization: number;
+}
+
+export interface AllocationStats {
+  totalUnassigned: number;
+  teamMembers: WorkloadUser[];
+}
+
+export interface AutoAllocateResult {
+  assigned: number;
+  details: Array<{ leadId: string; assignedToId: string; name: string }>;
+}
+
+export interface AssignmentHistoryEntry {
+  id: string;
+  description: string;
+  metadata: {
+    previousAssigneeId: string | null;
+    newAssigneeId: string;
+    reason: string | null;
+  };
+  createdAt: string;
+  user?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  };
+}

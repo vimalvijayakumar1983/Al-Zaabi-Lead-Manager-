@@ -629,4 +629,35 @@ class ApiClient {
   }
 }
 
+  // ─── Lead Allocation ────────────────────────────────────────────
+  async reassignLead(leadId: string, assignedToId: string, reason?: string) {
+    return this.request<any>(`/leads/${leadId}/reassign`, {
+      method: 'POST',
+      body: JSON.stringify({ assignedToId, reason }),
+    });
+  }
+
+  async getAllocationStats() {
+    return this.request<any>('/leads/allocation/stats');
+  }
+
+  async autoAllocateLeads() {
+    return this.request<any>('/leads/allocation/auto-allocate', {
+      method: 'POST',
+    });
+  }
+
+  async getAllocationRules() {
+    return this.request<any>('/leads/allocation/rules');
+  }
+
+  async updateAllocationRules(rules: any) {
+    return this.request<any>('/leads/allocation/rules', {
+      method: 'PUT',
+      body: JSON.stringify(rules),
+    });
+  }
+
+}
+
 export const api = new ApiClient();
