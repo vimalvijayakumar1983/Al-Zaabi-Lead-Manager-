@@ -105,7 +105,7 @@ function ToastItem({ toast, onDismiss, onNavigate }: ToastItemProps) {
         relative overflow-hidden
         w-80 max-w-full
         ${config.bgClass} border ${config.borderClass}
-        shadow-elevation-medium rounded-xl
+        shadow-float rounded-xl
         animate-slide-in-right
         transition-all duration-300 ease-out
         ${entityUrl ? 'cursor-pointer' : ''}

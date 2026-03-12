@@ -792,7 +792,7 @@ export default function NotificationCenter({
       {/* Backdrop overlay (subtle) */}
       <div
         className={`
-          fixed inset-0 z-40
+          fixed inset-0 z-40 bg-black/10
           transition-opacity duration-200
           ${isVisible ? 'opacity-100' : 'opacity-0'}
         `}
@@ -808,8 +808,8 @@ export default function NotificationCenter({
         className={`
           fixed top-12 right-4 z-50
           w-[420px] max-w-[calc(100vw-2rem)]
-          bg-surface-primary border border-border-subtle rounded-2xl
-          shadow-elevation-medium
+          bg-white border border-border-subtle rounded-2xl
+          shadow-float
           flex flex-col
           max-h-[calc(100vh-5rem)]
           transition-all duration-200 ease-out origin-top-right
@@ -885,7 +885,7 @@ export default function NotificationCenter({
                     transition-all duration-150 ease-out flex-1 justify-center
                     ${
                       isActive
-                        ? 'bg-surface-primary text-text-primary shadow-sm'
+                        ? 'bg-white text-text-primary shadow-sm'
                         : 'text-text-tertiary hover:text-text-secondary'
                     }
                   `}
@@ -931,7 +931,7 @@ export default function NotificationCenter({
               {groupedNotifications.map((group) => (
                 <Fragment key={group.label}>
                   {/* Date group header */}
-                  <div className="sticky top-0 z-10 px-4 py-2 bg-surface-primary/95 backdrop-blur-sm">
+                  <div className="sticky top-0 z-10 px-4 py-2 bg-white/95 backdrop-blur-sm">
                     <span className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">
                       {group.label}
                     </span>
