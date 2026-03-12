@@ -71,8 +71,8 @@ export default function LeadDetailPage() {
   // Fetch assignment history
   useEffect(() => {
     if (lead?.id) {
-      api.request<AssignmentHistoryEntry[]>(`/leads/${lead.id}/assignment-history`)
-        .then(setAssignmentHistory)
+      api.getAssignmentHistory(lead.id)
+        .then((data: any) => setAssignmentHistory(Array.isArray(data) ? data : []))
         .catch(() => setAssignmentHistory([]));
     }
   }, [lead?.id]);
