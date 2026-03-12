@@ -770,16 +770,35 @@ router.post('/:id/notes', validate(z.object({
 // ---------------------------------------------------------------------------
 
 router.post('/:id/reassign', validate(z.object({
-  assignedToId: z.string().uuid(),
+  assignedToId: z.string().refine(v => v === '__auto__' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v), { message: 'Must be a valid UUID or __auto__' }),
   reason: z.string().max(500).optional(),
 })), async (req, res, next) => {
   try {
-    const { assignedToId, reason } = req.validated;
+    let { assignedToId, reason } = req.validated;
     const lead = await prisma.lead.findFirst({
       where: { id: req.params.id, organizationId: { in: req.orgIds } },
       include: { assignedTo: { select: { id: true, firstName: true, lastName: true } } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // Handle auto-assign: find best user via round-robin/rules
+    if (assignedToId === '__auto__') {
+      const { autoAssign } = require('../services/leadAssignment');
+      // Try lead's own org first
+      let autoId = await autoAssign(lead.organizationId, lead);
+      // If no users in lead's org, try other orgs in scope
+      if (!autoId && req.orgIds.length > 1) {
+        for (const altOrgId of req.orgIds) {
+          if (altOrgId === lead.organizationId) continue;
+          autoId = await autoAssign(altOrgId, lead);
+          if (autoId) break;
+        }
+      }
+      if (!autoId) {
+        return res.status(400).json({ error: 'No eligible team members found for auto-assignment' });
+      }
+      assignedToId = autoId;
+    }
 
     const previousAssignee = lead.assignedTo;
 
