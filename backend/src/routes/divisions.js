@@ -5,6 +5,8 @@ const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
+const bcrypt = require('bcryptjs');
+
 const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────
@@ -263,6 +265,232 @@ router.delete('/:id', authorize('SUPER_ADMIN'), async (req, res, next) => {
     });
 
     res.json({ message: 'Division deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════
+// DIVISION USER MANAGEMENT ROUTES
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── 1. List Division Users ─────────────────────────────────────
+router.get('/:id/users', async (req, res, next) => {
+  try {
+    const divisionId = req.params.id;
+    const { search, role, isActive } = req.query;
+
+    // Verify division exists and requester has access
+    const division = await prisma.organization.findFirst({
+      where: { id: divisionId, ...(req.isSuperAdmin ? {} : { id: { in: req.orgIds } }) },
+    });
+    if (!division) return res.status(404).json({ error: 'Division not found' });
+
+    const where = { organizationId: divisionId };
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    if (role) where.role = role;
+    if (isActive !== undefined && isActive !== '') where.isActive = isActive === 'true';
+
+    const users = await prisma.user.findMany({
+      where,
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        role: true, isActive: true, createdAt: true, lastLoginAt: true,
+        organizationId: true, avatar: true,
+        _count: { select: { leads: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(users.map(u => ({
+      ...u,
+      leadCount: u._count?.leads ?? 0,
+      _count: undefined,
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── 2. Division Stats ──────────────────────────────────────────
+router.get('/:id/stats', async (req, res, next) => {
+  try {
+    const divisionId = req.params.id;
+
+    const division = await prisma.organization.findFirst({
+      where: { id: divisionId, ...(req.isSuperAdmin ? {} : { id: { in: req.orgIds } }) },
+    });
+    if (!division) return res.status(404).json({ error: 'Division not found' });
+
+    const [totalUsers, activeUsers, totalLeads, newLeadsThisMonth, pipelineCount, taskCount] = await Promise.all([
+      prisma.user.count({ where: { organizationId: divisionId } }),
+      prisma.user.count({ where: { organizationId: divisionId, isActive: true } }),
+      prisma.lead.count({ where: { organizationId: divisionId } }),
+      prisma.lead.count({
+        where: {
+          organizationId: divisionId,
+          createdAt: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
+        },
+      }),
+      prisma.pipelineStage.count({ where: { organizationId: divisionId } }).catch(() => 0),
+      prisma.task.count({ where: { organizationId: divisionId } }).catch(() => 0),
+    ]);
+
+    res.json({
+      totalUsers,
+      activeUsers,
+      inactiveUsers: totalUsers - activeUsers,
+      totalLeads,
+      newLeadsThisMonth,
+      pipelineStages: pipelineCount,
+      totalTasks: taskCount,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── 3. Invite User to Division ─────────────────────────────────
+router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), validate(z.object({
+  email: z.string().email(),
+  firstName: z.string().min(1),
+  lastName: z.string().min(1),
+  role: z.enum(['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER']),
+  password: z.string().min(4),
+})), async (req, res, next) => {
+  try {
+    const divisionId = req.params.id;
+    const { email, firstName, lastName, role, password } = req.validated;
+
+    // Verify division exists and requester has access
+    const division = await prisma.organization.findFirst({
+      where: { id: divisionId, ...(req.isSuperAdmin ? {} : { id: { in: req.orgIds } }) },
+    });
+    if (!division) return res.status(404).json({ error: 'Division not found' });
+
+    // Check email uniqueness
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) return res.status(409).json({ error: 'Email already in use' });
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await prisma.user.create({
+      data: {
+        email, firstName, lastName, role, passwordHash,
+        organizationId: divisionId,
+      },
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        role: true, createdAt: true, organizationId: true,
+      },
+    });
+
+    res.status(201).json(user);
+
+    // Fire-and-forget notification
+    notifyOrgAdmins(divisionId, {
+      type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED,
+      title: 'New Team Member',
+      message: `${req.user.firstName} ${req.user.lastName} invited ${email} to ${division.name}`,
+      entityType: 'user',
+      entityId: user.id,
+    }, req.user.id).catch(() => {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── 4. Transfer User Between Divisions ─────────────────────────
+router.post('/:id/users/transfer', authorize('SUPER_ADMIN', 'ADMIN'), validate(z.object({
+  userId: z.string().uuid(),
+  targetDivisionId: z.string().uuid(),
+})), async (req, res, next) => {
+  try {
+    const sourceDivisionId = req.params.id;
+    const { userId, targetDivisionId } = req.validated;
+
+    // Verify both divisions exist
+    const [sourcDiv, targetDiv, user] = await Promise.all([
+      prisma.organization.findFirst({ where: { id: sourceDivisionId } }),
+      prisma.organization.findFirst({ where: { id: targetDivisionId } }),
+      prisma.user.findFirst({ where: { id: userId, organizationId: sourceDivisionId } }),
+    ]);
+
+    if (!sourcDiv) return res.status(404).json({ error: 'Source division not found' });
+    if (!targetDiv) return res.status(404).json({ error: 'Target division not found' });
+    if (!user) return res.status(404).json({ error: 'User not found in source division' });
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { organizationId: targetDivisionId },
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        role: true, organizationId: true,
+      },
+    });
+
+    res.json({ ...updated, message: `User transferred from ${sourcDiv.name} to ${targetDiv.name}` });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── 5. Update Division User (role, active status) ──────────────
+router.put('/:id/users/:userId', authorize('SUPER_ADMIN', 'ADMIN'), validate(z.object({
+  role: z.enum(['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER']).optional(),
+  isActive: z.boolean().optional(),
+  firstName: z.string().min(1).optional(),
+  lastName: z.string().min(1).optional(),
+})), async (req, res, next) => {
+  try {
+    const { id: divisionId, userId } = req.params;
+
+    const user = await prisma.user.findFirst({
+      where: { id: userId, organizationId: divisionId },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found in this division' });
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: req.validated,
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        role: true, isActive: true, organizationId: true,
+      },
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── 6. Reset Division User Password ────────────────────────────
+router.put('/:id/users/:userId/reset-password', authorize('SUPER_ADMIN', 'ADMIN'), validate(z.object({
+  newPassword: z.string().min(4),
+})), async (req, res, next) => {
+  try {
+    const { id: divisionId, userId } = req.params;
+    const { newPassword } = req.validated;
+
+    const user = await prisma.user.findFirst({
+      where: { id: userId, organizationId: divisionId },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found in this division' });
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    res.json({ message: 'Password reset successfully' });
   } catch (err) {
     next(err);
   }
