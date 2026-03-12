@@ -334,8 +334,10 @@ router.post(
  */
 router.get('/rules', async (req, res, next) => {
   try {
-    const org = await prisma.organization.findFirst({
-      where: { id: { in: req.orgIds } },
+    // Use primary org consistently (same as PUT) for read/write parity
+    const primaryOrgId = req.orgId || (req.orgIds && req.orgIds.length > 0 ? req.orgIds[0] : null);
+    const org = await prisma.organization.findUnique({
+      where: { id: primaryOrgId },
       select: { settings: true },
     });
 
@@ -383,10 +385,11 @@ router.put(
       // Validate that assignToId references exist and belong to the org
       if (rules.sourceRules.length > 0) {
         const assigneeIds = [...new Set(rules.sourceRules.map((r) => r.assignToId))];
+        const allOrgIds = orgIds || [orgId];
         const validUsers = await prisma.user.findMany({
           where: {
             id: { in: assigneeIds },
-            organizationId: orgId,
+            organizationId: { in: allOrgIds },
             isActive: true,
           },
           select: { id: true },
