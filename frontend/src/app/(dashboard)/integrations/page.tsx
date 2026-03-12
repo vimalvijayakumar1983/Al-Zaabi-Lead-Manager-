@@ -754,9 +754,9 @@ export default function IntegrationsPage() {
       const payload = buildPayload(selectedPlatform.slug);
       const existing = getIntegrationForPlatform(selectedPlatform.slug);
       if (existing) {
-        await api.updateIntegration(existing.id, payload);
+        await api.updateIntegration(existing.id, payload as never);
       } else {
-        await api.createIntegration(payload);
+        await api.createIntegration(payload as never);
       }
       await loadData();
       setActiveModal(null);
@@ -823,7 +823,7 @@ export default function IntegrationsPage() {
         },
         divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
       };
-      await api.createIntegration(payload);
+      await api.createIntegration(payload as never);
       await loadData();
       setWebhookName('');
       setWebhookEvents([]);
@@ -854,9 +854,9 @@ export default function IntegrationsPage() {
       };
       const existing = getIntegrationForPlatform('website_forms');
       if (existing) {
-        await api.updateIntegration(existing.id, payload);
+        await api.updateIntegration(existing.id, payload as never);
       } else {
-        await api.createIntegration(payload);
+        await api.createIntegration(payload as never);
       }
       await loadData();
     } catch {
