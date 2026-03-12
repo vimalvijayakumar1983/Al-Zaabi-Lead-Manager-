@@ -666,9 +666,9 @@ export default function DivisionsPage() {
           return bVal - aVal;
         }
         case 'newest':
-          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+          return new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime();
         case 'oldest':
-          return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+          return new Date((a as any).createdAt || 0).getTime() - new Date((b as any).createdAt || 0).getTime();
         default:
           return 0;
       }

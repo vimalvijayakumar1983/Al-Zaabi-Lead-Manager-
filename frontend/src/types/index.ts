@@ -11,6 +11,8 @@ export interface Organization {
   parentId?: string;
   children?: Organization[];
   _count?: { users: number; leads: number };
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // ─── User & Auth ─────────────────────────────────────────────────
@@ -27,6 +29,8 @@ export interface User {
   organization?: Organization;
   isActive: boolean;
   lastLoginAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
   _count?: { assignedLeads: number; tasks: number };
 }
 
@@ -34,38 +38,6 @@ export interface AuthResponse {
   token: string;
   user: User;
   divisions?: Organization[];
-}
-
-// ─── Division User ──────────────────────────────────────────────
-export interface DivisionUser {
-  id: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  role: string;
-  avatar?: string;
-  phone?: string;
-  isActive: boolean;
-  lastLoginAt?: string;
-  createdAt: string;
-  organizationId: string;
-  _count: {
-    assignedLeads: number;
-    tasks: number;
-  };
-}
-
-// ─── Division Stats ─────────────────────────────────────────────
-export interface DivisionStats {
-  totalLeads: number;
-  totalUsers: number;
-  activeUsers: number;
-  leadsByStage: Array<{ stage: string; count: number; value: number; color: string }>;
-  totalPipelineValue: number;
-  conversionRate: number;
-  avgLeadValue: number;
-  recentLeads: Array<{ id: string; name: string; company: string; value: number; createdAt: string }>;
-  topPerformers: Array<{ id: string; name: string; wonLeads: number; totalValue: number }>;
 }
 
 // ─── Lead ────────────────────────────────────────────────────────
@@ -163,8 +135,11 @@ export interface Task {
   isRecurring: boolean;
   leadId?: string;
   lead?: Pick<Lead, 'id' | 'firstName' | 'lastName'>;
+  assigneeId?: string;
   assignee?: Pick<User, 'id' | 'firstName' | 'lastName'>;
   createdBy?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // ─── Communication ───────────────────────────────────────────────
