@@ -175,21 +175,26 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       return res.status(400).json({ error: 'No data rows to import' });
     }
 
-    // Create import history record
-    const importRecord = await prisma.importHistory.create({
-      data: {
-        module,
-        fileName: req.file.originalname,
-        fileSize: req.file.size,
-        totalRows: rows.length,
-        fieldMapping,
-        duplicateAction,
-        duplicateField: duplicateField || null,
-        organizationId: req.orgId,
-        userId: req.user.id,
-        status: 'PROCESSING',
-      },
-    });
+    // Create import history record (gracefully handle missing table)
+    let importRecord = null;
+    try {
+      importRecord = await prisma.importHistory.create({
+        data: {
+          module,
+          fileName: req.file.originalname,
+          fileSize: req.file.size,
+          totalRows: rows.length,
+          fieldMapping,
+          duplicateAction,
+          duplicateField: duplicateField || null,
+          organizationId: req.orgId,
+          userId: req.user.id,
+          status: 'PROCESSING',
+        },
+      });
+    } catch (historyErr) {
+      console.warn('ImportHistory table not available, proceeding without tracking:', historyErr.message);
+    }
 
     // Process import
     const errors = [];
@@ -392,23 +397,29 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       }
     }
 
-    // Update import history
-    await prisma.importHistory.update({
-      where: { id: importRecord.id },
-      data: {
-        importedCount: imported,
-        skippedCount: skipped,
-        updatedCount: updated,
-        duplicateCount: duplicates,
-        status: 'COMPLETED',
-        errors: errors.slice(0, 100),
-        importedIds,
-        completedAt: new Date(),
-      },
-    });
+    // Update import history (if tracking is available)
+    if (importRecord) {
+      try {
+        await prisma.importHistory.update({
+          where: { id: importRecord.id },
+          data: {
+            importedCount: imported,
+            skippedCount: skipped,
+            updatedCount: updated,
+            duplicateCount: duplicates,
+            status: 'COMPLETED',
+            errors: errors.slice(0, 100),
+            importedIds,
+            completedAt: new Date(),
+          },
+        });
+      } catch (historyErr) {
+        console.warn('Failed to update import history:', historyErr.message);
+      }
+    }
 
     res.json({
-      importId: importRecord.id,
+      importId: importRecord?.id || null,
       message: `Import complete: ${imported} imported, ${updated} updated, ${skipped} skipped, ${duplicates} duplicates found`,
       imported,
       updated,
@@ -428,18 +439,25 @@ router.get('/history', async (req, res, next) => {
     const { page = 1, limit = 20 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const [history, total] = await Promise.all([
-      prisma.importHistory.findMany({
-        where: { organizationId: req.orgId },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit),
-        include: {
-          user: { select: { id: true, firstName: true, lastName: true, email: true } },
-        },
-      }),
-      prisma.importHistory.count({ where: { organizationId: req.orgId } }),
-    ]);
+    let history = [];
+    let total = 0;
+    try {
+      [history, total] = await Promise.all([
+        prisma.importHistory.findMany({
+          where: { organizationId: req.orgId },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: parseInt(limit),
+          include: {
+            user: { select: { id: true, firstName: true, lastName: true, email: true } },
+          },
+        }),
+        prisma.importHistory.count({ where: { organizationId: req.orgId } }),
+      ]);
+    } catch (tableErr) {
+      // Table may not exist yet
+      console.warn('ImportHistory table not available:', tableErr.message);
+    }
 
     res.json({
       data: history,
