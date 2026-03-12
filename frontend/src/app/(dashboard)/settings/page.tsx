@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import {
-  User2, Lock, Building2, Bell, Shield, AlertTriangle, Check, X,
+  User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
-  Clock, FileText, Trash2, LogOut,
+  FileText, Trash2, LogOut,
 } from 'lucide-react';
 
 type Tab = 'profile' | 'security' | 'organization' | 'notifications' | 'audit' | 'danger';
