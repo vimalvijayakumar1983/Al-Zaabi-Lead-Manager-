@@ -89,9 +89,20 @@ const divisionColors = [
   'bg-rose-100 text-rose-700',
 ];
 
+/** Safe default overview if API returns unexpected shape */
+const DEFAULT_OVERVIEW = {
+  totalLeads: 0,
+  newLeads: 0,
+  wonLeads: 0,
+  lostLeads: 0,
+  conversionRate: 0,
+  pipelineValue: 0,
+};
+
 export default function DashboardPage() {
   const [data, setData] = useState<ExtendedDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [divisions, setDivisions] = useState<Organization[]>([]);
   const [divisionFilter, setDivisionFilter] = useState<string>('all');
@@ -110,6 +121,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     const params: Record<string, string> = {};
     if (divisionFilter !== 'all') {
       params.divisionId = divisionFilter;
@@ -127,9 +139,34 @@ export default function DashboardPage() {
           : {}),
       },
     })
-      .then((res) => res.json())
-      .then((d) => setData(d))
-      .catch(() => setData(null))
+      .then((res) => {
+        if (!res.ok) throw new Error(`Dashboard API returned ${res.status}`);
+        return res.json();
+      })
+      .then((d) => {
+        // Validate that the response has the expected shape
+        if (d && typeof d === 'object' && d.overview) {
+          setData(d);
+        } else if (d && typeof d === 'object' && d.error) {
+          setError(d.error);
+          setData(null);
+        } else {
+          // Unexpected shape - wrap it with safe defaults
+          setData({
+            overview: DEFAULT_OVERVIEW,
+            leadsByStatus: [],
+            leadsBySource: [],
+            recentLeads: [],
+            upcomingTasks: [],
+            ...(d || {}),
+          });
+        }
+      })
+      .catch((err) => {
+        console.error('Dashboard fetch error:', err);
+        setError(err.message || 'Failed to load dashboard');
+        setData(null);
+      })
       .finally(() => setLoading(false));
   }, [divisionFilter]);
 
@@ -180,20 +217,31 @@ export default function DashboardPage() {
   if (!data) return (
     <div className="empty-state">
       <div className="empty-state-icon"><XCircle className="h-6 w-6" /></div>
-      <p className="text-sm font-medium text-text-primary">Failed to load dashboard</p>
+      <p className="text-sm font-medium text-text-primary">{error || 'Failed to load dashboard'}</p>
       <p className="text-xs text-text-tertiary mt-1">Please try refreshing the page</p>
+      <button
+        onClick={() => window.location.reload()}
+        className="mt-3 btn-primary text-sm"
+      >
+        Refresh
+      </button>
     </div>
   );
 
-  const { overview } = data;
+  // Safe access with fallback defaults
+  const overview = data.overview || DEFAULT_OVERVIEW;
+  const leadsByStatus = Array.isArray(data.leadsByStatus) ? data.leadsByStatus : [];
+  const leadsBySource = Array.isArray(data.leadsBySource) ? data.leadsBySource : [];
+  const recentLeads = Array.isArray(data.recentLeads) ? data.recentLeads : [];
+  const upcomingTasks = Array.isArray(data.upcomingTasks) ? data.upcomingTasks : [];
 
   const kpis = [
-    { label: 'Total Leads', value: overview.totalLeads, icon: Users, color: 'brand', trend: '+12%', up: true },
-    { label: 'New Leads', value: overview.newLeads, icon: UserPlus, color: 'indigo', trend: '+8%', up: true },
-    { label: 'Won Deals', value: overview.wonLeads, icon: Trophy, color: 'emerald', trend: '+15%', up: true },
-    { label: 'Lost Deals', value: overview.lostLeads, icon: XCircle, color: 'red', trend: '-3%', up: false },
-    { label: 'Conversion', value: `${overview.conversionRate}%`, icon: TrendingUp, color: 'cyan', trend: '+2.1%', up: true },
-    { label: 'Pipeline Value', value: `AED ${Number(overview.pipelineValue).toLocaleString()}`, icon: Banknote, color: 'amber', trend: '+22%', up: true },
+    { label: 'Total Leads', value: overview.totalLeads ?? 0, icon: Users, color: 'brand', trend: '+12%', up: true },
+    { label: 'New Leads', value: overview.newLeads ?? 0, icon: UserPlus, color: 'indigo', trend: '+8%', up: true },
+    { label: 'Won Deals', value: overview.wonLeads ?? 0, icon: Trophy, color: 'emerald', trend: '+15%', up: true },
+    { label: 'Lost Deals', value: overview.lostLeads ?? 0, icon: XCircle, color: 'red', trend: '-3%', up: false },
+    { label: 'Conversion', value: `${overview.conversionRate ?? 0}%`, icon: TrendingUp, color: 'cyan', trend: '+2.1%', up: true },
+    { label: 'Pipeline Value', value: `AED ${Number(overview.pipelineValue ?? 0).toLocaleString()}`, icon: Banknote, color: 'amber', trend: '+22%', up: true },
   ];
 
   const colorMap: Record<string, { iconBg: string; iconText: string }> = {
@@ -206,10 +254,10 @@ export default function DashboardPage() {
   };
 
   // Calculate group-level totals from divisionBreakdown if available
-  const divisionBreakdown = data.divisionBreakdown || [];
-  const groupTotalLeads = divisionBreakdown.reduce((sum, d) => sum + d.totalLeads, 0);
-  const groupTotalPipeline = divisionBreakdown.reduce((sum, d) => sum + d.pipelineValue, 0);
-  const groupTotalWon = divisionBreakdown.reduce((sum, d) => sum + d.wonLeads, 0);
+  const divisionBreakdown = Array.isArray(data.divisionBreakdown) ? data.divisionBreakdown : [];
+  const groupTotalLeads = divisionBreakdown.reduce((sum, d) => sum + (d.totalLeads || 0), 0);
+  const groupTotalPipeline = divisionBreakdown.reduce((sum, d) => sum + (d.pipelineValue || 0), 0);
+  const groupTotalWon = divisionBreakdown.reduce((sum, d) => sum + (d.wonLeads || 0), 0);
   const groupConversionRate = groupTotalLeads > 0
     ? Number(((groupTotalWon / groupTotalLeads) * 100).toFixed(1))
     : 0;
@@ -346,33 +394,33 @@ export default function DashboardPage() {
                         <td className="table-cell">
                           <div className="flex items-center gap-2.5">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-semibold ${colorClass}`}>
-                              {div.divisionName.charAt(0)}
+                              {(div.divisionName || '?').charAt(0)}
                             </span>
                             <button
                               onClick={() => setDivisionFilter(div.divisionId)}
                               className="text-sm font-medium text-text-primary hover:text-brand-600 transition-colors"
                             >
-                              {div.divisionName}
+                              {div.divisionName || 'Unknown Division'}
                             </button>
                           </div>
                         </td>
                         <td className="table-cell text-right">
-                          <span className="text-sm font-semibold text-text-primary">{div.totalLeads.toLocaleString()}</span>
+                          <span className="text-sm font-semibold text-text-primary">{(div.totalLeads || 0).toLocaleString()}</span>
                         </td>
                         <td className="table-cell text-right hidden md:table-cell">
-                          <span className="text-sm text-text-secondary">{div.newLeads.toLocaleString()}</span>
+                          <span className="text-sm text-text-secondary">{(div.newLeads || 0).toLocaleString()}</span>
                         </td>
                         <td className="table-cell text-right hidden md:table-cell">
-                          <span className="text-sm text-emerald-600 font-medium">{div.wonLeads.toLocaleString()}</span>
+                          <span className="text-sm text-emerald-600 font-medium">{(div.wonLeads || 0).toLocaleString()}</span>
                         </td>
                         <td className="table-cell text-right">
-                          <span className={`text-sm font-medium ${div.conversionRate >= 20 ? 'text-emerald-600' : div.conversionRate >= 10 ? 'text-amber-600' : 'text-red-600'}`}>
-                            {div.conversionRate}%
+                          <span className={`text-sm font-medium ${(div.conversionRate || 0) >= 20 ? 'text-emerald-600' : (div.conversionRate || 0) >= 10 ? 'text-amber-600' : 'text-red-600'}`}>
+                            {div.conversionRate || 0}%
                           </span>
                         </td>
                         <td className="table-cell text-right">
                           <span className="text-sm font-semibold text-text-primary">
-                            AED {Number(div.pipelineValue).toLocaleString()}
+                            AED {Number(div.pipelineValue || 0).toLocaleString()}
                           </span>
                         </td>
                       </tr>
@@ -390,7 +438,7 @@ export default function DashboardPage() {
                     </td>
                     <td className="table-cell text-right hidden md:table-cell">
                       <span className="text-sm font-bold text-text-primary">
-                        {divisionBreakdown.reduce((s, d) => s + d.newLeads, 0).toLocaleString()}
+                        {divisionBreakdown.reduce((s, d) => s + (d.newLeads || 0), 0).toLocaleString()}
                       </span>
                     </td>
                     <td className="table-cell text-right hidden md:table-cell">
@@ -462,34 +510,40 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold text-text-primary">Leads by Status</h2>
             <button className="btn-icon h-7 w-7"><MoreHorizontal className="h-4 w-4" /></button>
           </div>
-          <div className="space-y-3">
-            {data.leadsByStatus.map((item) => {
-              const pct = overview.totalLeads > 0 ? (item.count / overview.totalLeads) * 100 : 0;
-              const colors = statusColors[item.status] || { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', dot: 'bg-gray-500' };
-              return (
-                <div key={item.status} className="group">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${colors.dot}`} />
-                      <span className="text-sm font-medium text-text-primary capitalize">
-                        {item.status.replace(/_/g, ' ').toLowerCase()}
-                      </span>
+          {leadsByStatus.length > 0 ? (
+            <div className="space-y-3">
+              {leadsByStatus.map((item) => {
+                const pct = overview.totalLeads > 0 ? (item.count / overview.totalLeads) * 100 : 0;
+                const colors = statusColors[item.status] || { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', dot: 'bg-gray-500' };
+                return (
+                  <div key={item.status} className="group">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className={`h-2 w-2 rounded-full ${colors.dot}`} />
+                        <span className="text-sm font-medium text-text-primary capitalize">
+                          {item.status.replace(/_/g, ' ').toLowerCase()}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-text-primary">{item.count}</span>
+                        <span className="text-xs text-text-tertiary">{pct.toFixed(0)}%</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-text-primary">{item.count}</span>
-                      <span className="text-xs text-text-tertiary">{pct.toFixed(0)}%</span>
+                    <div className="h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ease-smooth ${colors.dot}`}
+                        style={{ width: `${pct}%`, '--progress-width': `${pct}%` } as any}
+                      />
                     </div>
                   </div>
-                  <div className="h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ease-smooth ${colors.dot}`}
-                      style={{ width: `${pct}%`, '--progress-width': `${pct}%` } as any}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="py-8 text-center">
+              <p className="text-sm text-text-tertiary">No lead data yet</p>
+            </div>
+          )}
         </div>
 
         {/* Leads by Source */}
@@ -498,34 +552,40 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold text-text-primary">Leads by Source</h2>
             <button className="btn-icon h-7 w-7"><MoreHorizontal className="h-4 w-4" /></button>
           </div>
-          <div className="space-y-3">
-            {data.leadsBySource.map((item) => {
-              const pct = overview.totalLeads > 0 ? (item.count / overview.totalLeads) * 100 : 0;
-              const barColor = sourceColors[item.source] || 'bg-gray-400';
-              return (
-                <div key={item.source} className="group">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${barColor}`} />
-                      <span className="text-sm font-medium text-text-primary">
-                        {sourceLabels[item.source] || item.source}
-                      </span>
+          {leadsBySource.length > 0 ? (
+            <div className="space-y-3">
+              {leadsBySource.map((item) => {
+                const pct = overview.totalLeads > 0 ? (item.count / overview.totalLeads) * 100 : 0;
+                const barColor = sourceColors[item.source] || 'bg-gray-400';
+                return (
+                  <div key={item.source} className="group">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className={`h-2 w-2 rounded-full ${barColor}`} />
+                        <span className="text-sm font-medium text-text-primary">
+                          {sourceLabels[item.source] || item.source}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-text-primary">{item.count}</span>
+                        <span className="text-xs text-text-tertiary">{pct.toFixed(0)}%</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-text-primary">{item.count}</span>
-                      <span className="text-xs text-text-tertiary">{pct.toFixed(0)}%</span>
+                    <div className="h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ease-smooth ${barColor}`}
+                        style={{ width: `${pct}%` }}
+                      />
                     </div>
                   </div>
-                  <div className="h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ease-smooth ${barColor}`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="py-8 text-center">
+              <p className="text-sm text-text-tertiary">No source data yet</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -541,8 +601,9 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div className="divide-y divide-border-subtle">
-            {data.recentLeads.map((lead: any) => {
+            {recentLeads.map((lead: any) => {
               const colors = statusColors[lead.status] || { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', dot: 'bg-gray-500' };
+              const initials = `${(lead.firstName || '?')[0]}${(lead.lastName || '?')[0]}`;
               return (
                 <Link
                   key={lead.id}
@@ -550,26 +611,26 @@ export default function DashboardPage() {
                   className="flex items-center gap-3.5 px-6 py-3 hover:bg-surface-secondary transition-colors group"
                 >
                   <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white flex-shrink-0">
-                    {lead.firstName[0]}{lead.lastName[0]}
+                    {initials}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-text-primary truncate group-hover:text-brand-700 transition-colors">
-                      {lead.firstName} {lead.lastName}
+                      {lead.firstName || ''} {lead.lastName || ''}
                     </p>
                     <p className="text-xs text-text-tertiary truncate">
-                      {lead.company || lead.email}
+                      {lead.company || lead.email || 'No details'}
                     </p>
                   </div>
                   <span className={`badge ${colors.bg} ${colors.text} ring-1 ${colors.ring}`}>
-                    {lead.status.replace(/_/g, ' ')}
+                    {(lead.status || 'UNKNOWN').replace(/_/g, ' ')}
                   </span>
                   <div className="text-right flex-shrink-0">
-                    <ScoreRing score={lead.score} size={32} />
+                    <ScoreRing score={lead.score ?? 0} size={32} />
                   </div>
                 </Link>
               );
             })}
-            {data.recentLeads.length === 0 && (
+            {recentLeads.length === 0 && (
               <div className="py-8 text-center">
                 <p className="text-sm text-text-tertiary">No recent leads</p>
               </div>
@@ -587,7 +648,7 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div className="divide-y divide-border-subtle">
-            {data.upcomingTasks.map((task: any) => {
+            {upcomingTasks.map((task: any) => {
               const priorityMap: Record<string, { dot: string; label: string }> = {
                 URGENT: { dot: 'bg-red-500', label: 'Urgent' },
                 HIGH: { dot: 'bg-orange-500', label: 'High' },
@@ -595,28 +656,28 @@ export default function DashboardPage() {
                 LOW: { dot: 'bg-gray-400', label: 'Low' },
               };
               const priority = priorityMap[task.priority] || priorityMap.MEDIUM;
-              const dueDate = new Date(task.dueAt);
-              const isOverdue = dueDate < new Date();
+              const dueDate = task.dueAt ? new Date(task.dueAt) : null;
+              const isOverdue = dueDate ? dueDate < new Date() : false;
 
               return (
                 <div key={task.id} className="flex items-center gap-3.5 px-6 py-3 hover:bg-surface-secondary transition-colors">
                   <div className={`h-2.5 w-2.5 rounded-full ${priority.dot} flex-shrink-0 ring-2 ring-white`} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-text-primary truncate">{task.title}</p>
+                    <p className="text-sm font-medium text-text-primary truncate">{task.title || 'Untitled task'}</p>
                     <p className="text-xs text-text-tertiary truncate">
-                      {task.lead ? `${task.lead.firstName} ${task.lead.lastName}` : 'No lead'} &middot; {task.type.replace(/_/g, ' ')}
+                      {task.lead ? `${task.lead.firstName || ''} ${task.lead.lastName || ''}`.trim() : 'No lead'} &middot; {(task.type || 'TASK').replace(/_/g, ' ')}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     <Clock className={`h-3 w-3 ${isOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
                     <span className={`text-xs font-medium ${isOverdue ? 'text-red-600' : 'text-text-secondary'}`}>
-                      {dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {dueDate ? dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'No date'}
                     </span>
                   </div>
                 </div>
               );
             })}
-            {data.upcomingTasks.length === 0 && (
+            {upcomingTasks.length === 0 && (
               <div className="py-8 text-center">
                 <Sparkles className="h-8 w-8 text-text-tertiary mx-auto mb-2 opacity-50" />
                 <p className="text-sm text-text-tertiary">No upcoming tasks</p>
@@ -633,7 +694,7 @@ export default function DashboardPage() {
 function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
   const radius = (size - 6) / 2;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
+  const offset = circumference - ((score || 0) / 100) * circumference;
   const color = score >= 70 ? '#10b981' : score >= 40 ? '#f59e0b' : '#ef4444';
 
   return (
@@ -648,7 +709,7 @@ function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
         />
       </svg>
       <span className="absolute inset-0 flex items-center justify-center text-2xs font-bold text-text-primary">
-        {score}
+        {score || 0}
       </span>
     </div>
   );

@@ -23,16 +23,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     const response = await api.login(email, password);
     const { token, user } = response;
     api.setToken(token);
-    set({ user, isAuthenticated: true });
-    usePermissionsStore.getState().loadPermissions();
+    // Set isLoading:false here so the dashboard layout doesn't stay in loading state
+    set({ user, isAuthenticated: true, isLoading: false });
+    // Load permissions in background (fire-and-forget with error handling)
+    usePermissionsStore.getState().loadPermissions().catch(() => {});
     return response;
   },
 
   register: async (data) => {
     const { token, user } = await api.register(data);
     api.setToken(token);
-    set({ user, isAuthenticated: true });
-    usePermissionsStore.getState().loadPermissions();
+    set({ user, isAuthenticated: true, isLoading: false });
+    usePermissionsStore.getState().loadPermissions().catch(() => {});
   },
 
   logout: () => {
@@ -71,7 +73,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
       const user = await api.getMe();
       set({ user, isAuthenticated: true, isLoading: false });
-      usePermissionsStore.getState().loadPermissions();
+      usePermissionsStore.getState().loadPermissions().catch(() => {});
     } catch {
       set({ user: null, isAuthenticated: false, isLoading: false });
     }

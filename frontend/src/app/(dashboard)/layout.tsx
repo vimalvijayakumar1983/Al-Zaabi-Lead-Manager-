@@ -9,6 +9,7 @@ import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
 import NotificationCenter from '@/components/NotificationCenter';
 import ToastProvider from '@/components/ToastProvider';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { GlobalSearch } from './components/global-search';
 import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown } from 'lucide-react';
 
@@ -118,13 +119,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Connect WebSocket and fetch unread count when authenticated
   useEffect(() => {
     if (isAuthenticated) {
-      const token = localStorage.getItem('token');
-      if (token) {
-        connectWebSocket(token);
-        fetchUnreadCount();
+      try {
+        const token = localStorage.getItem('token');
+        if (token) {
+          connectWebSocket(token);
+          fetchUnreadCount();
+        }
+      } catch (err) {
+        console.error('WebSocket/notification init error:', err);
       }
     }
-    return () => disconnectWebSocket();
+    return () => {
+      try {
+        disconnectWebSocket();
+      } catch {
+        // Ignore cleanup errors
+      }
+    };
   }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
 
   // Detect sidebar collapse from CSS variable
@@ -276,8 +287,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </header>
 
-        {/* Page content */}
-        <div className="p-6">{children}</div>
+        {/* Page content wrapped in error boundary */}
+        <ErrorBoundary>
+          <div className="p-6">{children}</div>
+        </ErrorBoundary>
 
         {/* Toast notifications */}
         <ToastProvider />
