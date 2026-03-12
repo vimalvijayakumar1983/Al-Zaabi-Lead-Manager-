@@ -1682,7 +1682,7 @@ export default function IntegrationsPage() {
           {/* Connected info */}
           {isConnected && intg && (
             <div className="mb-4 bg-gray-50 rounded-lg p-3 space-y-1.5">
-              {intg.config?.pageId && (
+              {!!intg.config?.pageId && (
                 <div className="flex items-center gap-2 text-xs">
                   <FileText className="w-3.5 h-3.5 text-text-tertiary" />
                   <span className="text-text-secondary">
