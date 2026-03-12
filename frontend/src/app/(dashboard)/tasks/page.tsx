@@ -287,7 +287,7 @@ export default function TasksPage() {
 
       const res: PaginatedResponse<Task> = await api.getTasks(params);
       setTasks(res.data);
-      setTotalFromApi(res.total || res.data.length);
+      setTotalFromApi(res.pagination?.total || res.data.length);
     } catch (err) {
       console.error('Failed to fetch tasks:', err);
     } finally {
