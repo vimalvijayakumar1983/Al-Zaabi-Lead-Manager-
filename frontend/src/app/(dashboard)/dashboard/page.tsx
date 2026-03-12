@@ -90,7 +90,7 @@ export default function DashboardPage() {
     { label: 'Won Deals', value: overview.wonLeads, icon: Trophy, color: 'emerald', trend: '+15%', up: true },
     { label: 'Lost Deals', value: overview.lostLeads, icon: XCircle, color: 'red', trend: '-3%', up: false },
     { label: 'Conversion', value: `${overview.conversionRate}%`, icon: TrendingUp, color: 'cyan', trend: '+2.1%', up: true },
-    { label: 'Pipeline Value', value: `$${Number(overview.pipelineValue).toLocaleString()}`, icon: DollarSign, color: 'amber', trend: '+22%', up: true },
+    { label: 'Pipeline Value', value: `AED ${Number(overview.pipelineValue).toLocaleString()}`, icon: DollarSign, color: 'amber', trend: '+22%', up: true },
   ];
 
   const colorMap: Record<string, { iconBg: string; iconText: string }> = {
