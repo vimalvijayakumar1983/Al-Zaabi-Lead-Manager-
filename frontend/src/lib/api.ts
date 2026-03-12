@@ -266,33 +266,37 @@ class ApiClient {
     return this.request<any>(`/import/undo/${id}`, { method: 'POST' });
   }
 
-  getImportTemplateUrl(module: string) {
-    return `${API_URL}/import/template/${module}`;
-  }
-
-  async exportData(module: string, filters?: Record<string, string>) {
-    const params = filters ? '?' + new URLSearchParams(filters).toString() : '';
+  private async authenticatedDownload(path: string, fallbackFilename: string) {
     const token = this.getToken();
-    const res = await fetch(`${API_URL}/import/export/${module}${params}`, {
+    const res = await fetch(`${API_URL}${path}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) {
-      const data = await res.json();
-      throw new Error(data.error || 'Export failed');
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Download failed');
     }
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = res.headers.get('Content-Disposition')?.split('filename=')[1] || `${module}-export.csv`;
+    a.download = res.headers.get('Content-Disposition')?.split('filename=')[1] || fallbackFilename;
     document.body.appendChild(a);
     a.click();
     a.remove();
     window.URL.revokeObjectURL(url);
   }
 
-  getErrorsCsvUrl(importId: string) {
-    return `${API_URL}/import/history/${importId}/errors-csv`;
+  async downloadImportTemplate(module: string) {
+    return this.authenticatedDownload(`/import/template/${module}`, `${module}-import-template.csv`);
+  }
+
+  async exportData(module: string, filters?: Record<string, string>) {
+    const params = filters ? '?' + new URLSearchParams(filters).toString() : '';
+    return this.authenticatedDownload(`/import/export/${module}${params}`, `${module}-export.csv`);
+  }
+
+  async downloadErrorsCsv(importId: string) {
+    return this.authenticatedDownload(`/import/history/${importId}/errors-csv`, `import-errors.csv`);
   }
 
   // Campaigns

@@ -312,13 +312,13 @@ function ImportWizard() {
           <div className="card p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-text-primary">Upload File</h3>
-              <a
-                href={api.getImportTemplateUrl(selectedModule)}
+              <button
+                onClick={() => api.downloadImportTemplate(selectedModule).catch((err: any) => alert(err.message))}
                 className="text-sm text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
               >
                 <Download className="h-3.5 w-3.5" />
                 Download Template
-              </a>
+              </button>
             </div>
 
             <div
@@ -1217,15 +1217,13 @@ function ImportDetailModal({ importRecord, onClose }: { importRecord: ImportHist
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-semibold text-text-primary">Errors ({errors.length})</h4>
-                <a
-                  href={api.getErrorsCsvUrl(importRecord.id)}
+                <button
+                  onClick={() => api.downloadErrorsCsv(importRecord.id).catch((err: any) => alert(err.message))}
                   className="text-2xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
-                  target="_blank"
-                  rel="noopener noreferrer"
                 >
                   <Download className="h-3 w-3" />
                   Download Error Rows CSV
-                </a>
+                </button>
               </div>
               <div className="space-y-1 max-h-40 overflow-y-auto">
                 {errors.map((err: any, i: number) => (
