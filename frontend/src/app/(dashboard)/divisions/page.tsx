@@ -1160,7 +1160,7 @@ export default function DivisionsPage() {
 
       {/* ── Create/Edit Division Modal ──────────────────────────────── */}
       <Modal open={showDivisionModal} onClose={() => setShowDivisionModal(false)}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
             <Building2 className="h-5 w-5 text-brand-500" />
             {editingDivision ? 'Edit Division' : 'Add Division'}
@@ -1169,7 +1169,7 @@ export default function DivisionsPage() {
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="px-6 py-5 space-y-4 overflow-y-auto">
+        <div className="flex-1 min-h-0 px-6 py-5 space-y-4 overflow-y-auto">
           {modalError && (
             <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 p-3 text-sm text-red-700">
               <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
@@ -1283,7 +1283,7 @@ export default function DivisionsPage() {
             </div>
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
           <button onClick={() => setShowDivisionModal(false)} className="btn-secondary" disabled={saving}>
             Cancel
           </button>
@@ -1329,7 +1329,7 @@ export default function DivisionsPage() {
             />
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
           <button
             onClick={() => { setDeletingId(null); setDeleteConfirm(''); }}
             className="btn-secondary"
@@ -1353,7 +1353,7 @@ export default function DivisionsPage() {
 
       {/* ── Invite User Modal ───────────────────────────────────────── */}
       <Modal open={!!inviteDiv} onClose={() => setInviteDiv(null)} maxWidth="max-w-md">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
             <UserPlus className="h-5 w-5 text-brand-500" />
             Invite User
@@ -1362,7 +1362,7 @@ export default function DivisionsPage() {
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="px-6 py-5 space-y-4 overflow-y-auto">
+        <div className="flex-1 min-h-0 px-6 py-5 space-y-4 overflow-y-auto">
           {inviteError && (
             <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 p-3 text-sm text-red-700">
               <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
@@ -1430,7 +1430,7 @@ export default function DivisionsPage() {
             </div>
           )}
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
           <button onClick={() => setInviteDiv(null)} className="btn-secondary" disabled={inviting}>
             Cancel
           </button>
@@ -1446,7 +1446,7 @@ export default function DivisionsPage() {
 
       {/* ── Edit Role Modal ─────────────────────────────────────────── */}
       <Modal open={!!editRoleUser} onClose={() => setEditRoleUser(null)} maxWidth="max-w-sm">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
             <Shield className="h-5 w-5 text-blue-500" />
             Edit Role
@@ -1483,7 +1483,7 @@ export default function DivisionsPage() {
             </select>
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
           <button onClick={() => setEditRoleUser(null)} className="btn-secondary" disabled={editRoleSaving}>
             Cancel
           </button>
@@ -1499,7 +1499,7 @@ export default function DivisionsPage() {
 
       {/* ── Reset Password Modal ────────────────────────────────────── */}
       <Modal open={!!resetPwUser} onClose={() => setResetPwUser(null)} maxWidth="max-w-sm">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
             <KeyRound className="h-5 w-5 text-amber-500" />
             Reset Password
@@ -1546,7 +1546,7 @@ export default function DivisionsPage() {
             />
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
           <button onClick={() => setResetPwUser(null)} className="btn-secondary" disabled={resettingPw}>
             Cancel
           </button>
@@ -1562,7 +1562,7 @@ export default function DivisionsPage() {
 
       {/* ── Transfer User Modal ─────────────────────────────────────── */}
       <Modal open={!!transferUser} onClose={() => setTransferUser(null)} maxWidth="max-w-sm">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
             <ArrowRightLeft className="h-5 w-5 text-indigo-500" />
             Transfer User
@@ -1614,7 +1614,7 @@ export default function DivisionsPage() {
             </select>
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
           <button onClick={() => setTransferUser(null)} className="btn-secondary" disabled={transferring}>
             Cancel
           </button>
