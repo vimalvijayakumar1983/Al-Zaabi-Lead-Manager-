@@ -620,8 +620,8 @@ function DivisionBrandingSection({ isSuperAdmin }: { isSuperAdmin: boolean }) {
     try {
       const updated = await api.updateDivision(selectedDivisionId, {
         name: form.name,
-        tradeName: form.tradeName || null,
-        logo: form.logo || null,
+        tradeName: form.tradeName || undefined,
+        logo: form.logo || undefined,
         primaryColor: form.primaryColor,
         secondaryColor: form.secondaryColor,
       });
