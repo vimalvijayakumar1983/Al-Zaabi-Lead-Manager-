@@ -216,6 +216,27 @@ npm install
 npm run dev            # Starts on port 3000
 ```
 
+
+### Automated Production Deployment (GitHub Actions)
+
+This repository includes `.github/workflows/deploy-production.yml` for automated backend deployment to Railway.
+
+**Trigger**
+- Push to `main`
+- Or run manually from **Actions → Deploy to Production**
+
+**What it does**
+1. Runs backend unit tests (`npm test -- --runInBand`).
+2. If tests pass, deploys backend service to Railway using Railway CLI.
+
+**Required GitHub Secrets**
+- `RAILWAY_TOKEN`
+- `RAILWAY_PROJECT_ID`
+- `RAILWAY_ENVIRONMENT_ID`
+- `RAILWAY_BACKEND_SERVICE`
+
+> After adding these secrets, merges to `main` will auto-deploy the backend to production.
+
 ### Docker Deployment
 
 ```bash
