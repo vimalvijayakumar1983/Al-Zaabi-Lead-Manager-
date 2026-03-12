@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import type { Lead } from '@/types';
+import type { Lead, CustomField } from '@/types';
 
 const statusColors: Record<string, string> = {
   NEW: 'bg-indigo-100 text-indigo-800 border-indigo-200',
@@ -49,6 +49,12 @@ export default function LeadDetailPage() {
   const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    api.getCustomFields().then(setCustomFields).catch(() => {});
+  }, []);
 
   const refreshLead = useCallback(async () => {
     const data = await api.getLead(id);
@@ -98,6 +104,13 @@ export default function LeadDetailPage() {
       budget: lead.budget?.toString() || '',
       campaign: lead.campaign || '',
     });
+    // Load custom field values for editing
+    const cd = (lead.customData || {}) as Record<string, unknown>;
+    const cfVals: Record<string, unknown> = {};
+    for (const cf of customFields) {
+      cfVals[cf.name] = cd[cf.name] ?? '';
+    }
+    setCustomEditValues(cfVals);
     setIsEditing(true);
   };
 
@@ -112,6 +125,22 @@ export default function LeadDetailPage() {
       for (const key of ['email', 'phone', 'company', 'jobTitle', 'location', 'website', 'productInterest', 'campaign']) {
         if (!data[key]) data[key] = null;
       }
+      // Build custom data
+      const existingCustomData = (lead.customData || {}) as Record<string, unknown>;
+      const newCustomData = { ...existingCustomData };
+      for (const cf of customFields) {
+        const val = customEditValues[cf.name];
+        if (val === '' || val === undefined || val === null) {
+          delete newCustomData[cf.name];
+        } else if (cf.type === 'NUMBER') {
+          newCustomData[cf.name] = parseFloat(String(val)) || null;
+        } else if (cf.type === 'BOOLEAN') {
+          newCustomData[cf.name] = val === true || val === 'true';
+        } else {
+          newCustomData[cf.name] = val;
+        }
+      }
+      data.customData = newCustomData;
       await api.updateLead(lead.id, data);
       setIsEditing(false);
       await refreshLead();
@@ -335,6 +364,49 @@ export default function LeadDetailPage() {
                   <label className="text-xs text-gray-500">Campaign</label>
                   <input className="input text-sm" value={editForm.campaign} onChange={(e) => setEditForm({ ...editForm, campaign: e.target.value })} />
                 </div>
+                {/* Custom fields in edit mode */}
+                {customFields.map(cf => (
+                  <div key={cf.id}>
+                    <label className="text-xs text-gray-500">{cf.label}{cf.isRequired ? ' *' : ''}</label>
+                    {(cf.type === 'TEXT' || cf.type === 'EMAIL' || cf.type === 'PHONE' || cf.type === 'URL') && (
+                      <input type={cf.type === 'EMAIL' ? 'email' : cf.type === 'URL' ? 'url' : 'text'} className="input text-sm" required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
+                    )}
+                    {cf.type === 'NUMBER' && (
+                      <input type="number" className="input text-sm" required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
+                    )}
+                    {cf.type === 'DATE' && (
+                      <input type="date" className="input text-sm" required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
+                    )}
+                    {cf.type === 'SELECT' && (
+                      <select className="input text-sm" required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })}>
+                        <option value="">Select...</option>
+                        {(cf.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
+                    {cf.type === 'BOOLEAN' && (
+                      <div className="flex items-center gap-4 mt-1">
+                        <label className="flex items-center gap-1.5 text-sm"><input type="radio" name={`cfe_${cf.name}`} checked={customEditValues[cf.name] === true} onChange={() => setCustomEditValues({ ...customEditValues, [cf.name]: true })} /> Yes</label>
+                        <label className="flex items-center gap-1.5 text-sm"><input type="radio" name={`cfe_${cf.name}`} checked={customEditValues[cf.name] === false} onChange={() => setCustomEditValues({ ...customEditValues, [cf.name]: false })} /> No</label>
+                      </div>
+                    )}
+                    {cf.type === 'MULTI_SELECT' && (
+                      <select className="input text-sm" value="" onChange={(e) => {
+                        if (e.target.value) {
+                          const current = (customEditValues[cf.name] as string[]) || [];
+                          if (!current.includes(e.target.value)) setCustomEditValues({ ...customEditValues, [cf.name]: [...current, e.target.value] });
+                          e.target.value = '';
+                        }
+                      }}>
+                        <option value="">Add option...</option>
+                        {(cf.options || []).filter(o => !((customEditValues[cf.name] as string[]) || []).includes(o)).map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
+                  </div>
+                ))}
                 <div className="flex gap-2 pt-2">
                   <button onClick={handleSaveEdit} disabled={saving} className="btn-primary text-xs flex-1">
                     {saving ? 'Saving...' : 'Save Changes'}
@@ -349,6 +421,19 @@ export default function LeadDetailPage() {
                 <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
                 <InfoRow label="Budget" value={lead.budget ? `$${Number(lead.budget).toLocaleString()}` : '-'} />
                 <InfoRow label="Stage" value={lead.stage?.name || '-'} />
+                {/* Custom fields */}
+                {customFields.map(cf => {
+                  const cd = (lead.customData || {}) as Record<string, unknown>;
+                  const val = cd[cf.name];
+                  let display = '-';
+                  if (val !== undefined && val !== null && val !== '') {
+                    if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
+                    else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
+                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
+                    else display = String(val);
+                  }
+                  return <InfoRow key={cf.id} label={cf.label} value={display} />;
+                })}
               </>
             )}
           </div>

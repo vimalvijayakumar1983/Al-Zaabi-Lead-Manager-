@@ -366,6 +366,27 @@ class ApiClient {
   async deleteAccount(password: string) {
     return this.request<any>('/settings/account', { method: 'DELETE', body: JSON.stringify({ password }) });
   }
+
+  // Custom Fields
+  async getCustomFields() {
+    return this.request<any[]>('/settings/custom-fields');
+  }
+
+  async createCustomField(data: { label: string; type: string; options?: string[]; isRequired?: boolean }) {
+    return this.request<any>('/settings/custom-fields', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateCustomField(id: string, data: { label?: string; type?: string; options?: string[] | null; isRequired?: boolean }) {
+    return this.request<any>(`/settings/custom-fields/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async reorderCustomFields(fieldIds: string[]) {
+    return this.request<any>('/settings/custom-fields-reorder', { method: 'PUT', body: JSON.stringify({ fieldIds }) });
+  }
+
+  async deleteCustomField(id: string) {
+    return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
+  }
 }
 
 export const api = new ApiClient();

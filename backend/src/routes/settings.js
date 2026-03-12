@@ -251,4 +251,160 @@ router.delete('/account', validate(z.object({
   }
 });
 
+// ─── Custom Fields ─────────────────────────────────────────────
+
+// List custom fields
+router.get('/custom-fields', async (req, res, next) => {
+  try {
+    const fields = await prisma.customField.findMany({
+      where: { organizationId: req.orgId },
+      orderBy: { order: 'asc' },
+    });
+    res.json(fields);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Create custom field
+router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
+  label: z.string().min(1).max(100),
+  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']),
+  options: z.array(z.string()).optional(),
+  isRequired: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const { label, type, options, isRequired } = req.validated;
+
+    // Generate name from label (e.g. "Company Size" -> "companySize")
+    const name = label
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+(.)/g, (_, c) => c.toUpperCase())
+      .replace(/\s/g, '');
+
+    // Get next order number
+    const maxOrder = await prisma.customField.aggregate({
+      where: { organizationId: req.orgId },
+      _max: { order: true },
+    });
+
+    const field = await prisma.customField.create({
+      data: {
+        name,
+        label,
+        type,
+        options: (type === 'SELECT' || type === 'MULTI_SELECT') ? (options || []) : null,
+        isRequired: isRequired || false,
+        order: (maxOrder._max.order ?? -1) + 1,
+        organizationId: req.orgId,
+      },
+    });
+
+    res.status(201).json(field);
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return res.status(409).json({ error: 'A custom field with this name already exists' });
+    }
+    next(err);
+  }
+});
+
+// Update custom field
+router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
+  label: z.string().min(1).max(100).optional(),
+  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']).optional(),
+  options: z.array(z.string()).optional().nullable(),
+  isRequired: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const existing = await prisma.customField.findFirst({
+      where: { id: req.params.id, organizationId: req.orgId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: 'Custom field not found' });
+    }
+
+    const data = { ...req.validated };
+    // If label changes, update name too
+    if (data.label) {
+      data.name = data.label
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\s+(.)/g, (_, c) => c.toUpperCase())
+        .replace(/\s/g, '');
+    }
+
+    const field = await prisma.customField.update({
+      where: { id: req.params.id },
+      data,
+    });
+
+    res.json(field);
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return res.status(409).json({ error: 'A custom field with this name already exists' });
+    }
+    next(err);
+  }
+});
+
+// Reorder custom fields
+router.put('/custom-fields-reorder', authorize('ADMIN'), validate(z.object({
+  fieldIds: z.array(z.string()),
+})), async (req, res, next) => {
+  try {
+    const { fieldIds } = req.validated;
+    const updates = fieldIds.map((id, index) =>
+      prisma.customField.updateMany({
+        where: { id, organizationId: req.orgId },
+        data: { order: index },
+      })
+    );
+    await prisma.$transaction(updates);
+    res.json({ message: 'Reordered' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Delete custom field
+router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const existing = await prisma.customField.findFirst({
+      where: { id: req.params.id, organizationId: req.orgId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: 'Custom field not found' });
+    }
+
+    await prisma.customField.delete({ where: { id: req.params.id } });
+
+    // Clean up: remove this field's data from all leads' customData
+    const leads = await prisma.lead.findMany({
+      where: { organizationId: req.orgId },
+      select: { id: true, customData: true },
+    });
+
+    const updates = leads
+      .filter(l => {
+        const data = typeof l.customData === 'object' && l.customData ? l.customData : {};
+        return existing.name in data;
+      })
+      .map(l => {
+        const data = { ...(typeof l.customData === 'object' && l.customData ? l.customData : {}) };
+        delete data[existing.name];
+        return prisma.lead.update({ where: { id: l.id }, data: { customData: data } });
+      });
+
+    if (updates.length > 0) {
+      await prisma.$transaction(updates);
+    }
+
+    res.json({ message: 'Custom field deleted' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { CustomField } from '@/types';
 
 export interface ColumnDef {
   id: string;
@@ -10,6 +11,8 @@ export interface ColumnDef {
   sortField?: string;
   width?: string;
   locked?: boolean; // cannot be hidden (e.g. name)
+  isCustom?: boolean; // custom field column
+  customFieldType?: string; // field type for rendering
 }
 
 export const DEFAULT_COLUMNS: ColumnDef[] = [
@@ -36,22 +39,62 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
 
 const STORAGE_KEY = 'leads-column-config';
 
-export function loadColumns(): ColumnDef[] {
-  if (typeof window === 'undefined') return DEFAULT_COLUMNS;
+export function customFieldToColumn(cf: CustomField): ColumnDef {
+  return {
+    id: `cf_${cf.name}`,
+    label: cf.label,
+    visible: false,
+    sortable: false,
+    isCustom: true,
+    customFieldType: cf.type,
+  };
+}
+
+export function loadColumns(customFields?: CustomField[]): ColumnDef[] {
+  // Build custom field columns
+  const cfColumns = (customFields || []).map(customFieldToColumn);
+
+  // All available columns = defaults + custom (before actions)
+  const allColumns = [
+    ...DEFAULT_COLUMNS.filter(c => c.id !== 'actions'),
+    ...cfColumns,
+    DEFAULT_COLUMNS.find(c => c.id === 'actions')!,
+  ];
+
+  if (typeof window === 'undefined') return allColumns;
+
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed: ColumnDef[] = JSON.parse(saved);
-      // Merge with defaults to pick up any new columns
-      const ids = new Set(parsed.map((c) => c.id));
-      const merged = [
-        ...parsed,
-        ...DEFAULT_COLUMNS.filter((c) => !ids.has(c.id)),
-      ];
-      return merged;
+      const savedIds = new Set(parsed.map((c) => c.id));
+
+      // Update saved custom columns with latest labels/types
+      const updated = parsed.map(c => {
+        if (c.isCustom) {
+          const fresh = cfColumns.find(cf => cf.id === c.id);
+          if (fresh) return { ...c, label: fresh.label, customFieldType: fresh.customFieldType };
+          // Custom field was deleted - remove from saved
+          return null;
+        }
+        return c;
+      }).filter(Boolean) as ColumnDef[];
+
+      // Add any new columns not in saved
+      const newCols = allColumns.filter(c => !savedIds.has(c.id));
+      // Insert new columns before 'actions'
+      const actionsIdx = updated.findIndex(c => c.id === 'actions');
+      if (actionsIdx >= 0) {
+        updated.splice(actionsIdx, 0, ...newCols);
+      } else {
+        updated.push(...newCols);
+      }
+
+      return updated;
     }
   } catch { /* ignore */ }
-  return DEFAULT_COLUMNS;
+
+  return allColumns;
 }
 
 export function saveColumns(columns: ColumnDef[]) {
@@ -94,7 +137,10 @@ export function ColumnManager({ columns, onChange, onClose }: ColumnManagerProps
   };
 
   const handleReset = () => {
-    const reset = [...DEFAULT_COLUMNS];
+    // Keep custom columns but reset visibility/order to defaults
+    const defaults = [...DEFAULT_COLUMNS.filter(c => c.id !== 'actions')];
+    const customs = local.filter(c => c.isCustom).map(c => ({ ...c, visible: false }));
+    const reset = [...defaults, ...customs, DEFAULT_COLUMNS.find(c => c.id === 'actions')!];
     setLocal(reset);
   };
 
@@ -113,7 +159,7 @@ export function ColumnManager({ columns, onChange, onClose }: ColumnManagerProps
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-1">
-          {movableColumns.map((col, i) => {
+          {movableColumns.map((col) => {
             const globalIdx = local.findIndex((c) => c.id === col.id);
             return (
               <div
@@ -140,6 +186,7 @@ export function ColumnManager({ columns, onChange, onClose }: ColumnManagerProps
                   <span className="text-sm text-gray-700">{col.label}</span>
                 </label>
                 {col.locked && <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">Required</span>}
+                {col.isCustom && <span className="text-[10px] text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded">Custom</span>}
               </div>
             );
           })}

@@ -147,6 +147,19 @@ export interface Attachment {
   createdAt: string;
 }
 
+// ─── Custom Field ───────────────────────────────────────────────
+export type FieldType = 'TEXT' | 'NUMBER' | 'DATE' | 'SELECT' | 'MULTI_SELECT' | 'BOOLEAN' | 'URL' | 'EMAIL' | 'PHONE';
+
+export interface CustomField {
+  id: string;
+  name: string;
+  label: string;
+  type: FieldType;
+  options?: string[];
+  isRequired: boolean;
+  order: number;
+}
+
 // ─── Campaign ────────────────────────────────────────────────────
 export interface Campaign {
   id: string;

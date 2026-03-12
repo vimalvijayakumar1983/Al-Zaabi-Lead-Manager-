@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
-import type { Lead, PaginatedResponse, User } from '@/types';
+import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
 import { ColumnManager, loadColumns, saveColumns, type ColumnDef } from './components/column-config';
 import { ViewSidebar, SYSTEM_VIEWS, loadCustomViews, saveCustomViews, type SavedView } from './components/saved-views';
 import { KanbanView } from './components/kanban-view';
@@ -60,6 +60,9 @@ export default function LeadsPage() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
 
+  // Custom fields
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+
   const visibleColumns = columns.filter((c) => c.visible);
 
   // ─── Data Fetching ──────────────────────────────────────────────
@@ -103,8 +106,26 @@ export default function LeadsPage() {
     } catch { /* non-critical */ }
   }, []);
 
+  const fetchCustomFields = useCallback(async () => {
+    try {
+      const data = await api.getCustomFields();
+      setCustomFields(data as CustomField[]);
+      // Rebuild columns with custom fields
+      setColumns(prev => {
+        const updated = loadColumns(data as CustomField[]);
+        // Preserve user's visibility/order preferences from existing columns
+        const prevMap = new Map(prev.map(c => [c.id, c]));
+        return updated.map(c => {
+          const existing = prevMap.get(c.id);
+          if (existing) return { ...c, visible: existing.visible };
+          return c;
+        });
+      });
+    } catch { /* non-critical */ }
+  }, []);
+
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
-  useEffect(() => { fetchStats(); fetchUsers(); }, [fetchStats, fetchUsers]);
+  useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
 
   // Close quick action menu on outside click
   useEffect(() => {
@@ -269,7 +290,16 @@ export default function LeadsPage() {
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
           case 'createdAt': return new Date(l.createdAt).toLocaleDateString();
           case 'updatedAt': return new Date(l.updatedAt).toLocaleDateString();
-          default: return '';
+          default:
+            if (c.id.startsWith('cf_')) {
+              const fn = c.id.slice(3);
+              const cd = (l.customData || {}) as Record<string, unknown>;
+              const v = cd[fn];
+              if (v === undefined || v === null) return '';
+              if (Array.isArray(v)) return v.join(', ');
+              return String(v);
+            }
+            return '';
         }
       })
     );
@@ -453,6 +483,53 @@ export default function LeadsPage() {
           </div>
         );
       default:
+        // Custom field columns (id starts with cf_)
+        if (col.id.startsWith('cf_') && col.isCustom) {
+          const fieldName = col.id.slice(3); // remove 'cf_' prefix
+          const customData = (lead.customData || {}) as Record<string, unknown>;
+          const value = customData[fieldName];
+          const cf = customFields.find(f => f.name === fieldName);
+
+          if (value === undefined || value === null || value === '') {
+            return <span className="text-xs text-gray-400 italic">-</span>;
+          }
+
+          // Render based on type
+          switch (col.customFieldType) {
+            case 'BOOLEAN':
+              return <span className={`text-xs font-medium px-2 py-0.5 rounded ${value ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{value ? 'Yes' : 'No'}</span>;
+            case 'SELECT':
+              return <span className="text-sm text-gray-700 bg-gray-100 px-2 py-0.5 rounded">{String(value)}</span>;
+            case 'MULTI_SELECT':
+              return (
+                <div className="flex gap-1 flex-wrap">
+                  {(Array.isArray(value) ? value : []).map((v: string, i: number) => (
+                    <span key={i} className="text-[10px] font-medium bg-brand-100 text-brand-700 px-1.5 py-0.5 rounded-full">{v}</span>
+                  ))}
+                </div>
+              );
+            case 'URL':
+              return <a href={String(value)} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-600 hover:underline truncate block max-w-[180px]">{String(value)}</a>;
+            case 'DATE':
+              return <span className="text-sm text-gray-700">{new Date(String(value)).toLocaleDateString()}</span>;
+            case 'NUMBER':
+              return (
+                <InlineEdit value={String(value)} onSave={async (v) => {
+                  const newCustomData = { ...customData, [fieldName]: v ? parseFloat(v) : null };
+                  await api.updateLead(lead.id, { customData: newCustomData });
+                  fetchLeads();
+                }} type="number" placeholder="-" displayClassName="text-sm text-gray-700" />
+              );
+            default:
+              return (
+                <InlineEdit value={String(value)} onSave={async (v) => {
+                  const newCustomData = { ...customData, [fieldName]: v || null };
+                  await api.updateLead(lead.id, { customData: newCustomData });
+                  fetchLeads();
+                }} placeholder="-" displayClassName="text-sm text-gray-700" />
+              );
+          }
+        }
         return null;
     }
   };
@@ -743,6 +820,7 @@ export default function LeadsPage() {
           {viewMode === 'kanban' && (
             <KanbanView
               leads={leads}
+              customFields={customFields}
               onStatusChange={async (leadId, status) => {
                 await handleQuickStatus(leadId, status);
               }}
@@ -752,7 +830,7 @@ export default function LeadsPage() {
       </div>
 
       {/* ─── Modals ──────────────────────────────────────────────── */}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} />}
+      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} />}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
   );
@@ -810,17 +888,29 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
   );
 }
 
-function CreateLeadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
+function CreateLeadModal({ onClose, onSubmit, customFields = [] }: { onClose: () => void; onSubmit: (data: any) => void; customFields?: CustomField[] }) {
   const [form, setForm] = useState({
     firstName: '', lastName: '', email: '', phone: '', company: '', jobTitle: '',
     source: 'MANUAL', productInterest: '', location: '', budget: '', website: '', campaign: '',
   });
+  const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     try {
+      // Build customData from custom field values
+      const customData: Record<string, unknown> = {};
+      for (const cf of customFields) {
+        const val = customValues[cf.name];
+        if (val !== undefined && val !== '' && val !== null) {
+          if (cf.type === 'NUMBER') customData[cf.name] = parseFloat(String(val)) || null;
+          else if (cf.type === 'BOOLEAN') customData[cf.name] = val === true || val === 'true';
+          else customData[cf.name] = val;
+        }
+      }
+
       await onSubmit({
         firstName: form.firstName, lastName: form.lastName,
         email: form.email || null, phone: form.phone || null,
@@ -828,6 +918,7 @@ function CreateLeadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
         source: form.source || undefined, productInterest: form.productInterest || null,
         location: form.location || null, budget: form.budget ? parseFloat(form.budget) : null,
         website: form.website || null, campaign: form.campaign || null,
+        ...(Object.keys(customData).length > 0 ? { customData } : {}),
       });
     } finally { setSubmitting(false); }
   };
@@ -888,6 +979,62 @@ function CreateLeadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
             <div><label className="label">Product Interest</label><input className="input" value={form.productInterest} onChange={(e) => setForm({ ...form, productInterest: e.target.value })} placeholder="e.g. Enterprise Plan" /></div>
             <div><label className="label">Campaign</label><input className="input" value={form.campaign} onChange={(e) => setForm({ ...form, campaign: e.target.value })} placeholder="e.g. Q1 Promo" /></div>
           </div>
+
+          {/* Custom Fields */}
+          {customFields.length > 0 && (
+            <>
+              <SectionHeader icon="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2" title="Custom Fields" />
+              <div className="grid grid-cols-2 gap-3">
+                {customFields.map((cf) => (
+                  <div key={cf.id}>
+                    <label className="label">{cf.label}{cf.isRequired ? ' *' : ''}</label>
+                    {cf.type === 'TEXT' && <input className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
+                    {cf.type === 'NUMBER' && <input type="number" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
+                    {cf.type === 'DATE' && <input type="date" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
+                    {cf.type === 'EMAIL' && <input type="email" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
+                    {cf.type === 'PHONE' && <input className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} placeholder="+1 (555) 000-0000" />}
+                    {cf.type === 'URL' && <input type="url" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} placeholder="https://" />}
+                    {cf.type === 'SELECT' && (
+                      <select className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })}>
+                        <option value="">Select...</option>
+                        {(cf.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
+                    {cf.type === 'MULTI_SELECT' && (
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap gap-1">
+                          {((customValues[cf.name] as string[]) || []).map((v, i) => (
+                            <span key={i} className="inline-flex items-center gap-1 text-xs bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full">
+                              {v}
+                              <button type="button" onClick={() => setCustomValues({ ...customValues, [cf.name]: ((customValues[cf.name] as string[]) || []).filter((_, j) => j !== i) })} className="hover:text-red-600">&times;</button>
+                            </span>
+                          ))}
+                        </div>
+                        <select className="input" value="" onChange={(e) => {
+                          if (e.target.value) {
+                            const current = (customValues[cf.name] as string[]) || [];
+                            if (!current.includes(e.target.value)) {
+                              setCustomValues({ ...customValues, [cf.name]: [...current, e.target.value] });
+                            }
+                            e.target.value = '';
+                          }
+                        }}>
+                          <option value="">Add...</option>
+                          {(cf.options || []).filter(o => !((customValues[cf.name] as string[]) || []).includes(o)).map((o) => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      </div>
+                    )}
+                    {cf.type === 'BOOLEAN' && (
+                      <div className="flex items-center gap-4 mt-1">
+                        <label className="flex items-center gap-1.5 text-sm"><input type="radio" name={`cf_${cf.name}`} checked={customValues[cf.name] === true} onChange={() => setCustomValues({ ...customValues, [cf.name]: true })} /> Yes</label>
+                        <label className="flex items-center gap-1.5 text-sm"><input type="radio" name={`cf_${cf.name}`} checked={customValues[cf.name] === false} onChange={() => setCustomValues({ ...customValues, [cf.name]: false })} /> No</label>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-3 border-t">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>

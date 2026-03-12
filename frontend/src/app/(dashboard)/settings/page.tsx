@@ -6,15 +6,19 @@ import { useAuthStore } from '@/store/authStore';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
-  FileText, Trash2, LogOut,
+  FileText, Trash2, LogOut, Columns3, Plus, GripVertical,
+  Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
+  AtSign,
 } from 'lucide-react';
+import type { CustomField, FieldType } from '@/types';
 
-type Tab = 'profile' | 'security' | 'organization' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'customFields' | 'notifications' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
   { key: 'security', label: 'Security', icon: Lock },
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
+  { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'audit', label: 'Audit Log', icon: Shield, adminOnly: true },
   { key: 'danger', label: 'Danger Zone', icon: AlertTriangle },
@@ -71,6 +75,7 @@ export default function SettingsPage() {
           {activeTab === 'profile' && <ProfileSection />}
           {activeTab === 'security' && <SecuritySection />}
           {activeTab === 'organization' && isAdmin && <OrganizationSection />}
+          {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
           {activeTab === 'audit' && isAdmin && <AuditLogSection />}
           {activeTab === 'danger' && <DangerZoneSection />}
@@ -840,6 +845,333 @@ function DangerZoneSection() {
             </div>
           </form>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Custom Fields Section ──────────────────────────────────────── */
+
+const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
+  TEXT: { label: 'Text', icon: Type, color: 'bg-gray-100 text-gray-700' },
+  NUMBER: { label: 'Number', icon: Hash, color: 'bg-blue-100 text-blue-700' },
+  DATE: { label: 'Date', icon: Calendar, color: 'bg-purple-100 text-purple-700' },
+  SELECT: { label: 'Dropdown', icon: List, color: 'bg-amber-100 text-amber-700' },
+  MULTI_SELECT: { label: 'Multi-Select', icon: List, color: 'bg-orange-100 text-orange-700' },
+  BOOLEAN: { label: 'Yes/No', icon: ToggleLeft, color: 'bg-green-100 text-green-700' },
+  URL: { label: 'URL', icon: Link2, color: 'bg-cyan-100 text-cyan-700' },
+  EMAIL: { label: 'Email', icon: AtSign, color: 'bg-indigo-100 text-indigo-700' },
+  PHONE: { label: 'Phone', icon: Phone, color: 'bg-pink-100 text-pink-700' },
+};
+
+function CustomFieldsSection() {
+  const [fields, setFields] = useState<CustomField[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editingField, setEditingField] = useState<CustomField | null>(null);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+
+  const fetchFields = async () => {
+    try {
+      const data = await api.getCustomFields();
+      setFields(data);
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchFields(); }, []);
+
+  const handleDelete = async (field: CustomField) => {
+    if (!confirm(`Delete custom field "${field.label}"? This will remove all data stored in this field from all leads.`)) return;
+    try {
+      await api.deleteCustomField(field.id);
+      fetchFields();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleDragStart = (idx: number) => setDragIdx(idx);
+
+  const handleDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === idx) return;
+    const items = [...fields];
+    const dragged = items.splice(dragIdx, 1)[0];
+    items.splice(idx, 0, dragged);
+    setFields(items);
+    setDragIdx(idx);
+  };
+
+  const handleDragEnd = async () => {
+    setDragIdx(null);
+    try {
+      await api.reorderCustomFields(fields.map(f => f.id));
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <SectionHeader title="Custom Fields" description="Add custom columns to your leads table. These fields appear in lead details, table view, and import mapping." />
+        <button onClick={() => { setEditingField(null); setShowModal(true); }} className="btn-primary gap-1.5 text-sm">
+          <Plus className="h-4 w-4" />
+          Add Field
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="card p-8 text-center">
+          <div className="animate-spin h-6 w-6 border-2 border-brand-600 border-t-transparent rounded-full mx-auto" />
+        </div>
+      ) : fields.length === 0 ? (
+        <div className="card p-8 text-center">
+          <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+            <Columns3 className="h-6 w-6 text-gray-400" />
+          </div>
+          <p className="text-sm font-medium text-gray-900 mb-1">No custom fields yet</p>
+          <p className="text-xs text-gray-500 mb-4">Create custom fields to track additional lead information specific to your business.</p>
+          <button onClick={() => { setEditingField(null); setShowModal(true); }} className="btn-primary text-sm gap-1.5">
+            <Plus className="h-4 w-4" />
+            Create First Field
+          </button>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+            <div className="grid grid-cols-12 gap-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <div className="col-span-1" />
+              <div className="col-span-4">Field Label</div>
+              <div className="col-span-2">Type</div>
+              <div className="col-span-2">Required</div>
+              <div className="col-span-3 text-right">Actions</div>
+            </div>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {fields.map((field, idx) => {
+              const typeConfig = FIELD_TYPE_CONFIG[field.type];
+              const TypeIcon = typeConfig.icon;
+              return (
+                <div
+                  key={field.id}
+                  draggable
+                  onDragStart={() => handleDragStart(idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDragEnd={handleDragEnd}
+                  className={`grid grid-cols-12 gap-3 items-center px-4 py-3 transition-colors ${
+                    dragIdx === idx ? 'bg-brand-50' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="col-span-1">
+                    <GripVertical className="h-4 w-4 text-gray-300 cursor-grab active:cursor-grabbing" />
+                  </div>
+                  <div className="col-span-4">
+                    <p className="text-sm font-medium text-gray-900">{field.label}</p>
+                    <p className="text-xs text-gray-400 font-mono">{field.name}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${typeConfig.color}`}>
+                      <TypeIcon className="h-3 w-3" />
+                      {typeConfig.label}
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    {field.isRequired ? (
+                      <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded">Required</span>
+                    ) : (
+                      <span className="text-xs text-gray-400">Optional</span>
+                    )}
+                  </div>
+                  <div className="col-span-3 flex items-center justify-end gap-1">
+                    {field.options && field.options.length > 0 && (
+                      <span className="text-xs text-gray-400 mr-2">{(field.options as string[]).length} options</span>
+                    )}
+                    <button onClick={() => { setEditingField(field); setShowModal(true); }}
+                      className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="Edit">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button onClick={() => handleDelete(field)}
+                      className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Delete">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {showModal && (
+        <CustomFieldModal
+          field={editingField}
+          onClose={() => { setShowModal(false); setEditingField(null); }}
+          onSaved={() => { setShowModal(false); setEditingField(null); fetchFields(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | null; onClose: () => void; onSaved: () => void }) {
+  const [label, setLabel] = useState(field?.label || '');
+  const [type, setType] = useState<FieldType>(field?.type || 'TEXT');
+  const [isRequired, setIsRequired] = useState(field?.isRequired || false);
+  const [options, setOptions] = useState<string[]>((field?.options as string[]) || []);
+  const [newOption, setNewOption] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const isSelect = type === 'SELECT' || type === 'MULTI_SELECT';
+
+  const addOption = () => {
+    const val = newOption.trim();
+    if (val && !options.includes(val)) {
+      setOptions([...options, val]);
+      setNewOption('');
+    }
+  };
+
+  const removeOption = (idx: number) => {
+    setOptions(options.filter((_, i) => i !== idx));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!label.trim()) { setError('Label is required'); return; }
+    if (isSelect && options.length === 0) { setError('Add at least one option'); return; }
+
+    setSaving(true);
+    setError('');
+    try {
+      if (field) {
+        await api.updateCustomField(field.id, { label, type, options: isSelect ? options : null, isRequired });
+      } else {
+        await api.createCustomField({ label, type, options: isSelect ? options : undefined, isRequired });
+      }
+      onSaved();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="card w-full max-w-lg max-h-[85vh] overflow-y-auto animate-fade-in">
+        <div className="flex items-center justify-between p-5 border-b">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">{field ? 'Edit' : 'Create'} Custom Field</h2>
+            <p className="text-xs text-gray-500 mt-0.5">This field will appear in lead forms, table, and details</p>
+          </div>
+          <button onClick={onClose} className="btn-icon"><X className="h-5 w-5" /></button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Field Label */}
+          <div>
+            <label className="label">Field Label *</label>
+            <input className="input" value={label} onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. Company Size, Industry, Contract Value" autoFocus />
+          </div>
+
+          {/* Field Type */}
+          <div>
+            <label className="label">Field Type *</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(Object.entries(FIELD_TYPE_CONFIG) as [FieldType, typeof FIELD_TYPE_CONFIG[FieldType]][]).map(([key, config]) => {
+                const Icon = config.icon;
+                return (
+                  <button
+                    key={key} type="button"
+                    onClick={() => setType(key)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                      type === key ? 'border-brand-300 bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {config.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Options for SELECT / MULTI_SELECT */}
+          {isSelect && (
+            <div>
+              <label className="label">Options *</label>
+              <div className="space-y-2">
+                {options.map((opt, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <span className="flex-1 text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">{opt}</span>
+                    <button type="button" onClick={() => removeOption(idx)}
+                      className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <input className="input flex-1" value={newOption} onChange={(e) => setNewOption(e.target.value)}
+                    placeholder="Type option and press Enter" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOption(); } }} />
+                  <button type="button" onClick={addOption} className="btn-secondary text-sm">Add</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Required toggle */}
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Required field</p>
+              <p className="text-xs text-gray-500">Require this field when creating or importing leads</p>
+            </div>
+            <ToggleSwitch checked={isRequired} onChange={() => setIsRequired(!isRequired)} />
+          </div>
+
+          {/* Preview */}
+          <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Preview</p>
+            <div>
+              <label className="label">{label || 'Field Label'}{isRequired ? ' *' : ''}</label>
+              {type === 'TEXT' && <input className="input" placeholder="Enter text..." disabled />}
+              {type === 'NUMBER' && <input className="input" type="number" placeholder="0" disabled />}
+              {type === 'DATE' && <input className="input" type="date" disabled />}
+              {type === 'URL' && <input className="input" placeholder="https://..." disabled />}
+              {type === 'EMAIL' && <input className="input" placeholder="email@example.com" disabled />}
+              {type === 'PHONE' && <input className="input" placeholder="+1 (555) 000-0000" disabled />}
+              {type === 'BOOLEAN' && (
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1.5 text-sm"><input type="radio" disabled /> Yes</label>
+                  <label className="flex items-center gap-1.5 text-sm"><input type="radio" disabled /> No</label>
+                </div>
+              )}
+              {type === 'SELECT' && (
+                <select className="input" disabled>
+                  <option>Select...</option>
+                  {options.map((o, i) => <option key={i}>{o}</option>)}
+                </select>
+              )}
+              {type === 'MULTI_SELECT' && (
+                <div className="flex gap-1 flex-wrap">
+                  {options.length > 0 ? options.map((o, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 bg-brand-100 text-brand-700 text-xs font-medium px-2 py-0.5 rounded-full">{o}</span>
+                  )) : <span className="text-xs text-gray-400">No options yet</span>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+            <button type="submit" disabled={saving} className="btn-primary gap-1.5">
+              {saving ? 'Saving...' : field ? 'Update Field' : 'Create Field'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

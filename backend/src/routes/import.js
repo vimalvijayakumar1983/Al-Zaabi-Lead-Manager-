@@ -110,13 +110,34 @@ function autoDetectMapping(csvColumns, moduleFields) {
   return mapping;
 }
 
-// ─── 1. GET module field definitions ────────────────────────────
-router.get('/fields/:module', (req, res) => {
-  const fields = MODULE_FIELDS[req.params.module];
-  if (!fields) {
-    return res.status(400).json({ error: `Unknown module: ${req.params.module}. Supported: ${Object.keys(MODULE_FIELDS).join(', ')}` });
+// ─── 1. GET module field definitions (includes custom fields) ────
+router.get('/fields/:module', async (req, res, next) => {
+  try {
+    const fields = MODULE_FIELDS[req.params.module];
+    if (!fields) {
+      return res.status(400).json({ error: `Unknown module: ${req.params.module}. Supported: ${Object.keys(MODULE_FIELDS).join(', ')}` });
+    }
+
+    // For leads, append custom fields
+    let allFields = [...fields];
+    if (req.params.module === 'leads') {
+      const customFields = await prisma.customField.findMany({
+        where: { organizationId: req.orgId },
+        orderBy: { order: 'asc' },
+      });
+      for (const cf of customFields) {
+        const fieldDef = { key: `custom_${cf.name}`, label: cf.label, required: cf.isRequired, type: cf.type.toLowerCase(), isCustom: true };
+        if (cf.type === 'SELECT' || cf.type === 'MULTI_SELECT') {
+          fieldDef.options = cf.options || [];
+        }
+        allFields.push(fieldDef);
+      }
+    }
+
+    res.json({ module: req.params.module, fields: allFields });
+  } catch (err) {
+    next(err);
   }
-  res.json({ module: req.params.module, fields });
 });
 
 // ─── 2. Upload & preview (Step 1 of wizard) ────────────────────
@@ -132,13 +153,29 @@ router.post('/preview', upload.single('file'), async (req, res, next) => {
       return res.status(400).json({ error: `Unknown module: ${module}` });
     }
 
+    // Include custom fields for leads
+    let allFields = [...fields];
+    if (module === 'leads') {
+      const customFields = await prisma.customField.findMany({
+        where: { organizationId: req.orgId },
+        orderBy: { order: 'asc' },
+      });
+      for (const cf of customFields) {
+        const fieldDef = { key: `custom_${cf.name}`, label: cf.label, required: cf.isRequired, type: cf.type.toLowerCase(), isCustom: true };
+        if (cf.type === 'SELECT' || cf.type === 'MULTI_SELECT') {
+          fieldDef.options = cf.options || [];
+        }
+        allFields.push(fieldDef);
+      }
+    }
+
     const rows = await parseFileToRows(req.file);
     if (rows.length === 0) {
       return res.status(400).json({ error: 'File contains no data rows' });
     }
 
     const csvColumns = Object.keys(rows[0]);
-    const suggestedMapping = autoDetectMapping(csvColumns, fields);
+    const suggestedMapping = autoDetectMapping(csvColumns, allFields);
 
     // Return preview data
     res.json({
@@ -148,7 +185,7 @@ router.post('/preview', upload.single('file'), async (req, res, next) => {
       columns: csvColumns,
       sampleData: rows.slice(0, 5), // First 5 rows for preview
       suggestedMapping,
-      moduleFields: fields,
+      moduleFields: allFields,
     });
   } catch (err) {
     next(err);
@@ -214,9 +251,14 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
         try {
           // Apply field mapping
           const mapped = {};
+          const customData = {};
           for (const [csvCol, crmField] of Object.entries(fieldMapping)) {
             if (crmField && row[csvCol] !== undefined && row[csvCol] !== '') {
-              mapped[crmField] = row[csvCol];
+              if (crmField.startsWith('custom_')) {
+                customData[crmField.replace('custom_', '')] = row[csvCol];
+              } else {
+                mapped[crmField] = row[csvCol];
+              }
             }
           }
 
@@ -272,13 +314,12 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
               skipped++;
               continue;
             } else if (duplicateAction === 'overwrite') {
-              // Update existing record
-              const updateData = { ...mapped };
-              delete updateData.firstName; // Only update non-key fields if desired, keep name
-              // Actually overwrite everything
+              // Update existing record, merge custom data
+              const existingCustom = typeof existingLead.customData === 'object' && existingLead.customData ? existingLead.customData : {};
+              const mergedCustom = Object.keys(customData).length > 0 ? { ...existingCustom, ...customData } : existingCustom;
               await prisma.lead.update({
                 where: { id: existingLead.id },
-                data: { ...mapped, updatedAt: new Date() },
+                data: { ...mapped, customData: mergedCustom, updatedAt: new Date() },
               });
               importedIds.push(existingLead.id);
               updated++;
@@ -302,6 +343,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             location: mapped.location || null,
             campaign: mapped.campaign || null,
             website: mapped.website || null,
+            customData: Object.keys(customData).length > 0 ? customData : undefined,
             organizationId: req.orgId,
             createdById: req.user.id,
             assignedToId: assignToId || null,
@@ -553,41 +595,57 @@ router.post('/undo/:id', authorize('ADMIN'), async (req, res, next) => {
   }
 });
 
-// ─── 7. Download sample template ────────────────────────────────
-router.get('/template/:module', (req, res) => {
-  const fields = MODULE_FIELDS[req.params.module];
-  if (!fields) {
-    return res.status(400).json({ error: `Unknown module: ${req.params.module}` });
+// ─── 7. Download sample template (includes custom fields) ───────
+router.get('/template/:module', async (req, res, next) => {
+  try {
+    const fields = MODULE_FIELDS[req.params.module];
+    if (!fields) {
+      return res.status(400).json({ error: `Unknown module: ${req.params.module}` });
+    }
+
+    const headers = fields.map(f => f.label);
+    const sampleRow = fields.map(f => {
+      if (f.key === 'firstName') return 'John';
+      if (f.key === 'lastName') return 'Doe';
+      if (f.key === 'email') return 'john.doe@example.com';
+      if (f.key === 'phone') return '+971501234567';
+      if (f.key === 'company') return 'Acme Corp';
+      if (f.key === 'jobTitle') return 'Sales Manager';
+      if (f.key === 'source') return 'MANUAL';
+      if (f.key === 'status') return 'NEW';
+      if (f.key === 'budget') return '50000';
+      if (f.key === 'productInterest') return 'Enterprise Plan';
+      if (f.key === 'location') return 'Dubai, UAE';
+      if (f.key === 'campaign') return 'Q1 Campaign';
+      if (f.key === 'website') return 'https://example.com';
+      if (f.key === 'tags') return 'hot-lead, enterprise';
+      if (f.key === 'name') return 'Summer Campaign 2025';
+      if (f.key === 'type') return 'EMAIL';
+      if (f.key === 'startDate') return '2025-06-01';
+      if (f.key === 'endDate') return '2025-08-31';
+      return '';
+    });
+
+    // Append custom fields for leads module
+    if (req.params.module === 'leads') {
+      const customFields = await prisma.customField.findMany({
+        where: { organizationId: req.orgId },
+        orderBy: { order: 'asc' },
+      });
+      for (const cf of customFields) {
+        headers.push(cf.label);
+        sampleRow.push(cf.type === 'BOOLEAN' ? 'true' : cf.type === 'NUMBER' ? '0' : cf.type === 'DATE' ? '2026-01-01' : '');
+      }
+    }
+
+    const csv = [headers.join(','), sampleRow.join(',')].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=${req.params.module}-import-template.csv`);
+    res.send(csv);
+  } catch (err) {
+    next(err);
   }
-
-  const headers = fields.map(f => f.label);
-  const sampleRow = fields.map(f => {
-    if (f.key === 'firstName') return 'John';
-    if (f.key === 'lastName') return 'Doe';
-    if (f.key === 'email') return 'john.doe@example.com';
-    if (f.key === 'phone') return '+971501234567';
-    if (f.key === 'company') return 'Acme Corp';
-    if (f.key === 'jobTitle') return 'Sales Manager';
-    if (f.key === 'source') return 'MANUAL';
-    if (f.key === 'status') return 'NEW';
-    if (f.key === 'budget') return '50000';
-    if (f.key === 'productInterest') return 'Enterprise Plan';
-    if (f.key === 'location') return 'Dubai, UAE';
-    if (f.key === 'campaign') return 'Q1 Campaign';
-    if (f.key === 'website') return 'https://example.com';
-    if (f.key === 'tags') return 'hot-lead, enterprise';
-    if (f.key === 'name') return 'Summer Campaign 2025';
-    if (f.key === 'type') return 'EMAIL';
-    if (f.key === 'startDate') return '2025-06-01';
-    if (f.key === 'endDate') return '2025-08-31';
-    return '';
-  });
-
-  const csv = [headers.join(','), sampleRow.join(',')].join('\n');
-
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename=${req.params.module}-import-template.csv`);
-  res.send(csv);
 });
 
 // ─── 8. Validate data (dry run) ────────────────────────────────
@@ -685,6 +743,12 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
         ];
       }
 
+      // Fetch custom fields for export headers
+      const customFields = await prisma.customField.findMany({
+        where: { organizationId: req.orgId },
+        orderBy: { order: 'asc' },
+      });
+
       const leads = await prisma.lead.findMany({
         where,
         include: {
@@ -698,7 +762,8 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
 
       const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Company', 'Job Title',
         'Source', 'Status', 'Score', 'Budget', 'Product Interest', 'Location', 'Campaign',
-        'Website', 'Pipeline Stage', 'Assigned To', 'Tags', 'Created At'];
+        'Website', 'Pipeline Stage', 'Assigned To', 'Tags', 'Created At',
+        ...customFields.map(cf => cf.label)];
 
       const escapeCSV = (val) => {
         if (val === null || val === undefined) return '';
@@ -709,16 +774,25 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
         return str;
       };
 
-      const rows = leads.map(l => [
-        l.firstName, l.lastName, l.email || '', l.phone || '',
-        l.company || '', l.jobTitle || '', l.source, l.status,
-        l.score, l.budget ? parseFloat(l.budget) : '',
-        l.productInterest || '', l.location || '', l.campaign || '',
-        l.website || '', l.stage?.name || '',
-        l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '',
-        (l.tags || []).map(t => t.tag.name).join(', '),
-        new Date(l.createdAt).toISOString().split('T')[0],
-      ].map(escapeCSV));
+      const rows = leads.map(l => {
+        const cd = typeof l.customData === 'object' && l.customData ? l.customData : {};
+        return [
+          l.firstName, l.lastName, l.email || '', l.phone || '',
+          l.company || '', l.jobTitle || '', l.source, l.status,
+          l.score, l.budget ? parseFloat(l.budget) : '',
+          l.productInterest || '', l.location || '', l.campaign || '',
+          l.website || '', l.stage?.name || '',
+          l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '',
+          (l.tags || []).map(t => t.tag.name).join(', '),
+          new Date(l.createdAt).toISOString().split('T')[0],
+          ...customFields.map(cf => {
+            const val = cd[cf.name];
+            if (val === null || val === undefined) return '';
+            if (Array.isArray(val)) return val.join(', ');
+            return String(val);
+          }),
+        ].map(escapeCSV);
+      });
 
       const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
       const timestamp = new Date().toISOString().split('T')[0];

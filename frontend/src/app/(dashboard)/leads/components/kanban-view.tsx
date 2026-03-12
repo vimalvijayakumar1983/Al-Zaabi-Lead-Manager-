@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react';
 import Link from 'next/link';
-import type { Lead } from '@/types';
+import type { Lead, CustomField } from '@/types';
 
 const statusColors: Record<string, { bg: string; border: string; text: string; dot: string }> = {
   NEW: { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700', dot: 'bg-indigo-500' },
@@ -19,9 +19,10 @@ const statusOrder = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIAT
 interface KanbanViewProps {
   leads: Lead[];
   onStatusChange: (leadId: string, status: string) => Promise<void>;
+  customFields?: CustomField[];
 }
 
-export function KanbanView({ leads, onStatusChange }: KanbanViewProps) {
+export function KanbanView({ leads, onStatusChange, customFields = [] }: KanbanViewProps) {
   const [draggedLead, setDraggedLead] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -175,6 +176,26 @@ export function KanbanView({ leads, onStatusChange }: KanbanViewProps) {
                         {lead.tags.length > 2 && <span className="text-[9px] text-gray-400">+{lead.tags.length - 2}</span>}
                       </div>
                     )}
+
+                    {/* Custom field values */}
+                    {customFields.length > 0 && lead.customData && (() => {
+                      const cd = typeof lead.customData === 'object' ? lead.customData as Record<string, unknown> : {};
+                      const visible = customFields.filter(cf => cd[cf.name] !== undefined && cd[cf.name] !== null && cd[cf.name] !== '');
+                      if (visible.length === 0) return null;
+                      return (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {visible.slice(0, 3).map(cf => (
+                            <span key={cf.id} className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] bg-gray-100 text-gray-600">
+                              <span className="font-medium text-gray-500">{cf.label}:</span>
+                              {cf.type === 'BOOLEAN' ? (cd[cf.name] ? 'Yes' : 'No') :
+                               Array.isArray(cd[cf.name]) ? (cd[cf.name] as string[]).join(', ') :
+                               String(cd[cf.name])}
+                            </span>
+                          ))}
+                          {visible.length > 3 && <span className="text-[9px] text-gray-400">+{visible.length - 3}</span>}
+                        </div>
+                      );
+                    })()}
                   </Link>
                 </div>
               ))}
