@@ -207,7 +207,7 @@ function UserDropdown({
           </div>
 
           {/* User list */}
-          <div className="max-h-48 overflow-y-auto">
+          <div className="max-h-64 overflow-y-auto">
             {filteredUsers.length === 0 ? (
               <div className="px-3 py-4 text-sm text-gray-400 text-center">
                 No matching team members
@@ -379,7 +379,7 @@ export function ReassignmentPanel({
   );
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200">
       {/* Header */}
       <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
         <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
