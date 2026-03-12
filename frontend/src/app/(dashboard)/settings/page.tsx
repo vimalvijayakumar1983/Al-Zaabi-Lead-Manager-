@@ -3,21 +3,22 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import type { CustomField, FieldType, Organization } from '@/types';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
   FileText, Trash2, LogOut, Columns3, Plus, GripVertical,
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
-  AtSign,
+  AtSign, Palette, ChevronDown, Image, Save, Sparkles,
 } from 'lucide-react';
-import type { CustomField, FieldType } from '@/types';
 
-type Tab = 'profile' | 'security' | 'organization' | 'customFields' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'notifications' | 'audit' | 'danger';
 
-const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
+const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
   { key: 'security', label: 'Security', icon: Lock },
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
+  { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'audit', label: 'Audit Log', icon: Shield, adminOnly: true },
@@ -27,9 +28,15 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
 export default function SettingsPage() {
   const { user } = useAuthStore();
   const [activeTab, setActiveTab] = useState<Tab>('profile');
-  const isAdmin = user?.role === 'ADMIN';
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const isAdmin = user?.role === 'ADMIN' || isSuperAdmin;
 
-  const filteredTabs = tabs.filter(t => !t.adminOnly || isAdmin);
+  const filteredTabs = tabs.filter(t => {
+    // Show divisionBranding tab to SUPER_ADMIN and ADMIN
+    if (t.divisionAdmin) return isSuperAdmin || user?.role === 'ADMIN';
+    if (t.adminOnly) return isAdmin;
+    return true;
+  });
 
   return (
     <div className="animate-fade-in max-w-5xl mx-auto">
@@ -75,6 +82,9 @@ export default function SettingsPage() {
           {activeTab === 'profile' && <ProfileSection />}
           {activeTab === 'security' && <SecuritySection />}
           {activeTab === 'organization' && isAdmin && <OrganizationSection />}
+          {activeTab === 'divisionBranding' && (isSuperAdmin || user?.role === 'ADMIN') && (
+            <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
+          )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
           {activeTab === 'audit' && isAdmin && <AuditLogSection />}
@@ -538,6 +548,301 @@ function OrganizationSection() {
           {!success && <div />}
           <button type="submit" disabled={saving} className="btn-primary">
             {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ─── Division Branding Section (NEW - Multi-tenant) ─────────────── */
+function DivisionBrandingSection({ isSuperAdmin }: { isSuperAdmin: boolean }) {
+  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    name: '',
+    tradeName: '',
+    logo: '',
+    primaryColor: '#3B82F6',
+    secondaryColor: '#1E40AF',
+  });
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+
+  // Load divisions
+  useEffect(() => {
+    const loadDivisions = async () => {
+      try {
+        if (isSuperAdmin) {
+          const divs = await api.getDivisions();
+          setDivisions(divs || []);
+          if (divs && divs.length > 0) {
+            setSelectedDivisionId(divs[0].id);
+          }
+        } else {
+          // ADMIN: load their own division
+          const org = await api.getOrganization();
+          if (org) {
+            setDivisions([org]);
+            setSelectedDivisionId(org.id);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      setLoading(false);
+    };
+    loadDivisions();
+  }, [isSuperAdmin]);
+
+  // Load the selected division's branding data
+  useEffect(() => {
+    if (!selectedDivisionId || divisions.length === 0) return;
+    const div = divisions.find(d => d.id === selectedDivisionId);
+    if (div) {
+      setForm({
+        name: div.name || '',
+        tradeName: (div as any).tradeName || '',
+        logo: (div as any).logo || '',
+        primaryColor: (div as any).primaryColor || '#3B82F6',
+        secondaryColor: (div as any).secondaryColor || '#1E40AF',
+      });
+    }
+  }, [selectedDivisionId, divisions]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+    setSuccess(false);
+    try {
+      const updated = await api.updateDivision(selectedDivisionId, {
+        name: form.name,
+        tradeName: form.tradeName || null,
+        logo: form.logo || null,
+        primaryColor: form.primaryColor,
+        secondaryColor: form.secondaryColor,
+      });
+      // Update local state
+      setDivisions(prev =>
+        prev.map(d => d.id === selectedDivisionId ? { ...d, ...updated } : d)
+      );
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to save division settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader
+          title="Division Branding"
+          description={isSuperAdmin ? 'Manage branding settings for each division' : 'Customize your division\'s branding'}
+        />
+        <div className="card p-6 space-y-4">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i}><div className="skeleton h-4 w-24 mb-2" /><div className="skeleton h-10 w-full rounded-lg" /></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (divisions.length === 0) {
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <SectionHeader
+          title="Division Branding"
+          description="No divisions available"
+        />
+        <div className="card p-8 text-center">
+          <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+            <Building2 className="h-6 w-6 text-gray-400" />
+          </div>
+          <p className="text-sm font-medium text-text-primary mb-1">No divisions found</p>
+          <p className="text-xs text-text-tertiary">Division branding will be available once divisions are configured.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <SectionHeader
+        title="Division Branding"
+        description={isSuperAdmin ? 'Manage branding settings for each division in the group' : 'Customize your division\'s branding and appearance'}
+      />
+
+      {/* Division Selector (SUPER_ADMIN only — they can switch between divisions) */}
+      {isSuperAdmin && divisions.length > 1 && (
+        <div className="card p-4">
+          <label className="label mb-2">Select Division</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+            <select
+              className="input pl-10 appearance-none cursor-pointer"
+              value={selectedDivisionId}
+              onChange={(e) => setSelectedDivisionId(e.target.value)}
+            >
+              {divisions.map((div) => (
+                <option key={div.id} value={div.id}>{div.name}</option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+          </div>
+        </div>
+      )}
+
+      {/* Branding Preview */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-text-primary mb-4">Preview</h3>
+        <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-secondary">
+          {form.logo ? (
+            <img
+              src={form.logo}
+              alt={form.name}
+              className="h-14 w-14 rounded-xl object-cover shadow-soft"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
+          ) : (
+            <div
+              className="h-14 w-14 rounded-xl flex items-center justify-center text-xl font-bold text-white shadow-soft"
+              style={{ background: `linear-gradient(135deg, ${form.primaryColor}, ${form.secondaryColor})` }}
+            >
+              {form.name?.[0] || 'D'}
+            </div>
+          )}
+          <div>
+            <p className="text-lg font-semibold text-text-primary">{form.name || 'Division Name'}</p>
+            {form.tradeName && (
+              <p className="text-sm text-text-secondary">{form.tradeName}</p>
+            )}
+            <div className="flex items-center gap-2 mt-1.5">
+              <div
+                className="h-4 w-4 rounded-full border border-white shadow-sm"
+                style={{ backgroundColor: form.primaryColor }}
+                title="Primary Color"
+              />
+              <div
+                className="h-4 w-4 rounded-full border border-white shadow-sm"
+                style={{ backgroundColor: form.secondaryColor }}
+                title="Secondary Color"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Branding Form */}
+      <form onSubmit={handleSave} className="card p-6 space-y-5">
+        <div>
+          <label className="label">Division Name</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              className="input pl-10"
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Al Reem Real Estate"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Trade Name</label>
+          <div className="relative">
+            <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              className="input pl-10"
+              value={form.tradeName}
+              onChange={(e) => setForm({ ...form, tradeName: e.target.value })}
+              placeholder="e.g. Al Reem Properties LLC"
+            />
+          </div>
+          <p className="text-2xs text-text-tertiary mt-1">The official trade name of this division</p>
+        </div>
+
+        <div>
+          <label className="label">Logo URL</label>
+          <div className="relative">
+            <Image className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              className="input pl-10"
+              value={form.logo}
+              onChange={(e) => setForm({ ...form, logo: e.target.value })}
+              placeholder="https://example.com/logo.png"
+              type="url"
+            />
+          </div>
+          <p className="text-2xs text-text-tertiary mt-1">Recommended: square image, at least 200x200px</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Primary Color</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                className="h-10 w-10 rounded-lg border border-border cursor-pointer p-0.5"
+                value={form.primaryColor}
+                onChange={(e) => setForm({ ...form, primaryColor: e.target.value })}
+              />
+              <input
+                className="input flex-1 font-mono text-sm"
+                value={form.primaryColor}
+                onChange={(e) => setForm({ ...form, primaryColor: e.target.value })}
+                placeholder="#3B82F6"
+                pattern="^#[0-9A-Fa-f]{6}$"
+              />
+            </div>
+            <p className="text-2xs text-text-tertiary mt-1">Main brand color for this division</p>
+          </div>
+          <div>
+            <label className="label">Secondary Color</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                className="h-10 w-10 rounded-lg border border-border cursor-pointer p-0.5"
+                value={form.secondaryColor}
+                onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })}
+              />
+              <input
+                className="input flex-1 font-mono text-sm"
+                value={form.secondaryColor}
+                onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })}
+                placeholder="#1E40AF"
+                pattern="^#[0-9A-Fa-f]{6}$"
+              />
+            </div>
+            <p className="text-2xs text-text-tertiary mt-1">Accent color used for gradients and highlights</p>
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          {success && (
+            <div className="flex items-center gap-1.5 text-sm text-emerald-600 animate-fade-in">
+              <Check className="h-4 w-4" />
+              Division branding updated successfully
+            </div>
+          )}
+          {!success && <div />}
+          <button type="submit" disabled={saving} className="btn-primary">
+            <Save className="h-3.5 w-3.5" />
+            {saving ? 'Saving...' : 'Save Branding'}
           </button>
         </div>
       </form>

@@ -1,14 +1,30 @@
+// ─── Organization ────────────────────────────────────────────────
+export interface Organization {
+  id: string;
+  name: string;
+  tradeName?: string;
+  logo?: string;
+  primaryColor: string;
+  secondaryColor: string;
+  type: 'GROUP' | 'DIVISION';
+  plan?: string;
+  parentId?: string;
+  children?: Organization[];
+  _count?: { users: number; leads: number };
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────
 export interface User {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
-  role: 'ADMIN' | 'MANAGER' | 'SALES_REP' | 'VIEWER';
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'SALES_REP' | 'VIEWER';
   avatar?: string;
   phone?: string;
   organizationId: string;
   organizationName?: string;
+  organization?: Organization;
   isActive: boolean;
   lastLoginAt?: string;
   _count?: { assignedLeads: number; tasks: number };
@@ -17,6 +33,7 @@ export interface User {
 export interface AuthResponse {
   token: string;
   user: User;
+  divisions?: Organization[];
 }
 
 // ─── Lead ────────────────────────────────────────────────────────

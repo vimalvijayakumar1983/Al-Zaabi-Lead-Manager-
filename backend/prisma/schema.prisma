@@ -8,16 +8,32 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Organization Types ─────────────────────────────────────────
+
+enum OrgType {
+  GROUP
+  DIVISION
+}
+
 // ─── Multi-Tenant Organization ───────────────────────────────────
 
 model Organization {
-  id        String   @id @default(uuid())
-  name      String
-  domain    String?  @unique
-  plan      Plan     @default(FREE)
-  settings  Json     @default("{}")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(uuid())
+  name           String
+  tradeName      String?
+  domain         String?  @unique
+  logo           String?
+  primaryColor   String   @default("#6366f1")
+  secondaryColor String   @default("#1e293b")
+  type           OrgType  @default(DIVISION)
+  plan           Plan     @default(FREE)
+  settings       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  parentId       String?
+  parent         Organization?  @relation("OrgHierarchy", fields: [parentId], references: [id])
+  children       Organization[] @relation("OrgHierarchy")
 
   users             User[]
   leads             Lead[]
@@ -30,6 +46,7 @@ model Organization {
   auditLogs         AuditLog[]
   importHistory     ImportHistory[]
 
+  @@index([parentId])
   @@map("organizations")
 }
 
@@ -74,6 +91,7 @@ model User {
 }
 
 enum Role {
+  SUPER_ADMIN
   ADMIN
   MANAGER
   SALES_REP

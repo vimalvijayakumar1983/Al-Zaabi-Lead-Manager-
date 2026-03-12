@@ -28,13 +28,14 @@ const automationSchema = z.object({
     config: z.record(z.unknown()),
   })),
   isActive: z.boolean().optional(),
+  divisionId: z.string().uuid().optional().nullable(),
 });
 
 // ─── List Automations ────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
     const rules = await prisma.automationRule.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
       orderBy: { createdAt: 'desc' },
     });
     res.json(rules);
@@ -46,8 +47,11 @@ router.get('/', async (req, res, next) => {
 // ─── Create Automation ───────────────────────────────────────────
 router.post('/', authorize('ADMIN', 'MANAGER'), validate(automationSchema), async (req, res, next) => {
   try {
+    const { divisionId, ...data } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     const rule = await prisma.automationRule.create({
-      data: { ...req.validated, organizationId: req.orgId },
+      data: { ...data, organizationId: targetOrgId },
     });
     res.status(201).json(rule);
   } catch (err) {
@@ -58,9 +62,16 @@ router.post('/', authorize('ADMIN', 'MANAGER'), validate(automationSchema), asyn
 // ─── Update Automation ───────────────────────────────────────────
 router.put('/:id', authorize('ADMIN', 'MANAGER'), validate(automationSchema.partial()), async (req, res, next) => {
   try {
+    // Verify rule belongs to accessible orgs
+    const existing = await prisma.automationRule.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Rule not found' });
+
+    const { divisionId, ...data } = req.validated;
     const rule = await prisma.automationRule.update({
       where: { id: req.params.id },
-      data: req.validated,
+      data,
     });
     res.json(rule);
   } catch (err) {
@@ -71,7 +82,9 @@ router.put('/:id', authorize('ADMIN', 'MANAGER'), validate(automationSchema.part
 // ─── Toggle Automation ───────────────────────────────────────────
 router.post('/:id/toggle', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const existing = await prisma.automationRule.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.automationRule.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
     if (!existing) return res.status(404).json({ error: 'Rule not found' });
 
     const rule = await prisma.automationRule.update({
@@ -87,6 +100,11 @@ router.post('/:id/toggle', authorize('ADMIN', 'MANAGER'), async (req, res, next)
 // ─── Delete Automation ───────────────────────────────────────────
 router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const existing = await prisma.automationRule.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Rule not found' });
+
     await prisma.automationRule.delete({ where: { id: req.params.id } });
     res.json({ message: 'Automation deleted' });
   } catch (err) {

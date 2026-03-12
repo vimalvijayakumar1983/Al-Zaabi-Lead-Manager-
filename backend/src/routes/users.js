@@ -10,6 +10,7 @@ router.use(authenticate, orgScope);
 
 // Default permission matrix
 const DEFAULT_PERMISSIONS = {
+  SUPER_ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: true },
   ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true },
   MANAGER: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, deleteData: false, exportData: true },
   SALES_REP: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
@@ -83,12 +84,22 @@ router.put('/permissions/user/:userId', authorize('ADMIN'), validate(z.object({
 // ─── List Users ──────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
+    const { divisionId } = req.query;
+
+    // SUPER_ADMIN sees users across all divisions; optionally filter by division
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin) {
+      orgFilter = divisionId;
+    } else {
+      orgFilter = { in: req.orgIds };
+    }
+
     const users = await prisma.user.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: orgFilter },
       select: {
         id: true, email: true, firstName: true, lastName: true,
         role: true, avatar: true, phone: true, isActive: true,
-        lastLoginAt: true, createdAt: true,
+        lastLoginAt: true, createdAt: true, organizationId: true,
         _count: { select: { assignedLeads: true, tasks: true } },
       },
       orderBy: { firstName: 'asc' },
@@ -106,24 +117,28 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
   lastName: z.string().min(1),
   role: z.enum(['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER']),
   password: z.string().min(8),
+  divisionId: z.string().uuid().optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const { email, firstName, lastName, role, password } = req.validated;
+    const { email, firstName, lastName, role, password, divisionId } = req.validated;
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return res.status(409).json({ error: 'Email already in use' });
     }
 
+    // SUPER_ADMIN must specify which division when inviting
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
       data: {
         email, firstName, lastName, role, passwordHash,
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
       select: {
         id: true, email: true, firstName: true, lastName: true,
-        role: true, createdAt: true,
+        role: true, createdAt: true, organizationId: true,
       },
     });
 
@@ -142,12 +157,18 @@ router.put('/:id', authorize('ADMIN'), validate(z.object({
   phone: z.string().optional().nullable(),
 })), async (req, res, next) => {
   try {
+    // Verify user belongs to accessible orgs
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
     const user = await prisma.user.update({
       where: { id: req.params.id },
       data: req.validated,
       select: {
         id: true, email: true, firstName: true, lastName: true,
-        role: true, isActive: true, phone: true,
+        role: true, isActive: true, phone: true, organizationId: true,
       },
     });
     res.json(user);
@@ -161,6 +182,12 @@ router.put('/:id/reset-password', authorize('ADMIN'), validate(z.object({
   newPassword: z.string().min(8).max(128),
 })), async (req, res, next) => {
   try {
+    // Verify user belongs to accessible orgs
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
     const passwordHash = await bcrypt.hash(req.validated.newPassword, 12);
     await prisma.user.update({
       where: { id: req.params.id },
@@ -175,12 +202,18 @@ router.put('/:id/reset-password', authorize('ADMIN'), validate(z.object({
 // ─── Reactivate User ────────────────────────────────────────────
 router.post('/:id/reactivate', authorize('ADMIN'), async (req, res, next) => {
   try {
+    // Verify user belongs to accessible orgs
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
     const user = await prisma.user.update({
       where: { id: req.params.id },
       data: { isActive: true },
       select: {
         id: true, email: true, firstName: true, lastName: true,
-        role: true, isActive: true,
+        role: true, isActive: true, organizationId: true,
       },
     });
     res.json(user);
@@ -195,6 +228,13 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
     if (req.params.id === req.user.id) {
       return res.status(400).json({ error: 'Cannot deactivate yourself' });
     }
+
+    // Verify user belongs to accessible orgs
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
     await prisma.user.update({
       where: { id: req.params.id },
       data: { isActive: false },

@@ -12,6 +12,7 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
+const divisionRoutes = require('./routes/divisions');
 const leadRoutes = require('./routes/leads');
 const pipelineRoutes = require('./routes/pipeline');
 const taskRoutes = require('./routes/tasks');
@@ -65,6 +66,7 @@ app.get('/api/health', (_req, res) => {
 
 // ─── API Routes ──────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
+app.use('/api/divisions', divisionRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/pipeline', pipelineRoutes);
 app.use('/api/tasks', taskRoutes);

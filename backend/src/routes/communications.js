@@ -22,7 +22,7 @@ router.get('/lead/:leadId', async (req, res, next) => {
     const communications = await prisma.communication.findMany({
       where: {
         leadId: req.params.leadId,
-        lead: { organizationId: req.orgId },
+        lead: { organizationId: { in: req.orgIds } },
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -41,7 +41,7 @@ router.post('/', validate(communicationSchema), async (req, res, next) => {
     const data = req.validated;
 
     const lead = await prisma.lead.findFirst({
-      where: { id: data.leadId, organizationId: req.orgId },
+      where: { id: data.leadId, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
@@ -83,6 +83,12 @@ router.post('/send-email', validate(z.object({
 })), async (req, res, next) => {
   try {
     const { leadId, to, subject, body } = req.validated;
+
+    // Verify lead belongs to accessible orgs
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // In production, send via SMTP/Nodemailer
     // For now, log the communication

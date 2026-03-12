@@ -118,11 +118,11 @@ router.get('/fields/:module', async (req, res, next) => {
       return res.status(400).json({ error: `Unknown module: ${req.params.module}. Supported: ${Object.keys(MODULE_FIELDS).join(', ')}` });
     }
 
-    // For leads, append custom fields
+    // For leads, append custom fields from all accessible orgs
     let allFields = [...fields];
     if (req.params.module === 'leads') {
       const customFields = await prisma.customField.findMany({
-        where: { organizationId: req.orgId },
+        where: { organizationId: { in: req.orgIds } },
         orderBy: { order: 'asc' },
       });
       for (const cf of customFields) {
@@ -157,7 +157,7 @@ router.post('/preview', upload.single('file'), async (req, res, next) => {
     let allFields = [...fields];
     if (module === 'leads') {
       const customFields = await prisma.customField.findMany({
-        where: { organizationId: req.orgId },
+        where: { organizationId: { in: req.orgIds } },
         orderBy: { order: 'asc' },
       });
       for (const cf of customFields) {
@@ -199,13 +199,16 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       return res.status(400).json({ error: 'File is required' });
     }
 
-    const { module = 'leads', fieldMapping: mappingStr, duplicateAction = 'skip', duplicateField, assignToId, defaultStatus, defaultSource } = req.body;
+    const { module = 'leads', fieldMapping: mappingStr, duplicateAction = 'skip', duplicateField, assignToId, defaultStatus, defaultSource, divisionId } = req.body;
     const fieldMapping = typeof mappingStr === 'string' ? JSON.parse(mappingStr) : (mappingStr || {});
     const fields = MODULE_FIELDS[module];
 
     if (!fields) {
       return res.status(400).json({ error: `Unknown module: ${module}` });
     }
+
+    // Determine target org for newly created records
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
 
     const rows = await parseFileToRows(req.file);
     if (rows.length === 0) {
@@ -224,7 +227,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
           fieldMapping,
           duplicateAction,
           duplicateField: duplicateField || null,
-          organizationId: req.orgId,
+          organizationId: targetOrgId,
           userId: req.user.id,
           status: 'PROCESSING',
         },
@@ -243,7 +246,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
 
     if (module === 'leads') {
       const defaultStage = await prisma.pipelineStage.findFirst({
-        where: { organizationId: req.orgId, isDefault: true },
+        where: { organizationId: targetOrgId, isDefault: true },
       });
 
       for (let i = 0; i < rows.length; i++) {
@@ -301,7 +304,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
           if (duplicateField && mapped[duplicateField]) {
             existingLead = await prisma.lead.findFirst({
               where: {
-                organizationId: req.orgId,
+                organizationId: targetOrgId,
                 [duplicateField]: mapped[duplicateField],
                 isArchived: false,
               },
@@ -344,7 +347,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             campaign: mapped.campaign || null,
             website: mapped.website || null,
             customData: Object.keys(customData).length > 0 ? customData : undefined,
-            organizationId: req.orgId,
+            organizationId: targetOrgId,
             createdById: req.user.id,
             assignedToId: assignToId || null,
             stageId: defaultStage?.id || null,
@@ -360,11 +363,11 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
           if (tagNames.length > 0) {
             for (const tagName of tagNames) {
               let tag = await prisma.tag.findFirst({
-                where: { organizationId: req.orgId, name: tagName },
+                where: { organizationId: targetOrgId, name: tagName },
               });
               if (!tag) {
                 tag = await prisma.tag.create({
-                  data: { name: tagName, organizationId: req.orgId },
+                  data: { name: tagName, organizationId: targetOrgId },
                 });
               }
               await prisma.leadTag.create({
@@ -410,7 +413,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
           // Duplicate check by name
           if (duplicateAction === 'skip') {
             const existing = await prisma.campaign.findFirst({
-              where: { organizationId: req.orgId, name: mapped.name },
+              where: { organizationId: targetOrgId, name: mapped.name },
             });
             if (existing) {
               duplicates++;
@@ -427,7 +430,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
               budget: mapped.budget || null,
               startDate: mapped.startDate || null,
               endDate: mapped.endDate || null,
-              organizationId: req.orgId,
+              organizationId: targetOrgId,
             },
           });
           importedIds.push(campaign.id);
@@ -486,7 +489,7 @@ router.get('/history', async (req, res, next) => {
     try {
       [history, total] = await Promise.all([
         prisma.importHistory.findMany({
-          where: { organizationId: req.orgId },
+          where: { organizationId: { in: req.orgIds } },
           orderBy: { createdAt: 'desc' },
           skip,
           take: parseInt(limit),
@@ -494,7 +497,7 @@ router.get('/history', async (req, res, next) => {
             user: { select: { id: true, firstName: true, lastName: true, email: true } },
           },
         }),
-        prisma.importHistory.count({ where: { organizationId: req.orgId } }),
+        prisma.importHistory.count({ where: { organizationId: { in: req.orgIds } } }),
       ]);
     } catch (tableErr) {
       // Table may not exist yet
@@ -519,7 +522,7 @@ router.get('/history', async (req, res, next) => {
 router.get('/history/:id', async (req, res, next) => {
   try {
     const record = await prisma.importHistory.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
@@ -539,7 +542,7 @@ router.get('/history/:id', async (req, res, next) => {
 router.post('/undo/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
     const record = await prisma.importHistory.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
 
     if (!record) {
@@ -562,11 +565,11 @@ router.post('/undo/:id', authorize('ADMIN'), async (req, res, next) => {
     let deleted = 0;
 
     if (record.module === 'leads') {
-      // Soft delete (archive) imported leads
+      // Soft delete (archive) imported leads — scope to accessible orgs
       const result = await prisma.lead.updateMany({
         where: {
           id: { in: ids },
-          organizationId: req.orgId,
+          organizationId: { in: req.orgIds },
         },
         data: { isArchived: true },
       });
@@ -575,7 +578,7 @@ router.post('/undo/:id', authorize('ADMIN'), async (req, res, next) => {
       const result = await prisma.campaign.deleteMany({
         where: {
           id: { in: ids },
-          organizationId: req.orgId,
+          organizationId: { in: req.orgIds },
         },
       });
       deleted = result.count;
@@ -629,7 +632,7 @@ router.get('/template/:module', async (req, res, next) => {
     // Append custom fields for leads module
     if (req.params.module === 'leads') {
       const customFields = await prisma.customField.findMany({
-        where: { organizationId: req.orgId },
+        where: { organizationId: { in: req.orgIds } },
         orderBy: { order: 'asc' },
       });
       for (const cf of customFields) {
@@ -669,6 +672,7 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
     let validCount = 0;
     let duplicateCount = 0;
 
+    // Use all org IDs for duplicate checking across divisions
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const mapped = {};
@@ -699,7 +703,7 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
       // Check for duplicates in DB
       if (duplicateField && mapped[duplicateField]) {
         const existing = await prisma.lead.findFirst({
-          where: { organizationId: req.orgId, [duplicateField]: mapped[duplicateField], isArchived: false },
+          where: { organizationId: { in: req.orgIds }, [duplicateField]: mapped[duplicateField], isArchived: false },
         });
         if (existing) {
           duplicateCount++;
@@ -727,10 +731,18 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
 router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { module } = req.params;
-    const { status, source, assignedToId, search } = req.query;
+    const { status, source, assignedToId, search, divisionId } = req.query;
+
+    // Determine org filter — support divisionId query param for SUPER_ADMIN
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin) {
+      orgFilter = divisionId;
+    } else {
+      orgFilter = { in: req.orgIds };
+    }
 
     if (module === 'leads') {
-      const where = { organizationId: req.orgId, isArchived: false };
+      const where = { organizationId: orgFilter, isArchived: false };
       if (status) where.status = status;
       if (source) where.source = source;
       if (assignedToId) where.assignedToId = assignedToId;
@@ -745,7 +757,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
 
       // Fetch custom fields for export headers
       const customFields = await prisma.customField.findMany({
-        where: { organizationId: req.orgId },
+        where: { organizationId: orgFilter },
         orderBy: { order: 'asc' },
       });
 
@@ -802,7 +814,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
       res.send('\uFEFF' + csv); // BOM for Excel compatibility
     } else if (module === 'campaigns') {
       const campaigns = await prisma.campaign.findMany({
-        where: { organizationId: req.orgId },
+        where: { organizationId: orgFilter },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -841,7 +853,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
 router.get('/history/:id/errors-csv', async (req, res, next) => {
   try {
     const record = await prisma.importHistory.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
 
     if (!record) {

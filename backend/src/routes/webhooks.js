@@ -12,7 +12,7 @@ router.use(authenticate, orgScope);
 router.get('/', authorize('ADMIN'), async (req, res, next) => {
   try {
     const webhooks = await prisma.webhook.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
     });
     res.json(webhooks);
   } catch (err) {
@@ -24,13 +24,17 @@ router.get('/', authorize('ADMIN'), async (req, res, next) => {
 router.post('/', authorize('ADMIN'), validate(z.object({
   url: z.string().url(),
   events: z.array(z.string()).min(1),
+  divisionId: z.string().uuid().optional().nullable(),
 })), async (req, res, next) => {
   try {
+    const { divisionId, ...data } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     const webhook = await prisma.webhook.create({
       data: {
-        ...req.validated,
+        ...data,
         secret: uuidv4(),
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
     });
     res.status(201).json(webhook);
@@ -42,6 +46,12 @@ router.post('/', authorize('ADMIN'), validate(z.object({
 // ─── Delete Webhook ──────────────────────────────────────────────
 router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
+    // Verify webhook belongs to accessible orgs
+    const existing = await prisma.webhook.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Webhook not found' });
+
     await prisma.webhook.delete({ where: { id: req.params.id } });
     res.json({ message: 'Webhook deleted' });
   } catch (err) {

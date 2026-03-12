@@ -12,6 +12,7 @@ export const FEATURES = [
   { key: 'team', label: 'Team Management', section: 'Management' },
   { key: 'settings', label: 'Organization Settings', section: 'Management' },
   { key: 'invite', label: 'Invite Users', section: 'Management' },
+  { key: 'divisions', label: 'Division Management', section: 'Management' },
   { key: 'deleteData', label: 'Delete Data', section: 'Destructive' },
   { key: 'exportData', label: 'Export Data', section: 'Data' },
 ] as const;
@@ -19,10 +20,11 @@ export const FEATURES = [
 export type FeatureKey = (typeof FEATURES)[number]['key'];
 
 const DEFAULT_PERMISSIONS: Record<string, Record<string, boolean>> = {
-  ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true },
-  MANAGER: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, deleteData: false, exportData: true },
-  SALES_REP: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
-  VIEWER: { dashboard: true, leads: true, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
+  SUPER_ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, divisions: true, deleteData: true, exportData: true },
+  ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, divisions: false, deleteData: true, exportData: true },
+  MANAGER: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, divisions: false, deleteData: false, exportData: true },
+  SALES_REP: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, divisions: false, deleteData: false, exportData: false },
+  VIEWER: { dashboard: true, leads: true, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, team: false, settings: false, invite: false, divisions: false, deleteData: false, exportData: false },
 };
 
 interface PermissionsState {

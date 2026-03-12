@@ -2,7 +2,8 @@ const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 
 /**
- * Round-robin lead assignment
+ * Round-robin lead assignment.
+ * organizationId should be the specific division/org the lead belongs to.
  */
 const roundRobinAssign = async (organizationId) => {
   const salesReps = await prisma.user.findMany({
@@ -36,7 +37,8 @@ const roundRobinAssign = async (organizationId) => {
 };
 
 /**
- * Rules-based lead assignment
+ * Rules-based lead assignment.
+ * organizationId should be the specific division/org the lead belongs to.
  */
 const rulesBasedAssign = async (organizationId, lead) => {
   const rules = await prisma.automationRule.findMany({
@@ -76,7 +78,8 @@ const rulesBasedAssign = async (organizationId, lead) => {
 };
 
 /**
- * Auto-assign lead: try rules first, then round-robin
+ * Auto-assign lead: try rules first, then round-robin.
+ * organizationId should be the specific division/org the lead belongs to.
  */
 const autoAssign = async (organizationId, lead) => {
   // Try rules-based assignment first

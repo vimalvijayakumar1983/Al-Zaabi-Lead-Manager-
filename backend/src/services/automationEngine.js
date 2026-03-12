@@ -3,7 +3,9 @@ const { logger } = require('../config/logger');
 const { notifyUser } = require('../websocket/server');
 
 /**
- * Evaluate and execute automation rules for a given trigger event
+ * Evaluate and execute automation rules for a given trigger event.
+ * The context.organizationId can be a single org ID or, for SUPER_ADMIN scenarios,
+ * the lead's own organizationId. The caller is responsible for passing the correct org ID.
  */
 const executeAutomations = async (trigger, context) => {
   const { organizationId, lead, previousData } = context;

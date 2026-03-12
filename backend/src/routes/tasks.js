@@ -35,15 +35,15 @@ router.get('/', validateQuery(paginationSchema.extend({
 
     const where = {};
 
-    // Scope to org via lead or assignee
+    // Scope to org via assignee's organization
     if (leadId) {
       where.leadId = leadId;
     }
     if (assigneeId) {
       where.assigneeId = assigneeId;
     } else {
-      // Default: show tasks for current user
-      where.assignee = { organizationId: req.orgId };
+      // Default: show tasks for users in the accessible orgs
+      where.assignee = { organizationId: { in: req.orgIds } };
     }
     if (status) where.status = status;
     if (priority) where.priority = priority;
@@ -117,6 +117,12 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
 // ─── Update Task ─────────────────────────────────────────────────
 router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
   try {
+    // Verify task belongs to accessible orgs via assignee
+    const existing = await prisma.task.findFirst({
+      where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+
     const data = req.validated;
     if (data.dueAt) data.dueAt = new Date(data.dueAt);
     if (data.reminder) data.reminder = new Date(data.reminder);
@@ -138,6 +144,12 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
 // ─── Complete Task ───────────────────────────────────────────────
 router.post('/:id/complete', async (req, res, next) => {
   try {
+    // Verify task belongs to accessible orgs
+    const existing = await prisma.task.findFirst({
+      where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+
     const task = await prisma.task.update({
       where: { id: req.params.id },
       data: { status: 'COMPLETED', completedAt: new Date() },
@@ -163,6 +175,12 @@ router.post('/:id/complete', async (req, res, next) => {
 // ─── Delete Task ─────────────────────────────────────────────────
 router.delete('/:id', async (req, res, next) => {
   try {
+    // Verify task belongs to accessible orgs
+    const existing = await prisma.task.findFirst({
+      where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+
     await prisma.task.delete({ where: { id: req.params.id } });
     res.json({ message: 'Task deleted' });
   } catch (err) {

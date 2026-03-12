@@ -33,6 +33,7 @@ const createLeadSchema = z.object({
   stageId: z.string().uuid().optional().nullable(),
   tags: z.array(z.string()).optional(),
   customData: z.record(z.unknown()).optional(),
+  divisionId: z.string().uuid().optional().nullable(),
 });
 
 const updateLeadSchema = createLeadSchema.partial().extend({
@@ -65,17 +66,23 @@ const leadFilterSchema = paginationSchema.extend({
   conversionMin: z.coerce.number().optional(),
   conversionMax: z.coerce.number().optional(),
   customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
+  divisionId: z.string().optional(),
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId } = req.validatedQuery;
 
     const where = {
-      organizationId: req.orgId,
+      organizationId: { in: req.orgIds },
       isArchived: false,
     };
+
+    // Optional: filter to specific division
+    if (divisionId && req.isSuperAdmin) {
+      where.organizationId = divisionId;
+    }
 
     if (status) where.status = status;
     if (source) where.source = source;
@@ -191,7 +198,7 @@ router.get('/search/global', async (req, res, next) => {
     const search = String(q).trim();
 
     const where = {
-      organizationId: req.orgId,
+      organizationId: { in: req.orgIds },
       isArchived: false,
       OR: [
         { firstName: { contains: search, mode: 'insensitive' } },
@@ -250,7 +257,7 @@ router.get('/search/global', async (req, res, next) => {
 // ─── Filter Values (unique values for dynamic filters) ──────────
 router.get('/filter-values', async (req, res, next) => {
   try {
-    const orgWhere = { organizationId: req.orgId, isArchived: false };
+    const orgWhere = { organizationId: { in: req.orgIds }, isArchived: false };
 
     const [companies, jobTitles, locations, products, campaigns, tags, stages, users] = await Promise.all([
       prisma.lead.findMany({ where: { ...orgWhere, company: { not: null } }, select: { company: true }, distinct: ['company'], take: 100, orderBy: { company: 'asc' } }),
@@ -258,9 +265,9 @@ router.get('/filter-values', async (req, res, next) => {
       prisma.lead.findMany({ where: { ...orgWhere, location: { not: null } }, select: { location: true }, distinct: ['location'], take: 100, orderBy: { location: 'asc' } }),
       prisma.lead.findMany({ where: { ...orgWhere, productInterest: { not: null } }, select: { productInterest: true }, distinct: ['productInterest'], take: 100, orderBy: { productInterest: 'asc' } }),
       prisma.lead.findMany({ where: { ...orgWhere, campaign: { not: null } }, select: { campaign: true }, distinct: ['campaign'], take: 100, orderBy: { campaign: 'asc' } }),
-      prisma.tag.findMany({ where: { organizationId: req.orgId }, select: { id: true, name: true, color: true }, orderBy: { name: 'asc' } }),
-      prisma.pipelineStage.findMany({ where: { organizationId: req.orgId }, select: { id: true, name: true, color: true }, orderBy: { order: 'asc' } }),
-      prisma.user.findMany({ where: { organizationId: req.orgId, isActive: true }, select: { id: true, firstName: true, lastName: true }, orderBy: { firstName: 'asc' } }),
+      prisma.tag.findMany({ where: { organizationId: { in: req.orgIds } }, select: { id: true, name: true, color: true }, orderBy: { name: 'asc' } }),
+      prisma.pipelineStage.findMany({ where: { organizationId: { in: req.orgIds } }, select: { id: true, name: true, color: true }, orderBy: { order: 'asc' } }),
+      prisma.user.findMany({ where: { organizationId: { in: req.orgIds }, isActive: true }, select: { id: true, firstName: true, lastName: true }, orderBy: { firstName: 'asc' } }),
     ]);
 
     res.json({
@@ -282,7 +289,7 @@ router.get('/filter-values', async (req, res, next) => {
 router.get('/tags', async (req, res, next) => {
   try {
     const tags = await prisma.tag.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
       select: { id: true, name: true, color: true },
       orderBy: { name: 'asc' },
     });
@@ -296,7 +303,7 @@ router.get('/tags', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const lead = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
       include: {
         assignedTo: { select: { id: true, firstName: true, lastName: true, email: true, avatar: true } },
         createdBy: { select: { id: true, firstName: true, lastName: true } },
@@ -335,8 +342,12 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
   try {
     const data = req.validated;
 
+    // Determine target org: SUPER_ADMIN can target a division
+    const targetOrgId = (req.isSuperAdmin && data.divisionId) ? data.divisionId : req.orgId;
+    delete data.divisionId;
+
     // Duplicate detection
-    const duplicates = await detectDuplicates(req.orgId, {
+    const duplicates = await detectDuplicates(targetOrgId, {
       email: data.email,
       phone: data.phone,
     });
@@ -351,7 +362,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     // Get default stage if not specified
     if (!data.stageId) {
       const defaultStage = await prisma.pipelineStage.findFirst({
-        where: { organizationId: req.orgId, isDefault: true },
+        where: { organizationId: targetOrgId, isDefault: true },
       });
       if (defaultStage) data.stageId = defaultStage.id;
     }
@@ -368,7 +379,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
           ...leadData,
           score,
           conversionProb,
-          organizationId: req.orgId,
+          organizationId: targetOrgId,
           createdById: req.user.id,
         },
         include: {
@@ -381,8 +392,8 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
       if (tagNames && tagNames.length > 0) {
         for (const name of tagNames) {
           const tag = await tx.tag.upsert({
-            where: { organizationId_name: { organizationId: req.orgId, name } },
-            create: { name, organizationId: req.orgId },
+            where: { organizationId_name: { organizationId: targetOrgId, name } },
+            create: { name, organizationId: targetOrgId },
             update: {},
           });
           await tx.leadTag.create({
@@ -414,7 +425,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
 
     await createAuditLog({
       userId: req.user.id,
-      organizationId: req.orgId,
+      organizationId: targetOrgId,
       action: 'CREATE',
       entity: 'Lead',
       entityId: lead.id,
@@ -432,13 +443,14 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
 router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
   try {
     const existing = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!existing) {
       return res.status(404).json({ error: 'Lead not found' });
     }
 
     const data = req.validated;
+    delete data.divisionId; // not applicable for update
     const { tags: tagNames, ...updateData } = data;
 
     // Recalculate score if relevant fields change
@@ -507,13 +519,13 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
         });
       }
 
-      // Update tags
+      // Update tags — use the lead's own organizationId for tag scoping
       if (tagNames) {
         await tx.leadTag.deleteMany({ where: { leadId: existing.id } });
         for (const name of tagNames) {
           const tag = await tx.tag.upsert({
-            where: { organizationId_name: { organizationId: req.orgId, name } },
-            create: { name, organizationId: req.orgId },
+            where: { organizationId_name: { organizationId: existing.organizationId, name } },
+            create: { name, organizationId: existing.organizationId },
             update: {},
           });
           await tx.leadTag.create({ data: { leadId: existing.id, tagId: tag.id } });
@@ -525,7 +537,7 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     await createAuditLog({
       userId: req.user.id,
-      organizationId: req.orgId,
+      organizationId: existing.organizationId,
       action: 'UPDATE',
       entity: 'Lead',
       entityId: lead.id,
@@ -544,7 +556,7 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 router.delete('/:id', async (req, res, next) => {
   try {
     const lead = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
@@ -557,7 +569,7 @@ router.delete('/:id', async (req, res, next) => {
 
     await createAuditLog({
       userId: req.user.id,
-      organizationId: req.orgId,
+      organizationId: lead.organizationId,
       action: 'ARCHIVE',
       entity: 'Lead',
       entityId: req.params.id,
@@ -577,7 +589,7 @@ router.post('/:id/notes', validate(z.object({
 })), async (req, res, next) => {
   try {
     const lead = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
@@ -613,9 +625,10 @@ router.patch('/bulk', validate(z.object({
 })), async (req, res, next) => {
   try {
     const { leadIds, data } = req.validated;
+    delete data.divisionId;
 
     await prisma.lead.updateMany({
-      where: { id: { in: leadIds }, organizationId: req.orgId },
+      where: { id: { in: leadIds }, organizationId: { in: req.orgIds } },
       data,
     });
 

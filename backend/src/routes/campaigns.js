@@ -16,12 +16,13 @@ const campaignSchema = z.object({
   startDate: z.string().datetime().optional().nullable(),
   endDate: z.string().datetime().optional().nullable(),
   metadata: z.record(z.unknown()).optional(),
+  divisionId: z.string().uuid().optional().nullable(),
 });
 
 router.get('/', validateQuery(paginationSchema), async (req, res, next) => {
   try {
     const { page, limit, sortBy, sortOrder } = req.validatedQuery;
-    const where = { organizationId: req.orgId };
+    const where = { organizationId: { in: req.orgIds } };
 
     const [campaigns, total] = await Promise.all([
       prisma.campaign.findMany({
@@ -36,7 +37,7 @@ router.get('/', validateQuery(paginationSchema), async (req, res, next) => {
     const enriched = await Promise.all(
       campaigns.map(async (c) => {
         const leadCount = await prisma.lead.count({
-          where: { organizationId: req.orgId, campaign: c.name },
+          where: { organizationId: { in: req.orgIds }, campaign: c.name },
         });
         return { ...c, leadCount };
       })
@@ -50,12 +51,14 @@ router.get('/', validateQuery(paginationSchema), async (req, res, next) => {
 
 router.post('/', authorize('ADMIN', 'MANAGER'), validate(campaignSchema), async (req, res, next) => {
   try {
-    const data = req.validated;
+    const { divisionId, ...data } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     if (data.startDate) data.startDate = new Date(data.startDate);
     if (data.endDate) data.endDate = new Date(data.endDate);
 
     const campaign = await prisma.campaign.create({
-      data: { ...data, organizationId: req.orgId },
+      data: { ...data, organizationId: targetOrgId },
     });
     res.status(201).json(campaign);
   } catch (err) {
@@ -65,7 +68,13 @@ router.post('/', authorize('ADMIN', 'MANAGER'), validate(campaignSchema), async 
 
 router.put('/:id', authorize('ADMIN', 'MANAGER'), validate(campaignSchema.partial()), async (req, res, next) => {
   try {
-    const data = req.validated;
+    // Verify campaign belongs to accessible orgs
+    const existing = await prisma.campaign.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Campaign not found' });
+
+    const { divisionId, ...data } = req.validated;
     if (data.startDate) data.startDate = new Date(data.startDate);
     if (data.endDate) data.endDate = new Date(data.endDate);
 
@@ -81,6 +90,12 @@ router.put('/:id', authorize('ADMIN', 'MANAGER'), validate(campaignSchema.partia
 
 router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
+    // Verify campaign belongs to accessible orgs
+    const existing = await prisma.campaign.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Campaign not found' });
+
     await prisma.campaign.delete({ where: { id: req.params.id } });
     res.json({ message: 'Campaign deleted' });
   } catch (err) {

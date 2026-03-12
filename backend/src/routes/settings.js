@@ -18,7 +18,11 @@ router.get('/profile', async (req, res, next) => {
         role: true, avatar: true, phone: true, isActive: true,
         lastLoginAt: true, createdAt: true, updatedAt: true,
         organization: {
-          select: { id: true, name: true, plan: true },
+          select: {
+            id: true, name: true, tradeName: true, logo: true,
+            primaryColor: true, secondaryColor: true, type: true,
+            parentId: true, plan: true,
+          },
         },
         _count: { select: { assignedLeads: true, tasks: true } },
       },
@@ -87,7 +91,9 @@ router.get('/organization', async (req, res, next) => {
     const org = await prisma.organization.findUnique({
       where: { id: req.orgId },
       select: {
-        id: true, name: true, domain: true, plan: true,
+        id: true, name: true, tradeName: true, logo: true,
+        primaryColor: true, secondaryColor: true, type: true,
+        parentId: true, domain: true, plan: true,
         settings: true, createdAt: true, updatedAt: true,
         _count: {
           select: { users: true, leads: true, campaigns: true, automationRules: true },
@@ -103,6 +109,10 @@ router.get('/organization', async (req, res, next) => {
 // ─── Update Organization ────────────────────────────────────────
 router.put('/organization', authorize('ADMIN'), validate(z.object({
   name: z.string().min(1).max(200).optional(),
+  tradeName: z.string().max(200).optional().nullable(),
+  logo: z.string().optional().nullable(),
+  primaryColor: z.string().optional(),
+  secondaryColor: z.string().optional(),
   domain: z.string().max(200).optional().nullable(),
   settings: z.record(z.any()).optional(),
 })), async (req, res, next) => {
@@ -123,8 +133,9 @@ router.put('/organization', authorize('ADMIN'), validate(z.object({
       where: { id: req.orgId },
       data,
       select: {
-        id: true, name: true, domain: true, plan: true,
-        settings: true, updatedAt: true,
+        id: true, name: true, tradeName: true, logo: true,
+        primaryColor: true, secondaryColor: true, type: true,
+        domain: true, plan: true, settings: true, updatedAt: true,
       },
     });
     res.json(org);
@@ -200,7 +211,7 @@ router.put('/notifications', validate(z.object({
 router.get('/audit-log', authorize('ADMIN'), async (req, res, next) => {
   try {
     const logs = await prisma.auditLog.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
       select: {
         id: true, action: true, entity: true, entityId: true,
         createdAt: true, ipAddress: true,
@@ -230,10 +241,10 @@ router.delete('/account', validate(z.object({
       return res.status(400).json({ error: 'Password is incorrect' });
     }
 
-    // Don't allow last admin to delete account
-    if (user.role === 'ADMIN') {
+    // Don't allow last admin/super_admin to delete account
+    if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') {
       const adminCount = await prisma.user.count({
-        where: { organizationId: req.orgId, role: 'ADMIN', isActive: true },
+        where: { organizationId: req.orgId, role: { in: ['ADMIN', 'SUPER_ADMIN'] }, isActive: true },
       });
       if (adminCount <= 1) {
         return res.status(400).json({ error: 'Cannot delete the last admin account. Transfer admin role first.' });
@@ -257,7 +268,7 @@ router.delete('/account', validate(z.object({
 router.get('/custom-fields', async (req, res, next) => {
   try {
     const fields = await prisma.customField.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
       orderBy: { order: 'asc' },
     });
     res.json(fields);
@@ -272,9 +283,11 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
   type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']),
   options: z.array(z.string()).optional(),
   isRequired: z.boolean().optional(),
+  divisionId: z.string().uuid().optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const { label, type, options, isRequired } = req.validated;
+    const { label, type, options, isRequired, divisionId } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
 
     // Generate name from label (e.g. "Company Size" -> "companySize")
     const name = label
@@ -285,7 +298,7 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
 
     // Get next order number
     const maxOrder = await prisma.customField.aggregate({
-      where: { organizationId: req.orgId },
+      where: { organizationId: targetOrgId },
       _max: { order: true },
     });
 
@@ -297,7 +310,7 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
         options: (type === 'SELECT' || type === 'MULTI_SELECT') ? (options || []) : null,
         isRequired: isRequired || false,
         order: (maxOrder._max.order ?? -1) + 1,
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
     });
 
@@ -319,7 +332,7 @@ router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
 })), async (req, res, next) => {
   try {
     const existing = await prisma.customField.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!existing) {
       return res.status(404).json({ error: 'Custom field not found' });
@@ -357,7 +370,7 @@ router.put('/custom-fields-reorder', authorize('ADMIN'), validate(z.object({
     const { fieldIds } = req.validated;
     const updates = fieldIds.map((id, index) =>
       prisma.customField.updateMany({
-        where: { id, organizationId: req.orgId },
+        where: { id, organizationId: { in: req.orgIds } },
         data: { order: index },
       })
     );
@@ -372,7 +385,7 @@ router.put('/custom-fields-reorder', authorize('ADMIN'), validate(z.object({
 router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
     const existing = await prisma.customField.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!existing) {
       return res.status(404).json({ error: 'Custom field not found' });
@@ -382,7 +395,7 @@ router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) =
 
     // Clean up: remove this field's data from all leads' customData
     const leads = await prisma.lead.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: existing.organizationId },
       select: { id: true, customData: true },
     });
 

@@ -11,7 +11,7 @@ router.use(authenticate, orgScope);
 router.get('/stages', async (req, res, next) => {
   try {
     const stages = await prisma.pipelineStage.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
       orderBy: { order: 'asc' },
       include: {
         _count: { select: { leads: true } },
@@ -37,18 +37,22 @@ router.post('/stages', authorize('ADMIN', 'MANAGER'), validate(z.object({
   color: z.string().optional(),
   isWonStage: z.boolean().optional(),
   isLostStage: z.boolean().optional(),
+  divisionId: z.string().uuid().optional(),
 })), async (req, res, next) => {
   try {
+    const { divisionId, ...stageData } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     const maxOrder = await prisma.pipelineStage.aggregate({
-      where: { organizationId: req.orgId },
+      where: { organizationId: targetOrgId },
       _max: { order: true },
     });
 
     const stage = await prisma.pipelineStage.create({
       data: {
-        ...req.validated,
+        ...stageData,
         order: (maxOrder._max.order ?? -1) + 1,
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
     });
     res.status(201).json(stage);
@@ -64,6 +68,12 @@ router.put('/stages/:id', authorize('ADMIN', 'MANAGER'), validate(z.object({
   order: z.number().int().optional(),
 })), async (req, res, next) => {
   try {
+    // Verify stage belongs to one of the user's orgs
+    const existing = await prisma.pipelineStage.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Stage not found' });
+
     const stage = await prisma.pipelineStage.update({
       where: { id: req.params.id },
       data: req.validated,
@@ -84,12 +94,12 @@ router.post('/move', validate(z.object({
     const { leadId, stageId, order } = req.validated;
 
     const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: req.orgId },
+      where: { id: leadId, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const stage = await prisma.pipelineStage.findFirst({
-      where: { id: stageId, organizationId: req.orgId },
+      where: { id: stageId, organizationId: { in: req.orgIds } },
     });
     if (!stage) return res.status(404).json({ error: 'Stage not found' });
 

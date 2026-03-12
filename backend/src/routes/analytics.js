@@ -8,7 +8,14 @@ router.use(authenticate, orgScope);
 // ─── Dashboard Overview ──────────────────────────────────────────
 router.get('/dashboard', async (req, res, next) => {
   try {
-    const orgId = req.orgId;
+    // Support optional divisionId query param for SUPER_ADMIN to filter by division
+    const { divisionId } = req.query;
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin) {
+      orgFilter = divisionId;
+    } else {
+      orgFilter = { in: req.orgIds };
+    }
 
     const [
       totalLeads,
@@ -21,25 +28,25 @@ router.get('/dashboard', async (req, res, next) => {
       upcomingTasks,
       pipelineValue,
     ] = await Promise.all([
-      prisma.lead.count({ where: { organizationId: orgId, isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgId, status: 'NEW', isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgId, status: 'WON', isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgId, status: 'LOST', isArchived: false } }),
+      prisma.lead.count({ where: { organizationId: orgFilter, isArchived: false } }),
+      prisma.lead.count({ where: { organizationId: orgFilter, status: 'NEW', isArchived: false } }),
+      prisma.lead.count({ where: { organizationId: orgFilter, status: 'WON', isArchived: false } }),
+      prisma.lead.count({ where: { organizationId: orgFilter, status: 'LOST', isArchived: false } }),
 
       prisma.lead.groupBy({
         by: ['status'],
-        where: { organizationId: orgId, isArchived: false },
+        where: { organizationId: orgFilter, isArchived: false },
         _count: true,
       }),
 
       prisma.lead.groupBy({
         by: ['source'],
-        where: { organizationId: orgId, isArchived: false },
+        where: { organizationId: orgFilter, isArchived: false },
         _count: true,
       }),
 
       prisma.lead.findMany({
-        where: { organizationId: orgId, isArchived: false },
+        where: { organizationId: orgFilter, isArchived: false },
         orderBy: { createdAt: 'desc' },
         take: 5,
         select: {
@@ -51,7 +58,7 @@ router.get('/dashboard', async (req, res, next) => {
 
       prisma.task.findMany({
         where: {
-          assignee: { organizationId: orgId },
+          assignee: { organizationId: orgFilter },
           status: { in: ['PENDING', 'IN_PROGRESS'] },
           dueAt: { gte: new Date() },
         },
@@ -65,7 +72,7 @@ router.get('/dashboard', async (req, res, next) => {
 
       prisma.lead.aggregate({
         where: {
-          organizationId: orgId,
+          organizationId: orgFilter,
           isArchived: false,
           status: { notIn: ['LOST'] },
           budget: { not: null },
@@ -100,8 +107,16 @@ router.get('/dashboard', async (req, res, next) => {
 // ─── Conversion Funnel ───────────────────────────────────────────
 router.get('/funnel', async (req, res, next) => {
   try {
+    const { divisionId } = req.query;
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin) {
+      orgFilter = divisionId;
+    } else {
+      orgFilter = { in: req.orgIds };
+    }
+
     const stages = await prisma.pipelineStage.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: orgFilter },
       orderBy: { order: 'asc' },
       include: {
         _count: { select: { leads: true } },
@@ -121,8 +136,16 @@ router.get('/funnel', async (req, res, next) => {
 // ─── Salesperson Performance ─────────────────────────────────────
 router.get('/team-performance', async (req, res, next) => {
   try {
+    const { divisionId } = req.query;
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin) {
+      orgFilter = divisionId;
+    } else {
+      orgFilter = { in: req.orgIds };
+    }
+
     const users = await prisma.user.findMany({
-      where: { organizationId: req.orgId, isActive: true },
+      where: { organizationId: orgFilter, isActive: true },
       select: {
         id: true, firstName: true, lastName: true, role: true,
         _count: { select: { assignedLeads: true } },
@@ -158,9 +181,17 @@ router.get('/trends', async (req, res, next) => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
+    const { divisionId } = req.query;
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin) {
+      orgFilter = divisionId;
+    } else {
+      orgFilter = { in: req.orgIds };
+    }
+
     const leads = await prisma.lead.findMany({
       where: {
-        organizationId: req.orgId,
+        organizationId: orgFilter,
         createdAt: { gte: thirtyDaysAgo },
       },
       select: { createdAt: true, status: true },

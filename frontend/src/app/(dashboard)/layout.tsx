@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore } from '@/lib/permissions';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
 import { GlobalSearch } from './components/global-search';
-import { Bell, HelpCircle, ShieldAlert } from 'lucide-react';
+import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown } from 'lucide-react';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
@@ -20,6 +20,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/team': { title: 'Team', description: 'Team members and access control' },
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
   '/import': { title: 'Import Center', description: 'Import data from files' },
+  '/divisions': { title: 'Divisions', description: 'Manage organization divisions' },
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -27,6 +28,73 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const { isAuthenticated, isLoading, loadUser, user } = useAuthStore();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Organization branding state
+  const [orgBranding, setOrgBranding] = useState<{
+    name: string;
+    tradeName?: string;
+    logo?: string;
+    primaryColor: string;
+    secondaryColor: string;
+  } | null>(null);
+
+  // Division switcher state (SUPER_ADMIN only)
+  const [divisions, setDivisions] = useState<any[]>([]);
+  const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
+  const [showDivisionDropdown, setShowDivisionDropdown] = useState(false);
+
+  // Load branding and division data from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Load organization branding
+    try {
+      const orgData = localStorage.getItem('organization');
+      if (orgData) {
+        setOrgBranding(JSON.parse(orgData));
+      }
+    } catch {
+      // ignore parse errors
+    }
+
+    // Load divisions for SUPER_ADMIN
+    try {
+      const divisionsData = localStorage.getItem('divisions');
+      if (divisionsData) {
+        setDivisions(JSON.parse(divisionsData));
+      }
+    } catch {
+      // ignore parse errors
+    }
+
+    // Load active division selection
+    const storedDivisionId = localStorage.getItem('activeDivisionId');
+    if (storedDivisionId) {
+      setActiveDivisionId(storedDivisionId);
+    }
+  }, []);
+
+  // Apply primary color as CSS custom property
+  useEffect(() => {
+    if (orgBranding?.primaryColor) {
+      document.documentElement.style.setProperty('--org-primary-color', orgBranding.primaryColor);
+    }
+    return () => {
+      document.documentElement.style.removeProperty('--org-primary-color');
+    };
+  }, [orgBranding?.primaryColor]);
+
+  const handleDivisionSwitch = useCallback((divisionId: string | null) => {
+    setActiveDivisionId(divisionId);
+    setShowDivisionDropdown(false);
+    if (divisionId) {
+      localStorage.setItem('activeDivisionId', divisionId);
+    } else {
+      localStorage.removeItem('activeDivisionId');
+    }
+    // Reload page data by triggering a navigation refresh
+    window.location.reload();
+  }, []);
 
   useEffect(() => {
     loadUser();
@@ -50,6 +118,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => observer.disconnect();
   }, []);
 
+  // Close division dropdown on outside click
+  useEffect(() => {
+    if (!showDivisionDropdown) return;
+    const handleClick = () => setShowDivisionDropdown(false);
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [showDivisionDropdown]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-surface-secondary">
@@ -66,6 +142,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const basePath = '/' + (pathname?.split('/')[1] || '');
   const pageInfo = pageTitles[basePath];
 
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const activeDivision = divisions.find((d) => d.id === activeDivisionId);
+
   // Route-to-permission mapping
   const routePermissions: Record<string, string> = {
     '/dashboard': 'dashboard',
@@ -78,6 +157,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/team': 'team',
     '/settings': 'settings',
     '/import': 'leads',
+    '/divisions': 'divisions',
   };
 
   const requiredPermission = routePermissions[basePath];
@@ -103,9 +183,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     );
   }
 
+  // Determine branding display values
+  const displayName = orgBranding?.tradeName || orgBranding?.name || '';
+  const primaryColor = orgBranding?.primaryColor || '#6366f1';
+
   return (
     <div className="min-h-screen bg-surface-secondary">
-      <Sidebar />
+      <Sidebar
+        orgBranding={orgBranding ? {
+          name: displayName,
+          logo: orgBranding.logo,
+          primaryColor,
+        } : undefined}
+        divisionSwitcher={isSuperAdmin && divisions.length > 0 ? {
+          divisions,
+          activeDivisionId,
+          showDropdown: showDivisionDropdown,
+          onToggleDropdown: () => setShowDivisionDropdown(!showDivisionDropdown),
+          onSelectDivision: handleDivisionSwitch,
+        } : undefined}
+        showDivisionsNav={isSuperAdmin}
+      />
       <CommandPalette />
 
       {/* Main content area */}
@@ -122,6 +220,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <div className="animate-fade-in">
                 <h1 className="text-sm font-semibold text-text-primary">Lead Details</h1>
               </div>
+            )}
+            {/* Show active division indicator for SUPER_ADMIN */}
+            {isSuperAdmin && activeDivision && (
+              <span className="text-xs px-2 py-0.5 rounded-full text-white" style={{ backgroundColor: primaryColor }}>
+                {activeDivision.tradeName || activeDivision.name}
+              </span>
             )}
           </div>
 

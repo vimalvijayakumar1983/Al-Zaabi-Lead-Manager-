@@ -4,20 +4,43 @@ import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore, FEATURES } from '@/lib/permissions';
-import type { User } from '@/types';
+import type { User, Organization } from '@/types';
 import {
   UserPlus, X, Shield, Users as UsersIcon, Crown, Eye,
   MoreHorizontal, Pencil, Key, UserX, UserCheck, Search,
   Mail, Phone, Calendar, BarChart3, CheckCircle2, XCircle,
   AlertTriangle, ChevronDown, Filter, RotateCcw, Save,
+  Building2, Sparkles,
 } from 'lucide-react';
 
 const roleConfig: Record<string, { bg: string; text: string; ring: string; icon: React.ComponentType<{ className?: string }>; label: string; description: string }> = {
+  SUPER_ADMIN: { bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-600/10', icon: Sparkles, label: 'Super Admin', description: 'Full access across all divisions, group-level management' },
   ADMIN: { bg: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-600/10', icon: Crown, label: 'Admin', description: 'Full access to all features, settings, and team management' },
   MANAGER: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10', icon: Shield, label: 'Manager', description: 'Manage leads, tasks, team members, and view analytics' },
   SALES_REP: { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-600/10', icon: UsersIcon, label: 'Sales Rep', description: 'Work with assigned leads, create tasks, and log activities' },
   VIEWER: { bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-600/10', icon: Eye, label: 'Viewer', description: 'Read-only access to leads, pipeline, and analytics' },
 };
+
+/** Roles shown in the stats cards (exclude SUPER_ADMIN from the stats row for brevity) */
+const statsRoleKeys = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'];
+
+const divisionBadgeColors = [
+  { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10' },
+  { bg: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-600/10' },
+  { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-600/10' },
+  { bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-600/10' },
+  { bg: 'bg-pink-50', text: 'text-pink-700', ring: 'ring-pink-600/10' },
+  { bg: 'bg-cyan-50', text: 'text-cyan-700', ring: 'ring-cyan-600/10' },
+  { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-600/10' },
+  { bg: 'bg-orange-50', text: 'text-orange-700', ring: 'ring-orange-600/10' },
+  { bg: 'bg-teal-50', text: 'text-teal-700', ring: 'ring-teal-600/10' },
+  { bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-600/10' },
+];
+
+function getDivisionBadgeColor(divisionId: string, divisionsList: Organization[]) {
+  const idx = divisionsList.findIndex(d => d.id === divisionId);
+  return divisionBadgeColors[idx >= 0 ? idx % divisionBadgeColors.length : 0];
+}
 
 export default function TeamPage() {
   const { user: currentUser } = useAuthStore();
@@ -32,6 +55,15 @@ export default function TeamPage() {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [showRoles, setShowRoles] = useState(false);
 
+  // Multi-tenant state
+  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [divisionFilter, setDivisionFilter] = useState<string>('all');
+
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+  const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
+  const isManager = currentUser?.role === 'MANAGER';
+  const canManage = isAdmin || isManager;
+
   const fetchUsers = useCallback(async () => {
     const data = await api.getUsers();
     setUsers(data);
@@ -39,6 +71,15 @@ export default function TeamPage() {
   }, []);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  // Fetch divisions for SUPER_ADMIN
+  useEffect(() => {
+    if (isSuperAdmin) {
+      api.getDivisions().then((divs: Organization[]) => {
+        setDivisions(divs || []);
+      }).catch(() => { /* ignore */ });
+    }
+  }, [isSuperAdmin]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -48,10 +89,6 @@ export default function TeamPage() {
     return () => window.removeEventListener('click', handler);
   }, [activeMenu]);
 
-  const isAdmin = currentUser?.role === 'ADMIN';
-  const isManager = currentUser?.role === 'MANAGER';
-  const canManage = isAdmin || isManager;
-
   const filteredUsers = users.filter((u) => {
     const matchesSearch = searchQuery === '' ||
       `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(searchQuery.toLowerCase());
@@ -59,7 +96,11 @@ export default function TeamPage() {
     const matchesStatus = statusFilter === 'all' ||
       (statusFilter === 'active' && u.isActive) ||
       (statusFilter === 'inactive' && !u.isActive);
-    return matchesSearch && matchesRole && matchesStatus;
+    // Division filter for SUPER_ADMIN
+    const matchesDivision = divisionFilter === 'all' ||
+      u.organizationId === divisionFilter ||
+      (u as any).organization?.id === divisionFilter;
+    return matchesSearch && matchesRole && matchesStatus && matchesDivision;
   });
 
   const activeCount = users.filter(u => u.isActive).length;
@@ -86,6 +127,15 @@ export default function TeamPage() {
     } catch (err: any) {
       alert(err.message);
     }
+  };
+
+  /** Get the division name for a user */
+  const getUserDivisionName = (user: User): string => {
+    const org = (user as any).organization as Organization | undefined;
+    if (org) return org.name;
+    if (user.organizationName) return user.organizationName;
+    const match = divisions.find(d => d.id === user.organizationId);
+    return match?.name || '—';
   };
 
   return (
@@ -115,7 +165,8 @@ export default function TeamPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {Object.entries(roleConfig).map(([key, config]) => {
+        {statsRoleKeys.map((key) => {
+          const config = roleConfig[key];
           const Icon = config.icon;
           const count = roleCounts[key] || 0;
           return (
@@ -140,7 +191,7 @@ export default function TeamPage() {
       </div>
 
       {/* Filters & Search */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
           <input
@@ -150,6 +201,25 @@ export default function TeamPage() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+
+        {/* Division filter for SUPER_ADMIN */}
+        {isSuperAdmin && divisions.length > 0 && (
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+            <select
+              className="input py-2 pl-9 pr-8 text-sm w-auto bg-white appearance-none cursor-pointer min-w-[180px]"
+              value={divisionFilter}
+              onChange={(e) => setDivisionFilter(e.target.value)}
+            >
+              <option value="all">All Divisions</option>
+              {divisions.map((div) => (
+                <option key={div.id} value={div.id}>{div.name}</option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+          </div>
+        )}
+
         <div className="flex gap-1 bg-surface-tertiary rounded-lg p-1">
           {[
             { key: 'all', label: 'All' },
@@ -174,6 +244,13 @@ export default function TeamPage() {
             {roleConfig[roleFilter]?.label} <X className="h-3 w-3 ml-1" />
           </button>
         )}
+        {isSuperAdmin && divisionFilter !== 'all' && (
+          <button onClick={() => setDivisionFilter('all')} className="badge bg-purple-50 text-purple-700 ring-1 ring-purple-200 cursor-pointer hover:bg-purple-100">
+            <Building2 className="h-3 w-3" />
+            {divisions.find(d => d.id === divisionFilter)?.name}
+            <X className="h-3 w-3 ml-1" />
+          </button>
+        )}
       </div>
 
       {/* Team Table */}
@@ -183,6 +260,7 @@ export default function TeamPage() {
             <tr className="table-header">
               <th className="table-cell text-left">Member</th>
               <th className="table-cell text-left">Role</th>
+              {isSuperAdmin && <th className="table-cell text-left hidden md:table-cell">Division</th>}
               <th className="table-cell text-left hidden md:table-cell">Contact</th>
               <th className="table-cell text-center hidden lg:table-cell">Leads</th>
               <th className="table-cell text-center hidden lg:table-cell">Tasks</th>
@@ -197,6 +275,7 @@ export default function TeamPage() {
                 <tr key={i} className="table-row">
                   <td className="table-cell"><div className="flex items-center gap-3"><div className="skeleton h-10 w-10 rounded-full" /><div><div className="skeleton h-4 w-32 mb-1" /><div className="skeleton h-3 w-24" /></div></div></td>
                   <td className="table-cell"><div className="skeleton h-5 w-20 rounded-md" /></td>
+                  {isSuperAdmin && <td className="table-cell hidden md:table-cell"><div className="skeleton h-5 w-24 rounded-md" /></td>}
                   <td className="table-cell hidden md:table-cell"><div className="skeleton h-3 w-36" /></td>
                   <td className="table-cell hidden lg:table-cell"><div className="skeleton h-4 w-8 mx-auto" /></td>
                   <td className="table-cell hidden lg:table-cell"><div className="skeleton h-4 w-8 mx-auto" /></td>
@@ -207,7 +286,7 @@ export default function TeamPage() {
               ))
             ) : filteredUsers.length === 0 ? (
               <tr>
-                <td colSpan={canManage ? 8 : 7}>
+                <td colSpan={canManage ? (isSuperAdmin ? 9 : 8) : (isSuperAdmin ? 8 : 7)}>
                   <div className="empty-state">
                     <div className="empty-state-icon"><UsersIcon className="h-6 w-6" /></div>
                     <p className="text-sm font-medium text-text-primary">No team members found</p>
@@ -221,6 +300,8 @@ export default function TeamPage() {
                 const RoleIcon = role.icon;
                 const isCurrentUser = currentUser?.id === user.id;
                 const isSelf = isCurrentUser;
+                const divName = getUserDivisionName(user);
+                const divColor = getDivisionBadgeColor(user.organizationId, divisions);
 
                 return (
                   <tr key={user.id} className={`table-row group ${!user.isActive ? 'opacity-50' : ''}`}>
@@ -252,6 +333,16 @@ export default function TeamPage() {
                         {role.label}
                       </span>
                     </td>
+
+                    {/* Division (SUPER_ADMIN only) */}
+                    {isSuperAdmin && (
+                      <td className="table-cell hidden md:table-cell">
+                        <span className={`badge ${divColor.bg} ${divColor.text} ring-1 ${divColor.ring}`}>
+                          <Building2 className="h-3 w-3" />
+                          {divName}
+                        </span>
+                      </td>
+                    )}
 
                     {/* Contact */}
                     <td className="table-cell hidden md:table-cell">
@@ -366,7 +457,14 @@ export default function TeamPage() {
       </div>
 
       {/* Modals */}
-      {showInvite && <InviteModal onClose={() => setShowInvite(false)} onCreated={fetchUsers} />}
+      {showInvite && (
+        <InviteModal
+          onClose={() => setShowInvite(false)}
+          onCreated={fetchUsers}
+          isSuperAdmin={isSuperAdmin}
+          divisions={divisions}
+        />
+      )}
       {editingUser && <EditMemberModal user={editingUser} onClose={() => setEditingUser(null)} onSaved={fetchUsers} />}
       {resetPasswordUser && <ResetPasswordModal user={resetPasswordUser} onClose={() => setResetPasswordUser(null)} />}
       {showRoles && <RolesAccessModal onClose={() => setShowRoles(false)} />}
@@ -375,19 +473,49 @@ export default function TeamPage() {
 }
 
 /* ─── Invite Modal ───────────────────────────────────────────────── */
-function InviteModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function InviteModal({
+  onClose,
+  onCreated,
+  isSuperAdmin,
+  divisions,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  isSuperAdmin: boolean;
+  divisions: Organization[];
+}) {
   const [form, setForm] = useState({
-    firstName: '', lastName: '', email: '', role: 'SALES_REP', password: '',
+    firstName: '', lastName: '', email: '', role: 'SALES_REP', password: '', divisionId: '',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Roles available for invite selection (exclude SUPER_ADMIN — only one per group)
+  const inviteRoleKeys = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // SUPER_ADMIN must select a division
+    if (isSuperAdmin && !form.divisionId) {
+      setError('Please select a division for this team member');
+      return;
+    }
+
     setSaving(true);
     setError('');
     try {
-      await api.inviteUser(form);
+      const payload: any = {
+        firstName: form.firstName,
+        lastName: form.lastName,
+        email: form.email,
+        role: form.role,
+        password: form.password,
+      };
+      if (isSuperAdmin && form.divisionId) {
+        payload.divisionId = form.divisionId;
+      }
+      await api.inviteUser(payload);
       onClose();
       onCreated();
     } catch (err: any) {
@@ -423,10 +551,37 @@ function InviteModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
             <label className="label">Email Address</label>
             <input type="email" className="input" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="john@company.com" />
           </div>
+
+          {/* Division selector for SUPER_ADMIN */}
+          {isSuperAdmin && divisions.length > 0 && (
+            <div>
+              <label className="label">
+                Division <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+                <select
+                  className="input pl-10 appearance-none cursor-pointer"
+                  required
+                  value={form.divisionId}
+                  onChange={(e) => setForm({ ...form, divisionId: e.target.value })}
+                >
+                  <option value="">Select a division...</option>
+                  {divisions.map((div) => (
+                    <option key={div.id} value={div.id}>{div.name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+              </div>
+              <p className="text-2xs text-text-tertiary mt-1">This member will be added to the selected division</p>
+            </div>
+          )}
+
           <div>
             <label className="label">Role</label>
             <div className="grid grid-cols-2 gap-2">
-              {Object.entries(roleConfig).map(([key, config]) => {
+              {inviteRoleKeys.map((key) => {
+                const config = roleConfig[key];
                 const Icon = config.icon;
                 return (
                   <button
@@ -478,7 +633,8 @@ function InviteModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
 function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () => void; onSaved: () => void }) {
   const { user: currentUser } = useAuthStore();
   const { rolePermissions, userOverrides, loadPermissions } = usePermissionsStore();
-  const isAdmin = currentUser?.role === 'ADMIN';
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+  const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
 
   const [tab, setTab] = useState<'details' | 'permissions'>('details');
   const [form, setForm] = useState<{ firstName: string; lastName: string; role: string; phone: string }>({
@@ -494,6 +650,9 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
   const existingOverrides = userOverrides[user.id] || {};
   const [permOverrides, setPermOverrides] = useState<Record<string, boolean | undefined>>({ ...existingOverrides });
   const [savingPerms, setSavingPerms] = useState(false);
+
+  // Roles available for editing (exclude SUPER_ADMIN)
+  const editRoleKeys = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -620,7 +779,8 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
             <div>
               <label className="label">Role</label>
               <div className="grid grid-cols-2 gap-2">
-                {Object.entries(roleConfig).map(([key, config]) => {
+                {editRoleKeys.map((key) => {
+                  const config = roleConfig[key];
                   const Icon = config.icon;
                   return (
                     <button
@@ -854,7 +1014,11 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
 function RolesAccessModal({ onClose }: { onClose: () => void }) {
   const { user: currentUser } = useAuthStore();
   const { rolePermissions, loadPermissions } = usePermissionsStore();
-  const isAdmin = currentUser?.role === 'ADMIN';
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+  const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
+
+  // Roles shown in the permission matrix (include all standard roles)
+  const matrixRoleKeys = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'];
 
   const [editPerms, setEditPerms] = useState<Record<string, Record<string, boolean>>>({});
   const [saving, setSaving] = useState(false);
@@ -863,7 +1027,7 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     // Deep clone current role permissions for editing
     const clone: Record<string, Record<string, boolean>> = {};
-    for (const role of Object.keys(roleConfig)) {
+    for (const role of matrixRoleKeys) {
       clone[role] = { ...(rolePermissions[role] || {}) };
     }
     setEditPerms(clone);
@@ -893,7 +1057,7 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
 
   const handleReset = () => {
     const clone: Record<string, Record<string, boolean>> = {};
-    for (const role of Object.keys(roleConfig)) {
+    for (const role of matrixRoleKeys) {
       clone[role] = { ...(rolePermissions[role] || {}) };
     }
     setEditPerms(clone);
@@ -917,7 +1081,8 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
         <div className="p-6">
           {/* Role descriptions */}
           <div className="grid grid-cols-4 gap-3 mb-6">
-            {Object.entries(roleConfig).map(([key, config]) => {
+            {matrixRoleKeys.map((key) => {
+              const config = roleConfig[key];
               const Icon = config.icon;
               return (
                 <div key={key} className={`p-3 rounded-lg ${config.bg} ring-1 ${config.ring}`}>
@@ -937,11 +1102,14 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
               <thead>
                 <tr className="table-header">
                   <th className="table-cell text-left">Feature</th>
-                  {Object.entries(roleConfig).map(([key, config]) => (
-                    <th key={key} className="table-cell text-center">
-                      <span className={`text-xs font-semibold ${config.text}`}>{config.label}</span>
-                    </th>
-                  ))}
+                  {matrixRoleKeys.map((key) => {
+                    const config = roleConfig[key];
+                    return (
+                      <th key={key} className="table-cell text-center">
+                        <span className={`text-xs font-semibold ${config.text}`}>{config.label}</span>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
@@ -953,7 +1121,7 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
                         <span className="text-2xs text-text-tertiary ml-2">{feature.section}</span>
                       </div>
                     </td>
-                    {Object.keys(roleConfig).map((role) => (
+                    {matrixRoleKeys.map((role) => (
                       <td key={role} className="table-cell text-center">
                         {isAdmin ? (
                           <button

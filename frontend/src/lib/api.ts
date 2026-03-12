@@ -1,3 +1,5 @@
+import type { Organization } from './types';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 class ApiClient {
@@ -55,7 +57,7 @@ class ApiClient {
 
   // Auth
   async login(email: string, password: string) {
-    return this.request<{ token: string; user: any }>('/auth/login', {
+    return this.request<{ token: string; user: any; divisions?: Organization[] }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
@@ -398,6 +400,27 @@ class ApiClient {
 
   async deleteCustomField(id: string) {
     return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
+  }
+
+  // Division management
+  async getDivisions(): Promise<Organization[]> {
+    return this.request<Organization[]>('/divisions');
+  }
+
+  async createDivision(data: Partial<Organization>): Promise<Organization> {
+    return this.request<Organization>('/divisions', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getDivision(id: string): Promise<Organization> {
+    return this.request<Organization>(`/divisions/${id}`);
+  }
+
+  async updateDivision(id: string, data: Partial<Organization>): Promise<Organization> {
+    return this.request<Organization>(`/divisions/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteDivision(id: string): Promise<void> {
+    return this.request<void>(`/divisions/${id}`, { method: 'DELETE' });
   }
 }
 
