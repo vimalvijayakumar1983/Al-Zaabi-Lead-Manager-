@@ -550,7 +550,7 @@ export default function LeadDetailPage() {
             currentUserId={currentUserId}
             onReassign={async (leadId: string, assignedToId: string, reason?: string) => {
               await api.reassignLead(leadId, assignedToId, reason);
-              fetchLead();
+              refreshLead();
             }}
             assignmentHistory={assignmentHistory}
           />
