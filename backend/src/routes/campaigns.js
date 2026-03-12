@@ -273,7 +273,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
 
     const orderBy = { [sortBy]: sortOrder };
 
-    const { skip, take } = paginate(req.query);
+    const { skip, take } = paginate(req.query.page, req.query.limit);
 
     const [campaigns, total] = await Promise.all([
       prisma.campaign.findMany({
@@ -348,7 +348,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
       };
     });
 
-    res.json(paginatedResponse(enrichedCampaigns, total, req.query));
+    res.json(paginatedResponse(enrichedCampaigns, total, req.query.page, req.query.limit));
   } catch (err) {
     next(err);
   }
