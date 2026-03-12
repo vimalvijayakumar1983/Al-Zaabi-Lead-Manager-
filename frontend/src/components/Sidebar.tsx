@@ -23,6 +23,7 @@ import {
   ChevronDown,
   Sparkles,
   Upload,
+  Building2,
 } from 'lucide-react';
 
 const navItems = [
@@ -35,17 +36,35 @@ const navItems = [
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
   { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
   { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'leads' },
+  { href: '/divisions', label: 'Divisions', icon: Building2, shortcut: '0', permission: 'divisions', divisionOnly: true },
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  orgBranding?: {
+    name: string;
+    logo?: string;
+    primaryColor: string;
+  };
+  divisionSwitcher?: {
+    divisions: any[];
+    activeDivisionId: string | null;
+    showDropdown: boolean;
+    onToggleDropdown: () => void;
+    onSelectDivision: (divisionId: string | null) => void;
+  };
+  showDivisionsNav?: boolean;
+}
+
+export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNav }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
   const { hasPermission } = usePermissionsStore();
   const [collapsed, setCollapsed] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
-  const visibleNavItems = navItems.filter((item) =>
-    !user || hasPermission(user.id, user.role, item.permission)
+  const visibleNavItems = navItems.filter((item: any) =>
+    (!user || hasPermission(user.id, user.role, item.permission)) &&
+    (!item.divisionOnly || showDivisionsNav)
   );
   const canAccessSettings = !user || hasPermission(user.id, user.role, 'settings');
 
@@ -77,14 +96,57 @@ export default function Sidebar() {
       )}
     >
       {/* Logo */}
+      {/* Division Switcher for Super Admin */}
+      {divisionSwitcher && !collapsed && (
+        <div className="px-3 pt-2 pb-1">
+          <div className="relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); divisionSwitcher.onToggleDropdown(); }}
+              className="w-full flex items-center gap-2 rounded-lg border border-border bg-surface-secondary px-3 py-2 text-sm hover:bg-surface-tertiary transition-all"
+            >
+              <Building2 className="h-4 w-4 text-text-tertiary flex-shrink-0" />
+              <span className="flex-1 text-left truncate text-text-secondary">
+                {divisionSwitcher.activeDivisionId
+                  ? divisionSwitcher.divisions.find((d: any) => d.id === divisionSwitcher.activeDivisionId)?.tradeName || 'Division'
+                  : 'All Divisions'}
+              </span>
+              <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${divisionSwitcher.showDropdown ? 'rotate-180' : ''}`} />
+            </button>
+            {divisionSwitcher.showDropdown && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl shadow-float border border-border p-1.5 z-50 animate-scale-in">
+                <button
+                  onClick={() => divisionSwitcher.onSelectDivision(null)}
+                  className={`w-full text-left rounded-lg px-3 py-2 text-sm transition-colors ${!divisionSwitcher.activeDivisionId ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-surface-tertiary'}`}
+                >
+                  All Divisions
+                </button>
+                {divisionSwitcher.divisions.map((div: any) => (
+                  <button
+                    key={div.id}
+                    onClick={() => divisionSwitcher.onSelectDivision(div.id)}
+                    className={`w-full text-left rounded-lg px-3 py-2 text-sm transition-colors ${divisionSwitcher.activeDivisionId === div.id ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-surface-tertiary'}`}
+                  >
+                    {div.tradeName || div.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="h-14 flex items-center justify-between px-4 border-b border-border-subtle">
         <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0">
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center flex-shrink-0 shadow-soft">
-            <Sparkles className="h-4 w-4 text-white" />
-          </div>
+          {orgBranding?.logo ? (
+            <img src={orgBranding.logo} alt={orgBranding.name} className="h-8 w-8 rounded-lg flex-shrink-0 object-contain" />
+          ) : (
+            <div className="h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-soft" style={{ background: orgBranding?.primaryColor ? `linear-gradient(135deg, ${orgBranding.primaryColor}, ${orgBranding.primaryColor}dd)` : undefined }} >
+              <Sparkles className="h-4 w-4 text-white" />
+            </div>
+          )}
           {!collapsed && (
             <span className="text-lg font-bold text-text-primary tracking-tight animate-fade-in">
-              LeadFlow
+              {orgBranding?.name || 'LeadFlow'}
             </span>
           )}
         </Link>
