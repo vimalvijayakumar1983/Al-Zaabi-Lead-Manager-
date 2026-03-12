@@ -79,7 +79,15 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
 
     if (status) where.status = status;
     if (source) where.source = source;
-    if (assignedToId) where.assignedToId = assignedToId;
+    if (assignedToId) {
+      if (assignedToId === 'unassigned' || assignedToId === '__unassigned__') {
+        where.assignedToId = null;
+      } else if (assignedToId === '__current_user__') {
+        where.assignedToId = req.user.id;
+      } else {
+        where.assignedToId = assignedToId;
+      }
+    }
     if (stageId) where.stageId = stageId;
     if (minScore !== undefined || maxScore !== undefined) {
       where.score = {};
