@@ -395,7 +395,7 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
 
     // Fire-and-forget notification
     notifyOrgAdmins(divisionId, {
-      type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED,
+      type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED || 'TEAM_MEMBER_INVITED',
       title: 'New Team Member',
       message: `${req.user.firstName} ${req.user.lastName} invited ${email} to ${division.name}`,
       entityType: 'user',
