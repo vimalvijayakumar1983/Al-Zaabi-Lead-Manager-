@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { TrendingUp, Users, Trophy, BarChart3 } from 'lucide-react';
 
 export default function AnalyticsPage() {
   const [funnel, setFunnel] = useState<{ name: string; color: string; count: number }[]>([]);
@@ -22,36 +23,51 @@ export default function AnalyticsPage() {
   }, []);
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" /></div>;
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <div><div className="skeleton h-8 w-32 mb-2" /><div className="skeleton h-4 w-48" /></div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-6"><div className="skeleton h-5 w-40 mb-6" /><div className="space-y-3">{[1,2,3,4,5].map(i => <div key={i} className="skeleton h-8 w-full" />)}</div></div>
+          <div className="card p-6"><div className="skeleton h-5 w-40 mb-6" /><div className="space-y-3">{[1,2,3,4].map(i => <div key={i} className="skeleton h-12 w-full" />)}</div></div>
+        </div>
+        <div className="card p-6"><div className="skeleton h-5 w-48 mb-6" /><div className="skeleton h-48 w-full" /></div>
+      </div>
+    );
   }
 
   const maxFunnelCount = Math.max(...funnel.map((s) => s.count), 1);
   const maxTrendTotal = Math.max(...trends.map((t: any) => t.total), 1);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
-        <p className="text-gray-500 mt-1">Insights and performance metrics</p>
+        <h1 className="text-2xl font-bold text-text-primary tracking-tight">Analytics</h1>
+        <p className="text-text-secondary text-sm mt-0.5">Insights and performance metrics</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Conversion Funnel */}
         <div className="card p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-6">Conversion Funnel</h2>
+          <div className="flex items-center gap-2 mb-6">
+            <div className="h-8 w-8 rounded-lg bg-brand-100 flex items-center justify-center">
+              <TrendingUp className="h-4 w-4 text-brand-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-text-primary">Conversion Funnel</h2>
+          </div>
           <div className="space-y-3">
             {funnel.map((stage, i) => {
               const widthPct = (stage.count / maxFunnelCount) * 100;
               return (
-                <div key={i} className="flex items-center gap-3">
-                  <span className="text-sm text-gray-600 w-28 truncate">{stage.name}</span>
-                  <div className="flex-1 h-8 bg-gray-100 rounded-lg overflow-hidden relative">
+                <div key={i} className="group">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-text-primary">{stage.name}</span>
+                    <span className="text-sm font-semibold text-text-primary tabular-nums">{stage.count}</span>
+                  </div>
+                  <div className="h-2 bg-surface-tertiary rounded-full overflow-hidden">
                     <div
-                      className="h-full rounded-lg flex items-center px-2 transition-all"
-                      style={{ width: `${Math.max(widthPct, 8)}%`, backgroundColor: stage.color }}
-                    >
-                      <span className="text-xs font-medium text-white">{stage.count}</span>
-                    </div>
+                      className="h-full rounded-full transition-all duration-700 ease-smooth"
+                      style={{ width: `${Math.max(widthPct, 4)}%`, backgroundColor: stage.color }}
+                    />
                   </div>
                 </div>
               );
@@ -60,44 +76,56 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Team Performance */}
-        <div className="card p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-6">Team Performance</h2>
+        <div className="card overflow-hidden">
+          <div className="flex items-center gap-2 px-6 py-4 border-b border-border-subtle">
+            <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+              <Trophy className="h-4 w-4 text-emerald-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-text-primary">Team Performance</h2>
+          </div>
           <div className="overflow-x-auto">
             <table className="min-w-full">
               <thead>
-                <tr className="text-left text-xs font-medium text-gray-500 uppercase">
-                  <th className="pb-3">Name</th>
-                  <th className="pb-3">Total</th>
-                  <th className="pb-3">Won</th>
-                  <th className="pb-3">Conversion</th>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-6 py-3 text-left">Name</th>
+                  <th className="table-header px-4 py-3 text-left">Total</th>
+                  <th className="table-header px-4 py-3 text-left">Won</th>
+                  <th className="table-header px-4 py-3 text-left">Conversion</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody>
                 {team.map((member: any) => (
-                  <tr key={member.id}>
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="h-7 w-7 rounded-full bg-brand-100 flex items-center justify-center text-xs font-medium text-brand-700">
+                  <tr key={member.id} className="table-row">
+                    <td className="table-cell px-6">
+                      <div className="flex items-center gap-2.5">
+                        <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white shadow-xs">
                           {member.name.split(' ').map((n: string) => n[0]).join('')}
                         </div>
                         <div>
-                          <p className="text-sm font-medium text-gray-900">{member.name}</p>
-                          <p className="text-xs text-gray-500">{member.role}</p>
+                          <p className="text-sm font-medium text-text-primary">{member.name}</p>
+                          <p className="text-2xs text-text-tertiary capitalize">{member.role?.toLowerCase().replace('_', ' ')}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="py-3 text-sm text-gray-700">{member.totalLeads}</td>
-                    <td className="py-3 text-sm text-green-600 font-medium">{member.wonLeads}</td>
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                          <div className="h-full bg-brand-500 rounded-full" style={{ width: `${member.conversionRate}%` }} />
+                    <td className="table-cell px-4">
+                      <span className="text-sm font-semibold text-text-primary tabular-nums">{member.totalLeads}</span>
+                    </td>
+                    <td className="table-cell px-4">
+                      <span className="text-sm font-semibold text-emerald-600 tabular-nums">{member.wonLeads}</span>
+                    </td>
+                    <td className="table-cell px-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-16 h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
+                          <div className="h-full bg-brand-500 rounded-full transition-all duration-500" style={{ width: `${member.conversionRate}%` }} />
                         </div>
-                        <span className="text-sm font-medium text-gray-700">{member.conversionRate}%</span>
+                        <span className="text-sm font-semibold text-text-primary tabular-nums">{member.conversionRate}%</span>
                       </div>
                     </td>
                   </tr>
                 ))}
+                {team.length === 0 && (
+                  <tr><td colSpan={4} className="py-8 text-center text-sm text-text-tertiary">No team data available</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -106,21 +134,33 @@ export default function AnalyticsPage() {
 
       {/* Lead Trends */}
       <div className="card p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-6">Lead Trends (Last 30 Days)</h2>
+        <div className="flex items-center gap-2 mb-6">
+          <div className="h-8 w-8 rounded-lg bg-cyan-100 flex items-center justify-center">
+            <BarChart3 className="h-4 w-4 text-cyan-600" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-text-primary">Lead Trends</h2>
+            <p className="text-2xs text-text-tertiary">Last 30 days</p>
+          </div>
+        </div>
         {trends.length === 0 ? (
-          <p className="text-sm text-gray-500 text-center py-8">No data for the last 30 days</p>
+          <div className="empty-state py-8">
+            <div className="empty-state-icon"><BarChart3 className="h-6 w-6" /></div>
+            <p className="text-sm text-text-tertiary">No data for the last 30 days</p>
+          </div>
         ) : (
-          <div className="flex items-end gap-1 h-48">
+          <div className="flex items-end gap-[3px] h-48">
             {trends.map((day: any, i: number) => {
               const height = (day.total / maxTrendTotal) * 100;
               return (
                 <div key={i} className="flex-1 flex flex-col items-center group relative">
                   <div
-                    className="w-full bg-brand-500 rounded-t hover:bg-brand-600 transition-colors"
-                    style={{ height: `${Math.max(height, 4)}%` }}
+                    className="w-full bg-brand-500 rounded-t-sm hover:bg-brand-600 transition-colors cursor-pointer"
+                    style={{ height: `${Math.max(height, 3)}%` }}
                   />
-                  <div className="absolute bottom-full mb-1 hidden group-hover:block bg-gray-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap z-10">
-                    {day.date}: {day.total} leads ({day.won} won, {day.lost} lost)
+                  <div className="tooltip absolute bottom-full mb-2 hidden group-hover:block z-10">
+                    {day.date}: {day.total} leads
+                    <br />{day.won} won, {day.lost} lost
                   </div>
                 </div>
               );

@@ -456,15 +456,22 @@ export default function LeadsPage() {
     }
   };
 
+  // Listen for open-lead-form event from command palette
+  useEffect(() => {
+    const handler = () => setShowForm(true);
+    window.addEventListener('open-lead-form', handler);
+    return () => window.removeEventListener('open-lead-form', handler);
+  }, []);
+
   // ─── Render ─────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Leads</h1>
-          <p className="text-gray-500 mt-0.5 text-sm">{pagination.total} leads total</p>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Leads</h1>
+          <p className="text-text-secondary mt-0.5 text-sm">{pagination.total} leads total</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
@@ -621,15 +628,15 @@ export default function LeadsPage() {
           {viewMode === 'table' && (
             <div className="card overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
+                <table className="min-w-full">
+                  <thead>
+                    <tr className="border-b border-border">
                       {visibleColumns.map((col) => (
-                        <th key={col.id} className={`px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase ${col.width || ''} ${col.sortable ? 'cursor-pointer hover:text-gray-700 select-none' : ''}`}
+                        <th key={col.id} className={`table-header px-4 py-3 text-left ${col.width || ''} ${col.sortable ? 'cursor-pointer hover:text-text-secondary select-none' : ''}`}
                           onClick={() => col.sortable && col.sortField && handleSort(col.sortField)}>
                           {col.id === 'select' ? (
                             <input type="checkbox" checked={leads.length > 0 && selectedLeads.size === leads.length}
-                              onChange={toggleSelectAll} className="h-4 w-4 rounded border-gray-300 text-brand-600" />
+                              onChange={toggleSelectAll} className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
                           ) : (
                             <>{col.label}{col.sortable && col.sortField && <SortIcon field={col.sortField} />}</>
                           )}
@@ -637,27 +644,32 @@ export default function LeadsPage() {
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200 bg-white">
+                  <tbody className="bg-white">
                     {loading ? (
-                      <tr><td colSpan={visibleColumns.length} className="px-4 py-12 text-center">
-                        <div className="flex flex-col items-center gap-2">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
-                          <span className="text-sm text-gray-500">Loading leads...</span>
+                      <tr><td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="h-8 w-8 rounded-lg bg-brand-100 flex items-center justify-center animate-pulse-soft">
+                            <div className="h-4 w-4 rounded-full border-2 border-brand-600 border-t-transparent animate-spin" />
+                          </div>
+                          <span className="text-sm text-text-tertiary">Loading leads...</span>
                         </div>
                       </td></tr>
                     ) : leads.length === 0 ? (
-                      <tr><td colSpan={visibleColumns.length} className="px-4 py-12 text-center">
-                        <div className="flex flex-col items-center gap-2">
-                          <svg className="h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                          <p className="text-sm text-gray-500">No leads found</p>
-                          <button onClick={() => setShowForm(true)} className="text-sm text-brand-600 hover:text-brand-700 font-medium">Create your first lead</button>
+                      <tr><td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
+                        <div className="empty-state py-8">
+                          <div className="empty-state-icon">
+                            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                          </div>
+                          <p className="text-sm font-medium text-text-primary">No leads found</p>
+                          <p className="text-xs text-text-tertiary mt-1 mb-3">Get started by creating your first lead</p>
+                          <button onClick={() => setShowForm(true)} className="btn-primary text-sm">Create your first lead</button>
                         </div>
                       </td></tr>
                     ) : (
                       leads.map((lead) => (
-                        <tr key={lead.id} className={`hover:bg-gray-50 transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/50' : ''}`}>
+                        <tr key={lead.id} className={`table-row transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`px-4 py-3 ${col.width || ''}`}>{renderCell(col, lead)}</td>
+                            <td key={col.id} className={`table-cell ${col.width || ''}`}>{renderCell(col, lead)}</td>
                           ))}
                         </tr>
                       ))
@@ -827,14 +839,15 @@ function CreateLeadModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b">
+    <div className="modal">
+      <div className="overlay" onClick={onClose} />
+      <div className="modal-panel w-full max-w-lg max-h-[90vh] overflow-y-auto relative z-50 animate-fade-in-up">
+        <div className="flex items-center justify-between p-5 border-b border-border-subtle">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Create New Lead</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Add a new lead to your pipeline</p>
+            <h2 className="text-lg font-semibold text-text-primary">Create New Lead</h2>
+            <p className="text-sm text-text-secondary mt-0.5">Add a new lead to your pipeline</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="btn-icon">
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
