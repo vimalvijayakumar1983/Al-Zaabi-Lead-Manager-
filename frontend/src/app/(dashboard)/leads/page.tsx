@@ -971,6 +971,20 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
   );
 }
 
+const LEAD_SOURCES = [
+  'WEBSITE_FORM', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT',
+  'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+] as const;
+
+interface CreateLeadModalProps {
+  onClose: () => void;
+  onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  customFields?: any[];
+  users?: User[];
+  currentUserId?: string;
+}
+
 function CreateLeadModal({
   onClose,
   onSubmit,

@@ -68,7 +68,7 @@ function getRoleColor(role: string): string {
 /* ------------------------------------------------------------------ */
 
 function UserCard({ user }: { user: WorkloadUser }) {
-  const colors = getUtilizationColor(user.utilizationPct);
+  const colors = getUtilizationColor(user.utilization);
   const roleColor = getRoleColor(user.role);
 
   return (
@@ -105,13 +105,13 @@ function UserCard({ user }: { user: WorkloadUser }) {
             {user.activeLeads}/{user.capacity}
           </span>
           <span className={`text-xs font-bold ${colors.text}`}>
-            {user.utilizationPct}%
+            {user.utilization}%
           </span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
           <div
             className={`h-full rounded-full transition-all duration-500 ${colors.bar}`}
-            style={{ width: `${Math.min(100, user.utilizationPct)}%` }}
+            style={{ width: `${Math.min(100, user.utilization)}%` }}
           />
         </div>
       </div>
@@ -313,7 +313,7 @@ export function WorkloadDashboard({ isOpen, onToggle }: WorkloadDashboardProps) 
           {/* User cards grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {stats.users
-              .sort((a, b) => b.utilizationPct - a.utilizationPct)
+              .sort((a, b) => b.utilization - a.utilization)
               .map((user) => (
                 <UserCard key={user.id} user={user} />
               ))}

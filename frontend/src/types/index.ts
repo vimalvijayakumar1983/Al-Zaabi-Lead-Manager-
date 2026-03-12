@@ -483,6 +483,7 @@ export type AllocationMethod = 'round_robin' | 'workload_based' | 'manual';
 export interface SourceAllocationRule {
   source: string;
   assignToId: string;
+  assignToName?: string;
 }
 
 export interface AllocationRules {
@@ -503,16 +504,30 @@ export interface WorkloadUser {
   lostLeads: number;
   conversionRate: number;
   utilization: number;
+  avatar?: string;
+  capacity?: number;
 }
 
 export interface AllocationStats {
   totalUnassigned: number;
   teamMembers: WorkloadUser[];
+  summary: {
+    totalUnassigned: number;
+    totalLeads?: number;
+    assignedLeads?: number;
+    unassignedLeads?: number;
+    averageResponseTime?: string;
+    topPerformer?: string;
+    avgLeadsPerUser: number;
+    maxCapacity: number;
+  };
+  users: WorkloadUser[];
 }
 
 export interface AutoAllocateResult {
   assigned: number;
-  details: Array<{ leadId: string; assignedToId: string; name: string }>;
+  allocated: number;
+  details: Array<{ leadId: string; assignedToId: string; assignedToName?: string; name: string }>;
 }
 
 export interface AssignmentHistoryEntry {
