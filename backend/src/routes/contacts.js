@@ -182,6 +182,89 @@ router.get('/', validateQuery(listContactsSchema), async (req, res, next) => {
   }
 });
 
+// ─── GET /export — Export Contacts as CSV ───────────────────────
+
+router.get('/export', async (req, res, next) => {
+  try {
+    const { lifecycle, type, source, company, search, ids } = req.query;
+
+    const where = { organizationId: { in: req.orgIds }, isArchived: false };
+    if (lifecycle) where.lifecycle = lifecycle;
+    if (type) where.type = type;
+    if (source) where.source = source;
+    if (company) where.company = { contains: company, mode: 'insensitive' };
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { company: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    if (ids) {
+      const idList = ids.split(',').map(id => id.trim()).filter(Boolean);
+      if (idList.length > 0) where.id = { in: idList };
+    }
+
+    const contacts = await prisma.contact.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        owner: { select: { firstName: true, lastName: true, email: true } },
+        deals: { select: { name: true, amount: true, stage: true, status: true } },
+      },
+    });
+
+    // CSV columns
+    const columns = [
+      'First Name', 'Last Name', 'Email', 'Phone', 'Mobile', 'Company', 'Job Title',
+      'Department', 'Source', 'Lifecycle', 'Type', 'Salutation', 'Date of Birth',
+      'Website', 'LinkedIn', 'Twitter', 'Address', 'City', 'State', 'Country',
+      'Postal Code', 'Description', 'Score', 'Do Not Email', 'Do Not Call',
+      'Opted Out Email', 'Owner', 'Last Contacted', 'Created At', 'Deals',
+    ];
+
+    const escapeCsv = (val) => {
+      if (val == null) return '';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    };
+
+    const rows = contacts.map(c => [
+      c.firstName, c.lastName, c.email, c.phone, c.mobile, c.company, c.jobTitle,
+      c.department, c.source, c.lifecycle, c.type, c.salutation,
+      c.dateOfBirth ? new Date(c.dateOfBirth).toISOString().split('T')[0] : '',
+      c.website, c.linkedin, c.twitter, c.address, c.city, c.state, c.country,
+      c.postalCode, c.description, c.score, c.doNotEmail, c.doNotCall,
+      c.hasOptedOutEmail,
+      c.owner ? `${c.owner.firstName} ${c.owner.lastName}` : '',
+      c.lastContactedAt ? new Date(c.lastContactedAt).toISOString() : '',
+      new Date(c.createdAt).toISOString(),
+      c.deals?.map(d => `${d.name} ($${d.amount || 0} - ${d.stage})`).join('; ') || '',
+    ].map(escapeCsv));
+
+    const csv = [columns.join(','), ...rows.map(r => r.join(','))].join('\n');
+
+    await createAuditLog({
+      userId: req.user.id,
+      orgId: req.orgId,
+      action: 'EXPORT',
+      entity: 'Contact',
+      details: `Exported ${contacts.length} contacts`,
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="contacts-export-${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send('\uFEFF' + csv); // BOM for Excel compatibility
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── GET /stats — Contact Statistics ────────────────────────────
 
 router.get('/stats', async (req, res, next) => {

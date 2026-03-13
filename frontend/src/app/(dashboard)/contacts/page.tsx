@@ -53,6 +53,7 @@ export default function ContactsPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [filterValues, setFilterValues] = useState<any>(null);
   const [showMerge, setShowMerge] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const fetchContacts = useCallback(async () => {
     setLoading(true);
@@ -143,6 +144,25 @@ export default function ContactsPage() {
     setShowForm(true);
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const params: Record<string, string> = {};
+      if (search) params.search = search;
+      if (filters.lifecycle) params.lifecycle = filters.lifecycle;
+      if (filters.type) params.type = filters.type;
+      if (filters.source) params.source = filters.source;
+      if (filters.company) params.company = filters.company;
+      // If specific contacts are selected, export only those
+      if (selectedIds.size > 0) params.ids = Array.from(selectedIds).join(',');
+      await api.exportContacts(params);
+    } catch (err: any) {
+      alert(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handleFormClose = () => {
     setShowForm(false);
     setEditingContact(null);
@@ -169,6 +189,9 @@ export default function ContactsPage() {
           <p className="text-text-secondary text-sm mt-0.5">{stats?.total ?? 0} contacts in your CRM</p>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={handleExport} disabled={exporting} className="btn-secondary text-sm">
+            <Download className="h-4 w-4" /> {exporting ? 'Exporting...' : 'Export'}
+          </button>
           <button onClick={handleCreate} className="btn-primary text-sm">
             <Plus className="h-4 w-4" /> Add Contact
           </button>
@@ -227,6 +250,9 @@ export default function ContactsPage() {
             <option value="" disabled>Change Type</option>
             {Object.entries(typeLabels).map(([val, { label }]) => <option key={val} value={val}>{label}</option>)}
           </select>
+          <button onClick={handleExport} disabled={exporting} className="btn-secondary text-xs">
+            <Download className="h-3 w-3" /> {exporting ? 'Exporting...' : 'Export Selected'}
+          </button>
           <button onClick={() => setSelectedIds(new Set())} className="btn-secondary text-xs ml-auto">
             <X className="h-3 w-3" /> Clear
           </button>
