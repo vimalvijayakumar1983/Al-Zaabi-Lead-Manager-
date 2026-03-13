@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
@@ -55,6 +56,14 @@ export default function LeadDetailPage() {
   const [fullUsers, setFullUsers] = useState<User[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatChannel, setChatChannel] = useState<string>('WHATSAPP');
+  const [chatPlatform, setChatPlatform] = useState<string>('');
+  const [sendingChat, setSendingChat] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.getCustomFields().then(setCustomFields).catch(() => {});
@@ -210,6 +219,65 @@ export default function LeadDetailPage() {
       await refreshLead();
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  // Load chat messages when Communications tab is active
+  const loadChatMessages = useCallback(async () => {
+    if (!lead?.id) return;
+    setChatLoading(true);
+    try {
+      const data = await api.getInboxMessages(lead.id, { limit: 100 });
+      setChatMessages(data.messages || []);
+    } catch {
+      // Fallback to lead's communications if inbox API fails
+      setChatMessages(lead.communications || []);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [lead?.id, lead?.communications]);
+
+  useEffect(() => {
+    if (activeTab === 'communications' && lead?.id) {
+      loadChatMessages();
+    }
+  }, [activeTab, lead?.id, loadChatMessages]);
+
+  // Auto-scroll to bottom of chat
+  useEffect(() => {
+    if (chatEndRef.current && activeTab === 'communications') {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, activeTab]);
+
+  // Update chat channel/platform together
+  const handleChannelSelect = (value: string) => {
+    if (['FACEBOOK', 'INSTAGRAM', 'GOOGLE', 'WEBCHAT'].includes(value)) {
+      setChatChannel('CHAT');
+      setChatPlatform(value.toLowerCase());
+    } else {
+      setChatChannel(value);
+      setChatPlatform('');
+    }
+  };
+
+  const handleSendChatMessage = async () => {
+    if (!lead || !chatMessage.trim()) return;
+    setSendingChat(true);
+    try {
+      await api.sendInboxMessage({
+        leadId: lead.id,
+        channel: chatChannel,
+        body: chatMessage.trim(),
+        platform: chatPlatform || undefined,
+      });
+      setChatMessage('');
+      await loadChatMessages();
+      await refreshLead();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSendingChat(false);
     }
   };
 
@@ -717,33 +785,110 @@ export default function LeadDetailPage() {
               </div>
             )}
 
-            {/* Communications */}
+            {/* Communications Chat */}
             {activeTab === 'communications' && (
-              <div className="space-y-3">
-                <div className="flex justify-end mb-2">
-                  <button onClick={() => setShowCommModal(true)} className="btn-primary text-xs gap-1">
-                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
-                    Log Communication
-                  </button>
+              <div className="flex flex-col h-[500px]">
+                {/* Chat Header */}
+                <div className="flex items-center justify-between pb-3 border-b mb-3">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-700">Conversation</h3>
+                    <span className="text-xs text-gray-400">({chatMessages.length} messages)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setShowCommModal(true)} className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                      Log
+                    </button>
+                    <Link href={`/inbox?lead=${lead.id}`} className="text-xs text-brand-600 hover:text-brand-700 flex items-center gap-1 font-medium">
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-2.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
+                      Open in Inbox
+                    </Link>
+                  </div>
                 </div>
-                {lead.communications && lead.communications.length > 0 ? (
-                  lead.communications.map((comm) => (
-                    <div key={comm.id} className={`p-4 rounded-lg border transition-colors ${comm.direction === 'OUTBOUND' ? 'border-blue-200 bg-blue-50/50' : 'border-gray-200'}`}>
-                      <div className="flex items-center gap-2 mb-2">
-                        <ChannelIcon channel={comm.channel} />
-                        <span className="badge bg-gray-100 text-gray-800">{comm.channel}</span>
-                        <span className={`text-xs font-medium ${comm.direction === 'OUTBOUND' ? 'text-blue-600' : 'text-green-600'}`}>
-                          {comm.direction === 'OUTBOUND' ? 'Sent' : 'Received'}
-                        </span>
-                        {comm.subject && <span className="text-sm font-medium text-gray-900 ml-1">{comm.subject}</span>}
-                        <span className="text-xs text-gray-400 ml-auto">{formatTimeAgo(comm.createdAt)}</span>
-                      </div>
-                      <p className="text-sm text-gray-700 leading-relaxed">{comm.body}</p>
+
+                {/* Messages Area */}
+                <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-0">
+                  {chatLoading ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-600" />
                     </div>
-                  ))
-                ) : (
-                  <EmptyState icon="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" message="No communications yet" action="Log Communication" onAction={() => setShowCommModal(true)} />
-                )}
+                  ) : chatMessages.length > 0 ? (
+                    <>
+                      {chatMessages.map((msg) => {
+                        const isOutbound = msg.direction === 'OUTBOUND';
+                        const platform = msg.platform || msg.metadata?.platform || msg.channel;
+                        const platformLabel = (platform || msg.channel).toUpperCase();
+                        return (
+                          <div key={msg.id} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${isOutbound ? 'bg-brand-600 text-white rounded-br-md' : 'bg-gray-100 text-gray-900 rounded-bl-md'}`}>
+                              {msg.subject && (
+                                <p className={`text-xs font-semibold mb-1 ${isOutbound ? 'text-white/80' : 'text-gray-500'}`}>{msg.subject}</p>
+                              )}
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.body}</p>
+                              <div className={`flex items-center gap-1.5 mt-1 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+                                <ChatChannelBadge channel={platformLabel} isOutbound={isOutbound} />
+                                <span className={`text-[10px] ${isOutbound ? 'text-white/60' : 'text-gray-400'}`}>
+                                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                                {msg.user && isOutbound && (
+                                  <span className={`text-[10px] ${isOutbound ? 'text-white/60' : 'text-gray-400'}`}>
+                                    · {msg.user.firstName}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div ref={chatEndRef} />
+                    </>
+                  ) : (
+                    <EmptyState icon="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" message="No messages yet. Send the first message!" />
+                  )}
+                </div>
+
+                {/* Compose Area */}
+                <div className="pt-3 border-t mt-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-xs text-gray-500">Channel:</label>
+                    <select
+                      value={chatPlatform ? chatPlatform.toUpperCase() : chatChannel}
+                      onChange={(e) => handleChannelSelect(e.target.value)}
+                      className="text-xs border rounded-md px-2 py-1 text-gray-700 focus:ring-1 focus:ring-brand-500 focus:border-brand-500"
+                    >
+                      <option value="WHATSAPP">WhatsApp</option>
+                      <option value="EMAIL">Email</option>
+                      <option value="SMS">SMS</option>
+                      <option value="FACEBOOK">Facebook</option>
+                      <option value="INSTAGRAM">Instagram</option>
+                      <option value="GOOGLE">Google Business</option>
+                      <option value="WEBCHAT">Website Chat</option>
+                    </select>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={chatMessage}
+                      onChange={(e) => setChatMessage(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChatMessage(); } }}
+                      placeholder="Type your message..."
+                      className="flex-1 input text-sm"
+                      disabled={sendingChat}
+                    />
+                    <button
+                      onClick={handleSendChatMessage}
+                      disabled={sendingChat || !chatMessage.trim()}
+                      className="btn-primary px-4 text-sm gap-1.5"
+                    >
+                      {sendingChat ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                      ) : (
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                      )}
+                      Send
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -817,6 +962,22 @@ function ContactRow({ icon, label, value, isLink }: { icon: string; label: strin
       </div>
     </div>
   );
+}
+
+function ChatChannelBadge({ channel, isOutbound }: { channel: string; isOutbound: boolean }) {
+  const labels: Record<string, { label: string; color: string }> = {
+    WHATSAPP: { label: 'WhatsApp', color: isOutbound ? 'text-white/70' : 'text-green-600' },
+    EMAIL: { label: 'Email', color: isOutbound ? 'text-white/70' : 'text-red-500' },
+    SMS: { label: 'SMS', color: isOutbound ? 'text-white/70' : 'text-indigo-500' },
+    PHONE: { label: 'Phone', color: isOutbound ? 'text-white/70' : 'text-cyan-500' },
+    CHAT: { label: 'Chat', color: isOutbound ? 'text-white/70' : 'text-blue-500' },
+    FACEBOOK: { label: 'Facebook', color: isOutbound ? 'text-white/70' : 'text-blue-600' },
+    INSTAGRAM: { label: 'Instagram', color: isOutbound ? 'text-white/70' : 'text-pink-500' },
+    GOOGLE: { label: 'Google', color: isOutbound ? 'text-white/70' : 'text-blue-500' },
+    WEBCHAT: { label: 'Web Chat', color: isOutbound ? 'text-white/70' : 'text-purple-500' },
+  };
+  const info = labels[channel] || { label: channel, color: isOutbound ? 'text-white/70' : 'text-gray-500' };
+  return <span className={`text-[10px] font-medium ${info.color}`}>{info.label}</span>;
 }
 
 function ChannelIcon({ channel }: { channel: string }) {

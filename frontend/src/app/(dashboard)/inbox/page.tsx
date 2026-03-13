@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   MessageCircle, Send, Search, Phone, Mail, ArrowLeft,
   User, Building2, Star, Clock, ChevronDown, Smile, X, ExternalLink,
@@ -157,6 +157,7 @@ interface CannedResponse {
 
 export default function InboxPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useAuthStore();
 
   // State
@@ -265,6 +266,15 @@ export default function InboxPage() {
   }, []);
 
   useEffect(() => { loadConversations(); }, [loadConversations]);
+
+  // Auto-select lead from URL query param (e.g., /inbox?lead=<id>)
+  useEffect(() => {
+    const leadParam = searchParams.get('lead');
+    if (leadParam && !selectedLeadId) {
+      setSelectedLeadId(leadParam);
+      setMobileView('chat');
+    }
+  }, [searchParams, selectedLeadId]);
 
   // ─── Load lead attachments ──────────────────────────────────────────
   const loadAttachments = useCallback(async (leadId: string) => {
@@ -1232,13 +1242,20 @@ export default function InboxPage() {
                     </p>
                   )}
 
-                  {/* Score ring */}
+                  {/* Score ring + View Lead link */}
                   <div className="mt-3 flex items-center gap-3">
                     <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold">
                       <Star className="h-3.5 w-3.5" />
                       Score: {leadInfo.score}/100
                     </div>
                   </div>
+                  <button
+                    onClick={() => router.push(`/leads/${leadInfo.id}`)}
+                    className="mt-2 text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View Lead Details
+                  </button>
                 </div>
 
                 {/* Contact details */}

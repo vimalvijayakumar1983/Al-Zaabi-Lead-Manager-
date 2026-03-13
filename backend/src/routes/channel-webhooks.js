@@ -4,6 +4,18 @@ const { logger } = require('../config/logger');
 
 const router = Router();
 
+// ─── Source mapping from platform to valid LeadSource enum ──────────
+const PLATFORM_SOURCE_MAP = {
+  whatsapp: 'WHATSAPP',
+  facebook: 'FACEBOOK_ADS',
+  instagram: 'FACEBOOK_ADS',
+  google: 'GOOGLE_ADS',
+  webchat: 'WEBSITE_FORM',
+  email: 'EMAIL',
+  sms: 'PHONE',
+  phone: 'PHONE',
+};
+
 // ─── Helper: find or create lead from inbound message ──────────────
 async function findOrCreateLead(organizationId, { phone, email, name, source, platform }) {
   // Try to match existing lead by phone or email
@@ -26,24 +38,40 @@ async function findOrCreateLead(organizationId, { phone, email, name, source, pl
 
   // Get default pipeline stage
   const defaultStage = await prisma.pipelineStage.findFirst({
-    where: { pipeline: { organizationId } },
+    where: { organizationId },
     orderBy: { order: 'asc' },
   });
 
+  // Resolve source from platform
+  const resolvedSource = PLATFORM_SOURCE_MAP[platform?.toLowerCase()] || source || 'OTHER';
+
   // Create new lead
-  return prisma.lead.create({
+  const lead = await prisma.lead.create({
     data: {
       organizationId,
       firstName,
       lastName,
       phone: phone || null,
       email: email || null,
-      source: source || 'SOCIAL_MEDIA',
+      source: resolvedSource,
       status: 'NEW',
       score: 10,
-      stageId: defaultStage?.id,
+      stageId: defaultStage?.id || undefined,
     },
   });
+
+  // Log lead creation activity
+  await prisma.leadActivity.create({
+    data: {
+      leadId: lead.id,
+      type: 'CUSTOM',
+      description: `Lead auto-created from inbound ${platform || 'message'} DM`,
+      metadata: { platform, source: resolvedSource, autoCreated: true },
+    },
+  });
+
+  logger.info(`Auto-created lead ${lead.id} from ${platform} DM for org ${organizationId}`);
+  return lead;
 }
 
 // ─── Helper: store inbound communication ────────────────────────────
@@ -104,7 +132,6 @@ router.post('/whatsapp/:organizationId', async (req, res) => {
       const lead = await findOrCreateLead(organizationId, {
         phone: senderPhone,
         name: senderName,
-        source: 'SOCIAL_MEDIA',
         platform: 'whatsapp',
       });
 
@@ -158,7 +185,6 @@ router.post('/facebook/:organizationId', async (req, res) => {
         const lead = await findOrCreateLead(organizationId, {
           phone: null,
           name: `FB User ${senderId?.slice(-4) || ''}`,
-          source: 'SOCIAL_MEDIA',
           platform: 'facebook',
         });
 
@@ -212,7 +238,6 @@ router.post('/instagram/:organizationId', async (req, res) => {
         const lead = await findOrCreateLead(organizationId, {
           phone: null,
           name: `IG User ${senderId?.slice(-4) || ''}`,
-          source: 'SOCIAL_MEDIA',
           platform: 'instagram',
         });
 
@@ -265,7 +290,6 @@ router.post('/google/:organizationId', async (req, res) => {
     const lead = await findOrCreateLead(organizationId, {
       phone: null,
       name: senderName,
-      source: 'GOOGLE_ADS',
       platform: 'google',
     });
 
@@ -301,7 +325,6 @@ router.post('/webchat/:organizationId', async (req, res) => {
       phone: phone || null,
       email: email || null,
       name: name || 'Website Visitor',
-      source: 'WEBSITE',
       platform: 'webchat',
     });
 
@@ -337,7 +360,6 @@ router.post('/email/:organizationId', async (req, res) => {
     const lead = await findOrCreateLead(organizationId, {
       email: from,
       name: fromName || from.split('@')[0],
-      source: 'EMAIL',
       platform: 'email',
     });
 
