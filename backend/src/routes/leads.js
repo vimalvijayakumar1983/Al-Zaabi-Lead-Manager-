@@ -10,6 +10,7 @@ const { createAuditLog } = require('../middleware/auditLog');
 const { notifyUser } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { autoAssign } = require('../services/leadAssignment');
+const { executeAutomations } = require('../services/automationEngine');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -504,6 +505,9 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
       entityType: 'lead',
       entityId: lead.id,
     }, req.user.id).catch(() => {});
+
+    // Fire automation rules
+    executeAutomations('LEAD_CREATED', { organizationId: targetOrgId, lead }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -695,6 +699,18 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
           organizationId: existing.organizationId,
         }).catch(() => {});
       }
+    }
+
+    // ── Fire automation rules ──
+    const autoCtx = { organizationId: existing.organizationId, lead, previousData: existing };
+    if (data.status && data.status !== existing.status) {
+      executeAutomations('LEAD_STATUS_CHANGED', autoCtx).catch(() => {});
+    }
+    if (data.assignedToId && data.assignedToId !== existing.assignedToId) {
+      executeAutomations('LEAD_ASSIGNED', autoCtx).catch(() => {});
+    }
+    if (updateData.score !== undefined && updateData.score !== existing.score) {
+      executeAutomations('LEAD_SCORE_CHANGED', autoCtx).catch(() => {});
     }
   } catch (err) {
     next(err);

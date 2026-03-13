@@ -4,6 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { executeAutomations } = require('../services/automationEngine');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -148,6 +149,15 @@ router.post('/move', validate(z.object({
         entityType: 'lead',
         entityId: leadId,
         organizationId: lead.organizationId,
+      }).catch(() => {});
+    }
+
+    // Fire automation rules for stage change
+    if (stageId !== lead.stageId) {
+      executeAutomations('LEAD_STAGE_CHANGED', {
+        organizationId: lead.organizationId,
+        lead: updated,
+        previousData: lead,
       }).catch(() => {});
     }
   } catch (err) {
