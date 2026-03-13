@@ -111,7 +111,7 @@ export default function AutomationsPage() {
   const handleToggle = async (id: string) => {
     try {
       await api.toggleAutomation(id);
-      await fetchRules();
+      await Promise.all([fetchRules(), fetchStats()]);
     } catch (err: any) {
       alert(err.message || 'Failed to toggle automation');
     }
@@ -125,7 +125,7 @@ export default function AutomationsPage() {
         setSelectedRuleId(null);
         setView('list');
       }
-      await fetchRules();
+      await Promise.all([fetchRules(), fetchStats()]);
     } catch (err: any) {
       alert(err.message || 'Failed to delete automation');
     }
@@ -134,7 +134,7 @@ export default function AutomationsPage() {
   const handleDuplicate = async (id: string) => {
     try {
       await api.duplicateAutomation(id);
-      await fetchRules();
+      await Promise.all([fetchRules(), fetchStats()]);
     } catch (err: any) {
       alert(err.message || 'Failed to duplicate automation');
     }
@@ -149,7 +149,7 @@ export default function AutomationsPage() {
       }
       setShowForm(false);
       setEditingRule(null);
-      await fetchRules();
+      await Promise.all([fetchRules(), fetchStats()]);
     } catch (err: any) {
       alert(err.message || 'Failed to save automation');
     }
