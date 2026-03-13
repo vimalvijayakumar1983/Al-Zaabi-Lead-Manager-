@@ -30,6 +30,7 @@ const publicLeadsRoutes = require('./routes/public-leads');
 const notificationRoutes = require('./routes/notifications');
 const inboxRoutes = require('./routes/inbox');
 const channelWebhookRoutes = require('./routes/channel-webhooks');
+const contactRoutes = require('./routes/contacts');
 
 const app = express();
 const server = createServer(app);
@@ -99,6 +100,7 @@ const routeMounts = [
   ['/notifications', notificationRoutes],
   ['/inbox', inboxRoutes],
   ['/channels', channelWebhookRoutes],
+  ['/contacts', contactRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {

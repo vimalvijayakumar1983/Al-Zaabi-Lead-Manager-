@@ -50,6 +50,8 @@ export default function LeadDetailPage() {
   const [showCommModal, setShowCommModal] = useState(false);
   const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
+  const [showConvertToContact, setShowConvertToContact] = useState(false);
+  const [convertingToContact, setConvertingToContact] = useState(false);
   const [saving, setSaving] = useState(false);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
@@ -219,6 +221,27 @@ export default function LeadDetailPage() {
       await refreshLead();
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const handleConvertToContact = async (createDeal: boolean) => {
+    if (!lead) return;
+    setConvertingToContact(true);
+    try {
+      const contact = await api.convertLeadToContact({
+        leadId: lead.id,
+        lifecycle: 'CUSTOMER',
+        type: 'CUSTOMER',
+        createDeal,
+        dealName: lead.company ? `${lead.company} - Deal` : `${lead.firstName} ${lead.lastName} - Deal`,
+        dealAmount: lead.budget ? Number(lead.budget) : undefined,
+      });
+      setShowConvertToContact(false);
+      router.push(`/contacts/${contact.id}`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to convert lead to contact');
+    } finally {
+      setConvertingToContact(false);
     }
   };
 
@@ -596,6 +619,10 @@ export default function LeadDetailPage() {
                   Convert to Won Deal
                 </button>
               )}
+              <button onClick={() => setShowConvertToContact(true)} className="flex items-center gap-2 p-2.5 rounded-lg border border-brand-200 text-sm text-brand-700 bg-brand-50 hover:bg-brand-100 hover:border-brand-300 transition-colors col-span-2">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                Convert to Contact
+              </button>
             </div>
           </div>
 
@@ -914,6 +941,47 @@ export default function LeadDetailPage() {
           toEmail={lead.email}
           leadName={`${lead.firstName} ${lead.lastName}`}
         />
+      )}
+
+      {/* Convert to Contact Modal */}
+      {showConvertToContact && lead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="card w-full max-w-md p-6">
+            <div className="text-center mb-4">
+              <div className="mx-auto h-12 w-12 rounded-full bg-brand-100 flex items-center justify-center mb-3">
+                <svg className="h-6 w-6 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">Convert to Contact</h2>
+              <p className="text-sm text-gray-500 mt-1">Convert <strong>{lead.firstName} {lead.lastName}</strong> into a contact record.</p>
+            </div>
+            <div className="space-y-3 mb-5">
+              <p className="text-xs text-gray-500">This will create a new contact with all existing lead information. You can optionally create a deal at the same time.</p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowConvertToContact(false)}
+                disabled={convertingToContact}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleConvertToContact(false)}
+                disabled={convertingToContact}
+                className="btn-secondary flex-1 border-brand-200 text-brand-700 hover:bg-brand-50"
+              >
+                {convertingToContact ? 'Converting...' : 'Contact Only'}
+              </button>
+              <button
+                onClick={() => handleConvertToContact(true)}
+                disabled={convertingToContact}
+                className="btn-primary flex-1"
+              >
+                {convertingToContact ? 'Converting...' : 'Contact + Deal'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Convert Lead Modal */}

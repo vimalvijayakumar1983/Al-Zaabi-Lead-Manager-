@@ -16,6 +16,7 @@ import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu } from 'luc
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
   '/leads': { title: 'Leads', description: 'Manage and track your leads' },
+  '/contacts': { title: 'Contacts', description: 'Manage your contacts and relationships' },
   '/inbox': { title: 'Inbox', description: 'Omnichannel messaging hub' },
   '/pipeline': { title: 'Pipeline', description: 'Drag and drop leads between stages' },
   '/tasks': { title: 'Tasks', description: 'Manage follow-ups and activities' },
@@ -207,6 +208,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/campaigns': 'campaigns',
     '/team': 'team',
     '/settings': 'settings',
+    '/contacts': 'leads',
     '/inbox': 'leads',
     '/import': 'leads',
     '/divisions': 'divisions',
@@ -273,7 +275,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             >
               <Menu className="h-5 w-5" />
             </button>
-            {pageInfo && !pathname?.includes('/leads/') && (
+            {pageInfo && !pathname?.includes('/leads/') && !pathname?.includes('/contacts/') && (
               <div className="animate-fade-in min-w-0">
                 <h1 className="text-sm font-semibold text-text-primary truncate">{pageInfo.title}</h1>
               </div>
@@ -281,6 +283,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {pathname?.includes('/leads/') && (
               <div className="animate-fade-in min-w-0">
                 <h1 className="text-sm font-semibold text-text-primary truncate">Lead Details</h1>
+              </div>
+            )}
+            {pathname?.includes('/contacts/') && (
+              <div className="animate-fade-in min-w-0">
+                <h1 className="text-sm font-semibold text-text-primary truncate">Contact Details</h1>
               </div>
             )}
             {/* Show active division indicator for SUPER_ADMIN */}

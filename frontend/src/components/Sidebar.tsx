@@ -27,11 +27,13 @@ import {
   Plug2,
   X,
   Inbox,
+  UserCircle,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: '1', permission: 'dashboard' },
   { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null, permission: 'leads' },
+  { href: '/contacts', label: 'Contacts', icon: UserCircle, shortcut: 'C', permission: 'leads' },
   { href: '/inbox', label: 'Inbox', icon: Inbox, shortcut: 'I', permission: 'leads' },
   { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },

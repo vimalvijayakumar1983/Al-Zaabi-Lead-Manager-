@@ -271,6 +271,105 @@ export interface CampaignDashboardStats {
   byStatus: { status: string; count: number }[];
 }
 
+// ─── Contacts ─────────────────────────────────────────────────────
+
+export type ContactLifecycle =
+  | 'SUBSCRIBER' | 'LEAD' | 'MARKETING_QUALIFIED' | 'SALES_QUALIFIED'
+  | 'OPPORTUNITY' | 'CUSTOMER' | 'EVANGELIST' | 'OTHER';
+
+export type ContactType = 'PROSPECT' | 'CUSTOMER' | 'PARTNER' | 'VENDOR' | 'INFLUENCER' | 'OTHER';
+
+export type DealStatus = 'OPEN' | 'WON' | 'LOST';
+
+export interface Contact {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email?: string;
+  phone?: string;
+  mobile?: string;
+  company?: string;
+  jobTitle?: string;
+  department?: string;
+  source: LeadSource;
+  lifecycle: ContactLifecycle;
+  type: ContactType;
+  salutation?: string;
+  dateOfBirth?: string;
+  website?: string;
+  linkedin?: string;
+  twitter?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  postalCode?: string;
+  description?: string;
+  score: number;
+  lastContactedAt?: string;
+  doNotEmail: boolean;
+  doNotCall: boolean;
+  hasOptedOutEmail: boolean;
+  customData?: Record<string, unknown>;
+  ownerId?: string;
+  owner?: Pick<User, 'id' | 'firstName' | 'lastName' | 'avatar'>;
+  createdById?: string;
+  createdBy?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+  convertedFromLeadId?: string;
+  convertedFromLead?: Pick<Lead, 'id' | 'firstName' | 'lastName' | 'status'>;
+  tags?: { tag: Tag }[];
+  activities?: ContactActivity[];
+  notes?: ContactNote[];
+  tasks?: Task[];
+  deals?: Deal[];
+  _count?: { activities: number; tasks: number; notes: number; deals: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContactActivity {
+  id: string;
+  type: string;
+  description: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  user?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+}
+
+export interface ContactNote {
+  id: string;
+  content: string;
+  isPinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+  user: Pick<User, 'id' | 'firstName' | 'lastName'>;
+}
+
+export interface Deal {
+  id: string;
+  name: string;
+  amount?: number;
+  stage: string;
+  probability: number;
+  closeDate?: string;
+  description?: string;
+  status: DealStatus;
+  contactId: string;
+  contact?: Pick<Contact, 'id' | 'firstName' | 'lastName'>;
+  ownerId?: string;
+  owner?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContactStats {
+  total: number;
+  byLifecycle: Record<string, number>;
+  byType: Record<string, number>;
+  recentlyAdded: number;
+  recentlyContacted: number;
+}
+
 // ─── Integration ──────────────────────────────────────────────────
 
 export type IntegrationPlatform =

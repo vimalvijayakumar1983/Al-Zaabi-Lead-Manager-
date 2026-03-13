@@ -2,7 +2,7 @@ import type {
   Organization, DivisionUser, DivisionStats,
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
-  ApiKey, WidgetConfig,
+  ApiKey, WidgetConfig, Contact, ContactStats, Deal,
   AppNotification, NotificationPreferences
 } from '@/types';
 
@@ -544,6 +544,64 @@ class ApiClient {
 
   async getAutomationStats() {
     return this.request<any>('/automations/stats/overview');
+  }
+
+  // ─── Contacts ────────────────────────────────────────────────────
+  async getContacts(params?: Record<string, string | number>) {
+    const query = params ? '?' + new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString() : '';
+    return this.request<{ data: Contact[]; pagination: any }>(`/contacts${query}`);
+  }
+
+  async getContact(id: string) {
+    return this.request<Contact>(`/contacts/${id}`);
+  }
+
+  async createContact(data: Partial<Contact> & { tags?: string[] }) {
+    return this.request<Contact>('/contacts', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateContact(id: string, data: Partial<Contact> & { tags?: string[] }) {
+    return this.request<Contact>(`/contacts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteContact(id: string) {
+    return this.request<any>(`/contacts/${id}`, { method: 'DELETE' });
+  }
+
+  async getContactStats() {
+    return this.request<ContactStats>('/contacts/stats');
+  }
+
+  async getContactFilterValues() {
+    return this.request<any>('/contacts/filter-values');
+  }
+
+  async searchContacts(q: string) {
+    return this.request<Contact[]>(`/contacts/search/global?q=${encodeURIComponent(q)}`);
+  }
+
+  async convertLeadToContact(data: { leadId: string; lifecycle?: string; type?: string; createDeal?: boolean; dealName?: string; dealAmount?: number }) {
+    return this.request<Contact>('/contacts/convert-lead', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async mergeContacts(data: { primaryContactId: string; secondaryContactId: string; fieldsToKeep?: Record<string, 'primary' | 'secondary'> }) {
+    return this.request<Contact>('/contacts/merge', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async bulkUpdateContacts(contactIds: string[], data: Record<string, any>) {
+    return this.request<{ updated: number }>('/contacts/bulk', { method: 'PATCH', body: JSON.stringify({ contactIds, data }) });
+  }
+
+  async addContactNote(contactId: string, content: string) {
+    return this.request<any>(`/contacts/${contactId}/notes`, { method: 'POST', body: JSON.stringify({ content }) });
+  }
+
+  async createDeal(contactId: string, data: Partial<Deal>) {
+    return this.request<Deal>(`/contacts/${contactId}/deals`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateDeal(contactId: string, dealId: string, data: Partial<Deal>) {
+    return this.request<Deal>(`/contacts/${contactId}/deals/${dealId}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   // Communications
