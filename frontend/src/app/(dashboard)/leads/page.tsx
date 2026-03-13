@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
@@ -36,11 +37,25 @@ const sourceLabels: Record<string, string> = {
 type ViewMode = 'table' | 'cards' | 'kanban';
 
 export default function LeadsPage() {
+  const searchParams = useSearchParams();
+
   // ─── State ──────────────────────────────────────────────────────
   const [leads, setLeads] = useState<Lead[]>([]);
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 1 });
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<FilterState>({ ...emptyFilters });
+  const [filters, setFilters] = useState<FilterState>(() => {
+    // Initialize filters from URL params (for drill-down from analytics)
+    const initial = { ...emptyFilters };
+    const paramKeys: (keyof FilterState)[] = [
+      'status', 'source', 'assignedToId', 'stageId', 'campaign',
+      'minScore', 'maxScore', 'search', 'company', 'location',
+    ];
+    for (const key of paramKeys) {
+      const val = searchParams.get(key);
+      if (val) initial[key] = val;
+    }
+    return initial;
+  });
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [viewMode, setViewMode] = useState<ViewMode>('table');

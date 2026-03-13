@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import {
   TrendingUp, TrendingDown, Minus, Users, Trophy, BarChart3, DollarSign,
   Target, Zap, Activity, ArrowUpRight, ArrowDownRight, RefreshCw,
   Download, ChevronDown, Star, AlertCircle, CheckCircle2, Clock, Flame,
-  Globe, Mail, Phone, MessageSquare, Award, Filter,
+  Globe, Mail, Phone, MessageSquare, Award, Filter, ExternalLink,
+  Building2, ChevronRight, ArrowRight,
 } from 'lucide-react';
 
 type Period = '7d' | '30d' | '90d' | '180d' | '365d';
@@ -57,6 +59,13 @@ function roleLabel(r: string) {
   return r?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || '';
 }
 
+// ─── Drill-down link builder ──────────────────────────────────────
+
+function drillLink(params: Record<string, string>) {
+  const q = new URLSearchParams(params).toString();
+  return `/leads?${q}`;
+}
+
 // ─── SVG Line Chart ───────────────────────────────────────────────
 
 function LineChart({ data, series, height = 220 }: {
@@ -87,61 +96,39 @@ function LineChart({ data, series, height = 220 }: {
           </linearGradient>
         ))}
       </defs>
-
-      {/* Grid lines */}
       {gridVals.map((v, i) => {
         const y = yScale(v);
         return (
           <g key={i}>
             <line x1={PAD.left} x2={W - PAD.right} y1={y} y2={y} stroke="#f1f5f9" strokeWidth="1" />
-            <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize="10" fill="#94a3b8">
-              {fmt(v)}
-            </text>
+            <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize="10" fill="#94a3b8">{fmt(v)}</text>
           </g>
         );
       })}
-
-      {/* Areas + lines */}
       {series.map((s, si) => {
         const pts = data.map((d, i) => `${xScale(i)},${yScale(Number(d[s.key] || 0))}`);
-        const area = [
-          `${xScale(0)},${PAD.top + cH}`,
-          ...pts,
-          `${xScale(data.length - 1)},${PAD.top + cH}`,
-        ].join(' ');
+        const area = [`${xScale(0)},${PAD.top + cH}`, ...pts, `${xScale(data.length - 1)},${PAD.top + cH}`].join(' ');
         return (
           <g key={s.key}>
             <polygon points={area} fill={`url(#area-${si})`} />
-            <polyline points={pts.join(' ')} fill="none" stroke={s.color} strokeWidth="2.5"
-              strokeLinejoin="round" strokeLinecap="round" />
+            <polyline points={pts.join(' ')} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
           </g>
         );
       })}
-
-      {/* Dots on last point */}
       {series.map((s, si) => {
         const last = data[data.length - 1];
         if (!last) return null;
-        const x = xScale(data.length - 1);
-        const y = yScale(Number(last[s.key] || 0));
         return (
           <g key={`dot-${si}`}>
-            <circle cx={x} cy={y} r="4" fill={s.color} />
-            <circle cx={x} cy={y} r="7" fill={s.color} fillOpacity="0.15" />
+            <circle cx={xScale(data.length - 1)} cy={yScale(Number(last[s.key] || 0))} r="4" fill={s.color} />
+            <circle cx={xScale(data.length - 1)} cy={yScale(Number(last[s.key] || 0))} r="7" fill={s.color} fillOpacity="0.15" />
           </g>
         );
       })}
-
-      {/* X axis labels */}
       {data.map((d, i) => {
         const step = Math.max(1, Math.ceil(data.length / 8));
         if (i % step !== 0 && i !== data.length - 1) return null;
-        const label = d.date?.slice(5) ?? '';
-        return (
-          <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fontSize="10" fill="#94a3b8">
-            {label}
-          </text>
-        );
+        return <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fontSize="10" fill="#94a3b8">{d.date?.slice(5) ?? ''}</text>;
       })}
     </svg>
   );
@@ -171,9 +158,8 @@ function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, heigh
                 style={{ height: `${pct}%`, backgroundColor: color, minHeight: pct > 0 ? 3 : 0 }} />
             </div>
             <span className="text-xs text-text-tertiary truncate w-full text-center">{d[xKey]}</span>
-            <div className="tooltip absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap hidden group-hover:block z-20 pointer-events-none">
-              {d[xKey]}: {fmt(Number(d[yKey] || 0))}
-              {secondaryKey && ` • ${fmt(Number(d[secondaryKey] || 0))} won`}
+            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap hidden group-hover:block z-20 pointer-events-none">
+              {d[xKey]}: {fmt(Number(d[yKey] || 0))}{secondaryKey && ` / ${fmt(Number(d[secondaryKey] || 0))} won`}
             </div>
           </div>
         );
@@ -191,10 +177,8 @@ function ActivityHeatmap({ data, days }: { data: any[]; days: number }) {
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-    const s = d.toISOString().split('T')[0];
-    cells.push({ date: s, count: (map.get(s) as number) || 0 });
+    cells.push({ date: d.toISOString().split('T')[0], count: (map.get(d.toISOString().split('T')[0]) as number) || 0 });
   }
-
   const weeks: typeof cells[] = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
 
@@ -225,44 +209,47 @@ function ActivityHeatmap({ data, days }: { data: any[]; days: number }) {
   );
 }
 
-// ─── KPI Card ─────────────────────────────────────────────────────
+// ─── KPI Card (clickable) ─────────────────────────────────────────
 
-function KpiCard({ title, value, change, format = 'number', icon: Icon, iconBg, iconColor, subtitle }: {
+function KpiCard({ title, value, change, format = 'number', icon: Icon, iconBg, iconColor, subtitle, href, onClick }: {
   title: string; value: number; change?: number; format?: 'number' | 'currency' | 'percent';
   icon: any; iconBg: string; iconColor: string; subtitle?: string;
+  href?: string; onClick?: () => void;
 }) {
   const isPositive = change !== undefined && change > 0;
   const isNegative = change !== undefined && change < 0;
-  const isNeutral = change === undefined || change === 0;
+  const router = useRouter();
 
-  return (
-    <div className="card p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
+  const card = (
+    <div className={`card p-5 flex flex-col gap-3 transition-all ${href || onClick ? 'hover:shadow-md hover:border-brand-200 cursor-pointer group' : ''}`}
+      onClick={() => { if (href) router.push(href); else if (onClick) onClick(); }}>
       <div className="flex items-start justify-between">
         <div className={`h-9 w-9 rounded-lg flex items-center justify-center ${iconBg}`}>
           <Icon className={`h-4 w-4 ${iconColor}`} />
         </div>
-        {change !== undefined && (
-          <div className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-            isPositive ? 'bg-emerald-50 text-emerald-700' :
-            isNegative ? 'bg-red-50 text-red-600' :
-            'bg-gray-50 text-gray-500'
-          }`}>
-            {isPositive ? <ArrowUpRight className="h-3 w-3" /> :
-             isNegative ? <ArrowDownRight className="h-3 w-3" /> :
-             <Minus className="h-3 w-3" />}
-            {Math.abs(change)}%
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {change !== undefined && (
+            <div className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
+              isPositive ? 'bg-emerald-50 text-emerald-700' :
+              isNegative ? 'bg-red-50 text-red-600' : 'bg-gray-50 text-gray-500'
+            }`}>
+              {isPositive ? <ArrowUpRight className="h-3 w-3" /> :
+               isNegative ? <ArrowDownRight className="h-3 w-3" /> :
+               <Minus className="h-3 w-3" />}
+              {Math.abs(change)}%
+            </div>
+          )}
+          {(href || onClick) && <ExternalLink className="h-3 w-3 text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity" />}
+        </div>
       </div>
       <div>
-        <p className="text-2xl font-bold text-text-primary tabular-nums tracking-tight">
-          {fmt(value, format)}
-        </p>
+        <p className="text-2xl font-bold text-text-primary tabular-nums tracking-tight">{fmt(value, format)}</p>
         <p className="text-sm text-text-secondary mt-0.5">{title}</p>
         {subtitle && <p className="text-xs text-text-tertiary mt-0.5">{subtitle}</p>}
       </div>
     </div>
   );
+  return card;
 }
 
 // ─── Donut Chart ──────────────────────────────────────────────────
@@ -270,7 +257,6 @@ function KpiCard({ title, value, change, format = 'number', icon: Icon, iconBg, 
 function DonutChart({ data, colors }: { data: { label: string; value: number }[]; colors: string[] }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   if (!total) return <div className="flex items-center justify-center h-24 text-xs text-text-tertiary">No data</div>;
-
   const R = 40, cx = 56, cy = 56, stroke = 22;
   const circ = 2 * Math.PI * R;
   let offset = 0;
@@ -282,22 +268,17 @@ function DonutChart({ data, colors }: { data: { label: string; value: number }[]
         {data.map((d, i) => {
           const pct = d.value / total;
           const dash = pct * circ;
-          const gap = circ - dash;
           const seg = (
             <circle key={i} cx={cx} cy={cy} r={R} fill="none"
               stroke={colors[i % colors.length]} strokeWidth={stroke}
-              strokeDasharray={`${dash} ${gap}`}
-              strokeDashoffset={-offset * circ}
+              strokeDasharray={`${dash} ${circ - dash}`} strokeDashoffset={-offset * circ}
               style={{ transition: 'stroke-dasharray 0.6s ease' }}
-              transform={`rotate(-90 ${cx} ${cy})`}
-            />
+              transform={`rotate(-90 ${cx} ${cy})`} />
           );
           offset += pct;
           return seg;
         })}
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="600" fill="#1e293b">
-          {total}
-        </text>
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="600" fill="#1e293b">{total}</text>
       </svg>
       <div className="flex flex-col gap-1.5">
         {data.map((d, i) => (
@@ -312,46 +293,84 @@ function DonutChart({ data, colors }: { data: { label: string; value: number }[]
   );
 }
 
-// ─── Funnel Visualization ─────────────────────────────────────────
+// ─── Funnel Visualization (clickable, visual) ──────────────────────
 
-function FunnelViz({ stages }: { stages: any[] }) {
+function FunnelViz({ stages, onStageClick }: { stages: any[]; onStageClick?: (stage: any) => void }) {
   if (!stages.length) return <div className="empty-state py-6"><p className="text-sm text-text-tertiary">No pipeline data</p></div>;
   const maxCount = Math.max(...stages.map(s => s.count), 1);
+  const totalLeads = stages.reduce((s, st) => s + st.count, 0);
+  const totalValue = stages.reduce((s, st) => s + (st.value || 0), 0);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       {stages.map((stage, i) => {
-        const widthPct = Math.max((stage.count / maxCount) * 100, 8);
+        // Funnel shape: width starts at 100% and narrows proportionally
+        const funnelWidth = stages.length > 1
+          ? 100 - ((i / (stages.length - 1)) * 30) // narrows from 100% to 70%
+          : 100;
+        const fillPct = Math.max((stage.count / maxCount) * funnelWidth, 6);
+        const dropOff = i > 0 && stages[i - 1].count > 0
+          ? Math.round((1 - stage.count / stages[i - 1].count) * 100)
+          : 0;
+
         return (
           <div key={i}>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: stage.color }} />
-                <span className="text-sm font-medium text-text-primary">{stage.name}</span>
-                {i > 0 && stage.conversionFromPrev !== undefined && (
-                  <span className="text-xs text-text-tertiary">← {stage.conversionFromPrev}% from prev</span>
-                )}
+            {/* Drop-off indicator between stages */}
+            {i > 0 && dropOff > 0 && (
+              <div className="flex items-center justify-center gap-1.5 py-0.5 -my-0.5">
+                <div className="h-px flex-1 bg-border-subtle" />
+                <span className="text-2xs text-red-400 font-medium whitespace-nowrap flex items-center gap-0.5">
+                  <ArrowDownRight className="h-2.5 w-2.5" />
+                  {dropOff}% drop-off
+                </span>
+                <div className="h-px flex-1 bg-border-subtle" />
               </div>
-              <div className="flex items-center gap-3 text-right">
-                {stage.value > 0 && (
-                  <span className="text-xs text-text-tertiary">{fmt(stage.value, 'currency')}</span>
-                )}
-                <span className="text-sm font-bold text-text-primary tabular-nums w-8">{stage.count}</span>
+            )}
+
+            <div
+              className={`group relative rounded-lg transition-all duration-200 ${onStageClick ? 'cursor-pointer hover:shadow-sm hover:ring-1 hover:ring-brand-200' : ''}`}
+              onClick={() => onStageClick?.(stage)}
+              style={{ width: `${funnelWidth}%`, margin: '0 auto' }}
+            >
+              <div className="flex items-center justify-between px-3 py-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0 shadow-sm" style={{ backgroundColor: stage.color }} />
+                  <span className="text-sm font-medium text-text-primary truncate">{stage.name}</span>
+                  {i > 0 && stage.conversionFromPrev !== undefined && (
+                    <span className={`text-2xs font-medium px-1.5 py-0.5 rounded-full ${
+                      stage.conversionFromPrev >= 50 ? 'bg-emerald-50 text-emerald-600' :
+                      stage.conversionFromPrev >= 25 ? 'bg-amber-50 text-amber-600' :
+                      'bg-red-50 text-red-500'
+                    }`}>{stage.conversionFromPrev}%</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  {stage.value > 0 && (
+                    <span className="text-xs text-text-tertiary tabular-nums">{fmt(stage.value, 'currency')}</span>
+                  )}
+                  <span className="text-sm font-bold text-text-primary tabular-nums">{stage.count}</span>
+                  {onStageClick && <ChevronRight className="h-3.5 w-3.5 text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity" />}
+                </div>
               </div>
-            </div>
-            <div className="h-7 bg-surface-tertiary rounded-lg overflow-hidden">
-              <div
-                className="h-full rounded-lg flex items-center px-2 transition-all duration-700 ease-out"
-                style={{ width: `${widthPct}%`, backgroundColor: stage.color + '33', borderLeft: `3px solid ${stage.color}` }}
-              >
-                {widthPct > 15 && (
-                  <span className="text-xs font-semibold" style={{ color: stage.color }}>{stage.count}</span>
-                )}
+
+              {/* Fill bar */}
+              <div className="h-2 bg-surface-tertiary rounded-b-lg overflow-hidden mx-0.5 mb-0.5">
+                <div className="h-full rounded-b-lg transition-all duration-700 ease-out"
+                  style={{ width: `${(stage.count / maxCount) * 100}%`, backgroundColor: stage.color, opacity: 0.7 }} />
               </div>
             </div>
           </div>
         );
       })}
+
+      {/* Summary footer */}
+      <div className="mt-3 pt-3 border-t border-border-subtle flex items-center justify-between text-xs text-text-tertiary">
+        <span>{stages.length} stages</span>
+        <div className="flex items-center gap-4">
+          <span><strong className="text-text-primary">{totalLeads}</strong> total leads</span>
+          {totalValue > 0 && <span><strong className="text-amber-600">{fmt(totalValue, 'currency')}</strong> pipeline</span>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -375,6 +394,7 @@ const TABS: { value: Tab; label: string; icon: any }[] = [
 ];
 
 export default function AnalyticsPage() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const isSuperAdmin = (user as any)?.role === 'SUPER_ADMIN';
 
@@ -383,6 +403,11 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [periodOpen, setPeriodOpen] = useState(false);
+
+  // Division selector for Super Admins
+  const [divisions, setDivisions] = useState<any[]>([]);
+  const [selectedDivision, setSelectedDivision] = useState<string>('all');
+  const [divDropdownOpen, setDivDropdownOpen] = useState(false);
 
   // Data
   const [overview, setOverview] = useState<any>(null);
@@ -398,20 +423,34 @@ export default function AnalyticsPage() {
   const periodRef = useRef(period);
   periodRef.current = period;
 
+  // Fetch divisions for Super Admin
+  useEffect(() => {
+    if (isSuperAdmin) {
+      api.getDivisions().then(d => setDivisions(Array.isArray(d) ? d : [])).catch(() => {});
+    }
+  }, [isSuperAdmin]);
+
+  const divId = selectedDivision === 'all' ? undefined : selectedDivision;
+  const selectedDivName = selectedDivision === 'all'
+    ? 'All Divisions'
+    : divisions.find(d => d.id === selectedDivision)?.tradeName
+      || divisions.find(d => d.id === selectedDivision)?.name
+      || 'Division';
+
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     try {
       const p = periodRef.current;
       const [ov, fn, tr, tm, src, cam, act, sd] = await Promise.allSettled([
-        api.getAnalyticsOverview(p),
-        api.getFunnel(),
-        api.getTrends(p),
-        api.getTeamPerformance(),
-        api.getSourcePerformance(p),
-        api.getCampaignPerformance(),
-        api.getActivitiesAnalytics(p),
-        api.getScoreDistribution(),
+        api.getAnalyticsOverview(p, divId),
+        api.getFunnel(divId),
+        api.getTrends(p, divId),
+        api.getTeamPerformance(divId),
+        api.getSourcePerformance(p, divId),
+        api.getCampaignPerformance(divId),
+        api.getActivitiesAnalytics(p, divId),
+        api.getScoreDistribution(divId),
       ]);
 
       if (ov.status === 'fulfilled') setOverview(ov.value);
@@ -423,20 +462,25 @@ export default function AnalyticsPage() {
       if (act.status === 'fulfilled') setActivities(act.value);
       if (sd.status === 'fulfilled') setScoreDistrib(Array.isArray(sd.value) ? sd.value : []);
 
-      if (isSuperAdmin) {
+      if (isSuperAdmin && !divId) {
         api.getDivisionComparison().then(d => setDivisionComp(Array.isArray(d) ? d : [])).catch(() => {});
+      } else {
+        setDivisionComp([]);
       }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, divId]);
 
-  useEffect(() => { fetchData(); }, [period, fetchData]);
+  useEffect(() => { fetchData(); }, [period, selectedDivision, fetchData]);
 
   const days = { '7d': 7, '30d': 30, '90d': 90, '180d': 180, '365d': 365 }[period];
   const filledTrends = trends.length ? fillDates(trends, days) : [];
   const periodLabel = PERIODS.find(p => p.value === period)?.label ?? '';
+
+  // ── Drill-down helper ─────────────────────────────────────────────
+  const drill = (params: Record<string, string>) => router.push(drillLink(params));
 
   // ── Loading Skeleton ──────────────────────────────────────────────
   if (loading) {
@@ -446,13 +490,13 @@ export default function AnalyticsPage() {
           <div><div className="skeleton h-7 w-36 mb-2" /><div className="skeleton h-4 w-56" /></div>
           <div className="flex gap-2"><div className="skeleton h-9 w-28" /><div className="skeleton h-9 w-24" /></div>
         </div>
-        <div className="flex gap-1 border-b border-border-subtle pb-0"><div className="skeleton h-9 w-24 mr-1" /><div className="skeleton h-9 w-24 mr-1" /><div className="skeleton h-9 w-24" /></div>
+        <div className="flex gap-1 border-b border-border-subtle pb-0">{[...Array(5)].map((_, i) => <div key={i} className="skeleton h-9 w-24 mr-1" />)}</div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[...Array(8)].map((_, i) => <div key={i} className="card p-5"><div className="skeleton h-9 w-9 mb-3" /><div className="skeleton h-7 w-20 mb-1" /><div className="skeleton h-4 w-28" /></div>)}
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 card p-5"><div className="skeleton h-5 w-32 mb-5" /><div className="skeleton h-52 w-full" /></div>
-          <div className="card p-5"><div className="skeleton h-5 w-28 mb-5" />{[...Array(5)].map((_, i) => <div key={i} className="skeleton h-10 w-full mb-2" />)}</div>
+          <div className="lg:col-span-2 card p-5"><div className="skeleton h-52 w-full" /></div>
+          <div className="card p-5">{[...Array(5)].map((_, i) => <div key={i} className="skeleton h-10 w-full mb-2" />)}</div>
         </div>
       </div>
     );
@@ -461,20 +505,23 @@ export default function AnalyticsPage() {
   // ── Overview Tab ──────────────────────────────────────────────────
   const OverviewTab = () => (
     <div className="space-y-6">
-      {/* KPI Cards */}
+      {/* KPI Cards — all clickable */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KpiCard title="New Leads" value={overview?.newLeads?.value ?? 0}
           change={overview?.newLeads?.change} icon={TrendingUp}
           iconBg="bg-brand-50" iconColor="text-brand-600"
-          subtitle={`In last ${periodLabel}`} />
+          subtitle={`In last ${periodLabel}`}
+          href={drillLink({ status: 'NEW' })} />
         <KpiCard title="Deals Won" value={overview?.wonLeads?.value ?? 0}
           change={overview?.wonLeads?.change} icon={Trophy}
           iconBg="bg-emerald-50" iconColor="text-emerald-600"
-          subtitle={`In last ${periodLabel}`} />
+          subtitle={`In last ${periodLabel}`}
+          href={drillLink({ status: 'WON' })} />
         <KpiCard title="Pipeline Value" value={overview?.pipelineValue?.value ?? 0}
           change={overview?.pipelineValue?.change} format="currency" icon={DollarSign}
           iconBg="bg-amber-50" iconColor="text-amber-600"
-          subtitle="Active pipeline" />
+          subtitle="Active pipeline"
+          href={drillLink({ status: 'NEW,CONTACTED,QUALIFIED,PROPOSAL_SENT,NEGOTIATION' })} />
         <KpiCard title="Conversion Rate" value={overview?.conversionRate?.value ?? 0}
           change={overview?.conversionRate?.change} format="percent" icon={Target}
           iconBg="bg-purple-50" iconColor="text-purple-600"
@@ -482,7 +529,8 @@ export default function AnalyticsPage() {
         <KpiCard title="Won Revenue" value={overview?.wonRevenue?.value ?? 0}
           format="currency" icon={Star}
           iconBg="bg-rose-50" iconColor="text-rose-500"
-          subtitle="All-time won deals" />
+          subtitle="All-time won deals"
+          href={drillLink({ status: 'WON' })} />
         <KpiCard title="Avg Deal Size" value={overview?.avgDealSize?.value ?? 0}
           format="currency" icon={Award}
           iconBg="bg-cyan-50" iconColor="text-cyan-600"
@@ -490,11 +538,13 @@ export default function AnalyticsPage() {
         <KpiCard title="Activities" value={overview?.activities?.value ?? 0}
           change={overview?.activities?.change} icon={Zap}
           iconBg="bg-violet-50" iconColor="text-violet-600"
-          subtitle={`In last ${periodLabel}`} />
+          subtitle={`In last ${periodLabel}`}
+          onClick={() => setActiveTab('activities')} />
         <KpiCard title="Overdue Tasks" value={overview?.overdueTasks?.value ?? 0}
           icon={AlertCircle}
           iconBg="bg-red-50" iconColor="text-red-500"
-          subtitle="Need attention" />
+          subtitle="Need attention"
+          href="/tasks?filter=overdue" />
       </div>
 
       {/* Trends + Funnel */}
@@ -503,7 +553,7 @@ export default function AnalyticsPage() {
           <div className="flex items-center justify-between mb-5">
             <div>
               <h2 className="text-sm font-semibold text-text-primary">Lead Trends</h2>
-              <p className="text-xs text-text-tertiary mt-0.5">Created vs Won — last {periodLabel}</p>
+              <p className="text-xs text-text-tertiary mt-0.5">Created vs Won vs Lost — last {periodLabel}</p>
             </div>
             <div className="flex items-center gap-3">
               {[{ color: '#6366f1', label: 'Created' }, { color: '#10b981', label: 'Won' }, { color: '#f43f5e', label: 'Lost' }].map(s => (
@@ -514,28 +564,26 @@ export default function AnalyticsPage() {
               ))}
             </div>
           </div>
-          <LineChart
-            data={filledTrends}
+          <LineChart data={filledTrends}
             series={[
               { key: 'total', label: 'Created', color: '#6366f1' },
               { key: 'won', label: 'Won', color: '#10b981' },
               { key: 'lost', label: 'Lost', color: '#f43f5e' },
-            ]}
-            height={220}
-          />
+            ]} height={220} />
         </div>
 
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-5">
-            <div className="h-8 w-8 rounded-lg bg-brand-50 flex items-center justify-center">
-              <TrendingUp className="h-4 w-4 text-brand-600" />
-            </div>
+            <div className="h-8 w-8 rounded-lg bg-brand-50 flex items-center justify-center"><TrendingUp className="h-4 w-4 text-brand-600" /></div>
             <div>
               <h2 className="text-sm font-semibold text-text-primary">Pipeline Funnel</h2>
-              <p className="text-xs text-text-tertiary mt-0.5">Stage breakdown</p>
+              <p className="text-xs text-text-tertiary mt-0.5">Click a stage to view its leads</p>
             </div>
           </div>
-          <FunnelViz stages={funnel} />
+          <FunnelViz stages={funnel} onStageClick={(stage) => {
+            // Find the stage ID from pipeline stages
+            drill({ stageId: stage.name });
+          }} />
         </div>
       </div>
 
@@ -544,14 +592,25 @@ export default function AnalyticsPage() {
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-text-primary mb-4">Lead Status Breakdown</h2>
           {overview?.totalLeads?.value > 0 ? (
-            <DonutChart
-              data={[
-                { label: 'New', value: overview?.newLeads?.value ?? 0 },
-                { label: 'Won', value: overview?.wonLeads?.value ?? 0 },
-                { label: 'Lost', value: overview?.lostLeads?.value ?? 0 },
-              ].filter(d => d.value > 0)}
-              colors={['#6366f1', '#10b981', '#f43f5e', '#f59e0b', '#06b6d4']}
-            />
+            <>
+              <DonutChart
+                data={[
+                  { label: 'New', value: overview?.newLeads?.value ?? 0 },
+                  { label: 'Won', value: overview?.wonLeads?.value ?? 0 },
+                  { label: 'Lost', value: overview?.lostLeads?.value ?? 0 },
+                  { label: 'In Progress', value: Math.max(0, (overview?.totalLeads?.value ?? 0) - (overview?.newLeads?.value ?? 0) - (overview?.wonLeads?.value ?? 0) - (overview?.lostLeads?.value ?? 0)) },
+                ].filter(d => d.value > 0)}
+                colors={['#6366f1', '#10b981', '#f43f5e', '#f59e0b']}
+              />
+              <div className="mt-4 pt-3 border-t border-border-subtle flex flex-wrap gap-2">
+                {['NEW', 'CONTACTED', 'QUALIFIED', 'WON', 'LOST'].map(s => (
+                  <button key={s} onClick={() => drill({ status: s })}
+                    className="text-xs text-text-secondary hover:text-brand-600 hover:bg-brand-50 px-2 py-1 rounded-md transition-colors flex items-center gap-1">
+                    {formatSource(s)} <ExternalLink className="h-2.5 w-2.5" />
+                  </button>
+                ))}
+              </div>
+            </>
           ) : (
             <div className="empty-state py-6"><p className="text-sm text-text-tertiary">No lead data available</p></div>
           )}
@@ -559,33 +618,54 @@ export default function AnalyticsPage() {
 
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-text-primary mb-1">Lead Score Distribution</h2>
-          <p className="text-xs text-text-tertiary mb-4">Quality distribution of all leads</p>
+          <p className="text-xs text-text-tertiary mb-4">Click a bucket to view those leads</p>
           {scoreDistrib.some(b => b.total > 0) ? (
-            <BarChart
-              data={scoreDistrib}
-              xKey="label" yKey="total"
-              color="#6366f1" secondaryKey="won" secondaryColor="#10b981"
-              height={160}
-            />
+            <>
+              <div className="flex items-end gap-2" style={{ height: 160 }}>
+                {scoreDistrib.map((d, i) => {
+                  const maxVal = Math.max(...scoreDistrib.map(b => b.total), 1);
+                  const pct = (d.total / maxVal) * 90;
+                  const wonPct = (d.won / maxVal) * 90;
+                  // Parse min/max from label like "0–20" or "21–40"
+                  const parts = d.label.replace(/[^\d–-]/g, '').split(/[–-]/);
+                  const minScore = parts[0] || '0';
+                  const maxScore = parts[1] || '100';
+                  return (
+                    <div key={i}
+                      className="flex-1 flex flex-col items-center gap-1 group cursor-pointer"
+                      onClick={() => drill({ minScore, maxScore })}>
+                      <div className="w-full flex flex-col justify-end relative" style={{ height: 136 }}>
+                        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap hidden group-hover:block z-20 pointer-events-none">
+                          {d.total} leads / {d.won} won ({d.conversionRate}%)
+                        </div>
+                        <div className="w-full rounded-t-sm mb-0.5 transition-all duration-500"
+                          style={{ height: `${wonPct}%`, backgroundColor: '#10b981', minHeight: wonPct > 0 ? 2 : 0 }} />
+                        <div className="w-full rounded-t-sm transition-all duration-700 group-hover:opacity-80"
+                          style={{ height: `${pct}%`, backgroundColor: '#6366f1', minHeight: pct > 0 ? 3 : 0 }} />
+                      </div>
+                      <span className="text-xs text-text-tertiary">{d.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-3 mt-2">
+                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-brand-500" /><span className="text-xs text-text-tertiary">Total</span></div>
+                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-emerald-500" /><span className="text-xs text-text-tertiary">Won</span></div>
+              </div>
+            </>
           ) : (
             <div className="empty-state py-6"><p className="text-sm text-text-tertiary">No scored leads yet</p></div>
-          )}
-          {scoreDistrib.some(b => b.total > 0) && (
-            <div className="flex items-center gap-3 mt-2">
-              <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-brand-500" /><span className="text-xs text-text-tertiary">Total</span></div>
-              <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-emerald-500" /><span className="text-xs text-text-tertiary">Won</span></div>
-            </div>
           )}
         </div>
       </div>
 
-      {/* Division Comparison (Super Admin) */}
-      {isSuperAdmin && divisionComp.length > 1 && (
+      {/* Division Comparison (Super Admin, all divisions view) */}
+      {isSuperAdmin && divisionComp.length > 1 && selectedDivision === 'all' && (
         <div className="card overflow-hidden">
           <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-text-primary">Division Comparison</h2>
-              <p className="text-xs text-text-tertiary mt-0.5">Performance across all divisions</p>
+              <p className="text-xs text-text-tertiary mt-0.5">Click a division to drill down into its analytics</p>
             </div>
             <Globe className="h-4 w-4 text-text-tertiary" />
           </div>
@@ -600,13 +680,19 @@ export default function AnalyticsPage() {
               </thead>
               <tbody>
                 {divisionComp.map((div: any, i) => (
-                  <tr key={div.id} className="table-row">
+                  <tr key={div.id} className="table-row cursor-pointer hover:bg-brand-50/50 transition-colors"
+                    onClick={() => { setSelectedDivision(div.id); setDivDropdownOpen(false); }}>
                     <td className="table-cell px-4">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-xs font-bold">
-                          {i + 1}
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                          i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-600' :
+                          i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-500' :
+                          'bg-gradient-to-br from-brand-400 to-brand-600'
+                        }`}>{i + 1}</div>
+                        <div>
+                          <span className="text-sm font-medium text-text-primary">{div.name}</span>
+                          <p className="text-2xs text-text-tertiary">Click to drill down</p>
                         </div>
-                        <span className="text-sm font-medium text-text-primary">{div.name}</span>
                       </div>
                     </td>
                     <td className="table-cell px-4"><span className="text-sm text-text-secondary">{div.userCount}</span></td>
@@ -643,38 +729,18 @@ export default function AnalyticsPage() {
             <div className="h-8 w-8 rounded-lg bg-brand-50 flex items-center justify-center"><TrendingUp className="h-4 w-4 text-brand-600" /></div>
             <div>
               <h2 className="text-sm font-semibold text-text-primary">Pipeline Stages</h2>
-              <p className="text-xs text-text-tertiary">Lead count & value per stage</p>
+              <p className="text-xs text-text-tertiary">Click any stage to see its leads</p>
             </div>
           </div>
-          <FunnelViz stages={funnel} />
-          {funnel.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-border-subtle grid grid-cols-3 gap-3 text-center">
-              <div>
-                <p className="text-lg font-bold text-text-primary tabular-nums">{funnel.reduce((s, f) => s + f.count, 0)}</p>
-                <p className="text-xs text-text-tertiary">Total Leads</p>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-amber-600 tabular-nums">
-                  {fmt(funnel.reduce((s, f) => s + (f.value || 0), 0), 'currency')}
-                </p>
-                <p className="text-xs text-text-tertiary">Total Value</p>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-brand-600 tabular-nums">
-                  {funnel.length > 1 ? `${funnel[funnel.length - 1].conversionFromPrev ?? 0}%` : '—'}
-                </p>
-                <p className="text-xs text-text-tertiary">Final Conv.</p>
-              </div>
-            </div>
-          )}
+          <FunnelViz stages={funnel} onStageClick={(stage) => drill({ stageId: stage.name })} />
         </div>
 
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-5">
             <div className="h-8 w-8 rounded-lg bg-violet-50 flex items-center justify-center"><Star className="h-4 w-4 text-violet-600" /></div>
             <div>
-              <h2 className="text-sm font-semibold text-text-primary">Lead Score Distribution</h2>
-              <p className="text-xs text-text-tertiary">Quality & win rate by score bucket</p>
+              <h2 className="text-sm font-semibold text-text-primary">Lead Score vs Win Rate</h2>
+              <p className="text-xs text-text-tertiary">Click a bucket to view those leads</p>
             </div>
           </div>
           {scoreDistrib.some(b => b.total > 0) ? (
@@ -682,16 +748,21 @@ export default function AnalyticsPage() {
               <BarChart data={scoreDistrib} xKey="label" yKey="total" color="#8b5cf6"
                 secondaryKey="won" secondaryColor="#10b981" height={160} />
               <div className="mt-4 space-y-2">
-                {scoreDistrib.filter(b => b.total > 0).map((b, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-xs text-text-tertiary w-14">{b.label}</span>
-                    <div className="flex-1 h-2 bg-surface-tertiary rounded-full overflow-hidden">
-                      <div className="h-full bg-violet-500 rounded-full" style={{ width: `${b.conversionRate}%` }} />
+                {scoreDistrib.filter(b => b.total > 0).map((b, i) => {
+                  const parts = b.label.replace(/[^\d–-]/g, '').split(/[–-]/);
+                  return (
+                    <div key={i} className="flex items-center gap-3 cursor-pointer hover:bg-surface-secondary rounded px-2 py-1 -mx-2 transition-colors"
+                      onClick={() => drill({ minScore: parts[0], maxScore: parts[1] })}>
+                      <span className="text-xs text-text-tertiary w-14">{b.label}</span>
+                      <div className="flex-1 h-2 bg-surface-tertiary rounded-full overflow-hidden">
+                        <div className="h-full bg-violet-500 rounded-full" style={{ width: `${b.conversionRate}%` }} />
+                      </div>
+                      <span className="text-xs font-semibold text-text-primary w-10 text-right">{b.conversionRate}% win</span>
+                      <span className="text-xs text-text-tertiary w-12 text-right">{b.total} leads</span>
+                      <ExternalLink className="h-3 w-3 text-text-tertiary" />
                     </div>
-                    <span className="text-xs font-semibold text-text-primary w-10 text-right">{b.conversionRate}% win</span>
-                    <span className="text-xs text-text-tertiary w-12 text-right">{b.total} leads</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : (
@@ -708,11 +779,7 @@ export default function AnalyticsPage() {
             <p className="text-xs text-text-tertiary">Won deal value over time — last {periodLabel}</p>
           </div>
         </div>
-        <LineChart
-          data={filledTrends}
-          series={[{ key: 'value', label: 'Won Revenue', color: '#10b981' }]}
-          height={200}
-        />
+        <LineChart data={filledTrends} series={[{ key: 'value', label: 'Won Revenue', color: '#10b981' }]} height={200} />
       </div>
     </div>
   );
@@ -724,7 +791,7 @@ export default function AnalyticsPage() {
         <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold text-text-primary">Team Leaderboard</h2>
-            <p className="text-xs text-text-tertiary mt-0.5">Ranked by won revenue</p>
+            <p className="text-xs text-text-tertiary mt-0.5">Click a team member to view their leads</p>
           </div>
           <Trophy className="h-4 w-4 text-amber-500" />
         </div>
@@ -732,7 +799,7 @@ export default function AnalyticsPage() {
           <table className="min-w-full">
             <thead>
               <tr className="border-b border-border-subtle">
-                {['#', 'Sales Rep', 'Active', 'Total', 'Won', 'Lost', 'Conversion', 'Won Revenue', 'Avg Deal', 'Tasks ✓'].map(h => (
+                {['#', 'Sales Rep', 'Active', 'Total', 'Won', 'Lost', 'Conversion', 'Won Revenue', 'Avg Deal', 'Tasks'].map(h => (
                   <th key={h} className="table-header px-4 py-3 text-left whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -741,7 +808,8 @@ export default function AnalyticsPage() {
               {team.length === 0 ? (
                 <tr><td colSpan={10} className="py-10 text-center text-sm text-text-tertiary">No team data available</td></tr>
               ) : team.map((m: any, i: number) => (
-                <tr key={m.id} className="table-row">
+                <tr key={m.id} className="table-row cursor-pointer hover:bg-brand-50/50 transition-colors"
+                  onClick={() => drill({ assignedToId: m.id })}>
                   <td className="table-cell px-4 w-8">
                     <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
                       i === 0 ? 'bg-amber-100 text-amber-700' :
@@ -755,7 +823,9 @@ export default function AnalyticsPage() {
                         {m.name.split(' ').map((n: string) => n[0]).join('')}
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-text-primary">{m.name}</p>
+                        <p className="text-sm font-medium text-text-primary flex items-center gap-1">
+                          {m.name} <ExternalLink className="h-2.5 w-2.5 text-text-tertiary" />
+                        </p>
                         <p className="text-2xs text-text-tertiary">{roleLabel(m.role)}</p>
                       </div>
                     </div>
@@ -828,7 +898,7 @@ export default function AnalyticsPage() {
       <div className="card overflow-hidden">
         <div className="px-5 py-4 border-b border-border-subtle">
           <h2 className="text-sm font-semibold text-text-primary">Lead Source Attribution</h2>
-          <p className="text-xs text-text-tertiary mt-0.5">Where your leads come from and how they convert</p>
+          <p className="text-xs text-text-tertiary mt-0.5">Click a source to view its leads</p>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full">
@@ -843,11 +913,13 @@ export default function AnalyticsPage() {
               {sources.length === 0 ? (
                 <tr><td colSpan={9} className="py-10 text-center text-sm text-text-tertiary">No source data available</td></tr>
               ) : sources.map((s: any) => (
-                <tr key={s.source} className="table-row">
+                <tr key={s.source} className="table-row cursor-pointer hover:bg-brand-50/50 transition-colors"
+                  onClick={() => drill({ source: s.source })}>
                   <td className="table-cell px-4">
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: sourceColor(s.source) }} />
                       <span className="text-sm font-medium text-text-primary whitespace-nowrap">{formatSource(s.source)}</span>
+                      <ExternalLink className="h-2.5 w-2.5 text-text-tertiary" />
                     </div>
                   </td>
                   <td className="table-cell px-4">
@@ -873,8 +945,7 @@ export default function AnalyticsPage() {
                   <td className="table-cell px-4"><span className="text-sm text-text-secondary tabular-nums">{fmt(s.avgDealSize, 'currency')}</span></td>
                   <td className="table-cell px-4">
                     <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${s.recentCount > 0 ? 'bg-brand-50 text-brand-600' : 'text-text-tertiary'}`}>
-                      {s.recentCount > 0 && <Flame className="h-2.5 w-2.5" />}
-                      {s.recentCount}
+                      {s.recentCount > 0 && <Flame className="h-2.5 w-2.5" />}{s.recentCount}
                     </span>
                   </td>
                 </tr>
@@ -889,7 +960,7 @@ export default function AnalyticsPage() {
         <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold text-text-primary">Campaign ROI</h2>
-            <p className="text-xs text-text-tertiary mt-0.5">Budget, leads, conversion and return on investment</p>
+            <p className="text-xs text-text-tertiary mt-0.5">Click a campaign to view its leads</p>
           </div>
           <span className="text-xs text-text-tertiary">{campaigns.length} campaigns</span>
         </div>
@@ -906,13 +977,14 @@ export default function AnalyticsPage() {
               {campaigns.length === 0 ? (
                 <tr><td colSpan={10} className="py-10 text-center text-sm text-text-tertiary">No campaigns yet</td></tr>
               ) : campaigns.map((c: any) => (
-                <tr key={c.id} className="table-row">
+                <tr key={c.id} className="table-row cursor-pointer hover:bg-brand-50/50 transition-colors"
+                  onClick={() => drill({ campaign: c.name })}>
                   <td className="table-cell px-4">
-                    <span className="text-sm font-medium text-text-primary">{c.name}</span>
+                    <span className="text-sm font-medium text-text-primary flex items-center gap-1">
+                      {c.name} <ExternalLink className="h-2.5 w-2.5 text-text-tertiary" />
+                    </span>
                   </td>
-                  <td className="table-cell px-4">
-                    <span className="text-xs text-text-secondary">{formatSource(c.type)}</span>
-                  </td>
+                  <td className="table-cell px-4"><span className="text-xs text-text-secondary">{formatSource(c.type)}</span></td>
                   <td className="table-cell px-4">
                     <span className={`badge ${
                       c.status === 'ACTIVE' ? 'badge-success' :
@@ -960,7 +1032,6 @@ export default function AnalyticsPage() {
 
     return (
       <div className="space-y-6">
-        {/* Summary cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-text-primary tabular-nums">{fmt(totalActivities)}</p>
@@ -970,23 +1041,22 @@ export default function AnalyticsPage() {
             <p className="text-2xl font-bold text-brand-600 tabular-nums">
               {fmt(byType.filter((t: any) => t.type.includes('CALL')).reduce((s: number, t: any) => s + t.count, 0))}
             </p>
-            <p className="text-xs text-text-secondary mt-1">Calls Made/Received</p>
+            <p className="text-xs text-text-secondary mt-1">Calls</p>
           </div>
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-emerald-600 tabular-nums">
               {fmt(byType.filter((t: any) => t.type.includes('EMAIL')).reduce((s: number, t: any) => s + t.count, 0))}
             </p>
-            <p className="text-xs text-text-secondary mt-1">Emails Sent/Received</p>
+            <p className="text-xs text-text-secondary mt-1">Emails</p>
           </div>
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-violet-600 tabular-nums">
               {fmt(byType.filter((t: any) => t.type.includes('WHATSAPP')).reduce((s: number, t: any) => s + t.count, 0))}
             </p>
-            <p className="text-xs text-text-secondary mt-1">WhatsApp Messages</p>
+            <p className="text-xs text-text-secondary mt-1">WhatsApp</p>
           </div>
         </div>
 
-        {/* Heatmap */}
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-4">
             <div className="h-8 w-8 rounded-lg bg-violet-50 flex items-center justify-center"><Activity className="h-4 w-4 text-violet-600" /></div>
@@ -1003,7 +1073,6 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Activity by Type */}
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Activity Breakdown</h2>
             {byType.length === 0 ? (
@@ -1020,9 +1089,7 @@ export default function AnalyticsPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-text-secondary truncate">
-                            {t.type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                          </span>
+                          <span className="text-xs text-text-secondary truncate">{t.type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}</span>
                           <span className="text-xs font-semibold text-text-primary ml-2 tabular-nums">{t.count}</span>
                         </div>
                         <div className="h-1.5 bg-surface-tertiary rounded-full overflow-hidden">
@@ -1036,7 +1103,6 @@ export default function AnalyticsPage() {
             )}
           </div>
 
-          {/* Communication Channels */}
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Communication Channels</h2>
             {commStats.length === 0 ? (
@@ -1074,18 +1140,54 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Analytics</h1>
-          <p className="text-sm text-text-secondary mt-0.5">Deep insights across your entire lead management operation</p>
+          <p className="text-sm text-text-secondary mt-0.5">
+            {selectedDivision !== 'all'
+              ? <>Viewing <strong>{selectedDivName}</strong> — <button onClick={() => setSelectedDivision('all')} className="text-brand-600 hover:underline">view all</button></>
+              : 'Deep insights across your entire operation'}
+          </p>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+          {/* Division selector for Super Admins */}
+          {isSuperAdmin && divisions.length > 0 && (
+            <div className="relative">
+              <button onClick={() => setDivDropdownOpen(v => !v)}
+                className="btn-secondary flex items-center gap-2 text-sm h-9 px-3">
+                <Building2 className="h-3.5 w-3.5 text-text-tertiary" />
+                <span className="font-medium max-w-[140px] truncate">{selectedDivName}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-text-tertiary" />
+              </button>
+              {divDropdownOpen && (
+                <div className="absolute right-0 top-10 bg-white border border-border-subtle rounded-xl shadow-lg z-30 py-1 min-w-[200px] max-h-80 overflow-y-auto">
+                  <button onClick={() => { setSelectedDivision('all'); setDivDropdownOpen(false); }}
+                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-surface-secondary transition-colors flex items-center gap-2 ${
+                      selectedDivision === 'all' ? 'text-brand-600 font-semibold bg-brand-50' : 'text-text-primary'
+                    }`}>
+                    <Globe className="h-3.5 w-3.5" />
+                    All Divisions
+                  </button>
+                  <div className="h-px bg-border-subtle my-1" />
+                  {divisions.map(d => (
+                    <button key={d.id}
+                      onClick={() => { setSelectedDivision(d.id); setDivDropdownOpen(false); }}
+                      className={`w-full text-left px-4 py-2.5 text-sm hover:bg-surface-secondary transition-colors flex items-center gap-2 ${
+                        selectedDivision === d.id ? 'text-brand-600 font-semibold bg-brand-50' : 'text-text-primary'
+                      }`}>
+                      <Building2 className="h-3.5 w-3.5 text-text-tertiary" />
+                      {d.tradeName || d.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Period selector */}
           <div className="relative">
-            <button
-              onClick={() => setPeriodOpen(v => !v)}
-              className="btn-secondary flex items-center gap-2 text-sm h-9 px-3"
-            >
+            <button onClick={() => setPeriodOpen(v => !v)}
+              className="btn-secondary flex items-center gap-2 text-sm h-9 px-3">
               <span className="text-xs text-text-tertiary">Period:</span>
               <span className="font-medium">{periodLabel}</span>
               <ChevronDown className="h-3.5 w-3.5 text-text-tertiary" />
@@ -1095,9 +1197,9 @@ export default function AnalyticsPage() {
                 {PERIODS.map(p => (
                   <button key={p.value}
                     onClick={() => { setPeriod(p.value); setPeriodOpen(false); }}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-surface-secondary transition-colors ${period === p.value ? 'text-brand-600 font-semibold bg-brand-50' : 'text-text-primary'}`}>
-                    {p.label}
-                  </button>
+                    className={`w-full text-left px-4 py-2 text-sm hover:bg-surface-secondary transition-colors ${
+                      period === p.value ? 'text-brand-600 font-semibold bg-brand-50' : 'text-text-primary'
+                    }`}>{p.label}</button>
                 ))}
               </div>
             )}
