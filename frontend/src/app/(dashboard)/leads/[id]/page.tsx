@@ -864,31 +864,37 @@ function formatTimeAgo(dateStr: string) {
 // ─── Create Task Modal ───────────────────────────────────────────
 
 function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
+  const tomorrow = new Date(Date.now() + 86400000);
+  const defaultDate = tomorrow.toISOString().split('T')[0];
+  const defaultTime = '09:00';
+
   const [form, setForm] = useState({
     title: '',
     description: '',
     type: 'FOLLOW_UP_CALL',
     priority: 'MEDIUM',
-    dueAt: (() => {
-      const d = new Date(Date.now() + 86400000);
-      d.setSeconds(0, 0);
-      const tzOffsetMs = d.getTimezoneOffset() * 60000;
-      return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
-    })(),
+    dueDate: defaultDate,
+    dueTime: defaultTime,
     assigneeId: '',
+    reminderDate: '',
+    reminderTime: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
   const [fullUsers, setFullUsers] = useState<User[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
+  const [meId, setMeId] = useState('');
 
   useEffect(() => {
     Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]) => {
       setUsers(Array.isArray(userList) ? userList : []);
       setFullUsers(Array.isArray(userList) ? userList : []);
       setCurrentUserId(me?.id || '');
-      if (me?.id) setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
+      if (me?.id) {
+        setMeId(me.id);
+        setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
+      }
     }).catch(() => {});
   }, []);
 
@@ -896,10 +902,18 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
     e.preventDefault();
     setSubmitting(true);
     try {
-      await onSubmit({
-        ...form,
-        dueAt: new Date(form.dueAt).toISOString(),
-      });
+      const payload: any = {
+        title: form.title,
+        description: form.description,
+        type: form.type,
+        priority: form.priority,
+        assigneeId: form.assigneeId,
+        dueAt: new Date(`${form.dueDate}T${form.dueTime}:00`).toISOString(),
+      };
+      if (form.reminderDate && form.reminderTime) {
+        payload.reminder = new Date(`${form.reminderDate}T${form.reminderTime}:00`).toISOString();
+      }
+      await onSubmit(payload);
     } finally {
       setSubmitting(false);
     }
@@ -907,7 +921,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-md">
+      <div className="card w-full max-w-lg">
         <div className="flex items-center justify-between p-5 border-b">
           <h2 className="text-lg font-semibold text-gray-900">Create Task</h2>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400"><svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
@@ -940,17 +954,38 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
             </div>
           </div>
           <div>
-            <label className="label">Assign To *</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">Assign To *</label>
+              {meId && form.assigneeId !== meId && (
+                <button type="button" onClick={() => setForm({ ...form, assigneeId: meId })} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                  Assign to myself
+                </button>
+              )}
+              {meId && form.assigneeId === meId && (
+                <span className="text-xs text-green-600 font-medium">Assigned to you</span>
+              )}
+            </div>
             <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
               <option value="">Select assignee...</option>
               {users.map((u) => (
-                <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                <option key={u.id} value={u.id}>{u.firstName} {u.lastName}{u.id === meId ? ' (Me)' : ''}</option>
               ))}
             </select>
           </div>
           <div>
             <label className="label">Due Date & Time *</label>
-            <input type="datetime-local" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
+            <div className="grid grid-cols-2 gap-2">
+              <input type="date" className="input" required value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} />
+              <input type="time" className="input" required value={form.dueTime} onChange={(e) => setForm({ ...form, dueTime: e.target.value })} />
+            </div>
+          </div>
+          <div>
+            <label className="label">Reminder</label>
+            <div className="grid grid-cols-2 gap-2">
+              <input type="date" className="input" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })} placeholder="Date" />
+              <input type="time" className="input" value={form.reminderTime} onChange={(e) => setForm({ ...form, reminderTime: e.target.value })} placeholder="Time" />
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Set a date and time to be reminded about this task</p>
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
