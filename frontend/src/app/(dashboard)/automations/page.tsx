@@ -142,7 +142,7 @@ export default function AutomationsPage() {
 
   const handleCreate = async (data: any) => {
     try {
-      if (editingRule) {
+      if (editingRule && editingRule.id) {
         await api.updateAutomation(editingRule.id, data);
       } else {
         await api.createAutomation(data);
