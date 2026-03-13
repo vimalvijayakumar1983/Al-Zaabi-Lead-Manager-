@@ -26,11 +26,14 @@ const listNotificationsSchema = paginationSchema.extend({
 
 router.get('/unread-count', async (req, res) => {
   try {
-    const result = await prisma.$queryRawUnsafe(
-      `SELECT COUNT(*)::int as count FROM notifications WHERE "userId" = $1 AND "isRead" = false AND "isArchived" = false`,
-      req.user.id
-    );
-    res.json({ count: result[0]?.count || 0 });
+    const count = await prisma.notification.count({
+      where: {
+        userId: req.user.id,
+        isRead: false,
+        isArchived: false,
+      },
+    });
+    res.json({ count });
   } catch (error) {
     logger.error('Failed to get unread count', { error: error.message });
     res.status(500).json({ error: 'Failed to get unread count' });
@@ -41,16 +44,15 @@ router.get('/unread-count', async (req, res) => {
 
 router.get('/preferences', async (req, res) => {
   try {
-    const result = await prisma.$queryRawUnsafe(
-      `SELECT preferences FROM notification_preferences WHERE "userId" = $1`,
-      req.user.id
-    );
+    const pref = await prisma.notificationPreference.findUnique({
+      where: { userId: req.user.id },
+    });
     const defaults = {
       soundEnabled: true, desktopEnabled: false, emailEnabled: true,
       leads: true, tasks: true, campaigns: true,
       integrations: true, team: true, system: true,
     };
-    res.json(result[0]?.preferences || defaults);
+    res.json(pref?.preferences || defaults);
   } catch (error) {
     logger.error('Failed to get notification preferences', { error: error.message });
     res.status(500).json({ error: 'Failed to get preferences' });
@@ -62,13 +64,11 @@ router.get('/preferences', async (req, res) => {
 router.put('/preferences', async (req, res) => {
   try {
     const prefs = req.body;
-    await prisma.$queryRawUnsafe(
-      `INSERT INTO notification_preferences ("userId", preferences, "updatedAt")
-       VALUES ($1, $2::jsonb, NOW())
-       ON CONFLICT ("userId") DO UPDATE SET preferences = $2::jsonb, "updatedAt" = NOW()`,
-      req.user.id,
-      JSON.stringify(prefs)
-    );
+    await prisma.notificationPreference.upsert({
+      where: { userId: req.user.id },
+      update: { preferences: prefs },
+      create: { userId: req.user.id, preferences: prefs },
+    });
     res.json({ success: true, preferences: prefs });
   } catch (error) {
     logger.error('Failed to update notification preferences', { error: error.message });
@@ -81,59 +81,36 @@ router.put('/preferences', async (req, res) => {
 router.get('/', validateQuery(listNotificationsSchema), async (req, res) => {
   try {
     const q = req.validatedQuery || req.query;
-    const { type, isRead, entityType, dateFrom, dateTo, grouped, page = 1, limit = 20 } = q;
+    const { type, isRead, entityType, dateFrom, dateTo, page = 1, limit = 20 } = q;
 
-    const conditions = ['"userId" = $1', '"isArchived" = false'];
-    const params = [req.user.id];
-    let paramIdx = 2;
+    const where = {
+      userId: req.user.id,
+      isArchived: false,
+    };
 
-    if (type) {
-      conditions.push(`type = $${paramIdx}`);
-      params.push(type);
-      paramIdx++;
-    }
-    if (isRead !== undefined && isRead !== null) {
-      conditions.push(`"isRead" = $${paramIdx}`);
-      params.push(isRead);
-      paramIdx++;
-    }
-    if (entityType) {
-      conditions.push(`"entityType" = $${paramIdx}`);
-      params.push(entityType);
-      paramIdx++;
-    }
-    if (dateFrom) {
-      conditions.push(`"createdAt" >= $${paramIdx}::timestamp`);
-      params.push(dateFrom);
-      paramIdx++;
-    }
-    if (dateTo) {
-      conditions.push(`"createdAt" <= $${paramIdx}::timestamp`);
-      params.push(dateTo);
-      paramIdx++;
+    if (type) where.type = type;
+    if (isRead !== undefined && isRead !== null) where.isRead = isRead;
+    if (entityType) where.entityType = entityType;
+    if (dateFrom || dateTo) {
+      where.createdAt = {};
+      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+      if (dateTo) where.createdAt.lte = new Date(dateTo);
     }
 
-    const where = conditions.join(' AND ');
-
-    // Count
-    const countResult = await prisma.$queryRawUnsafe(
-      `SELECT COUNT(*)::int as total FROM notifications WHERE ${where}`,
-      ...params
-    );
-    const total = countResult[0]?.total || 0;
-
-    // Fetch with actor info
-    const offset = (page - 1) * limit;
-    const notifications = await prisma.$queryRawUnsafe(
-      `SELECT n.*, 
-        json_build_object('id', u.id, 'firstName', u."firstName", 'lastName', u."lastName", 'avatar', u.avatar) as actor
-       FROM notifications n
-       LEFT JOIN users u ON n."actorId" = u.id
-       WHERE ${where}
-       ORDER BY n."createdAt" DESC
-       LIMIT ${limit} OFFSET ${offset}`,
-      ...params
-    );
+    const [notifications, total] = await Promise.all([
+      prisma.notification.findMany({
+        where,
+        include: {
+          actor: {
+            select: { id: true, firstName: true, lastName: true, avatar: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.notification.count({ where }),
+    ]);
 
     res.json(paginatedResponse(notifications, total, page, limit));
   } catch (error) {
@@ -146,11 +123,10 @@ router.get('/', validateQuery(listNotificationsSchema), async (req, res) => {
 
 router.post('/:id/read', async (req, res) => {
   try {
-    await prisma.$queryRawUnsafe(
-      `UPDATE notifications SET "isRead" = true, "readAt" = NOW(), "updatedAt" = NOW() WHERE id = $1 AND "userId" = $2`,
-      req.params.id,
-      req.user.id
-    );
+    await prisma.notification.updateMany({
+      where: { id: req.params.id, userId: req.user.id },
+      data: { isRead: true, readAt: new Date() },
+    });
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to mark notification as read', { error: error.message });
@@ -162,10 +138,10 @@ router.post('/:id/read', async (req, res) => {
 
 router.post('/read-all', async (req, res) => {
   try {
-    await prisma.$queryRawUnsafe(
-      `UPDATE notifications SET "isRead" = true, "readAt" = NOW(), "updatedAt" = NOW() WHERE "userId" = $1 AND "isRead" = false`,
-      req.user.id
-    );
+    await prisma.notification.updateMany({
+      where: { userId: req.user.id, isRead: false },
+      data: { isRead: true, readAt: new Date() },
+    });
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to mark all as read', { error: error.message });
@@ -177,11 +153,10 @@ router.post('/read-all', async (req, res) => {
 
 router.post('/:id/archive', async (req, res) => {
   try {
-    await prisma.$queryRawUnsafe(
-      `UPDATE notifications SET "isArchived" = true, "updatedAt" = NOW() WHERE id = $1 AND "userId" = $2`,
-      req.params.id,
-      req.user.id
-    );
+    await prisma.notification.updateMany({
+      where: { id: req.params.id, userId: req.user.id },
+      data: { isArchived: true },
+    });
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to archive notification', { error: error.message });
@@ -193,11 +168,9 @@ router.post('/:id/archive', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    await prisma.$queryRawUnsafe(
-      `DELETE FROM notifications WHERE id = $1 AND "userId" = $2`,
-      req.params.id,
-      req.user.id
-    );
+    await prisma.notification.deleteMany({
+      where: { id: req.params.id, userId: req.user.id },
+    });
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to delete notification', { error: error.message });

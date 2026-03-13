@@ -149,10 +149,10 @@ router.use(authenticate);
 
 router.get('/platforms', async (req, res, next) => {
   try {
-    const connectedIntegrations = await prisma.$queryRawUnsafe(
-      `SELECT platform, status FROM integrations WHERE organization_id = ANY($1::uuid[])`,
-      req.orgIds
-    );
+    const connectedIntegrations = await prisma.integration.findMany({
+      where: { organizationId: { in: req.orgIds } },
+      select: { platform: true, status: true },
+    });
 
     const connectedMap = {};
     for (const row of connectedIntegrations) {
@@ -180,14 +180,13 @@ router.get('/platforms', async (req, res, next) => {
 
 router.get('/', async (req, res, next) => {
   try {
-    const integrations = await prisma.$queryRawUnsafe(
-      `SELECT i.*, c.name AS campaign_name
-       FROM integrations i
-       LEFT JOIN campaigns c ON c.id = i.campaign_id
-       WHERE i.organization_id = ANY($1::uuid[])
-       ORDER BY i.created_at DESC`,
-      req.orgIds
-    );
+    const integrations = await prisma.integration.findMany({
+      where: { organizationId: { in: req.orgIds } },
+      include: {
+        campaign: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
     const formatted = integrations.map((row) => ({
       id: row.id,
@@ -195,13 +194,13 @@ router.get('/', async (req, res, next) => {
       status: row.status,
       config: row.config,
       credentials: sanitizeCredentials(row.credentials),
-      lastSyncAt: row.last_sync_at,
-      organizationId: row.organization_id,
-      campaignId: row.campaign_id,
-      campaignName: row.campaign_name,
-      createdBy: row.created_by,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      lastSyncAt: row.lastSyncAt,
+      organizationId: row.organizationId,
+      campaignId: row.campaignId,
+      campaignName: row.campaign?.name || null,
+      createdBy: row.createdById,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     }));
 
     res.json(formatted);
@@ -216,47 +215,47 @@ router.get('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT i.*, c.name AS campaign_name, o.name AS organization_name
-       FROM integrations i
-       LEFT JOIN campaigns c ON c.id = i.campaign_id
-       LEFT JOIN organizations o ON o.id = i.organization_id
-       WHERE i.id = $1 AND i.organization_id = ANY($2::uuid[])
-       LIMIT 1`,
-      id,
-      req.orgIds
-    );
+    const integration = await prisma.integration.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+      include: {
+        campaign: { select: { name: true } },
+        organization: { select: { name: true } },
+      },
+    });
 
-    if (rows.length === 0) {
+    if (!integration) {
       return res.status(404).json({ error: 'Integration not found' });
     }
 
-    const row = rows[0];
-
-    const recentLogs = await prisma.$queryRawUnsafe(
-      `SELECT id, action, status, error_message, lead_id, created_at
-       FROM integration_logs
-       WHERE integration_id = $1
-       ORDER BY created_at DESC
-       LIMIT 20`,
-      id
-    );
+    const recentLogs = await prisma.integrationLog.findMany({
+      where: { integrationId: id },
+      select: { id: true, action: true, status: true, errorMessage: true, leadId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
 
     res.json({
-      id: row.id,
-      platform: row.platform,
-      status: row.status,
-      config: row.config,
-      credentials: sanitizeCredentials(row.credentials),
-      lastSyncAt: row.last_sync_at,
-      organizationId: row.organization_id,
-      organizationName: row.organization_name,
-      campaignId: row.campaign_id,
-      campaignName: row.campaign_name,
-      createdBy: row.created_by,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      recentLogs,
+      id: integration.id,
+      platform: integration.platform,
+      status: integration.status,
+      config: integration.config,
+      credentials: sanitizeCredentials(integration.credentials),
+      lastSyncAt: integration.lastSyncAt,
+      organizationId: integration.organizationId,
+      organizationName: integration.organization?.name || null,
+      campaignId: integration.campaignId,
+      campaignName: integration.campaign?.name || null,
+      createdBy: integration.createdById,
+      createdAt: integration.createdAt,
+      updatedAt: integration.updatedAt,
+      recentLogs: recentLogs.map(l => ({
+        id: l.id,
+        action: l.action,
+        status: l.status,
+        error_message: l.errorMessage,
+        lead_id: l.leadId,
+        created_at: l.createdAt,
+      })),
     });
   } catch (err) {
     next(err);
@@ -267,7 +266,7 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', validate(createIntegrationSchema), async (req, res, next) => {
   try {
-    const { platform, config, credentials, campaignId, organizationId } = req.body;
+    const { platform, config, credentials, campaignId, organizationId } = req.validated;
 
     const targetOrgId = organizationId || req.orgId;
     if (!req.orgIds.includes(targetOrgId)) {
@@ -283,36 +282,30 @@ router.post('/', validate(createIntegrationSchema), async (req, res, next) => {
       }
     }
 
-    const id = uuidv4();
-    const now = new Date();
+    const integration = await prisma.integration.create({
+      data: {
+        platform,
+        status: 'disconnected',
+        credentials: credentials || {},
+        config: config || {},
+        organizationId: targetOrgId,
+        createdById: req.userId || null,
+        campaignId: campaignId || null,
+      },
+    });
 
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO integrations (id, platform, status, credentials, config, organization_id, created_by, campaign_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10)`,
-      id,
-      platform,
-      'disconnected',
-      JSON.stringify(credentials || {}),
-      JSON.stringify(config || {}),
-      targetOrgId,
-      req.userId || null,
-      campaignId || null,
-      now,
-      now
-    );
-
-    await logIntegrationAction(id, 'created', { platform, config }, 'success');
+    await logIntegrationAction(integration.id, 'created', { platform, config }, 'success');
 
     res.status(201).json({
-      id,
-      platform,
-      status: 'disconnected',
-      config,
-      credentials: sanitizeCredentials(credentials || {}),
-      organizationId: targetOrgId,
-      campaignId: campaignId || null,
-      createdAt: now,
-      updatedAt: now,
+      id: integration.id,
+      platform: integration.platform,
+      status: integration.status,
+      config: integration.config,
+      credentials: sanitizeCredentials(integration.credentials),
+      organizationId: integration.organizationId,
+      campaignId: integration.campaignId,
+      createdAt: integration.createdAt,
+      updatedAt: integration.updatedAt,
     });
   } catch (err) {
     next(err);
@@ -325,74 +318,40 @@ router.put('/:id', validate(updateIntegrationSchema), async (req, res, next) => 
   try {
     const { id } = req.params;
 
-    const existing = await prisma.$queryRawUnsafe(
-      `SELECT id FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
-      id,
-      req.orgIds
-    );
+    const existing = await prisma.integration.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
 
-    if (existing.length === 0) {
+    if (!existing) {
       return res.status(404).json({ error: 'Integration not found' });
     }
 
-    const setClauses = [];
-    const values = [];
-    let paramIdx = 1;
+    const body = req.validated;
+    const updateData = {};
 
-    if (req.body.config !== undefined) {
-      setClauses.push(`config = $${paramIdx}::jsonb`);
-      values.push(JSON.stringify(req.body.config));
-      paramIdx++;
-    }
+    if (body.config !== undefined) updateData.config = body.config;
+    if (body.credentials !== undefined) updateData.credentials = body.credentials;
+    if (body.status !== undefined) updateData.status = body.status;
+    if (body.campaignId !== undefined) updateData.campaignId = body.campaignId;
 
-    if (req.body.credentials !== undefined) {
-      setClauses.push(`credentials = $${paramIdx}::jsonb`);
-      values.push(JSON.stringify(req.body.credentials));
-      paramIdx++;
-    }
+    const updated = await prisma.integration.update({
+      where: { id },
+      data: updateData,
+    });
 
-    if (req.body.status !== undefined) {
-      setClauses.push(`status = $${paramIdx}`);
-      values.push(req.body.status);
-      paramIdx++;
-    }
-
-    if (req.body.campaignId !== undefined) {
-      setClauses.push(`campaign_id = $${paramIdx}`);
-      values.push(req.body.campaignId);
-      paramIdx++;
-    }
-
-    setClauses.push(`updated_at = $${paramIdx}`);
-    values.push(new Date());
-    paramIdx++;
-
-    values.push(id);
-    values.push(req.orgIds);
-
-    await prisma.$executeRawUnsafe(
-      `UPDATE integrations SET ${setClauses.join(', ')} WHERE id = $${paramIdx - 1} AND organization_id = ANY($${paramIdx}::uuid[])`,
-      ...values
-    );
-
-    await logIntegrationAction(id, 'updated', req.body, 'success');
-
-    const updated = await prisma.$queryRawUnsafe(
-      `SELECT * FROM integrations WHERE id = $1`,
-      id
-    );
+    await logIntegrationAction(id, 'updated', body, 'success');
 
     res.json({
-      id: updated[0].id,
-      platform: updated[0].platform,
-      status: updated[0].status,
-      config: updated[0].config,
-      credentials: sanitizeCredentials(updated[0].credentials),
-      lastSyncAt: updated[0].last_sync_at,
-      organizationId: updated[0].organization_id,
-      campaignId: updated[0].campaign_id,
-      createdAt: updated[0].created_at,
-      updatedAt: updated[0].updated_at,
+      id: updated.id,
+      platform: updated.platform,
+      status: updated.status,
+      config: updated.config,
+      credentials: sanitizeCredentials(updated.credentials),
+      lastSyncAt: updated.lastSyncAt,
+      organizationId: updated.organizationId,
+      campaignId: updated.campaignId,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
     });
   } catch (err) {
     next(err);
@@ -405,21 +364,15 @@ router.delete('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const existing = await prisma.$queryRawUnsafe(
-      `SELECT id FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
-      id,
-      req.orgIds
-    );
+    const existing = await prisma.integration.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
 
-    if (existing.length === 0) {
+    if (!existing) {
       return res.status(404).json({ error: 'Integration not found' });
     }
 
-    await prisma.$executeRawUnsafe(
-      `DELETE FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
-      id,
-      req.orgIds
-    );
+    await prisma.integration.delete({ where: { id } });
 
     res.json({ message: 'Integration deleted successfully' });
   } catch (err) {
@@ -433,17 +386,14 @@ router.post('/:id/test', async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT * FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
-      id,
-      req.orgIds
-    );
+    const integration = await prisma.integration.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
 
-    if (rows.length === 0) {
+    if (!integration) {
       return res.status(404).json({ error: 'Integration not found' });
     }
 
-    const integration = rows[0];
     let testResult;
 
     try {
@@ -454,13 +404,10 @@ router.post('/:id/test', async (req, res, next) => {
 
     const newStatus = testResult.success ? 'connected' : 'error';
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE integrations SET status = $1, last_sync_at = $2, updated_at = $3 WHERE id = $4`,
-      newStatus,
-      new Date(),
-      new Date(),
-      id
-    );
+    await prisma.integration.update({
+      where: { id },
+      data: { status: newStatus, lastSyncAt: new Date() },
+    });
 
     await logIntegrationAction(
       id,
@@ -482,59 +429,49 @@ router.get('/:id/logs', validateQuery(logsQuerySchema), async (req, res, next) =
   try {
     const { id } = req.params;
 
-    const existing = await prisma.$queryRawUnsafe(
-      `SELECT id FROM integrations WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
-      id,
-      req.orgIds
-    );
+    const existing = await prisma.integration.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
 
-    if (existing.length === 0) {
+    if (!existing) {
       return res.status(404).json({ error: 'Integration not found' });
     }
 
-    const { page = 1, limit = 20, action, status } = req.query;
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const take = parseInt(limit, 10);
+    const q = req.validatedQuery || req.query;
+    const { page = 1, limit = 20, action, status } = q;
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
 
-    let whereClause = 'WHERE il.integration_id = $1';
-    const params = [id];
-    let paramIdx = 2;
+    const where = { integrationId: id };
+    if (action) where.action = action;
+    if (status) where.status = status;
 
-    if (action) {
-      whereClause += ` AND il.action = $${paramIdx}`;
-      params.push(action);
-      paramIdx++;
-    }
-
-    if (status) {
-      whereClause += ` AND il.status = $${paramIdx}`;
-      params.push(status);
-      paramIdx++;
-    }
-
-    params.push(take);
-    params.push(offset);
-
-    const [logs, countResult] = await Promise.all([
-      prisma.$queryRawUnsafe(
-        `SELECT il.* FROM integration_logs il ${whereClause} ORDER BY il.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-        ...params
-      ),
-      prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS total FROM integration_logs il ${whereClause}`,
-        ...params.slice(0, paramIdx - 1)
-      ),
+    const [logs, total] = await Promise.all([
+      prisma.integrationLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+      }),
+      prisma.integrationLog.count({ where }),
     ]);
 
-    const total = countResult[0]?.total || 0;
-
     res.json({
-      data: logs,
+      data: logs.map(l => ({
+        id: l.id,
+        integration_id: l.integrationId,
+        action: l.action,
+        payload: l.payload,
+        status: l.status,
+        error_message: l.errorMessage,
+        lead_id: l.leadId,
+        created_at: l.createdAt,
+      })),
       pagination: {
-        page: parseInt(page, 10),
-        limit: take,
+        page: pageNum,
+        limit: limitNum,
         total,
-        totalPages: Math.ceil(total / take),
+        totalPages: Math.ceil(total / limitNum),
       },
     });
   } catch (err) {
@@ -560,25 +497,23 @@ router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res,
       return res.status(404).json({ error: 'Organization not found' });
     }
 
-    const apiKeys = await prisma.$queryRawUnsafe(
-      `SELECT key FROM api_keys WHERE organization_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1`,
-      targetOrgId
-    );
+    const existingKey = await prisma.apiKey.findFirst({
+      where: { organizationId: targetOrgId, isActive: true },
+      orderBy: { createdAt: 'desc' },
+    });
 
     let apiKey;
-    if (apiKeys.length === 0) {
+    if (!existingKey) {
       apiKey = generateApiKeyString();
-      const keyId = uuidv4();
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO api_keys (id, key, name, organization_id, is_active, created_at) VALUES ($1, $2, $3, $4, true, $5)`,
-        keyId,
-        apiKey,
-        'Widget Auto-generated Key',
-        targetOrgId,
-        new Date()
-      );
+      await prisma.apiKey.create({
+        data: {
+          key: apiKey,
+          name: 'Widget Auto-generated Key',
+          organizationId: targetOrgId,
+        },
+      });
     } else {
-      apiKey = apiKeys[0].key;
+      apiKey = existingKey.key;
     }
 
     const fields = req.body.fields || [
@@ -612,7 +547,7 @@ router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res,
 
 router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res, next) => {
   try {
-    const { name, organizationId } = req.body;
+    const { name, organizationId } = req.validated;
     const targetOrgId = organizationId || req.orgId;
 
     if (!req.orgIds.includes(targetOrgId)) {
@@ -620,24 +555,22 @@ router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res
     }
 
     const apiKey = generateApiKeyString();
-    const id = uuidv4();
 
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO api_keys (id, key, name, organization_id, is_active, created_at) VALUES ($1, $2, $3, $4, true, $5)`,
-      id,
-      apiKey,
-      name,
-      targetOrgId,
-      new Date()
-    );
+    const created = await prisma.apiKey.create({
+      data: {
+        key: apiKey,
+        name,
+        organizationId: targetOrgId,
+      },
+    });
 
     res.status(201).json({
-      id,
+      id: created.id,
       apiKey,
       name,
       endpoint: 'https://api.alzaabi.ae/api/public/leads',
       organizationId: targetOrgId,
-      createdAt: new Date(),
+      createdAt: created.createdAt,
     });
   } catch (err) {
     next(err);
@@ -648,22 +581,20 @@ router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res
 
 router.post('/api-key/revoke', validate(revokeApiKeySchema), async (req, res, next) => {
   try {
-    const { apiKeyId } = req.body;
+    const { apiKeyId } = req.validated;
 
-    const existing = await prisma.$queryRawUnsafe(
-      `SELECT id FROM api_keys WHERE id = $1 AND organization_id = ANY($2::uuid[])`,
-      apiKeyId,
-      req.orgIds
-    );
+    const existing = await prisma.apiKey.findFirst({
+      where: { id: apiKeyId, organizationId: { in: req.orgIds } },
+    });
 
-    if (existing.length === 0) {
+    if (!existing) {
       return res.status(404).json({ error: 'API key not found' });
     }
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE api_keys SET is_active = false WHERE id = $1`,
-      apiKeyId
-    );
+    await prisma.apiKey.update({
+      where: { id: apiKeyId },
+      data: { isActive: false },
+    });
 
     res.json({ message: 'API key revoked successfully' });
   } catch (err) {
@@ -737,17 +668,15 @@ async function testPlatformConnection(integration) {
 
 async function logIntegrationAction(integrationId, action, payload, status, errorMessage) {
   try {
-    const id = uuidv4();
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO integration_logs (id, integration_id, action, payload, status, error_message, created_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
-      id,
-      integrationId,
-      action,
-      JSON.stringify(payload || {}),
-      status || 'success',
-      errorMessage || null,
-      new Date()
-    );
+    await prisma.integrationLog.create({
+      data: {
+        integrationId,
+        action,
+        payload: payload || {},
+        status: status || 'success',
+        errorMessage: errorMessage || null,
+      },
+    });
   } catch (err) {
     console.error('Failed to log integration action:', err.message);
   }

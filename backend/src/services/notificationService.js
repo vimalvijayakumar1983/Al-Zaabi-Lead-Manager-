@@ -71,27 +71,19 @@ async function createNotification(data) {
       organizationId,
     } = data;
 
-    const id = require('crypto').randomUUID();
-    const now = new Date().toISOString();
-
-    const rows = await prisma.$queryRawUnsafe(
-      `INSERT INTO notifications (id, type, title, message, "userId", "actorId", "entityType", "entityId", metadata, "organizationId", "isRead", "isArchived", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, false, false, $11::timestamp, $11::timestamp)
-       RETURNING *`,
-      id,
-      type,
-      title,
-      message,
-      userId,
-      actorId,
-      entityType,
-      entityId,
-      JSON.stringify(metadata),
-      organizationId,
-      now
-    );
-
-    const notification = rows[0];
+    const notification = await prisma.notification.create({
+      data: {
+        type,
+        title,
+        message,
+        userId,
+        actorId,
+        entityType,
+        entityId,
+        metadata,
+        organizationId,
+      },
+    });
 
     // Send real-time WebSocket notification
     try {
@@ -125,12 +117,10 @@ async function createBulkNotifications(notifications) {
   if (!notifications || notifications.length === 0) return [];
 
   try {
-    const now = new Date().toISOString();
     const created = [];
 
     await prisma.$transaction(async (tx) => {
       for (const data of notifications) {
-        const id = require('crypto').randomUUID();
         const {
           type,
           title,
@@ -143,24 +133,21 @@ async function createBulkNotifications(notifications) {
           organizationId,
         } = data;
 
-        const rows = await tx.$queryRawUnsafe(
-          `INSERT INTO notifications (id, type, title, message, "userId", "actorId", "entityType", "entityId", metadata, "organizationId", "isRead", "isArchived", "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, false, false, $11::timestamp, $11::timestamp)
-           RETURNING *`,
-          id,
-          type,
-          title,
-          message,
-          userId,
-          actorId,
-          entityType,
-          entityId,
-          JSON.stringify(metadata),
-          organizationId,
-          now
-        );
+        const notification = await tx.notification.create({
+          data: {
+            type,
+            title,
+            message,
+            userId,
+            actorId,
+            entityType,
+            entityId,
+            metadata,
+            organizationId,
+          },
+        });
 
-        created.push(rows[0]);
+        created.push(notification);
       }
     });
 
@@ -196,14 +183,14 @@ async function createBulkNotifications(notifications) {
 // ============================================================
 async function notifyOrgAdmins(organizationId, data) {
   try {
-    const admins = await prisma.$queryRawUnsafe(
-      `SELECT u.id FROM users u
-       INNER JOIN organization_members om ON om."userId" = u.id
-       WHERE om."organizationId" = $1
-         AND om.role IN ('ADMIN', 'SUPER_ADMIN')
-         AND u.status = 'ACTIVE'`,
-      organizationId
-    );
+    const admins = await prisma.user.findMany({
+      where: {
+        organizationId,
+        role: { in: ['ADMIN', 'SUPER_ADMIN'] },
+        isActive: true,
+      },
+      select: { id: true },
+    });
 
     if (!admins || admins.length === 0) return [];
 
@@ -228,20 +215,19 @@ async function notifyOrgAdmins(organizationId, data) {
 // ============================================================
 async function notifyLeadOwner(leadId, data) {
   try {
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT "assignedTo", "organizationId" FROM leads WHERE id = $1`,
-      leadId
-    );
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { assignedToId: true, organizationId: true },
+    });
 
-    if (!rows || rows.length === 0 || !rows[0].assignedTo) {
+    if (!lead || !lead.assignedToId) {
       logger.debug('No assigned owner for lead', { leadId });
       return null;
     }
 
-    const lead = rows[0];
     return await createNotification({
       ...data,
-      userId: lead.assignedTo,
+      userId: lead.assignedToId,
       organizationId: data.organizationId || lead.organizationId,
     });
   } catch (error) {
@@ -258,20 +244,19 @@ async function notifyLeadOwner(leadId, data) {
 // ============================================================
 async function notifyTeamMembers(organizationId, data, excludeUserId = null) {
   try {
-    let query = `
-      SELECT u.id FROM users u
-      INNER JOIN organization_members om ON om."userId" = u.id
-      WHERE om."organizationId" = $1
-        AND u.status = 'ACTIVE'
-    `;
-    const params = [organizationId];
+    const where = {
+      organizationId,
+      isActive: true,
+    };
 
     if (excludeUserId) {
-      query += ` AND u.id != $2`;
-      params.push(excludeUserId);
+      where.id = { not: excludeUserId };
     }
 
-    const members = await prisma.$queryRawUnsafe(query, ...params);
+    const members = await prisma.user.findMany({
+      where,
+      select: { id: true },
+    });
 
     if (!members || members.length === 0) return [];
 

@@ -45,6 +45,9 @@ model Organization {
   webhooks          Webhook[]
   auditLogs         AuditLog[]
   importHistory     ImportHistory[]
+  notifications     Notification[]
+  integrations      Integration[]
+  apiKeys           ApiKey[]
 
   @@index([parentId])
   @@map("organizations")
@@ -85,6 +88,10 @@ model User {
   communications Communication[]
   auditLogs      AuditLog[]
   imports        ImportHistory[]
+  notifications         Notification[] @relation("NotificationRecipient")
+  actedNotifications    Notification[] @relation("NotificationActor")
+  notificationPreference NotificationPreference?
+  createdIntegrations   Integration[]  @relation("IntegrationCreator")
 
   @@index([organizationId])
   @@map("users")
@@ -367,6 +374,8 @@ model Campaign {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  integrations   Integration[]
+
   @@index([organizationId])
   @@map("campaigns")
 }
@@ -573,4 +582,106 @@ model AuditLog {
   @@index([organizationId, createdAt])
   @@index([entity, entityId])
   @@map("audit_logs")
+}
+
+// ─── Notifications ──────────────────────────────────────────────
+
+model Notification {
+  id             String   @id @default(uuid())
+  type           String
+  title          String
+  message        String
+  isRead         Boolean  @default(false)
+  isArchived     Boolean  @default(false)
+  readAt         DateTime?
+  entityType     String?
+  entityId       String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userId         String
+  user           User     @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+
+  actorId        String?
+  actor          User?    @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, isArchived])
+  @@index([organizationId, createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id          String   @id @default(uuid())
+  preferences Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+// ─── Integrations ───────────────────────────────────────────────
+
+model Integration {
+  id             String   @id @default(uuid())
+  platform       String
+  status         String   @default("disconnected")
+  credentials    Json     @default("{}")
+  config         Json     @default("{}")
+  lastSyncAt     DateTime? @map("last_sync_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  campaignId     String?  @map("campaign_id")
+  campaign       Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  createdById    String?  @map("created_by")
+  createdBy      User?    @relation("IntegrationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  logs           IntegrationLog[]
+
+  @@index([organizationId, platform])
+  @@map("integrations")
+}
+
+model IntegrationLog {
+  id             String   @id @default(uuid())
+  action         String
+  payload        Json     @default("{}")
+  status         String   @default("success")
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  integrationId  String   @map("integration_id")
+  integration    Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  leadId         String?  @map("lead_id")
+
+  @@index([integrationId, createdAt])
+  @@map("integration_logs")
+}
+
+// ─── API Keys ───────────────────────────────────────────────────
+
+model ApiKey {
+  id             String   @id @default(uuid())
+  key            String   @unique
+  name           String
+  isActive       Boolean  @default(true) @map("is_active")
+  lastUsedAt     DateTime? @map("last_used_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([key, isActive])
+  @@map("api_keys")
 }

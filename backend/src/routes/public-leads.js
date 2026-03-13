@@ -52,27 +52,23 @@ router.post('/leads', async (req, res, next) => {
       });
     }
 
-    const apiKeyRows = await prisma.$queryRawUnsafe(
-      `SELECT ak.id, ak.key, ak.organization_id, o.name AS organization_name
-       FROM api_keys ak
-       JOIN organizations o ON o.id = ak.organization_id
-       WHERE ak.key = $1 AND ak.is_active = true
-       LIMIT 1`,
-      apiKeyValue
-    );
+    const apiKeyRecord = await prisma.apiKey.findFirst({
+      where: { key: apiKeyValue, isActive: true },
+      include: {
+        organization: { select: { name: true } },
+      },
+    });
 
-    if (apiKeyRows.length === 0) {
+    if (!apiKeyRecord) {
       return res.status(401).json({ error: 'Invalid or revoked API key' });
     }
 
-    const apiKeyRecord = apiKeyRows[0];
-    const organizationId = apiKeyRecord.organization_id;
+    const organizationId = apiKeyRecord.organizationId;
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE api_keys SET last_used_at = $1 WHERE id = $2`,
-      new Date(),
-      apiKeyRecord.id
-    );
+    await prisma.apiKey.update({
+      where: { id: apiKeyRecord.id },
+      data: { lastUsedAt: new Date() },
+    });
 
     const parsed = publicLeadSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -114,30 +110,25 @@ router.post('/leads', async (req, res, next) => {
 
     const lead = await prisma.lead.create({ data: leadData });
 
-    const logIntegration = await prisma.$queryRawUnsafe(
-      `SELECT id FROM integrations WHERE platform = 'website' AND organization_id = $1 AND status = 'connected' LIMIT 1`,
-      organizationId
-    );
+    const logIntegration = await prisma.integration.findFirst({
+      where: { platform: 'website', organizationId, status: 'connected' },
+    });
 
-    if (logIntegration.length > 0) {
+    if (logIntegration) {
       try {
-        const { v4: uuidv4 } = require('uuid');
-        const logId = uuidv4();
-        await prisma.$executeRawUnsafe(
-          `INSERT INTO integration_logs (id, integration_id, action, payload, status, lead_id, created_at)
-           VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
-          logId,
-          logIntegration[0].id,
-          'public_lead_created',
-          JSON.stringify({
-            source: leadSource,
-            apiKeyId: apiKeyRecord.id,
-            origin: req.headers.origin || req.headers.referer || 'unknown',
-          }),
-          'success',
-          lead.id,
-          new Date()
-        );
+        await prisma.integrationLog.create({
+          data: {
+            integrationId: logIntegration.id,
+            action: 'public_lead_created',
+            payload: {
+              source: leadSource,
+              apiKeyId: apiKeyRecord.id,
+              origin: req.headers.origin || req.headers.referer || 'unknown',
+            },
+            status: 'success',
+            leadId: lead.id,
+          },
+        });
       } catch (logErr) {
         console.error('Failed to log public lead creation:', logErr.message);
       }
@@ -146,7 +137,7 @@ router.post('/leads', async (req, res, next) => {
     res.status(201).json({
       id: lead.id,
       message: 'Lead created successfully',
-      organization: apiKeyRecord.organization_name,
+      organization: apiKeyRecord.organization.name,
     });
   } catch (err) {
     next(err);

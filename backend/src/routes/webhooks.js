@@ -179,9 +179,10 @@ router.post('/incoming/facebook', async (req, res, next) => {
     const signature = req.headers['x-hub-signature-256'];
     const body = req.body;
 
-    const integrations = await prisma.$queryRawUnsafe(
-      `SELECT * FROM integrations WHERE platform = 'facebook' AND status = 'connected' LIMIT 50`
-    );
+    const integrations = await prisma.integration.findMany({
+      where: { platform: 'facebook', status: 'connected' },
+      take: 50,
+    });
 
     if (signature && integrations.length > 0) {
       const isValid = integrations.some((integration) => {
@@ -218,17 +219,17 @@ router.post('/incoming/facebook', async (req, res, next) => {
           );
 
           const orgId = matchingIntegration
-            ? matchingIntegration.organization_id
-            : integrations[0]?.organization_id;
+            ? matchingIntegration.organizationId
+            : integrations[0]?.organizationId;
 
           if (!orgId) continue;
 
           const parsedLead = parseFacebookLeadFields(leadData);
 
           let campaign = null;
-          if (matchingIntegration?.campaign_id) {
+          if (matchingIntegration?.campaignId) {
             const campaignRows = await prisma.campaign.findFirst({
-              where: { id: matchingIntegration.campaign_id },
+              where: { id: matchingIntegration.campaignId },
               select: { name: true },
             });
             campaign = campaignRows?.name || null;
@@ -273,9 +274,10 @@ router.post('/incoming/google', async (req, res, next) => {
   try {
     const body = req.body;
 
-    const integrations = await prisma.$queryRawUnsafe(
-      `SELECT * FROM integrations WHERE platform = 'google' AND status = 'connected' LIMIT 50`
-    );
+    const integrations = await prisma.integration.findMany({
+      where: { platform: 'google', status: 'connected' },
+      take: 50,
+    });
 
     const results = [];
 
@@ -292,11 +294,11 @@ router.post('/incoming/google', async (req, res, next) => {
         const matchingIntegration = integrations.find(
           (i) => i.config?.campaignName === campaignName
         );
-        orgId = matchingIntegration?.organization_id;
+        orgId = matchingIntegration?.organizationId;
       }
 
       if (!orgId && integrations.length > 0) {
-        orgId = integrations[0].organization_id;
+        orgId = integrations[0].organizationId;
       }
 
       if (!orgId) continue;
@@ -316,7 +318,7 @@ router.post('/incoming/google', async (req, res, next) => {
       });
 
       const matchedIntegration = integrations.find(
-        (i) => i.organization_id === orgId
+        (i) => i.organizationId === orgId
       );
 
       await logIncomingWebhook(
@@ -342,9 +344,10 @@ router.post('/incoming/tiktok', async (req, res, next) => {
   try {
     const body = req.body;
 
-    const integrations = await prisma.$queryRawUnsafe(
-      `SELECT * FROM integrations WHERE platform = 'tiktok' AND status = 'connected' LIMIT 50`
-    );
+    const integrations = await prisma.integration.findMany({
+      where: { platform: 'tiktok', status: 'connected' },
+      take: 50,
+    });
 
     const results = [];
 
@@ -354,7 +357,7 @@ router.post('/incoming/tiktok', async (req, res, next) => {
       const parsedLead = parseTikTokLeadFields(tiktokLead);
 
       const orgId = integrations.length > 0
-        ? integrations[0].organization_id
+        ? integrations[0].organizationId
         : null;
 
       if (!orgId) continue;
@@ -366,7 +369,7 @@ router.post('/incoming/tiktok', async (req, res, next) => {
           email: parsedLead.email || null,
           phone: parsedLead.phone || null,
           company: parsedLead.company || null,
-          source: 'OTHER',
+          source: 'TIKTOK_ADS',
           status: 'NEW',
           campaign: tiktokLead.campaign_name || null,
           organizationId: orgId,
@@ -374,7 +377,7 @@ router.post('/incoming/tiktok', async (req, res, next) => {
       });
 
       const matchedIntegration = integrations.find(
-        (i) => i.organization_id === orgId
+        (i) => i.organizationId === orgId
       );
 
       await logIncomingWebhook(
@@ -412,9 +415,10 @@ router.post('/incoming/whatsapp', async (req, res, next) => {
   try {
     const body = req.body;
 
-    const integrations = await prisma.$queryRawUnsafe(
-      `SELECT * FROM integrations WHERE platform = 'whatsapp' AND status = 'connected' LIMIT 50`
-    );
+    const integrations = await prisma.integration.findMany({
+      where: { platform: 'whatsapp', status: 'connected' },
+      take: 50,
+    });
 
     const results = [];
 
@@ -434,8 +438,8 @@ router.post('/incoming/whatsapp', async (req, res, next) => {
           );
 
           const orgId = matchingIntegration
-            ? matchingIntegration.organization_id
-            : integrations[0]?.organization_id;
+            ? matchingIntegration.organizationId
+            : integrations[0]?.organizationId;
 
           if (!orgId) continue;
 
@@ -613,17 +617,15 @@ function parseTikTokLeadFields(tiktokLead) {
 async function logIncomingWebhook(integrationId, action, payload, status, leadId) {
   try {
     if (!integrationId) return;
-    const id = uuidv4();
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO integration_logs (id, integration_id, action, payload, status, lead_id, created_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)`,
-      id,
-      integrationId,
-      action,
-      JSON.stringify(payload || {}),
-      status || 'success',
-      leadId || null,
-      new Date()
-    );
+    await prisma.integrationLog.create({
+      data: {
+        integrationId,
+        action,
+        payload: payload || {},
+        status: status || 'success',
+        leadId: leadId || null,
+      },
+    });
   } catch (err) {
     console.error('Failed to log incoming webhook:', err.message);
   }
