@@ -68,32 +68,43 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', limiter);
+app.use(limiter);
 
 // ─── Health Check ────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
-// ─── API Routes ──────────────────────────────────────────────────
-app.use('/api/auth', authRoutes);
-app.use('/api/divisions', divisionRoutes);
-app.use('/api/leads/allocation', allocationRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/pipeline', pipelineRoutes);
-app.use('/api/tasks', taskRoutes);
-app.use('/api/communications', communicationRoutes);
-app.use('/api/campaigns', campaignRoutes);
-app.use('/api/automations', automationRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/webhooks', webhookRoutes);
-app.use('/api/import', importRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/api/integrations', integrationsRoutes);
-app.use('/api/public', publicLeadsRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/inbox', inboxRoutes);
-app.use('/api/channels', channelWebhookRoutes);
+// ─── API Routes (mounted at both /api/* and /* for flexible deployment) ──
+const routeMounts = [
+  ['/auth', authRoutes],
+  ['/divisions', divisionRoutes],
+  ['/leads/allocation', allocationRoutes],
+  ['/leads', leadRoutes],
+  ['/pipeline', pipelineRoutes],
+  ['/tasks', taskRoutes],
+  ['/communications', communicationRoutes],
+  ['/campaigns', campaignRoutes],
+  ['/automations', automationRoutes],
+  ['/analytics', analyticsRoutes],
+  ['/users', userRoutes],
+  ['/webhooks', webhookRoutes],
+  ['/import', importRoutes],
+  ['/settings', settingsRoutes],
+  ['/integrations', integrationsRoutes],
+  ['/public', publicLeadsRoutes],
+  ['/notifications', notificationRoutes],
+  ['/inbox', inboxRoutes],
+  ['/channels', channelWebhookRoutes],
+];
+
+for (const [path, handler] of routeMounts) {
+  app.use(`/api${path}`, handler);
+  app.use(path, handler);
+}
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);

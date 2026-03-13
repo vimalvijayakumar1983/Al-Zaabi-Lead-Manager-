@@ -6,8 +6,7 @@ import type {
   AppNotification, NotificationPreferences
 } from '@/types';
 
-// Use relative /api path so requests go through Next.js rewrites (avoids CORS issues)
-const API_URL = '/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 class ApiClient {
   private token: string | null = null;
