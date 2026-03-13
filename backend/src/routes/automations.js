@@ -115,16 +115,81 @@ router.get('/templates', (req, res) => {
   res.json(AUTOMATION_TEMPLATES);
 });
 
+// ─── Global Automation Stats (must be before /:id) ──────────────
+router.get('/stats/overview', async (req, res, next) => {
+  try {
+    const orgFilter = { organizationId: { in: req.orgIds } };
+
+    const [totalRules, activeRules] = await Promise.all([
+      prisma.automationRule.count({ where: orgFilter }),
+      prisma.automationRule.count({ where: { ...orgFilter, isActive: true } }),
+    ]);
+
+    // AutomationLog queries — gracefully handle if table doesn't exist yet
+    let totalExecutions = 0;
+    let recentLogs = [];
+    let dailyLogs = [];
+    try {
+      [totalExecutions, recentLogs] = await Promise.all([
+        prisma.automationLog.count({
+          where: { rule: { organizationId: { in: req.orgIds } } },
+        }),
+        prisma.automationLog.findMany({
+          where: { rule: { organizationId: { in: req.orgIds } } },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          include: { rule: { select: { name: true } } },
+        }),
+      ]);
+
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600000);
+      dailyLogs = await prisma.automationLog.groupBy({
+        by: ['status'],
+        where: {
+          rule: { organizationId: { in: req.orgIds } },
+          createdAt: { gte: sevenDaysAgo },
+        },
+        _count: true,
+      });
+    } catch {
+      // AutomationLog table may not exist yet — return zeros
+    }
+
+    const successRate = totalExecutions > 0
+      ? ((dailyLogs.find(d => d.status === 'success')?._count || 0) /
+         dailyLogs.reduce((sum, d) => sum + d._count, 0) * 100).toFixed(1)
+      : '0';
+
+    res.json({
+      totalRules,
+      activeRules,
+      totalExecutions,
+      successRate: parseFloat(successRate),
+      recentActivity: recentLogs,
+      dailyBreakdown: dailyLogs,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── List Automations ────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const rules = await prisma.automationRule.findMany({
-      where: { organizationId: { in: req.orgIds } },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: { select: { logs: true } },
-      },
-    });
+    let rules;
+    try {
+      rules = await prisma.automationRule.findMany({
+        where: { organizationId: { in: req.orgIds } },
+        orderBy: { createdAt: 'desc' },
+        include: { _count: { select: { logs: true } } },
+      });
+    } catch {
+      // Fallback if logs relation not available yet
+      rules = await prisma.automationRule.findMany({
+        where: { organizationId: { in: req.orgIds } },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
     res.json(rules);
   } catch (err) {
     next(err);
@@ -134,32 +199,38 @@ router.get('/', async (req, res, next) => {
 // ─── Get Single Automation with Stats ────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {
-    const rule = await prisma.automationRule.findFirst({
-      where: { id: req.params.id, organizationId: { in: req.orgIds } },
-      include: {
-        _count: { select: { logs: true } },
-      },
-    });
+    let rule;
+    try {
+      rule = await prisma.automationRule.findFirst({
+        where: { id: req.params.id, organizationId: { in: req.orgIds } },
+        include: { _count: { select: { logs: true } } },
+      });
+    } catch {
+      rule = await prisma.automationRule.findFirst({
+        where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      });
+    }
     if (!rule) return res.status(404).json({ error: 'Rule not found' });
 
-    // Get recent execution stats
-    const [successCount, failedCount, recentLogs] = await Promise.all([
-      prisma.automationLog.count({
-        where: { ruleId: rule.id, status: 'success' },
-      }),
-      prisma.automationLog.count({
-        where: { ruleId: rule.id, status: 'failed' },
-      }),
-      prisma.automationLog.findMany({
-        where: { ruleId: rule.id },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-    ]);
+    // Get recent execution stats (graceful fallback)
+    let successCount = 0, failedCount = 0, recentLogs = [];
+    try {
+      [successCount, failedCount, recentLogs] = await Promise.all([
+        prisma.automationLog.count({ where: { ruleId: rule.id, status: 'success' } }),
+        prisma.automationLog.count({ where: { ruleId: rule.id, status: 'failed' } }),
+        prisma.automationLog.findMany({
+          where: { ruleId: rule.id },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        }),
+      ]);
+    } catch {
+      // AutomationLog table may not exist yet
+    }
 
     res.json({
       ...rule,
-      stats: { successCount, failedCount, totalLogs: rule._count.logs },
+      stats: { successCount, failedCount, totalLogs: rule._count?.logs || 0 },
       recentLogs,
     });
   } catch (err) {
@@ -182,15 +253,20 @@ router.get('/:id/logs', async (req, res, next) => {
     const where = { ruleId: req.params.id };
     if (status) where.status = status;
 
-    const [logs, total] = await Promise.all([
-      prisma.automationLog.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.automationLog.count({ where }),
-    ]);
+    let logs = [], total = 0;
+    try {
+      [logs, total] = await Promise.all([
+        prisma.automationLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        prisma.automationLog.count({ where }),
+      ]);
+    } catch {
+      // AutomationLog table may not exist yet
+    }
 
     res.json({
       data: logs,
@@ -200,54 +276,6 @@ router.get('/:id/logs', async (req, res, next) => {
         limit,
         totalPages: Math.ceil(total / limit),
       },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── Global Automation Stats ─────────────────────────────────────
-router.get('/stats/overview', async (req, res, next) => {
-  try {
-    const orgFilter = { organizationId: { in: req.orgIds } };
-
-    const [totalRules, activeRules, totalExecutions, recentLogs] = await Promise.all([
-      prisma.automationRule.count({ where: orgFilter }),
-      prisma.automationRule.count({ where: { ...orgFilter, isActive: true } }),
-      prisma.automationLog.count({
-        where: { rule: { organizationId: { in: req.orgIds } } },
-      }),
-      prisma.automationLog.findMany({
-        where: { rule: { organizationId: { in: req.orgIds } } },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
-        include: { rule: { select: { name: true } } },
-      }),
-    ]);
-
-    // Group recent logs by day (last 7 days)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600000);
-    const dailyLogs = await prisma.automationLog.groupBy({
-      by: ['status'],
-      where: {
-        rule: { organizationId: { in: req.orgIds } },
-        createdAt: { gte: sevenDaysAgo },
-      },
-      _count: true,
-    });
-
-    const successRate = totalExecutions > 0
-      ? ((dailyLogs.find(d => d.status === 'success')?._count || 0) /
-         dailyLogs.reduce((sum, d) => sum + d._count, 0) * 100).toFixed(1)
-      : '0';
-
-    res.json({
-      totalRules,
-      activeRules,
-      totalExecutions,
-      successRate: parseFloat(successRate),
-      recentActivity: recentLogs,
-      dailyBreakdown: dailyLogs,
     });
   } catch (err) {
     next(err);
