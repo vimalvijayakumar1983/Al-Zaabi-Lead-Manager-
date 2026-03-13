@@ -28,8 +28,16 @@ async function proxyRequest(req: NextRequest) {
   }
 
   try {
-    const res = await fetch(target, init);
+    const res = await fetch(target, {
+      ...init,
+      signal: AbortSignal.timeout(30000),
+    });
     const body = await res.text();
+
+    // Log non-2xx responses for debugging
+    if (!res.ok) {
+      console.error(`[API Proxy] ${req.method} ${target} → ${res.status}: ${body.substring(0, 200)}`);
+    }
 
     return new NextResponse(body, {
       status: res.status,
@@ -40,7 +48,12 @@ async function proxyRequest(req: NextRequest) {
   } catch (error: any) {
     console.error(`[API Proxy] Failed to reach backend at ${target}:`, error.message);
     return NextResponse.json(
-      { error: 'Backend unavailable', details: `Could not connect to ${BACKEND_URL}` },
+      {
+        error: 'Backend unavailable',
+        details: error.message,
+        target,
+        backendUrl: BACKEND_URL,
+      },
       { status: 502 }
     );
   }
