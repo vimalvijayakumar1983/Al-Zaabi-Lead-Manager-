@@ -161,16 +161,48 @@ class ApiClient {
     return this.request<any>('/analytics/dashboard');
   }
 
-  async getFunnel() {
-    return this.request<any>('/analytics/funnel');
+  async getAnalyticsOverview(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/overview?${q}`);
   }
 
-  async getTeamPerformance() {
-    return this.request<any>('/analytics/team-performance');
+  async getFunnel(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/analytics/funnel${q}`);
   }
 
-  async getTrends() {
-    return this.request<any>('/analytics/trends');
+  async getTeamPerformance(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/analytics/team-performance${q}`);
+  }
+
+  async getTrends(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/trends?${q}`);
+  }
+
+  async getSourcePerformance(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/source-performance?${q}`);
+  }
+
+  async getCampaignPerformance(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/analytics/campaign-performance${q}`);
+  }
+
+  async getActivitiesAnalytics(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/activities?${q}`);
+  }
+
+  async getScoreDistribution(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/analytics/score-distribution${q}`);
+  }
+
+  async getDivisionComparison() {
+    return this.request<any>('/analytics/division-comparison');
   }
 
   // Users
