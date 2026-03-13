@@ -3,6 +3,8 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { sendEmail } = require('../services/emailService');
+const { logger } = require('../config/logger');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -90,8 +92,18 @@ router.post('/send-email', validate(z.object({
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-    // In production, send via SMTP/Nodemailer
-    // For now, log the communication
+    // Send via SMTP
+    const emailResult = await sendEmail({
+      to,
+      subject,
+      html: body,
+      organizationId: lead.organizationId,
+    });
+
+    if (!emailResult.success) {
+      logger.warn(`Email send failed for lead ${leadId}: ${emailResult.error}`);
+    }
+
     const communication = await prisma.communication.create({
       data: {
         leadId,

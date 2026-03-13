@@ -1,6 +1,7 @@
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 const { notifyUser } = require('../websocket/server');
+const { sendEmail, sendTemplateEmail } = require('./emailService');
 
 /**
  * Evaluate and execute automation rules for a given trigger event.
@@ -190,9 +191,65 @@ const executeSingleAction = async (action, context) => {
       }
       break;
 
-    case 'send_email':
-      logger.info(`[Automation] Send email to ${context.lead.email}: ${action.config.subject}`);
+    case 'send_email': {
+      const leadEmail = context.lead.email;
+      if (!leadEmail) {
+        logger.warn(`[Automation] No email address for lead ${context.lead.id}`);
+        break;
+      }
+
+      if (action.config.template) {
+        // Use a named template
+        const variables = {
+          firstName: context.lead.firstName || '',
+          lastName: context.lead.lastName || '',
+          email: leadEmail,
+          phone: context.lead.phone || '',
+          company: context.lead.company || '',
+          companyName: 'Al-Zaabi Group',
+          senderName: 'Al-Zaabi Team',
+        };
+        const result = await sendTemplateEmail({
+          to: leadEmail,
+          templateName: action.config.template,
+          variables,
+          organizationId: context.organizationId,
+        });
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to send template email');
+        }
+      } else {
+        // Direct email with subject/body from config
+        const result = await sendEmail({
+          to: leadEmail,
+          subject: action.config.subject || 'Notification from Al-Zaabi CRM',
+          html: action.config.body || action.config.message || '',
+          organizationId: context.organizationId,
+        });
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to send email');
+        }
+      }
+
+      // Log the communication
+      try {
+        await prisma.communication.create({
+          data: {
+            leadId: context.lead.id,
+            channel: 'EMAIL',
+            direction: 'OUTBOUND',
+            subject: action.config.subject || action.config.template || 'Automation Email',
+            body: action.config.body || `Template: ${action.config.template}`,
+            metadata: { source: 'automation' },
+          },
+        });
+      } catch (logErr) {
+        logger.warn('Failed to log automation email communication:', logErr.message);
+      }
+
+      logger.info(`[Automation] Email sent to ${leadEmail}`);
       break;
+    }
 
     case 'send_whatsapp':
       logger.info(`[Automation] Send WhatsApp to ${context.lead.phone}: ${action.config.message}`);

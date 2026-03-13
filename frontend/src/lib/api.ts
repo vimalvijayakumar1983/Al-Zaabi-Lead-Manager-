@@ -616,6 +616,35 @@ class ApiClient {
     return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
   }
 
+  // ─── Email Settings ──────────────────────────────────────────────
+  async getEmailConfig() {
+    return this.request<any>('/settings/email');
+  }
+
+  async saveEmailConfig(data: any) {
+    return this.request<any>('/settings/email', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async testEmailConnection(data: { smtpHost: string; smtpPort: number; smtpUser: string; smtpPass?: string }) {
+    return this.request<{ success: boolean; message: string }>('/settings/email/test-connection', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async sendTestEmail(toEmail: string) {
+    return this.request<{ success: boolean; message: string }>('/settings/email/send-test', { method: 'POST', body: JSON.stringify({ toEmail }) });
+  }
+
+  async getEmailTemplates() {
+    return this.request<any[]>('/settings/email/templates');
+  }
+
+  async saveEmailTemplate(name: string, data: { label: string; subject: string; htmlBody: string; description?: string }) {
+    return this.request<any>(`/settings/email/templates/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteEmailTemplate(name: string) {
+    return this.request<any>(`/settings/email/templates/${name}`, { method: 'DELETE' });
+  }
+
   // ─── Division Management ─────────────────────────────────────────
   async getDivisions(): Promise<Organization[]> {
     return this.request<Organization[]>('/divisions');

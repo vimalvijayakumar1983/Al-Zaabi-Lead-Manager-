@@ -10,9 +10,10 @@ import {
   FileText, Trash2, LogOut, Columns3, Plus, GripVertical,
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
   AtSign, Palette, ChevronDown, Image, Save, Sparkles,
+  Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
@@ -20,6 +21,8 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
   { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
+  { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
+  { key: 'emailTemplates', label: 'Email Templates', icon: LayoutTemplate, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'audit', label: 'Audit Log', icon: Shield, adminOnly: true },
   { key: 'danger', label: 'Danger Zone', icon: AlertTriangle },
@@ -86,6 +89,8 @@ export default function SettingsPage() {
             <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
           )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
+          {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
+          {activeTab === 'emailTemplates' && isAdmin && <EmailTemplatesSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
           {activeTab === 'audit' && isAdmin && <AuditLogSection />}
           {activeTab === 'danger' && <DangerZoneSection />}
@@ -1477,6 +1482,430 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Email Settings Section ─────────────────────────────────────── */
+function EmailSettingsSection() {
+  const [form, setForm] = useState({
+    smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '',
+    fromName: '', fromEmail: '', replyTo: '',
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [testEmail, setTestEmail] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [hasPassword, setHasPassword] = useState(false);
+
+  useEffect(() => {
+    api.getEmailConfig().then((config) => {
+      if (config && config.smtpHost) {
+        setForm({
+          smtpHost: config.smtpHost || '',
+          smtpPort: String(config.smtpPort || 587),
+          smtpUser: config.smtpUser || '',
+          smtpPass: config.hasPassword ? '••••••••' : '',
+          fromName: config.fromName || '',
+          fromEmail: config.fromEmail || '',
+          replyTo: config.replyTo || '',
+        });
+        setHasPassword(!!config.hasPassword);
+      }
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.saveEmailConfig({
+        ...form,
+        smtpPort: parseInt(form.smtpPort, 10),
+      });
+      setHasPassword(true);
+      setStatus({ type: 'success', message: 'Email settings saved successfully' });
+      setTimeout(() => setStatus(null), 4000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to save' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setStatus(null);
+    try {
+      const result = await api.testEmailConnection({
+        smtpHost: form.smtpHost,
+        smtpPort: parseInt(form.smtpPort, 10),
+        smtpUser: form.smtpUser,
+        smtpPass: form.smtpPass,
+      });
+      setStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Connection test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSendTest = async () => {
+    if (!testEmail) return;
+    setSendingTest(true);
+    setStatus(null);
+    try {
+      const result = await api.sendTestEmail(testEmail);
+      setStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to send test email' });
+    } finally {
+      setSendingTest(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="Email Settings" description="Configure SMTP settings to send emails from your CRM" />
+
+      {status && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
+          status.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {status.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+          {status.message}
+        </div>
+      )}
+
+      <form onSubmit={handleSave} className="space-y-6">
+        {/* SMTP Server */}
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <Globe className="h-4 w-4 text-text-tertiary" />
+            SMTP Server
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">SMTP Host *</label>
+              <input className="input" required value={form.smtpHost} onChange={(e) => setForm({ ...form, smtpHost: e.target.value })} placeholder="smtp.gmail.com" />
+            </div>
+            <div>
+              <label className="label">SMTP Port *</label>
+              <input className="input" required value={form.smtpPort} onChange={(e) => setForm({ ...form, smtpPort: e.target.value })} placeholder="587" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Username *</label>
+              <input className="input" required value={form.smtpUser} onChange={(e) => setForm({ ...form, smtpUser: e.target.value })} placeholder="your@email.com" />
+            </div>
+            <div>
+              <label className="label">Password *</label>
+              <div className="relative">
+                <input
+                  className="input pr-10"
+                  type={showPassword ? 'text' : 'password'}
+                  required={!hasPassword}
+                  value={form.smtpPass}
+                  onChange={(e) => setForm({ ...form, smtpPass: e.target.value })}
+                  placeholder={hasPassword ? 'Leave blank to keep current' : 'App password'}
+                  onFocus={() => { if (form.smtpPass === '••••••••') setForm({ ...form, smtpPass: '' }); }}
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary">
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-2xs text-text-tertiary mt-1">For Gmail, use an App Password (not your account password)</p>
+            </div>
+          </div>
+
+          <button type="button" onClick={handleTestConnection} disabled={testing || !form.smtpHost || !form.smtpUser}
+            className="btn-secondary text-xs">
+            {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {testing ? 'Testing...' : 'Test Connection'}
+          </button>
+        </div>
+
+        {/* Sender Identity */}
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <User2 className="h-4 w-4 text-text-tertiary" />
+            Sender Identity
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">From Name *</label>
+              <input className="input" required value={form.fromName} onChange={(e) => setForm({ ...form, fromName: e.target.value })} placeholder="Al-Zaabi Group" />
+            </div>
+            <div>
+              <label className="label">From Email *</label>
+              <input className="input" type="email" required value={form.fromEmail} onChange={(e) => setForm({ ...form, fromEmail: e.target.value })} placeholder="noreply@alzaabi.ae" />
+            </div>
+          </div>
+          <div>
+            <label className="label">Reply-To Email (optional)</label>
+            <input className="input" type="email" value={form.replyTo} onChange={(e) => setForm({ ...form, replyTo: e.target.value })} placeholder="support@alzaabi.ae" />
+          </div>
+        </div>
+
+        {/* Save Button */}
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={saving} className="btn-primary">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? 'Saving...' : 'Save Settings'}
+          </button>
+        </div>
+      </form>
+
+      {/* Send Test Email */}
+      <div className="card p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+          <Mail className="h-4 w-4 text-text-tertiary" />
+          Send Test Email
+        </h3>
+        <p className="text-xs text-text-tertiary">Save your settings first, then send a test email to verify everything works.</p>
+        <div className="flex items-end gap-3">
+          <div className="flex-1">
+            <label className="label">Recipient Email</label>
+            <input className="input" type="email" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="your@email.com" />
+          </div>
+          <button type="button" onClick={handleSendTest} disabled={sendingTest || !testEmail}
+            className="btn-primary whitespace-nowrap">
+            {sendingTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {sendingTest ? 'Sending...' : 'Send Test'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Email Templates Section ───────────────────────────────────── */
+function EmailTemplatesSection() {
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingTemplate, setEditingTemplate] = useState<any | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newForm, setNewForm] = useState({ name: '', label: '', subject: '', htmlBody: '', description: '' });
+
+  const fetchTemplates = async () => {
+    try {
+      const data = await api.getEmailTemplates();
+      setTemplates(data);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchTemplates(); }, []);
+
+  const handleSaveTemplate = async (name: string, data: any) => {
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.saveEmailTemplate(name, data);
+      await fetchTemplates();
+      setEditingTemplate(null);
+      setShowNewForm(false);
+      setStatus({ type: 'success', message: 'Template saved successfully' });
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to save template' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    if (!confirm('Delete this template? This cannot be undone.')) return;
+    try {
+      await api.deleteEmailTemplate(name);
+      await fetchTemplates();
+      setStatus({ type: 'success', message: 'Template deleted' });
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to delete' });
+    }
+  };
+
+  const handleCreateNew = async () => {
+    if (!newForm.name || !newForm.label || !newForm.subject || !newForm.htmlBody) {
+      setStatus({ type: 'error', message: 'All fields are required' });
+      return;
+    }
+    const safeName = newForm.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+    await handleSaveTemplate(safeName, {
+      label: newForm.label,
+      subject: newForm.subject,
+      htmlBody: newForm.htmlBody,
+      description: newForm.description,
+    });
+    setNewForm({ name: '', label: '', subject: '', htmlBody: '', description: '' });
+  };
+
+  const VARIABLE_HINTS = [
+    { var: '{{firstName}}', desc: 'Lead first name' },
+    { var: '{{lastName}}', desc: 'Lead last name' },
+    { var: '{{email}}', desc: 'Lead email' },
+    { var: '{{company}}', desc: 'Lead company' },
+    { var: '{{companyName}}', desc: 'Your organization name' },
+    { var: '{{senderName}}', desc: 'Sender name' },
+  ];
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <SectionHeader title="Email Templates" description="Manage email templates used in automations and communications" />
+        <button onClick={() => { setShowNewForm(true); setEditingTemplate(null); }} className="btn-primary text-xs">
+          <Plus className="h-3.5 w-3.5" /> New Template
+        </button>
+      </div>
+
+      {status && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
+          status.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {status.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+          {status.message}
+        </div>
+      )}
+
+      {/* Variable reference */}
+      <div className="card p-4">
+        <h4 className="text-xs font-semibold text-text-tertiary uppercase tracking-wider flex items-center gap-1.5 mb-2">
+          <Code2 className="h-3.5 w-3.5" /> Available Variables
+        </h4>
+        <div className="flex flex-wrap gap-2">
+          {VARIABLE_HINTS.map((v) => (
+            <span key={v.var} className="inline-flex items-center gap-1 px-2 py-1 bg-surface-secondary rounded text-2xs">
+              <code className="text-brand-600 font-mono">{v.var}</code>
+              <span className="text-text-tertiary">— {v.desc}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* New template form */}
+      {showNewForm && (
+        <div className="card p-5 space-y-4 border-2 border-brand-200">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">New Template</h3>
+            <button onClick={() => setShowNewForm(false)} className="btn-icon h-7 w-7"><X className="h-4 w-4" /></button>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Template Name *</label>
+              <input className="input text-sm" value={newForm.name} onChange={(e) => setNewForm({ ...newForm, name: e.target.value })} placeholder="e.g. onboarding" />
+            </div>
+            <div>
+              <label className="label">Display Label *</label>
+              <input className="input text-sm" value={newForm.label} onChange={(e) => setNewForm({ ...newForm, label: e.target.value })} placeholder="e.g. Onboarding" />
+            </div>
+          </div>
+          <div>
+            <label className="label">Subject Line *</label>
+            <input className="input text-sm" value={newForm.subject} onChange={(e) => setNewForm({ ...newForm, subject: e.target.value })} placeholder="e.g. Welcome to {{companyName}}" />
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <input className="input text-sm" value={newForm.description} onChange={(e) => setNewForm({ ...newForm, description: e.target.value })} placeholder="When is this template used?" />
+          </div>
+          <div>
+            <label className="label">HTML Body *</label>
+            <textarea className="input text-sm font-mono" rows={8} value={newForm.htmlBody} onChange={(e) => setNewForm({ ...newForm, htmlBody: e.target.value })}
+              placeholder="<div>Hi {{firstName}}, ...</div>" />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleCreateNew} disabled={saving} className="btn-primary text-xs">
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saving ? 'Saving...' : 'Create Template'}
+            </button>
+            <button onClick={() => setShowNewForm(false)} className="btn-secondary text-xs">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Template list */}
+      <div className="space-y-3">
+        {templates.map((tmpl) => (
+          <div key={tmpl.name} className="card p-4">
+            {editingTemplate?.name === tmpl.name ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Display Label</label>
+                    <input className="input text-sm" value={editingTemplate.label} onChange={(e) => setEditingTemplate({ ...editingTemplate, label: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="label">Description</label>
+                    <input className="input text-sm" value={editingTemplate.description || ''} onChange={(e) => setEditingTemplate({ ...editingTemplate, description: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Subject Line</label>
+                  <input className="input text-sm" value={editingTemplate.subject} onChange={(e) => setEditingTemplate({ ...editingTemplate, subject: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">HTML Body</label>
+                  <textarea className="input text-sm font-mono" rows={8} value={editingTemplate.htmlBody} onChange={(e) => setEditingTemplate({ ...editingTemplate, htmlBody: e.target.value })} />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => handleSaveTemplate(tmpl.name, editingTemplate)} disabled={saving} className="btn-primary text-xs">
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save
+                  </button>
+                  <button onClick={() => setEditingTemplate(null)} className="btn-secondary text-xs">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-semibold text-text-primary">{tmpl.label}</h4>
+                    <span className="text-2xs px-1.5 py-0.5 rounded bg-surface-secondary text-text-tertiary font-mono">{tmpl.name}</span>
+                    {tmpl.isDefault && <span className="text-2xs px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 font-medium">Default</span>}
+                  </div>
+                  {tmpl.description && <p className="text-xs text-text-tertiary mt-0.5">{tmpl.description}</p>}
+                  <p className="text-xs text-text-secondary mt-1 truncate">Subject: {tmpl.subject}</p>
+                </div>
+                <div className="flex items-center gap-1 ml-3">
+                  <button onClick={() => setEditingTemplate({ ...tmpl })} className="btn-icon h-7 w-7" title="Edit">
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => handleDelete(tmpl.name)} className="btn-icon h-7 w-7 text-red-500 hover:text-red-700" title="Delete">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {templates.length === 0 && (
+          <div className="card p-8 text-center">
+            <Mail className="h-8 w-8 text-text-tertiary mx-auto mb-2" />
+            <p className="text-sm text-text-secondary font-medium">No email templates</p>
+            <p className="text-xs text-text-tertiary mt-1">Create your first template to use in automations</p>
+          </div>
+        )}
       </div>
     </div>
   );
