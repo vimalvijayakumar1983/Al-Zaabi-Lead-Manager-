@@ -365,7 +365,7 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   role: z.enum(['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER']),
-  password: z.string().min(4),
+  password: z.string().min(8),
 })), async (req, res, next) => {
   try {
     const divisionId = req.params.id;

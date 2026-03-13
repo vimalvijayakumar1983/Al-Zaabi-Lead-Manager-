@@ -188,7 +188,7 @@ export function GlobalSearch() {
                 >
                   {/* Avatar */}
                   <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white flex-shrink-0">
-                    {result.firstName[0]}{result.lastName[0]}
+                    {(result.firstName || '?')[0]}{(result.lastName || '?')[0]}
                   </div>
 
                   {/* Info */}

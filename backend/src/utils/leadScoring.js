@@ -26,6 +26,7 @@ const calculateLeadScore = (lead, activityCount = 0) => {
     REFERRAL: 20,
     GOOGLE_ADS: 10,
     FACEBOOK_ADS: 8,
+    TIKTOK_ADS: 8,
     WHATSAPP: 12,
     EMAIL: 10,
     PHONE: 14,

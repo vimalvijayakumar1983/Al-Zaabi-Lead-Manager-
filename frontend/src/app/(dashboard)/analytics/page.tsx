@@ -73,7 +73,7 @@ function LineChart({ data, series, height = 220 }: {
   series: { key: string; label: string; color: string }[];
   height?: number;
 }) {
-  if (!data.length) return <div className="flex items-center justify-center h-40 text-sm text-text-tertiary">No data for this period</div>;
+  if (!data.length || !series.length) return <div className="flex items-center justify-center h-40 text-sm text-text-tertiary">No data for this period</div>;
 
   const W = 800, H = height;
   const PAD = { top: 16, bottom: 28, left: 44, right: 12 };

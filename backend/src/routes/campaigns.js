@@ -363,7 +363,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
 router.post('/', validate(createCampaignSchema), async (req, res, next) => {
   try {
     const { name, type, status, budget, description, startDate, endDate, metadata, organizationId } =
-      req.body;
+      req.validated;
 
     const targetOrgId = organizationId || req.orgId;
     if (!req.orgIds.includes(targetOrgId)) {
@@ -443,7 +443,7 @@ router.post('/:id/duplicate', async (req, res, next) => {
 
 router.post('/bulk-update', validate(bulkUpdateSchema), async (req, res, next) => {
   try {
-    const { ids, data } = req.body;
+    const { ids, data } = req.validated;
 
     const existing = await prisma.campaign.findMany({
       where: { id: { in: ids }, organizationId: { in: req.orgIds } },
@@ -478,7 +478,7 @@ router.post('/bulk-update', validate(bulkUpdateSchema), async (req, res, next) =
 
 router.post('/bulk-delete', validate(bulkDeleteSchema), async (req, res, next) => {
   try {
-    const { ids } = req.body;
+    const { ids } = req.validated;
 
     const existing = await prisma.campaign.findMany({
       where: { id: { in: ids }, organizationId: { in: req.orgIds } },
@@ -521,27 +521,28 @@ router.put('/:id', validate(updateCampaignSchema), async (req, res, next) => {
 
     const updateData = {};
 
-    if (req.body.name !== undefined) updateData.name = req.body.name;
-    if (req.body.type !== undefined) updateData.type = req.body.type;
-    if (req.body.status !== undefined) updateData.status = req.body.status;
-    if (req.body.budget !== undefined) updateData.budget = req.body.budget;
-        if (req.body.description !== undefined) updateData.description = req.body.description;
-    if (req.body.startDate !== undefined) {
-      updateData.startDate = req.body.startDate ? new Date(req.body.startDate) : null;
+    const body = req.validated;
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.type !== undefined) updateData.type = body.type;
+    if (body.status !== undefined) updateData.status = body.status;
+    if (body.budget !== undefined) updateData.budget = body.budget;
+    if (body.description !== undefined) updateData.description = body.description;
+    if (body.startDate !== undefined) {
+      updateData.startDate = body.startDate ? new Date(body.startDate) : null;
     }
-    if (req.body.endDate !== undefined) {
-      updateData.endDate = req.body.endDate ? new Date(req.body.endDate) : null;
+    if (body.endDate !== undefined) {
+      updateData.endDate = body.endDate ? new Date(body.endDate) : null;
     }
-    if (req.body.organizationId !== undefined) {
-      if (!req.orgIds.includes(req.body.organizationId)) {
+    if (body.organizationId !== undefined) {
+      if (!req.orgIds.includes(body.organizationId)) {
         return res.status(403).json({ error: 'Access denied to specified organization' });
       }
-      updateData.organizationId = req.body.organizationId;
+      updateData.organizationId = body.organizationId;
     }
-    if (req.body.metadata !== undefined) {
+    if (body.metadata !== undefined) {
       updateData.metadata = {
         ...(typeof existing.metadata === 'object' ? existing.metadata : {}),
-        ...req.body.metadata,
+        ...body.metadata,
       };
     }
 
@@ -558,8 +559,8 @@ router.put('/:id', validate(updateCampaignSchema), async (req, res, next) => {
     // ── Fire-and-forget notifications ──
     const campaignName = campaign.name;
 
-    if (req.body.status && req.body.status !== existing.status) {
-      if (req.body.status === 'ACTIVE') {
+    if (body.status && body.status !== existing.status) {
+      if (body.status === 'ACTIVE') {
         // Campaign activated → notify org admins
         notifyOrgAdmins(existing.organizationId, {
           type: NOTIFICATION_TYPES.CAMPAIGN_STARTED,
@@ -570,7 +571,7 @@ router.put('/:id', validate(updateCampaignSchema), async (req, res, next) => {
         }, req.user.id).catch(() => {});
       }
 
-      if (req.body.status === 'COMPLETED') {
+      if (body.status === 'COMPLETED') {
         // Campaign completed → notify org admins
         notifyOrgAdmins(existing.organizationId, {
           type: NOTIFICATION_TYPES.CAMPAIGN_COMPLETED,

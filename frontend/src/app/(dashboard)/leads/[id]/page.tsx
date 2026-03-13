@@ -510,7 +510,7 @@ export default function LeadDetailPage() {
               </div>
             ) : (
               <>
-                <InfoRow label="Source" value={lead.source.replace(/_/g, ' ')} />
+                <InfoRow label="Source" value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
                 <InfoRow label="Campaign" value={lead.campaign || '-'} />
                 <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
                 <InfoRow label="Budget" value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
@@ -540,14 +540,14 @@ export default function LeadDetailPage() {
             </h3>
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-gray-600">Lead Score</span>
-              <span className="text-2xl font-bold tabular-nums" style={{ color: lead.score >= 70 ? '#16a34a' : lead.score >= 40 ? '#d97706' : '#dc2626' }}>
-                {lead.score}<span className="text-sm font-normal text-gray-400">/100</span>
+              <span className="text-2xl font-bold tabular-nums" style={{ color: (lead.score || 0) >= 70 ? '#16a34a' : (lead.score || 0) >= 40 ? '#d97706' : '#dc2626' }}>
+                {lead.score || 0}<span className="text-sm font-normal text-gray-400">/100</span>
               </span>
             </div>
             <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden mb-3">
               <div className="h-full rounded-full transition-all duration-500" style={{
-                width: `${lead.score}%`,
-                background: lead.score >= 70 ? 'linear-gradient(90deg, #22c55e, #16a34a)' : lead.score >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)',
+                width: `${lead.score || 0}%`,
+                background: (lead.score || 0) >= 70 ? 'linear-gradient(90deg, #22c55e, #16a34a)' : (lead.score || 0) >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)',
               }} />
             </div>
             {lead.conversionProb != null && (
@@ -634,8 +634,8 @@ export default function LeadDetailPage() {
               <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               Timestamps
             </h3>
-            <InfoRow label="Created" value={new Date(lead.createdAt).toLocaleString()} />
-            <InfoRow label="Updated" value={new Date(lead.updatedAt).toLocaleString()} />
+            <InfoRow label="Created" value={lead.createdAt ? new Date(lead.createdAt).toLocaleString() : '-'} />
+            <InfoRow label="Updated" value={lead.updatedAt ? new Date(lead.updatedAt).toLocaleString() : '-'} />
 
           </div>
         </div>
