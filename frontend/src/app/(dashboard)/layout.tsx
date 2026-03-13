@@ -16,6 +16,7 @@ import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu } from 'luc
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
   '/leads': { title: 'Leads', description: 'Manage and track your leads' },
+  '/inbox': { title: 'Inbox', description: 'Omnichannel messaging hub' },
   '/pipeline': { title: 'Pipeline', description: 'Drag and drop leads between stages' },
   '/tasks': { title: 'Tasks', description: 'Manage follow-ups and activities' },
   '/analytics': { title: 'Analytics', description: 'Reports and performance metrics' },
@@ -206,6 +207,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/campaigns': 'campaigns',
     '/team': 'team',
     '/settings': 'settings',
+    '/inbox': 'leads',
     '/import': 'leads',
     '/divisions': 'divisions',
   };

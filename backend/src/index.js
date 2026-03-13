@@ -28,6 +28,8 @@ const settingsRoutes = require('./routes/settings');
 const integrationsRoutes = require('./routes/integrations');
 const publicLeadsRoutes = require('./routes/public-leads');
 const notificationRoutes = require('./routes/notifications');
+const inboxRoutes = require('./routes/inbox');
+const channelWebhookRoutes = require('./routes/channel-webhooks');
 
 const app = express();
 const server = createServer(app);
@@ -86,6 +88,8 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/integrations', integrationsRoutes);
 app.use('/api/public', publicLeadsRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/inbox', inboxRoutes);
+app.use('/api/channels', channelWebhookRoutes);
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);

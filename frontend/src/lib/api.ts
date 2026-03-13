@@ -694,6 +694,59 @@ class ApiClient {
   async getAssignmentHistory(leadId: string) {
     return this.request<any[]>(`/leads/${leadId}/assignment-history`);
   }
+
+  // ─── Inbox / Omnichannel ──────────────────────────────────────────
+
+  async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {
+    const q = new URLSearchParams();
+    if (params?.channel) q.set('channel', params.channel);
+    if (params?.search) q.set('search', params.search);
+    if (params?.status) q.set('status', params.status);
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    return this.request<any>(`/inbox/conversations?${q.toString()}`);
+  }
+
+  async getInboxMessages(leadId: string, params?: { channel?: string; page?: number; limit?: number }) {
+    const q = new URLSearchParams();
+    if (params?.channel) q.set('channel', params.channel);
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    return this.request<any>(`/inbox/conversations/${leadId}/messages?${q.toString()}`);
+  }
+
+  async sendInboxMessage(data: { leadId: string; channel: string; body: string; subject?: string; platform?: string; metadata?: any }) {
+    return this.request<any>('/inbox/send', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getInboxStats() {
+    return this.request<any>('/inbox/stats');
+  }
+
+  async updateConversationStatus(leadId: string, status: string) {
+    return this.request<any>(`/inbox/conversations/${leadId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async addInternalNote(leadId: string, body: string) {
+    return this.request<any>(`/inbox/conversations/${leadId}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async getInternalNotes(leadId: string) {
+    return this.request<any[]>(`/inbox/conversations/${leadId}/notes`);
+  }
+
+  async getCannedResponses() {
+    return this.request<any[]>('/inbox/canned-responses');
+  }
 }
 
 export const api = new ApiClient();
