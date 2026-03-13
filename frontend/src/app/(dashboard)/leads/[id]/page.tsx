@@ -94,7 +94,10 @@ export default function LeadDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    api.getLead(id).then(setLead).finally(() => setLoading(false));
+    api.getLead(id)
+      .then(setLead)
+      .catch((err) => console.error('Failed to load lead:', err))
+      .finally(() => setLoading(false));
   }, [id]);
 
   const handleStatusChange = async (status: string) => {
