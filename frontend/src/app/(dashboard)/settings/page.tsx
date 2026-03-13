@@ -494,7 +494,7 @@ function OrganizationSection() {
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
             { label: 'Users', value: org._count?.users || 0 },
             { label: 'Leads', value: org._count?.leads || 0 },
@@ -1384,7 +1384,7 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
           {/* Field Type */}
           <div>
             <label className="label">Field Type *</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {(Object.entries(FIELD_TYPE_CONFIG) as [FieldType, typeof FIELD_TYPE_CONFIG[FieldType]][]).map(([key, config]) => {
                 const Icon = config.icon;
                 return (

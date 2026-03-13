@@ -1654,7 +1654,7 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-6">
-          <div className="grid grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             {matrixRoleKeys.map((key) => {
               const config = roleConfig[key];
               const Icon = config.icon;

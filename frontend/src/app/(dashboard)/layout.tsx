@@ -11,7 +11,7 @@ import NotificationCenter from '@/components/NotificationCenter';
 import ToastProvider from '@/components/ToastProvider';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { GlobalSearch } from './components/global-search';
-import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown } from 'lucide-react';
+import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu } from 'lucide-react';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
@@ -32,6 +32,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const { isAuthenticated, isLoading, loadUser, user } = useAuthStore();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Notification Center state
   const [notifOpen, setNotifOpen] = useState(false);
@@ -150,6 +151,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
   }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
 
+  // Close mobile menu on route change
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
   // Detect sidebar collapse from CSS variable
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -213,7 +219,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return (
       <div className="min-h-screen bg-surface-secondary">
         <Sidebar />
-        <main className="transition-all duration-300 ease-smooth pl-[var(--sidebar-width)]">
+        <main className="transition-all duration-300 ease-smooth lg:pl-[var(--sidebar-width)]">
           <div className="flex flex-col items-center justify-center min-h-screen -mt-14">
             <div className="h-16 w-16 rounded-2xl bg-red-50 flex items-center justify-center mb-4">
               <ShieldAlert className="h-8 w-8 text-red-500" />
@@ -247,34 +253,46 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           onSelectDivision: handleDivisionSwitch,
         } : undefined}
         showDivisionsNav={isSuperAdmin}
+        mobileOpen={mobileMenuOpen}
+        onMobileClose={() => setMobileMenuOpen(false)}
       />
       <CommandPalette />
 
       {/* Main content area */}
-      <main className="transition-all duration-300 ease-smooth pl-[var(--sidebar-width)]">
+      <main className="transition-all duration-300 ease-smooth lg:pl-[var(--sidebar-width)]">
         {/* Top bar */}
-        <header className="sticky top-0 z-20 h-14 flex items-center justify-between px-6 bg-surface-secondary/80 backdrop-blur-lg border-b border-border-subtle">
-          <div className="flex items-center gap-3">
+        <header className="sticky top-0 z-20 h-14 flex items-center justify-between px-3 sm:px-4 md:px-6 bg-surface-secondary/80 backdrop-blur-lg border-b border-border-subtle">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile hamburger menu */}
+            <button
+              className="btn-icon -ml-1 lg:hidden flex-shrink-0"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              title="Menu"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
             {pageInfo && !pathname?.includes('/leads/') && (
-              <div className="animate-fade-in">
-                <h1 className="text-sm font-semibold text-text-primary">{pageInfo.title}</h1>
+              <div className="animate-fade-in min-w-0">
+                <h1 className="text-sm font-semibold text-text-primary truncate">{pageInfo.title}</h1>
               </div>
             )}
             {pathname?.includes('/leads/') && (
-              <div className="animate-fade-in">
-                <h1 className="text-sm font-semibold text-text-primary">Lead Details</h1>
+              <div className="animate-fade-in min-w-0">
+                <h1 className="text-sm font-semibold text-text-primary truncate">Lead Details</h1>
               </div>
             )}
             {/* Show active division indicator for SUPER_ADMIN */}
             {isSuperAdmin && activeDivision && (
-              <span className="text-xs px-2 py-0.5 rounded-full text-white" style={{ backgroundColor: primaryColor }}>
+              <span className="text-xs px-2 py-0.5 rounded-full text-white hidden sm:inline-flex flex-shrink-0" style={{ backgroundColor: primaryColor }}>
                 {activeDivision.tradeName || activeDivision.name}
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <GlobalSearch />
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            <div className="hidden sm:block">
+              <GlobalSearch />
+            </div>
             <button
               ref={bellRef}
               className="btn-icon relative"
@@ -293,7 +311,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               onClose={() => setNotifOpen(false)}
               anchorRef={bellRef}
             />
-            <button className="btn-icon" title="Help">
+            <button className="btn-icon hidden sm:inline-flex" title="Help">
               <HelpCircle className="h-4.5 w-4.5" />
             </button>
           </div>
@@ -301,7 +319,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Page content wrapped in error boundary */}
         <ErrorBoundary>
-          <div className="p-6">{children}</div>
+          <div className="p-3 sm:p-4 md:p-6">{children}</div>
         </ErrorBoundary>
 
         {/* Toast notifications */}
