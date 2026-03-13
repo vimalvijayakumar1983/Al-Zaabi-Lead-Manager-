@@ -21,7 +21,7 @@ const LEAD_FIELDS = [
   { key: 'phone', label: 'Phone', required: false, type: 'string' },
   { key: 'company', label: 'Company', required: false, type: 'string' },
   { key: 'jobTitle', label: 'Job Title', required: false, type: 'string' },
-  { key: 'source', label: 'Lead Source', required: false, type: 'enum', options: ['WEBSITE_FORM','LANDING_PAGE','WHATSAPP','FACEBOOK_ADS','GOOGLE_ADS','MANUAL','CSV_IMPORT','API','REFERRAL','EMAIL','PHONE','OTHER'] },
+  { key: 'source', label: 'Lead Source', required: false, type: 'enum', options: ['WEBSITE_FORM','LANDING_PAGE','WHATSAPP','FACEBOOK_ADS','GOOGLE_ADS','TIKTOK_ADS','MANUAL','CSV_IMPORT','API','REFERRAL','EMAIL','PHONE','OTHER'] },
   { key: 'status', label: 'Status', required: false, type: 'enum', options: ['NEW','CONTACTED','QUALIFIED','PROPOSAL_SENT','NEGOTIATION','WON','LOST'] },
   { key: 'budget', label: 'Budget', required: false, type: 'number' },
   { key: 'productInterest', label: 'Product Interest', required: false, type: 'string' },
@@ -33,7 +33,7 @@ const LEAD_FIELDS = [
 
 const CAMPAIGN_FIELDS = [
   { key: 'name', label: 'Campaign Name', required: true, type: 'string' },
-  { key: 'type', label: 'Type', required: true, type: 'enum', options: ['FACEBOOK_ADS','GOOGLE_ADS','EMAIL','WHATSAPP','LANDING_PAGE','REFERRAL','OTHER'] },
+  { key: 'type', label: 'Type', required: true, type: 'enum', options: ['FACEBOOK_ADS','GOOGLE_ADS','TIKTOK_ADS','EMAIL','WHATSAPP','LANDING_PAGE','REFERRAL','WEBSITE_FORM','OTHER'] },
   { key: 'status', label: 'Status', required: false, type: 'enum', options: ['DRAFT','ACTIVE','PAUSED','COMPLETED'] },
   { key: 'budget', label: 'Budget', required: false, type: 'number' },
   { key: 'startDate', label: 'Start Date', required: false, type: 'date' },

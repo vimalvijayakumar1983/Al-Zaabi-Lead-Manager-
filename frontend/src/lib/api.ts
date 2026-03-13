@@ -185,8 +185,9 @@ class ApiClient {
   }
 
   // Analytics
-  async getDashboard() {
-    return this.request<any>('/analytics/dashboard');
+  async getDashboard(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/analytics/dashboard${q}`);
   }
 
   async getAnalyticsOverview(period = '30d', divisionId?: string) {

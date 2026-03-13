@@ -17,8 +17,9 @@ import {
 const sourceOptions = [
   { value: 'WEBSITE_FORM', label: 'Website', icon: Globe },
   { value: 'REFERRAL', label: 'Referral', icon: Share2 },
-  { value: 'FACEBOOK_ADS', label: 'Social Media', icon: Megaphone },
+  { value: 'FACEBOOK_ADS', label: 'Facebook Ads', icon: Megaphone },
   { value: 'GOOGLE_ADS', label: 'Google Ads', icon: Megaphone },
+  { value: 'TIKTOK_ADS', label: 'TikTok Ads', icon: Megaphone },
   { value: 'WHATSAPP', label: 'WhatsApp', icon: Phone },
   { value: 'PHONE', label: 'Cold Call', icon: Phone },
   { value: 'EMAIL', label: 'Email', icon: Mail },
@@ -726,7 +727,7 @@ export default function PipelinePage() {
                         <Link href={`/leads/${lead.id}`}>
                           <div className="flex items-center gap-2.5 mb-2">
                             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white shadow-xs flex-shrink-0">
-                              {lead.firstName[0]}{lead.lastName[0]}
+                              {(lead.firstName || '?')[0]}{(lead.lastName || '')[0]}
                             </div>
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-text-primary truncate group-hover:text-brand-700 transition-colors">
@@ -776,7 +777,7 @@ export default function PipelinePage() {
                           {lead.assignedTo && (
                             <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-border-subtle">
                               <div className="h-5 w-5 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center text-[9px] font-semibold text-white">
-                                {lead.assignedTo.firstName[0]}{lead.assignedTo.lastName[0]}
+                                {(lead.assignedTo.firstName || '?')[0]}{(lead.assignedTo.lastName || '')[0]}
                               </div>
                               <span className="text-2xs text-text-tertiary">{lead.assignedTo.firstName} {lead.assignedTo.lastName}</span>
                             </div>
@@ -841,7 +842,7 @@ export default function PipelinePage() {
                             <td className="table-cell">
                               <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
                                 <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white flex-shrink-0">
-                                  {lead.firstName[0]}{lead.lastName[0]}
+                                  {(lead.firstName || '?')[0]}{(lead.lastName || '')[0]}
                                 </div>
                                 <div>
                                   <p className="text-sm font-medium text-text-primary group-hover:text-brand-700">{lead.firstName} {lead.lastName}</p>

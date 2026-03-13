@@ -224,18 +224,23 @@ export default function LeadDetailPage() {
 
   // Load chat messages when Communications tab is active
   const loadChatMessages = useCallback(async () => {
-    if (!lead?.id) return;
+    if (!id) return;
     setChatLoading(true);
     try {
-      const data = await api.getInboxMessages(lead.id, { limit: 100 });
+      const data = await api.getInboxMessages(id, { limit: 100 });
       setChatMessages(data.messages || []);
     } catch {
       // Fallback to lead's communications if inbox API fails
-      setChatMessages(lead.communications || []);
+      if (lead?.communications) {
+        setChatMessages([...lead.communications].sort((a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        ));
+      }
     } finally {
       setChatLoading(false);
     }
-  }, [lead?.id, lead?.communications]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
@@ -787,7 +792,7 @@ export default function LeadDetailPage() {
 
             {/* Communications Chat */}
             {activeTab === 'communications' && (
-              <div className="flex flex-col h-[500px]">
+              <div className="flex flex-col h-[400px] sm:h-[500px]">
                 {/* Chat Header */}
                 <div className="flex items-center justify-between pb-3 border-b mb-3">
                   <div className="flex items-center gap-2">

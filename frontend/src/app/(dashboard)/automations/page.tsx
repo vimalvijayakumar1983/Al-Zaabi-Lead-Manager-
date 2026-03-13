@@ -26,16 +26,24 @@ export default function AutomationsPage() {
   }, []);
 
   const handleToggle = async (id: string) => {
-    await api.toggleAutomation(id);
-    const updated = await api.getAutomations();
-    setRules(updated);
+    try {
+      await api.toggleAutomation(id);
+      const updated = await api.getAutomations();
+      setRules(updated);
+    } catch (err: any) {
+      alert(err.message || 'Failed to toggle automation');
+    }
   };
 
   const handleCreate = async (data: any) => {
-    await api.createAutomation(data);
-    setShowForm(false);
-    const updated = await api.getAutomations();
-    setRules(updated);
+    try {
+      await api.createAutomation(data);
+      setShowForm(false);
+      const updated = await api.getAutomations();
+      setRules(updated);
+    } catch (err: any) {
+      alert(err.message || 'Failed to create automation');
+    }
   };
 
   const activeCount = rules.filter(r => r.isActive).length;

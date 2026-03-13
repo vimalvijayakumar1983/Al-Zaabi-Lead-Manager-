@@ -219,6 +219,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={isRegister ? 'Min 8 characters' : 'Enter your password'}
                   required
+                  minLength={isRegister ? 8 : undefined}
                 />
                 <button
                   type="button"

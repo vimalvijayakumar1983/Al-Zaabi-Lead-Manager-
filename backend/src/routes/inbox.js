@@ -499,10 +499,17 @@ router.get('/stats', async (req, res, next) => {
 
 // ─── Update Conversation Status (lead status) ──────────────────────
 
+const statusUpdateSchema = z.object({
+  status: z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST']),
+});
+
 router.patch('/conversations/:leadId/status', async (req, res, next) => {
   try {
     const { leadId } = req.params;
-    const { status } = req.body;
+    const parsed = statusUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid status value', details: parsed.error.errors });
+    }
 
     const lead = await prisma.lead.findFirst({
       where: { id: leadId, organizationId: { in: req.orgIds } },
@@ -511,7 +518,7 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
 
     const updated = await prisma.lead.update({
       where: { id: leadId },
-      data: { status },
+      data: { status: parsed.data.status },
       select: { id: true, status: true },
     });
 
@@ -521,10 +528,17 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
 
 // ─── Internal Notes ─────────────────────────────────────────────────
 
+const noteSchema = z.object({
+  body: z.string().min(1, 'Note body is required'),
+});
+
 router.post('/conversations/:leadId/notes', async (req, res, next) => {
   try {
     const { leadId } = req.params;
-    const { body } = req.body;
+    const parsed = noteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Note body is required', details: parsed.error.errors });
+    }
 
     const lead = await prisma.lead.findFirst({
       where: { id: leadId, organizationId: { in: req.orgIds } },
@@ -535,7 +549,7 @@ router.post('/conversations/:leadId/notes', async (req, res, next) => {
       data: {
         leadId,
         userId: req.user.id,
-        content: body,
+        content: parsed.data.body,
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },

@@ -70,8 +70,8 @@ export interface AuthResponse {
 // ─── Lead ────────────────────────────────────────────────────────
 export type LeadSource =
   | 'WEBSITE_FORM' | 'LANDING_PAGE' | 'WHATSAPP' | 'FACEBOOK_ADS'
-  | 'GOOGLE_ADS' | 'MANUAL' | 'CSV_IMPORT' | 'API' | 'REFERRAL'
-  | 'EMAIL' | 'PHONE' | 'OTHER';
+  | 'GOOGLE_ADS' | 'TIKTOK_ADS' | 'MANUAL' | 'CSV_IMPORT' | 'API'
+  | 'REFERRAL' | 'EMAIL' | 'PHONE' | 'OTHER';
 
 export type LeadStatus =
   | 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'PROPOSAL_SENT'

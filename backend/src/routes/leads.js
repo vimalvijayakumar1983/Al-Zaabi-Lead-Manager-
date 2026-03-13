@@ -24,7 +24,7 @@ const createLeadSchema = z.object({
   jobTitle: z.string().optional().nullable(),
   source: z.enum([
     'WEBSITE_FORM', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
-    'GOOGLE_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+    'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
   ]).optional(),
   budget: z.number().optional().nullable(),
   productInterest: z.string().optional().nullable(),

@@ -35,15 +35,15 @@ const statusColors: Record<string, { bg: string; text: string; ring: string; dot
 
 const sourceLabels: Record<string, string> = {
   WEBSITE_FORM: 'Website', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
-  FACEBOOK_ADS: 'Facebook', GOOGLE_ADS: 'Google', MANUAL: 'Manual',
-  CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
+  FACEBOOK_ADS: 'Facebook', GOOGLE_ADS: 'Google', TIKTOK_ADS: 'TikTok',
+  MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',
 };
 
 const sourceColors: Record<string, string> = {
   WEBSITE_FORM: 'bg-indigo-500', LANDING_PAGE: 'bg-violet-500', WHATSAPP: 'bg-emerald-500',
-  FACEBOOK_ADS: 'bg-blue-500', GOOGLE_ADS: 'bg-amber-500', MANUAL: 'bg-gray-500',
-  CSV_IMPORT: 'bg-cyan-500', API: 'bg-purple-500', REFERRAL: 'bg-pink-500',
+  FACEBOOK_ADS: 'bg-blue-500', GOOGLE_ADS: 'bg-amber-500', TIKTOK_ADS: 'bg-fuchsia-500',
+  MANUAL: 'bg-gray-500', CSV_IMPORT: 'bg-cyan-500', API: 'bg-purple-500', REFERRAL: 'bg-pink-500',
   EMAIL: 'bg-sky-500', PHONE: 'bg-teal-500', OTHER: 'bg-gray-400',
 };
 
@@ -122,28 +122,9 @@ export default function DashboardPage() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    const params: Record<string, string> = {};
-    if (divisionFilter !== 'all') {
-      params.divisionId = divisionFilter;
-    }
-    const query = Object.keys(params).length > 0
-      ? '?' + new URLSearchParams(params).toString()
-      : '';
 
-    // Use getDashboard with optional division filter
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api'}/analytics/dashboard${query}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(typeof window !== 'undefined' && localStorage.getItem('token')
-          ? { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          : {}),
-      },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Dashboard API returned ${res.status}`);
-        return res.json();
-      })
-      .then((d) => {
+    api.getDashboard(divisionFilter !== 'all' ? divisionFilter : undefined)
+      .then((d: any) => {
         // Validate that the response has the expected shape
         if (d && typeof d === 'object' && d.overview) {
           setData(d);
@@ -162,7 +143,7 @@ export default function DashboardPage() {
           });
         }
       })
-      .catch((err) => {
+      .catch((err: any) => {
         console.error('Dashboard fetch error:', err);
         setError(err.message || 'Failed to load dashboard');
         setData(null);

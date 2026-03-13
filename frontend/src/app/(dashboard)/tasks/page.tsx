@@ -43,6 +43,7 @@ const statusConfig: Record<string, { bg: string; text: string; label: string }> 
   PENDING: { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' },
   IN_PROGRESS: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'In Progress' },
   COMPLETED: { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Completed' },
+  CANCELLED: { bg: 'bg-red-50', text: 'text-red-700', label: 'Cancelled' },
 };
 
 const TASK_TYPES = ['FOLLOW_UP_CALL', 'EMAIL', 'MEETING', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'] as const;

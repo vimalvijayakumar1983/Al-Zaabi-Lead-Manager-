@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import Link from 'next/link';
@@ -29,14 +29,22 @@ const statusColors: Record<string, string> = {
 
 const sourceLabels: Record<string, string> = {
   WEBSITE_FORM: 'Website Form', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
-  FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', MANUAL: 'Manual',
-  CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
+  FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', TIKTOK_ADS: 'TikTok Ads',
+  MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',
 };
 
 type ViewMode = 'table' | 'cards' | 'kanban';
 
 export default function LeadsPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>}>
+      <LeadsContent />
+    </Suspense>
+  );
+}
+
+function LeadsContent() {
   const searchParams = useSearchParams();
 
   // ─── State ──────────────────────────────────────────────────────
