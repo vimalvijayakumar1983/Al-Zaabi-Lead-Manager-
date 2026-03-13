@@ -12,13 +12,16 @@ router.use(authenticate, orgScope);
 // ─── Get Pipeline Stages ─────────────────────────────────────────
 router.get('/stages', async (req, res, next) => {
   try {
+    const leadFilter = { isArchived: false };
+    if (req.isRestrictedRole) leadFilter.assignedToId = req.user.id;
+
     const stages = await prisma.pipelineStage.findMany({
       where: { organizationId: { in: req.orgIds } },
       orderBy: { order: 'asc' },
       include: {
-        _count: { select: { leads: true } },
+        _count: { select: { leads: { where: leadFilter } } },
         leads: {
-          where: { isArchived: false },
+          where: leadFilter,
           orderBy: { stageOrder: 'asc' },
           include: {
             assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },

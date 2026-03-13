@@ -78,6 +78,10 @@ const orgScope = async (req, _res, next) => {
   }
   // Keep backward compat
   req.orgId = req.user.organizationId;
+
+  // Flag for role-based data scoping
+  // SALES_REP and VIEWER only see their own assigned data
+  req.isRestrictedRole = req.user.role === 'SALES_REP' || req.user.role === 'VIEWER';
   next();
 };
 

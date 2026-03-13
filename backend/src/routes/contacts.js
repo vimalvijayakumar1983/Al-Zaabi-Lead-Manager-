@@ -103,6 +103,11 @@ router.get('/', validateQuery(listContactsSchema), async (req, res, next) => {
       isArchived: false,
     };
 
+    // Role-based data scoping: SALES_REP only sees contacts they own
+    if (req.isRestrictedRole) {
+      where.ownerId = req.user.id;
+    }
+
     // Text search
     if (search) {
       where.OR = [
@@ -190,6 +195,7 @@ router.get('/export', async (req, res, next) => {
     const { lifecycle, type, source, company, search, ids } = req.query;
 
     const where = { organizationId: { in: req.orgIds }, isArchived: false };
+    if (req.isRestrictedRole) where.ownerId = req.user.id;
     if (lifecycle) where.lifecycle = lifecycle;
     if (type) where.type = type;
     if (source) where.source = source;
@@ -271,6 +277,7 @@ router.get('/export', async (req, res, next) => {
 router.get('/stats', async (req, res, next) => {
   try {
     const where = { organizationId: { in: req.orgIds }, isArchived: false };
+    if (req.isRestrictedRole) where.ownerId = req.user.id;
 
     const [total, byLifecycle, byType, recentlyAdded, recentlyContacted] = await Promise.all([
       prisma.contact.count({ where }),
@@ -355,8 +362,11 @@ router.get('/search/global', async (req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
+    const contactDetailWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) contactDetailWhere.ownerId = req.user.id;
+
     const contact = await prisma.contact.findFirst({
-      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      where: contactDetailWhere,
       include: {
         owner: { select: { id: true, firstName: true, lastName: true, avatar: true, email: true } },
         createdBy: { select: { id: true, firstName: true, lastName: true } },

@@ -12,6 +12,29 @@ function getOrgFilter(req, divisionId) {
   return { in: req.orgIds };
 }
 
+/**
+ * Build base where clause for leads, scoped by role.
+ * SALES_REP/VIEWER only see leads assigned to them.
+ */
+function getLeadWhere(req, divisionId, extra = {}) {
+  const where = { organizationId: getOrgFilter(req, divisionId), isArchived: false, ...extra };
+  if (req.isRestrictedRole) where.assignedToId = req.user.id;
+  return where;
+}
+
+/**
+ * Build base where clause for tasks, scoped by role.
+ */
+function getTaskWhere(req, divisionId, extra = {}) {
+  const where = { ...extra };
+  if (req.isRestrictedRole) {
+    where.assigneeId = req.user.id;
+  } else {
+    where.assignee = { organizationId: getOrgFilter(req, divisionId) };
+  }
+  return where;
+}
+
 function getPeriodDates(period = '30d') {
   const now = new Date();
   const days = { '7d': 7, '30d': 30, '90d': 90, '180d': 180, '365d': 365 }[period] || 30;
@@ -33,28 +56,31 @@ router.get('/dashboard', async (req, res, next) => {
     const { divisionId } = req.query;
     const orgFilter = getOrgFilter(req, divisionId);
 
+    const leadWhere = getLeadWhere(req, divisionId);
+    const taskWhere = getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { gte: new Date() } });
+
     const [
       totalLeads, newLeads, wonLeads, lostLeads,
       leadsByStatus, leadsBySource, recentLeads, upcomingTasks, pipelineValue,
     ] = await Promise.all([
-      prisma.lead.count({ where: { organizationId: orgFilter, isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'NEW', isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'WON', isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'LOST', isArchived: false } }),
-      prisma.lead.groupBy({ by: ['status'], where: { organizationId: orgFilter, isArchived: false }, _count: true }),
-      prisma.lead.groupBy({ by: ['source'], where: { organizationId: orgFilter, isArchived: false }, _count: true }),
+      prisma.lead.count({ where: leadWhere }),
+      prisma.lead.count({ where: { ...leadWhere, status: 'NEW' } }),
+      prisma.lead.count({ where: { ...leadWhere, status: 'WON' } }),
+      prisma.lead.count({ where: { ...leadWhere, status: 'LOST' } }),
+      prisma.lead.groupBy({ by: ['status'], where: leadWhere, _count: true }),
+      prisma.lead.groupBy({ by: ['source'], where: leadWhere, _count: true }),
       prisma.lead.findMany({
-        where: { organizationId: orgFilter, isArchived: false },
+        where: leadWhere,
         orderBy: { createdAt: 'desc' }, take: 5,
         select: { id: true, firstName: true, lastName: true, email: true, source: true, status: true, score: true, createdAt: true, assignedTo: { select: { firstName: true, lastName: true } } },
       }),
       prisma.task.findMany({
-        where: { assignee: { organizationId: orgFilter }, status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { gte: new Date() } },
+        where: taskWhere,
         orderBy: { dueAt: 'asc' }, take: 5,
         select: { id: true, title: true, type: true, priority: true, dueAt: true, lead: { select: { firstName: true, lastName: true } } },
       }),
       prisma.lead.aggregate({
-        where: { organizationId: orgFilter, isArchived: false, status: { notIn: ['LOST'] }, budget: { not: null } },
+        where: { ...leadWhere, status: { notIn: ['LOST'] }, budget: { not: null } },
         _sum: { budget: true },
       }),
     ]);
@@ -78,6 +104,10 @@ router.get('/overview', async (req, res, next) => {
     const { start, prevStart, prevEnd } = getPeriodDates(period);
     const now = new Date();
 
+    const lw = getLeadWhere(req, divisionId);
+    const actWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
+    const tw = getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } });
+
     const [
       curNew, prevNew,
       curWon, prevWon,
@@ -88,20 +118,20 @@ router.get('/overview', async (req, res, next) => {
       curActivities, prevActivities,
       overdueTasks,
     ] = await Promise.all([
-      prisma.lead.count({ where: { organizationId: orgFilter, isArchived: false, createdAt: { gte: start } } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, isArchived: false, createdAt: { gte: prevStart, lt: prevEnd } } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'WON', updatedAt: { gte: start } } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'LOST', updatedAt: { gte: start } } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'LOST', updatedAt: { gte: prevStart, lt: prevEnd } } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, isArchived: false } }),
-      prisma.lead.count({ where: { organizationId: orgFilter, status: 'WON' } }),
-      prisma.lead.aggregate({ where: { organizationId: orgFilter, isArchived: false, status: { notIn: ['LOST'] }, budget: { not: null } }, _sum: { budget: true } }),
-      prisma.lead.aggregate({ where: { organizationId: orgFilter, isArchived: false, status: { notIn: ['LOST'] }, budget: { not: null }, createdAt: { gte: prevStart, lt: prevEnd } }, _sum: { budget: true } }),
-      prisma.lead.aggregate({ where: { organizationId: orgFilter, status: 'WON', budget: { not: null } }, _sum: { budget: true }, _avg: { budget: true }, _count: true }),
-      prisma.leadActivity.count({ where: { lead: { organizationId: orgFilter }, createdAt: { gte: start } } }),
-      prisma.leadActivity.count({ where: { lead: { organizationId: orgFilter }, createdAt: { gte: prevStart, lt: prevEnd } } }),
-      prisma.task.count({ where: { assignee: { organizationId: orgFilter }, status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } } }),
+      prisma.lead.count({ where: { ...lw, createdAt: { gte: start } } }),
+      prisma.lead.count({ where: { ...lw, createdAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.count({ where: { ...lw, status: 'WON', updatedAt: { gte: start } } }),
+      prisma.lead.count({ where: { ...lw, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.count({ where: { ...lw, status: 'LOST', updatedAt: { gte: start } } }),
+      prisma.lead.count({ where: { ...lw, status: 'LOST', updatedAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.count({ where: lw }),
+      prisma.lead.count({ where: { ...lw, status: 'WON' } }),
+      prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null } }, _sum: { budget: true } }),
+      prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null }, createdAt: { gte: prevStart, lt: prevEnd } }, _sum: { budget: true } }),
+      prisma.lead.aggregate({ where: { ...lw, status: 'WON', budget: { not: null } }, _sum: { budget: true }, _avg: { budget: true }, _count: true }),
+      prisma.leadActivity.count({ where: { ...actWhere, createdAt: { gte: start } } }),
+      prisma.leadActivity.count({ where: { ...actWhere, createdAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.task.count({ where: tw }),
     ]);
 
     const curConvRate = curNew > 0 ? Math.round((curWon / curNew) * 10000) / 100 : 0;
@@ -133,12 +163,15 @@ router.get('/funnel', async (req, res, next) => {
     const { divisionId } = req.query;
     const orgFilter = getOrgFilter(req, divisionId);
 
+    const leadFilter = { isArchived: false };
+    if (req.isRestrictedRole) leadFilter.assignedToId = req.user.id;
+
     const stages = await prisma.pipelineStage.findMany({
       where: { organizationId: orgFilter },
       orderBy: { order: 'asc' },
       include: {
-        _count: { select: { leads: true } },
-        leads: { select: { budget: true }, where: { budget: { not: null }, isArchived: false } },
+        _count: { select: { leads: { where: leadFilter } } },
+        leads: { select: { budget: true }, where: { ...leadFilter, budget: { not: null } } },
       },
     });
 
@@ -181,8 +214,11 @@ router.get('/team-performance', async (req, res, next) => {
     const { divisionId } = req.query;
     const orgFilter = getOrgFilter(req, divisionId);
 
+    const userWhere = { organizationId: orgFilter, isActive: true };
+    if (req.isRestrictedRole) userWhere.id = req.user.id;
+
     const users = await prisma.user.findMany({
-      where: { organizationId: orgFilter, isActive: true },
+      where: userWhere,
       select: { id: true, firstName: true, lastName: true, role: true, _count: { select: { assignedLeads: true } } },
     });
 
@@ -232,8 +268,11 @@ router.get('/trends', async (req, res, next) => {
     const orgFilter = getOrgFilter(req, divisionId);
     const { start } = getPeriodDates(period);
 
+    const trendsWhere = getLeadWhere(req, divisionId, { createdAt: { gte: start } });
+    delete trendsWhere.isArchived; // include all for trend analysis
+
     const leads = await prisma.lead.findMany({
-      where: { organizationId: orgFilter, createdAt: { gte: start } },
+      where: trendsWhere,
       select: { createdAt: true, status: true, budget: true },
     });
 
@@ -260,21 +299,23 @@ router.get('/source-performance', async (req, res, next) => {
     const orgFilter = getOrgFilter(req, divisionId);
     const { start } = getPeriodDates(period);
 
+    const srcWhere = getLeadWhere(req, divisionId);
+
     const sources = await prisma.lead.groupBy({
       by: ['source'],
-      where: { organizationId: orgFilter, isArchived: false },
+      where: srcWhere,
       _count: true,
     });
 
     const enriched = await Promise.all(sources.map(async s => {
       const [won, lost, revenueAgg, recentCount] = await Promise.all([
-        prisma.lead.count({ where: { organizationId: orgFilter, source: s.source, status: 'WON' } }),
-        prisma.lead.count({ where: { organizationId: orgFilter, source: s.source, status: 'LOST' } }),
+        prisma.lead.count({ where: { ...srcWhere, source: s.source, status: 'WON' } }),
+        prisma.lead.count({ where: { ...srcWhere, source: s.source, status: 'LOST' } }),
         prisma.lead.aggregate({
-          where: { organizationId: orgFilter, source: s.source, status: 'WON', budget: { not: null } },
+          where: { ...srcWhere, source: s.source, status: 'WON', budget: { not: null } },
           _sum: { budget: true }, _avg: { budget: true },
         }),
-        prisma.lead.count({ where: { organizationId: orgFilter, source: s.source, createdAt: { gte: start } } }),
+        prisma.lead.count({ where: { ...srcWhere, source: s.source, createdAt: { gte: start } } }),
       ]);
 
       const total = s._count;
@@ -310,11 +351,14 @@ router.get('/campaign-performance', async (req, res, next) => {
     });
 
     const enriched = await Promise.all(campaigns.map(async c => {
+      const campLeadWhere = getLeadWhere(req, divisionId, { campaign: c.name });
+      delete campLeadWhere.isArchived; // count all campaign leads
+
       const [leadsCount, wonLeads, revenueAgg] = await Promise.all([
-        prisma.lead.count({ where: { organizationId: orgFilter, campaign: c.name } }),
-        prisma.lead.count({ where: { organizationId: orgFilter, campaign: c.name, status: 'WON' } }),
+        prisma.lead.count({ where: campLeadWhere }),
+        prisma.lead.count({ where: { ...campLeadWhere, status: 'WON' } }),
         prisma.lead.aggregate({
-          where: { organizationId: orgFilter, campaign: c.name, status: 'WON', budget: { not: null } },
+          where: { ...campLeadWhere, status: 'WON', budget: { not: null } },
           _sum: { budget: true },
         }),
       ]);
@@ -352,25 +396,29 @@ router.get('/activities', async (req, res, next) => {
     const orgFilter = getOrgFilter(req, divisionId);
     const { start } = getPeriodDates(period);
 
+    const actLeadWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
+    const actTaskWhere = req.isRestrictedRole ? { assigneeId: req.user.id } : { assignee: { organizationId: orgFilter } };
+    const commWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
+
     const [byType, allActivities, taskStats, communicationStats] = await Promise.all([
       prisma.leadActivity.groupBy({
         by: ['type'],
-        where: { lead: { organizationId: orgFilter }, createdAt: { gte: start } },
+        where: { ...actLeadWhere, createdAt: { gte: start } },
         _count: true,
         orderBy: { _count: { type: 'desc' } },
       }),
       prisma.leadActivity.findMany({
-        where: { lead: { organizationId: orgFilter }, createdAt: { gte: start } },
+        where: { ...actLeadWhere, createdAt: { gte: start } },
         select: { createdAt: true },
       }),
       prisma.task.groupBy({
         by: ['status'],
-        where: { assignee: { organizationId: orgFilter } },
+        where: actTaskWhere,
         _count: true,
       }),
       prisma.communication.groupBy({
         by: ['channel'],
-        where: { lead: { organizationId: orgFilter }, createdAt: { gte: start } },
+        where: { ...commWhere, createdAt: { gte: start } },
         _count: true,
       }),
     ]);
@@ -400,8 +448,10 @@ router.get('/score-distribution', async (req, res, next) => {
     const { divisionId } = req.query;
     const orgFilter = getOrgFilter(req, divisionId);
 
+    const scoreWhere = getLeadWhere(req, divisionId, { score: { not: null } });
+
     const leads = await prisma.lead.findMany({
-      where: { organizationId: orgFilter, isArchived: false, score: { not: null } },
+      where: scoreWhere,
       select: { score: true, status: true },
     });
 

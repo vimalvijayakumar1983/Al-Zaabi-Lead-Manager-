@@ -82,6 +82,11 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       isArchived: false,
     };
 
+    // Role-based data scoping: SALES_REP only sees their own assigned leads
+    if (req.isRestrictedRole) {
+      where.assignedToId = req.user.id;
+    }
+
     // Optional: filter to specific division
     if (divisionId && req.isSuperAdmin) {
       where.organizationId = divisionId;
@@ -101,7 +106,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         where.source = source;
       }
     }
-    if (assignedToId) where.assignedToId = assignedToId;
+    if (assignedToId && !req.isRestrictedRole) where.assignedToId = assignedToId;
     if (stageId) {
       // Support comma-separated stage IDs for multi-org drill-down
       const ids = stageId.split(',').filter(Boolean);
@@ -321,8 +326,11 @@ router.get('/tags', async (req, res, next) => {
 // ─── Get Lead by ID ──────────────────────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {
+    const detailWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) detailWhere.assignedToId = req.user.id;
+
     const lead = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      where: detailWhere,
       include: {
         assignedTo: { select: { id: true, firstName: true, lastName: true, email: true, avatar: true } },
         createdBy: { select: { id: true, firstName: true, lastName: true } },
@@ -519,8 +527,11 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
 // ─── Update Lead ─────────────────────────────────────────────────
 router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
   try {
+    const updateWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) updateWhere.assignedToId = req.user.id;
+
     const existing = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      where: updateWhere,
     });
     if (!existing) {
       return res.status(404).json({ error: 'Lead not found' });
@@ -726,8 +737,11 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 // ─── Delete (Archive) Lead ───────────────────────────────────────
 router.delete('/:id', async (req, res, next) => {
   try {
+    const deleteWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) deleteWhere.assignedToId = req.user.id;
+
     const lead = await prisma.lead.findFirst({
-      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      where: deleteWhere,
     });
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });

@@ -40,7 +40,10 @@ router.get('/', validateQuery(paginationSchema.extend({
     if (leadId) {
       where.leadId = leadId;
     }
-    if (assigneeId) {
+    if (req.isRestrictedRole) {
+      // SALES_REP / VIEWER only sees their own tasks
+      where.assigneeId = req.user.id;
+    } else if (assigneeId) {
       where.assigneeId = assigneeId;
     } else {
       // Default: show tasks for users in the accessible orgs
