@@ -509,12 +509,40 @@ class ApiClient {
     return this.request<any[]>('/automations');
   }
 
+  async getAutomation(id: string) {
+    return this.request<any>(`/automations/${id}`);
+  }
+
   async createAutomation(data: any) {
     return this.request<any>('/automations', { method: 'POST', body: JSON.stringify(data) });
   }
 
+  async updateAutomation(id: string, data: any) {
+    return this.request<any>(`/automations/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
   async toggleAutomation(id: string) {
     return this.request<any>(`/automations/${id}/toggle`, { method: 'POST' });
+  }
+
+  async deleteAutomation(id: string) {
+    return this.request<any>(`/automations/${id}`, { method: 'DELETE' });
+  }
+
+  async duplicateAutomation(id: string) {
+    return this.request<any>(`/automations/${id}/duplicate`, { method: 'POST' });
+  }
+
+  async getAutomationLogs(id: string, page = 1, limit = 20) {
+    return this.request<any>(`/automations/${id}/logs?page=${page}&limit=${limit}`);
+  }
+
+  async getAutomationTemplates() {
+    return this.request<any[]>('/automations/templates');
+  }
+
+  async getAutomationStats() {
+    return this.request<any>('/automations/stats/overview');
   }
 
   // Communications

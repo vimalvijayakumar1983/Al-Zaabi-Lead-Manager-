@@ -489,9 +489,30 @@ model AutomationRule {
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  logs           AutomationLog[]
 
   @@index([organizationId, isActive])
   @@map("automation_rules")
+}
+
+model AutomationLog {
+  id               String   @id @default(uuid())
+  status           String   @default("success") // success, failed, skipped
+  trigger          String
+  conditionsMet    Boolean  @default(true)
+  actionsExecuted  Json     @default("[]")
+  error            String?
+  executionTimeMs  Int      @default(0)
+  leadId           String?
+  leadName         String?
+  createdAt        DateTime @default(now())
+
+  ruleId           String
+  rule             AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId, createdAt])
+  @@index([createdAt])
+  @@map("automation_logs")
 }
 
 enum AutomationTrigger {
