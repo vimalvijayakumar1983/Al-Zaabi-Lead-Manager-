@@ -6,7 +6,8 @@ import type {
   AppNotification, NotificationPreferences
 } from '@/types';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+// Always use same-origin /api path — Next.js API route proxies to backend server-side
+const API_URL = '/api';
 
 class ApiClient {
   private token: string | null = null;
