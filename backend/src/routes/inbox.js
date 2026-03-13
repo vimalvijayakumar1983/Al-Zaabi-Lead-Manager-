@@ -1,8 +1,51 @@
 const { Router } = require('express');
 const { z } = require('zod');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
+
+// ─── Multer config for attachments ─────────────────────────────────
+
+const UPLOAD_DIR = path.join(__dirname, '../../uploads/inbox');
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname);
+    cb(null, uniqueSuffix + ext);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+  fileFilter: (_req, file, cb) => {
+    // Allow images, documents, audio, video
+    const allowed = [
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+      'application/pdf',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain', 'text/csv',
+      'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm',
+      'video/mp4', 'video/webm', 'video/quicktime',
+      'application/zip', 'application/x-rar-compressed',
+    ];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('File type not allowed'), false);
+    }
+  },
+});
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -278,6 +321,139 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
     };
 
     res.status(201).json(enriched);
+  } catch (err) { next(err); }
+});
+
+// ─── Upload Attachments ─────────────────────────────────────────────
+
+router.post('/upload', upload.array('files', 10), async (req, res, next) => {
+  try {
+    const files = req.files || [];
+    if (files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    const attachments = files.map(f => ({
+      filename: f.originalname,
+      storedName: f.filename,
+      mimeType: f.mimetype,
+      size: f.size,
+      url: `/uploads/inbox/${f.filename}`,
+    }));
+
+    res.json({ attachments });
+  } catch (err) { next(err); }
+});
+
+// ─── Send Message with Attachments ──────────────────────────────────
+
+router.post('/send-with-attachments', upload.array('files', 10), async (req, res, next) => {
+  try {
+    const { leadId, channel, body, subject, platform } = req.body;
+    const files = req.files || [];
+
+    if (!leadId || !channel) {
+      return res.status(400).json({ error: 'leadId and channel are required' });
+    }
+
+    // Verify lead
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // Build attachment metadata
+    const attachmentData = files.map(f => ({
+      filename: f.originalname,
+      storedName: f.filename,
+      mimeType: f.mimetype,
+      size: f.size,
+      url: `/uploads/inbox/${f.filename}`,
+    }));
+
+    const msgMetadata = {};
+    if (platform) msgMetadata.platform = platform.toLowerCase();
+    if (attachmentData.length > 0) msgMetadata.attachments = attachmentData;
+
+    // Create communication record
+    const communication = await prisma.communication.create({
+      data: {
+        leadId,
+        channel,
+        direction: 'OUTBOUND',
+        body: body || (files.length > 0 ? `[${files.length} attachment${files.length > 1 ? 's' : ''}]` : ''),
+        subject: subject || null,
+        metadata: msgMetadata,
+        userId: req.user.id,
+      },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    // Create Attachment records linked to lead
+    for (const att of attachmentData) {
+      await prisma.attachment.create({
+        data: {
+          leadId,
+          filename: att.filename,
+          mimeType: att.mimeType,
+          size: att.size,
+          url: att.url,
+        },
+      });
+    }
+
+    // Activity log
+    await prisma.leadActivity.create({
+      data: {
+        leadId,
+        userId: req.user.id,
+        type: files.length > 0 ? 'ATTACHMENT_ADDED' : (
+          channel === 'EMAIL' ? 'EMAIL_SENT' :
+          channel === 'WHATSAPP' ? 'WHATSAPP_SENT' :
+          channel === 'PHONE' ? 'CALL_MADE' : 'CUSTOM'
+        ),
+        description: files.length > 0
+          ? `Sent ${files.length} attachment${files.length > 1 ? 's' : ''} via ${platform || channel.toLowerCase()}`
+          : `Sent ${platform || channel.toLowerCase()} message`,
+        metadata: { channel, platform, messageId: communication.id, attachmentCount: files.length },
+      },
+    });
+
+    // Update lead timestamp
+    await prisma.lead.update({
+      where: { id: leadId },
+      data: { updatedAt: new Date() },
+    });
+
+    const enriched = {
+      ...communication,
+      platform: resolvePlatform(communication),
+      platformInfo: PLATFORM_MAP[resolvePlatform(communication)] || PLATFORM_MAP.CHAT,
+    };
+
+    res.status(201).json(enriched);
+  } catch (err) { next(err); }
+});
+
+// ─── Get Attachments for a Lead ─────────────────────────────────────
+
+router.get('/conversations/:leadId/attachments', async (req, res, next) => {
+  try {
+    const { leadId } = req.params;
+
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const attachments = await prisma.attachment.findMany({
+      where: { leadId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(attachments);
   } catch (err) { next(err); }
 });
 

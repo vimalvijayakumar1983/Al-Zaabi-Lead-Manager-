@@ -9,8 +9,8 @@ import {
   User, Building2, Star, Clock, ChevronDown, Smile, X, ExternalLink,
   MessageSquare, Globe, RefreshCw, StickyNote, Zap, Check, CheckCheck,
   Archive, Tag, Filter, MoreHorizontal, Bookmark, Pin,
-  ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase,
-  Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft,
+  ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase, Paperclip,
+  Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft, FileText, Image, Download,
 } from 'lucide-react';
 
 // ─── Platform Icons (SVG) ───────────────────────────────────────────
@@ -181,8 +181,8 @@ export default function InboxPage() {
   const [sending, setSending] = useState(false);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
-  // Right panel tabs: info | notes | canned
-  const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned'>('info');
+  // Right panel tabs: info | notes | canned | attachments
+  const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -190,8 +190,14 @@ export default function InboxPage() {
   const [showConvoActions, setShowConvoActions] = useState<string | null>(null);
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
 
+  // Attachments
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const searchTimeout = useRef<any>(null);
 
   // ─── Debounce search ──────────────────────────────────────────────
@@ -260,12 +266,22 @@ export default function InboxPage() {
 
   useEffect(() => { loadConversations(); }, [loadConversations]);
 
+  // ─── Load lead attachments ──────────────────────────────────────────
+  const loadAttachments = useCallback(async (leadId: string) => {
+    try {
+      const res = await api.getLeadAttachments(leadId);
+      setLeadAttachments(res || []);
+    } catch { setLeadAttachments([]); }
+  }, []);
+
   useEffect(() => {
     if (selectedLeadId) {
       loadMessages(selectedLeadId);
       loadNotes(selectedLeadId);
+      loadAttachments(selectedLeadId);
+      setAttachedFiles([]);
     }
-  }, [selectedLeadId, loadMessages, loadNotes]);
+  }, [selectedLeadId, loadMessages, loadNotes, loadAttachments]);
 
   // Auto-scroll
   useEffect(() => {
@@ -280,7 +296,7 @@ export default function InboxPage() {
 
   // ─── Send message ─────────────────────────────────────────────────
   const handleSend = async () => {
-    if (!messageText.trim() || !selectedLeadId || sending) return;
+    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
     try {
       setSending(true);
       let channel = sendChannel;
@@ -289,9 +305,23 @@ export default function InboxPage() {
         channel = 'CHAT';
         platform = sendChannel.toLowerCase();
       }
-      await api.sendInboxMessage({ leadId: selectedLeadId, channel, body: messageText.trim(), platform });
+
+      if (attachedFiles.length > 0) {
+        await api.sendInboxMessageWithAttachments({
+          leadId: selectedLeadId,
+          channel,
+          body: messageText.trim(),
+          platform,
+          files: attachedFiles,
+        });
+      } else {
+        await api.sendInboxMessage({ leadId: selectedLeadId, channel, body: messageText.trim(), platform });
+      }
+
       setMessageText('');
+      setAttachedFiles([]);
       await loadMessages(selectedLeadId);
+      loadAttachments(selectedLeadId);
       loadConversations();
       inputRef.current?.focus();
     } catch (err) {
@@ -300,6 +330,55 @@ export default function InboxPage() {
       setSending(false);
     }
   };
+
+  // ─── File handling ────────────────────────────────────────────────
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setAttachedFiles(prev => [...prev, ...files].slice(0, 10));
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeAttachedFile = (index: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    setAttachedFiles(prev => [...prev, ...files].slice(0, 10));
+  };
+
+  function formatFileSize(bytes: number) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function isImageFile(mimeType: string) {
+    return mimeType.startsWith('image/');
+  }
+
+  function getFileIcon(mimeType: string) {
+    if (mimeType.startsWith('image/')) return '🖼';
+    if (mimeType === 'application/pdf') return '📄';
+    if (mimeType.startsWith('video/')) return '🎬';
+    if (mimeType.startsWith('audio/')) return '🎵';
+    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return '📊';
+    if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📽';
+    if (mimeType.includes('document') || mimeType.includes('word')) return '📝';
+    return '📎';
+  }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -857,7 +936,46 @@ export default function InboxPage() {
                                     Re: {msg.subject}
                                   </p>
                                 )}
-                                <p className="whitespace-pre-wrap break-words">{msg.body}</p>
+                                {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
+
+                                {/* Attachments in message */}
+                                {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
+                                  <div className="mt-2 space-y-1.5">
+                                    {msg.metadata.attachments.map((att: any, ai: number) => (
+                                      <a
+                                        key={ai}
+                                        href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`flex items-center gap-2 p-2 rounded-lg transition-colors ${
+                                          isOutbound
+                                            ? 'bg-white/10 hover:bg-white/20'
+                                            : 'bg-surface-secondary hover:bg-surface-tertiary'
+                                        }`}
+                                      >
+                                        {isImageFile(att.mimeType) ? (
+                                          <img
+                                            src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                                            alt={att.filename}
+                                            className="h-16 w-16 rounded object-cover flex-shrink-0"
+                                          />
+                                        ) : (
+                                          <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                          <p className={`text-2xs font-medium truncate ${isOutbound ? 'text-white' : 'text-text-primary'}`}>
+                                            {att.filename}
+                                          </p>
+                                          <p className={`text-2xs ${isOutbound ? 'text-white/60' : 'text-text-tertiary'}`}>
+                                            {formatFileSize(att.size)}
+                                          </p>
+                                        </div>
+                                        <ExternalLink className={`h-3 w-3 flex-shrink-0 ${isOutbound ? 'text-white/50' : 'text-text-tertiary'}`} />
+                                      </a>
+                                    ))}
+                                  </div>
+                                )}
+
                                 <div className={`flex items-center gap-1.5 mt-1 ${isOutbound ? 'justify-end' : ''}`}>
                                   <span className={`text-[10px] ${isOutbound ? 'text-white/50' : 'text-text-tertiary'}`}>
                                     {formatTime(msg.createdAt)}
@@ -897,7 +1015,52 @@ export default function InboxPage() {
             </div>
 
             {/* ── Message composer ───────────────────────────────────── */}
-            <div className="border-t border-border bg-white">
+            <div
+              className={`border-t bg-white transition-colors ${isDragging ? 'border-brand-400 bg-brand-50/30' : 'border-border'}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {/* Drag overlay */}
+              {isDragging && (
+                <div className="px-4 py-3 text-center border-2 border-dashed border-brand-400 rounded-lg mx-3 mt-2 bg-brand-50/50">
+                  <Paperclip className="h-5 w-5 text-brand-500 mx-auto mb-1" />
+                  <p className="text-xs font-medium text-brand-600">Drop files here to attach</p>
+                  <p className="text-2xs text-brand-400">Max 10 files, 25MB each</p>
+                </div>
+              )}
+
+              {/* Attachment previews */}
+              {attachedFiles.length > 0 && (
+                <div className="px-3 sm:px-4 pt-2">
+                  <div className="flex flex-wrap gap-2">
+                    {attachedFiles.map((file, i) => (
+                      <div key={i} className="relative group/file flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface-tertiary border border-border max-w-[200px]">
+                        {file.type.startsWith('image/') ? (
+                          <img
+                            src={URL.createObjectURL(file)}
+                            alt={file.name}
+                            className="h-8 w-8 rounded object-cover flex-shrink-0"
+                          />
+                        ) : (
+                          <span className="text-sm flex-shrink-0">{getFileIcon(file.type)}</span>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-2xs font-medium text-text-primary truncate">{file.name}</p>
+                          <p className="text-2xs text-text-tertiary">{formatFileSize(file.size)}</p>
+                        </div>
+                        <button
+                          onClick={() => removeAttachedFile(i)}
+                          className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover/file:opacity-100 transition-opacity"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Channel bar */}
               <div className="flex items-center gap-2 px-3 sm:px-4 pt-2.5 pb-1">
                 <div className="relative">
@@ -938,6 +1101,14 @@ export default function InboxPage() {
 
                 {/* Quick actions */}
                 <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-2xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
+                  title="Attach files"
+                >
+                  <Paperclip className="h-3 w-3" />
+                  <span className="hidden sm:inline">Attach</span>
+                </button>
+                <button
                   onClick={() => setRightTab('canned')}
                   className="text-2xs text-text-tertiary hover:text-brand-600 flex items-center gap-1 transition-colors"
                   title="Canned responses"
@@ -955,8 +1126,25 @@ export default function InboxPage() {
                 </button>
               </div>
 
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleFileSelect}
+                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.mp3,.wav,.mp4,.webm,.zip,.rar"
+              />
+
               {/* Input area */}
               <div className="flex items-end gap-2 px-3 sm:px-4 pb-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-all"
+                  title="Attach file"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
                 <textarea
                   ref={inputRef}
                   value={messageText}
@@ -975,7 +1163,7 @@ export default function InboxPage() {
                 />
                 <button
                   onClick={handleSend}
-                  disabled={!messageText.trim() || sending}
+                  disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
                   className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
                   style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
                   title="Send"
@@ -1002,6 +1190,7 @@ export default function InboxPage() {
             {([
               { key: 'info', label: 'Contact', icon: User },
               { key: 'notes', label: 'Notes', icon: StickyNote },
+              { key: 'attachments', label: 'Files', icon: Paperclip },
               { key: 'canned', label: 'Quick Replies', icon: Zap },
             ] as const).map(tab => (
               <button
@@ -1197,6 +1386,68 @@ export default function InboxPage() {
             )}
 
             {/* ── Canned Responses Tab ──────────────────────────────── */}
+            {/* ── Attachments Tab ──────────────────────────────────── */}
+            {rightTab === 'attachments' && (
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-xs font-semibold text-text-primary">Shared Files</p>
+                    <p className="text-2xs text-text-tertiary">{leadAttachments.length} file{leadAttachments.length !== 1 ? 's' : ''}</p>
+                  </div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-2xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+                  >
+                    <Paperclip className="h-3 w-3" />
+                    Upload
+                  </button>
+                </div>
+
+                {leadAttachments.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Paperclip className="h-8 w-8 text-text-tertiary mx-auto mb-2" />
+                    <p className="text-xs text-text-tertiary">No files shared yet</p>
+                    <p className="text-2xs text-text-tertiary mt-0.5">Attachments sent in messages will appear here</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {leadAttachments.map((att: any) => (
+                      <a
+                        key={att.id}
+                        href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border hover:border-brand-300 hover:bg-brand-50/20 transition-all group/att"
+                      >
+                        {isImageFile(att.mimeType) ? (
+                          <div className="h-10 w-10 rounded-lg overflow-hidden flex-shrink-0 bg-surface-tertiary">
+                            <img
+                              src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                              alt={att.filename}
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="h-10 w-10 rounded-lg bg-surface-tertiary flex items-center justify-center flex-shrink-0 text-lg">
+                            {getFileIcon(att.mimeType)}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-medium text-text-primary truncate">{att.filename}</p>
+                          <div className="flex items-center gap-2 text-2xs text-text-tertiary">
+                            <span>{formatFileSize(att.size)}</span>
+                            <span>&middot;</span>
+                            <span>{new Date(att.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                          </div>
+                        </div>
+                        <Download className="h-3.5 w-3.5 text-text-tertiary opacity-0 group-hover/att:opacity-100 transition-opacity flex-shrink-0" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {rightTab === 'canned' && (
               <div className="p-4">
                 <p className="text-xs font-semibold text-text-primary mb-1">Quick Replies</p>

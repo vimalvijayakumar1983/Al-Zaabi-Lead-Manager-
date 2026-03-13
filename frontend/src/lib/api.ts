@@ -63,6 +63,34 @@ class ApiClient {
     return data;
   }
 
+  private async requestFormData<T>(path: string, formData: FormData): Promise<T> {
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (res.status === 401) {
+      this.setToken(null);
+      if (typeof window !== 'undefined' && !(window as any).__loggingOut) {
+        window.location.href = '/login';
+      }
+      throw new Error('Unauthorized');
+    }
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Upload failed');
+    }
+    return data;
+  }
+
   // Auth
   async login(email: string, password: string) {
     return this.request<{ token: string; user: any; divisions?: Organization[] }>('/auth/login', {
@@ -746,6 +774,34 @@ class ApiClient {
 
   async getCannedResponses() {
     return this.request<any[]>('/inbox/canned-responses');
+  }
+
+  async uploadInboxFiles(files: File[]) {
+    const formData = new FormData();
+    files.forEach(f => formData.append('files', f));
+    return this.requestFormData<{ attachments: any[] }>('/inbox/upload', formData);
+  }
+
+  async sendInboxMessageWithAttachments(data: {
+    leadId: string;
+    channel: string;
+    body?: string;
+    subject?: string;
+    platform?: string;
+    files: File[];
+  }) {
+    const formData = new FormData();
+    formData.append('leadId', data.leadId);
+    formData.append('channel', data.channel);
+    if (data.body) formData.append('body', data.body);
+    if (data.subject) formData.append('subject', data.subject);
+    if (data.platform) formData.append('platform', data.platform);
+    data.files.forEach(f => formData.append('files', f));
+    return this.requestFormData<any>('/inbox/send-with-attachments', formData);
+  }
+
+  async getLeadAttachments(leadId: string) {
+    return this.request<any[]>(`/inbox/conversations/${leadId}/attachments`);
   }
 }
 
