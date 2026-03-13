@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
 import { ColumnManager, loadColumns, saveColumns, type ColumnDef } from './components/column-config';
@@ -183,6 +184,9 @@ function LeadsContent() {
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
+
+  // Auto-refresh when another user modifies lead data
+  useRealtimeSync(['lead'], () => { fetchLeads(); fetchStats(); });
   useEffect(() => {
     api.getLeadTags().then((data: any) => setAllTags(data || [])).catch(() => {});
     api.getPipelineStages().then((data: any) => setStages(data.stages || data || [])).catch(() => {});

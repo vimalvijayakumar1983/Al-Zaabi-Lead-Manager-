@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore, FEATURES } from '@/lib/permissions';
 import type { User, Organization } from '@/types';
@@ -120,6 +121,9 @@ export default function TeamPage() {
   }, []);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  // Auto-refresh when another user modifies team data
+  useRealtimeSync(['user'], () => { fetchUsers(); });
 
   useEffect(() => {
     if (isSuperAdmin) {

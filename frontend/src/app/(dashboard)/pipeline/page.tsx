@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import Link from 'next/link';
 import type { PipelineStage, User } from '@/types';
@@ -102,6 +103,9 @@ export default function PipelinePage() {
   }, []);
 
   useEffect(() => { fetchStages(); }, [fetchStages]);
+
+  // Auto-refresh when another user modifies lead data
+  useRealtimeSync(['lead'], () => { fetchStages(); });
 
   useEffect(() => {
     api.getUsers().then((u: User[]) => setTeamMembers(u)).catch(() => {});

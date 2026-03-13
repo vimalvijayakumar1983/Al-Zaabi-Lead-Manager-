@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import type { Contact, ContactStats, ContactLifecycle, ContactType } from '@/types';
 import {
   Users, Plus, Search, Filter, MoreHorizontal, ChevronDown,
@@ -96,6 +97,9 @@ export default function ContactsPage() {
     fetchStats();
     api.getContactFilterValues().then(setFilterValues).catch(() => {});
   }, [fetchStats]);
+
+  // Auto-refresh when another user modifies contact/deal data
+  useRealtimeSync(['contact', 'deal'], () => { fetchContacts(); fetchStats(); });
 
   const handleSort = (field: string) => {
     if (sortBy === field) {

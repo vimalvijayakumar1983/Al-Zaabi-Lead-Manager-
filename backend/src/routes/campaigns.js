@@ -5,6 +5,7 @@ const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { broadcastDataChange } = require('../websocket/server');
 
 const router = Router();
 
@@ -397,6 +398,8 @@ router.post('/', validate(createCampaignSchema), async (req, res, next) => {
       entityType: 'campaign',
       entityId: campaign.id,
     }, req.user.id).catch(() => {});
+
+    broadcastDataChange(targetOrgId, 'campaign', 'created', req.user.id, { entityId: campaign.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -434,6 +437,8 @@ router.post('/:id/duplicate', async (req, res, next) => {
       ...duplicate,
       budget: duplicate.budget ? parseFloat(duplicate.budget) : null,
     });
+
+    broadcastDataChange(original.organizationId, 'campaign', 'created', req.user.id, { entityId: duplicate.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -469,6 +474,8 @@ router.post('/bulk-update', validate(bulkUpdateSchema), async (req, res, next) =
     });
 
     res.json({ updated: result.count, message: `${result.count} campaign(s) updated` });
+
+    broadcastDataChange(req.user.organizationId, 'campaign', 'bulk_updated', req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -500,6 +507,8 @@ router.post('/bulk-delete', validate(bulkDeleteSchema), async (req, res, next) =
     });
 
     res.json({ deleted: result.count, message: `${result.count} campaign(s) deleted` });
+
+    broadcastDataChange(req.user.organizationId, 'campaign', 'deleted', req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -582,6 +591,8 @@ router.put('/:id', validate(updateCampaignSchema), async (req, res, next) => {
         }, req.user.id).catch(() => {});
       }
     }
+
+    broadcastDataChange(existing.organizationId, 'campaign', 'updated', req.user.id, { entityId: campaign.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -604,6 +615,8 @@ router.delete('/:id', async (req, res, next) => {
     await prisma.campaign.delete({ where: { id } });
 
     res.json({ message: 'Campaign deleted successfully' });
+
+    broadcastDataChange(existing.organizationId, 'campaign', 'deleted', req.user.id, { entityId: id }).catch(() => {});
   } catch (err) {
     next(err);
   }

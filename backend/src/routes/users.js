@@ -5,6 +5,7 @@ const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { broadcastDataChange } = require('../websocket/server');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -153,6 +154,8 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
       entityType: 'user',
       entityId: user.id,
     }, req.user.id).catch(() => {});
+
+    broadcastDataChange(targetOrgId, 'user', 'created', req.user.id, { entityId: user.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -196,6 +199,8 @@ router.put('/:id', authorize('ADMIN'), validate(z.object({
         organizationId: existing.organizationId,
       }).catch(() => {});
     }
+
+    broadcastDataChange(existing.organizationId, 'user', 'updated', req.user.id, { entityId: user.id }).catch(() => {});
   } catch (err) {
     next(err);
   }

@@ -59,6 +59,8 @@ const playNotificationSound = () => {
 
 // ─── Store types ─────────────────────────────────────────────────
 
+type DataChangeHandler = (event: { entity: string; action: string; entityId?: string }) => void;
+
 interface NotificationStore {
   notifications: AppNotification[];
   unreadCount: number;
@@ -86,6 +88,10 @@ interface NotificationStore {
   // Preferences
   fetchPreferences: () => Promise<void>;
   updatePreferences: (prefs: Partial<NotificationPreferences>) => Promise<void>;
+
+  // Real-time data sync
+  subscribeDataChange: (handler: DataChangeHandler) => void;
+  unsubscribeDataChange: (handler: DataChangeHandler) => void;
 }
 
 // ─── Internal references (outside Zustand for WebSocket lifecycle) ─
@@ -94,6 +100,9 @@ let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 30_000; // 30 s
+
+// Data-change event subscribers (used by useRealtimeSync hook)
+const dataChangeListeners = new Set<DataChangeHandler>();
 
 // ─── Store ───────────────────────────────────────────────────────
 
@@ -238,32 +247,46 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data as string) as {
-            type: string;
-            notification: AppNotification;
-          };
+          const data = JSON.parse(event.data as string) as Record<string, any>;
 
           if (data.type === 'notification') {
+            const notification = data.notification as AppNotification;
             // Prepend the new notification
             set((state) => ({
-              notifications: [data.notification, ...state.notifications],
+              notifications: [notification, ...state.notifications],
               unreadCount: state.unreadCount + 1,
             }));
 
             // Show a toast for real-time notifications
             get().addToast({
-              type: getToastType(data.notification.type),
-              title: data.notification.title,
-              message: data.notification.message,
+              type: getToastType(notification.type),
+              title: notification.title,
+              message: notification.message,
               duration: 5000,
-              entityType: data.notification.entityType,
-              entityId: data.notification.entityId,
+              entityType: notification.entityType,
+              entityId: notification.entityId,
             });
 
             // Play sound if preference enabled
             if (get().preferences.soundEnabled !== false) {
               playNotificationSound();
             }
+          }
+
+          if (data.type === 'data_changed') {
+            // Notify all subscribed components to refresh their data
+            const changeEvent = {
+              entity: data.entity as string,
+              action: data.action as string,
+              entityId: data.entityId as string | undefined,
+            };
+            dataChangeListeners.forEach((handler) => {
+              try {
+                handler(changeEvent);
+              } catch {
+                // Prevent one broken handler from affecting others
+              }
+            });
           }
         } catch {
           // Malformed message — ignore
@@ -333,6 +356,16 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     set((state) => ({
       toasts: state.toasts.filter((t) => t.id !== id),
     }));
+  },
+
+  // ── Real-time data sync ─────────────────────────────────────
+
+  subscribeDataChange: (handler) => {
+    dataChangeListeners.add(handler);
+  },
+
+  unsubscribeDataChange: (handler) => {
+    dataChangeListeners.delete(handler);
   },
 
   // ── Preferences ──────────────────────────────────────────────

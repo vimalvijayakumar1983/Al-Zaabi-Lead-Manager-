@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import type { Task, PaginatedResponse } from '@/types';
 import {
@@ -299,6 +300,9 @@ export default function TasksPage() {
   useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
+
+  // Auto-refresh when another user modifies task data
+  useRealtimeSync(['task'], () => { fetchTasks(); });
 
   // ── Client-side filtering (for filters not supported by API) ──────
   const filteredTasks = useMemo(() => {

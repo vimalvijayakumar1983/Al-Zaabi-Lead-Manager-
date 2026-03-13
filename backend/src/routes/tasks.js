@@ -4,7 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
-const { notifyUser } = require('../websocket/server');
+const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
@@ -124,6 +124,8 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
         organizationId: req.user.organizationId,
       }).catch(() => {});
     }
+
+    broadcastDataChange(req.user.organizationId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -151,6 +153,8 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
       },
     });
     res.json(task);
+
+    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -196,6 +200,8 @@ router.post('/:id/complete', async (req, res, next) => {
         organizationId: req.user.organizationId,
       }).catch(() => {});
     }
+
+    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -212,6 +218,8 @@ router.delete('/:id', async (req, res, next) => {
 
     await prisma.task.delete({ where: { id: req.params.id } });
     res.json({ message: 'Task deleted' });
+
+    broadcastDataChange(req.user.organizationId, 'task', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {
     next(err);
   }

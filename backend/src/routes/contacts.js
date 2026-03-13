@@ -6,6 +6,7 @@ const { validate, validateQuery } = require('../middleware/validate');
 const { paginationSchema, paginate, paginatedResponse } = require('../utils/pagination');
 const { createAuditLog } = require('../middleware/auditLog');
 const { logger } = require('../config/logger');
+const { broadcastDataChange } = require('../websocket/server');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -469,6 +470,8 @@ router.post('/', validate(contactSchema), async (req, res, next) => {
     });
 
     res.status(201).json(full);
+
+    broadcastDataChange(targetOrgId, 'contact', 'created', req.user.id, { entityId: contact.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -546,6 +549,8 @@ router.put('/:id', validate(updateContactSchema), async (req, res, next) => {
     });
 
     res.json(full);
+
+    broadcastDataChange(existing.organizationId, 'contact', 'updated', req.user.id, { entityId: contact.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -571,6 +576,8 @@ router.delete('/:id', async (req, res, next) => {
     });
 
     res.json({ message: 'Contact archived' });
+
+    broadcastDataChange(existing.organizationId, 'contact', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -718,6 +725,9 @@ router.post('/convert-lead', validate(convertLeadSchema), async (req, res, next)
     });
 
     res.status(201).json(full);
+
+    broadcastDataChange(req.orgId, 'contact', 'created', req.user.id, { entityId: contact.id }).catch(() => {});
+    broadcastDataChange(req.orgId, 'lead', 'updated', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -796,6 +806,8 @@ router.post('/merge', validate(mergeContactsSchema), async (req, res, next) => {
     });
 
     res.json(merged);
+
+    broadcastDataChange(req.orgId, 'contact', 'updated', req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -822,6 +834,8 @@ router.patch('/bulk', validate(z.object({
     });
 
     res.json({ updated: result.count });
+
+    broadcastDataChange(req.orgId, 'contact', 'bulk_updated', req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -872,6 +886,8 @@ router.post('/:id/deals', validate(z.object({
     });
 
     res.status(201).json(deal);
+
+    broadcastDataChange(contact.organizationId, 'deal', 'created', req.user.id, { entityId: deal.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -904,6 +920,8 @@ router.put('/:contactId/deals/:dealId', validate(z.object({
     });
 
     res.json(updated);
+
+    broadcastDataChange(deal.organizationId, 'deal', 'updated', req.user.id, { entityId: deal.id }).catch(() => {});
   } catch (err) {
     next(err);
   }

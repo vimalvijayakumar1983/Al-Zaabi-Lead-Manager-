@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import type { DashboardData, Organization } from '@/types';
 import Link from 'next/link';
 import {
@@ -150,6 +151,16 @@ export default function DashboardPage() {
       })
       .finally(() => setLoading(false));
   }, [divisionFilter]);
+
+  // Auto-refresh dashboard when another user modifies any data
+  const refreshDashboard = useCallback(() => {
+    api.getDashboard(divisionFilter !== 'all' ? divisionFilter : undefined)
+      .then((d: any) => {
+        if (d && typeof d === 'object' && d.overview) setData(d);
+      })
+      .catch(() => {});
+  }, [divisionFilter]);
+  useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], refreshDashboard);
 
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
 

@@ -7,7 +7,7 @@ const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagi
 const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
 const { detectDuplicates } = require('../utils/duplicateDetection');
 const { createAuditLog } = require('../middleware/auditLog');
-const { notifyUser } = require('../websocket/server');
+const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { autoAssign } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
@@ -508,6 +508,9 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
 
     // Fire automation rules
     executeAutomations('LEAD_CREATED', { organizationId: targetOrgId, lead }).catch(() => {});
+
+    // Broadcast data change to all org users
+    broadcastDataChange(targetOrgId, 'lead', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -712,6 +715,9 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     if (updateData.score !== undefined && updateData.score !== existing.score) {
       executeAutomations('LEAD_SCORE_CHANGED', autoCtx).catch(() => {});
     }
+
+    // Broadcast data change to all org users
+    broadcastDataChange(existing.organizationId, 'lead', 'updated', req.user.id, { entityId: lead.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -742,6 +748,8 @@ router.delete('/:id', async (req, res, next) => {
     });
 
     res.json({ message: 'Lead archived' });
+
+    broadcastDataChange(lead.organizationId, 'lead', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -898,6 +906,8 @@ router.post('/:id/reassign', validate(z.object({
     });
 
     res.json(updated);
+
+    broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: updated.id }).catch(() => {});
   } catch (err) { next(err); }
 });
 
@@ -924,6 +934,8 @@ router.patch('/bulk', validate(z.object({
       entityType: 'lead',
       entityId: null,
     }, req.user.id).catch(() => {});
+
+    broadcastDataChange(req.user.organizationId, 'lead', 'bulk_updated', req.user.id).catch(() => {});
   } catch (err) {
     next(err);
   }

@@ -51,6 +51,7 @@ import {
 } from 'lucide-react';
 import type { Campaign, PaginatedResponse, User, Organization } from '@/types';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 
 // ---------------------------------------------------------------------------
@@ -1371,6 +1372,9 @@ export default function CampaignsPage() {
   useEffect(() => {
     fetchCampaigns();
   }, [fetchCampaigns]);
+
+  // Auto-refresh when another user modifies campaign data
+  useRealtimeSync(['campaign'], () => { fetchCampaigns(); });
 
   useEffect(() => {
     fetchStats();
