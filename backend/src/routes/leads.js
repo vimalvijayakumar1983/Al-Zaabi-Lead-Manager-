@@ -101,7 +101,11 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
     if (assignedToId) where.assignedToId = assignedToId;
-    if (stageId) where.stageId = stageId;
+    if (stageId) {
+      // Support comma-separated stage IDs for multi-org drill-down
+      const ids = stageId.split(',').filter(Boolean);
+      where.stageId = ids.length === 1 ? ids[0] : { in: ids };
+    }
     if (minScore !== undefined || maxScore !== undefined) {
       where.score = {};
       if (minScore !== undefined) where.score.gte = minScore;

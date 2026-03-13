@@ -582,7 +582,8 @@ export default function AnalyticsPage() {
           </div>
           <FunnelViz stages={funnel} onStageClick={(stage) => {
             // Find the stage ID from pipeline stages
-            drill({ stageId: stage.name });
+            // Pass comma-separated stage IDs for drill-down (handles multi-org aggregation)
+            drill({ stageId: (stage.stageIds || []).join(',') });
           }} />
         </div>
       </div>
@@ -732,7 +733,7 @@ export default function AnalyticsPage() {
               <p className="text-xs text-text-tertiary">Click any stage to see its leads</p>
             </div>
           </div>
-          <FunnelViz stages={funnel} onStageClick={(stage) => drill({ stageId: stage.name })} />
+          <FunnelViz stages={funnel} onStageClick={(stage) => drill({ stageId: (stage.stageIds || []).join(',') })} />
         </div>
 
         <div className="card p-5">

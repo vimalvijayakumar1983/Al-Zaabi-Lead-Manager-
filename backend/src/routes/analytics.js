@@ -142,13 +142,29 @@ router.get('/funnel', async (req, res, next) => {
       },
     });
 
-    const result = stages.map(s => ({
-      name: s.name,
-      color: s.color,
-      count: s._count.leads,
-      value: s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0),
-      conversionFromPrev: 100,
-    }));
+    // Aggregate stages by name + order across orgs (Super Admin sees multiple orgs)
+    const aggregated = new Map();
+    for (const s of stages) {
+      const key = `${s.order}-${s.name}`;
+      if (aggregated.has(key)) {
+        const existing = aggregated.get(key);
+        existing.count += s._count.leads;
+        existing.value += s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0);
+        existing.stageIds.push(s.id);
+      } else {
+        aggregated.set(key, {
+          name: s.name,
+          color: s.color,
+          order: s.order,
+          count: s._count.leads,
+          value: s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0),
+          stageIds: [s.id],
+          conversionFromPrev: 100,
+        });
+      }
+    }
+
+    const result = Array.from(aggregated.values()).sort((a, b) => a.order - b.order);
 
     for (let i = 1; i < result.length; i++) {
       const prev = result[i - 1].count;

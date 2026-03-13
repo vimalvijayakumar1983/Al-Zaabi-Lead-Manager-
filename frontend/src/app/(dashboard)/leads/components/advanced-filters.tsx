@@ -780,7 +780,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   );
 }
 
-export function FilterBadges({ filters, onRemove }: { filters: FilterState; onRemove: (key: keyof FilterState) => void }) {
+export function FilterBadges({ filters, onRemove, stages }: { filters: FilterState; onRemove: (key: keyof FilterState) => void; stages?: { id: string; name: string }[] }) {
   const badges: { key: keyof FilterState; label: string }[] = [];
 
   // Handle multi-select status display
@@ -802,7 +802,14 @@ export function FilterBadges({ filters, onRemove }: { filters: FilterState; onRe
     }
   }
   if (filters.assignedToId) badges.push({ key: 'assignedToId', label: filters.assignedToId === '__unassigned__' ? 'Unassigned' : 'Assigned' });
-  if (filters.stageId) badges.push({ key: 'stageId', label: `Stage: ${filters.stageId}` });
+  if (filters.stageId) {
+    // Resolve stage IDs to names (supports comma-separated IDs from analytics drill-down)
+    const ids = filters.stageId.split(',').filter(Boolean);
+    const names = stages
+      ? ids.map(id => stages.find(s => s.id === id)?.name || id).filter((v, i, a) => a.indexOf(v) === i)
+      : ids;
+    badges.push({ key: 'stageId', label: `Stage: ${names.join(', ')}` });
+  }
   if (filters.minScore) badges.push({ key: 'minScore', label: `Score >= ${filters.minScore}` });
   if (filters.maxScore) badges.push({ key: 'maxScore', label: `Score <= ${filters.maxScore}` });
   if (filters.dateFrom) badges.push({ key: 'dateFrom', label: `From: ${filters.dateFrom}` });

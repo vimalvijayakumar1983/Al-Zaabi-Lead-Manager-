@@ -743,7 +743,7 @@ export default function LeadsPage() {
           )}
 
           {/* Active Filter Badges */}
-          <FilterBadges filters={filters} onRemove={handleRemoveFilter} />
+          <FilterBadges filters={filters} onRemove={handleRemoveFilter} stages={stages} />
 
           {/* Bulk Actions Bar */}
           {selectedLeads.size > 0 && (
