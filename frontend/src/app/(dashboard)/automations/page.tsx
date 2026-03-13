@@ -46,6 +46,60 @@ const operatorLabels: Record<string, string> = {
   in: 'is one of',
 };
 
+const statusOptions = [
+  { value: 'NEW', label: 'New' },
+  { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'QUALIFIED', label: 'Qualified' },
+  { value: 'PROPOSAL_SENT', label: 'Proposal Sent' },
+  { value: 'NEGOTIATION', label: 'Negotiation' },
+  { value: 'WON', label: 'Won' },
+  { value: 'LOST', label: 'Lost' },
+];
+
+const sourceOptions = [
+  { value: 'WEBSITE_FORM', label: 'Website Form' },
+  { value: 'LANDING_PAGE', label: 'Landing Page' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+  { value: 'FACEBOOK_ADS', label: 'Facebook Ads' },
+  { value: 'GOOGLE_ADS', label: 'Google Ads' },
+  { value: 'TIKTOK_ADS', label: 'TikTok Ads' },
+  { value: 'MANUAL', label: 'Manual' },
+  { value: 'CSV_IMPORT', label: 'CSV Import' },
+  { value: 'API', label: 'API' },
+  { value: 'REFERRAL', label: 'Referral' },
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'PHONE', label: 'Phone' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+const priorityOptions = [
+  { value: 'LOW', label: 'Low' },
+  { value: 'MEDIUM', label: 'Medium' },
+  { value: 'HIGH', label: 'High' },
+  { value: 'URGENT', label: 'Urgent' },
+];
+
+const taskTypeOptions = [
+  { value: 'FOLLOW_UP_CALL', label: 'Follow Up Call' },
+  { value: 'MEETING', label: 'Meeting' },
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+  { value: 'DEMO', label: 'Demo' },
+  { value: 'PROPOSAL', label: 'Proposal' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+const conditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text'> = {
+  status: statusOptions,
+  source: sourceOptions,
+  score: 'number',
+  budget: 'number',
+  productInterest: 'text',
+  location: 'text',
+  company: 'text',
+  email: 'text',
+};
+
 const conditionFields = [
   { value: 'status', label: 'Status' },
   { value: 'source', label: 'Source' },
@@ -625,11 +679,16 @@ function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
                 </div>
                 <span className="text-2xs font-semibold text-text-tertiary mt-1.5 uppercase tracking-wider">Conditions</span>
                 <div className="mt-1 space-y-1">
-                  {rule.conditions.map((c: any, i: number) => (
-                    <span key={i} className="block text-xs text-text-secondary">
-                      {c.field} {operatorLabels[c.operator] || c.operator} <strong>{String(c.value)}</strong>
-                    </span>
-                  ))}
+                  {rule.conditions.map((c: any, i: number) => {
+                    const fieldLabel = conditionFields.find(f => f.value === c.field)?.label || c.field;
+                    const opts = conditionFieldValueOptions[c.field];
+                    const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value)) : String(c.value);
+                    return (
+                      <span key={i} className="block text-xs text-text-secondary">
+                        {fieldLabel} {operatorLabels[c.operator] || c.operator} <strong>{valueLabel}</strong>
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
             </>
@@ -894,7 +953,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
   const totalSteps = 4;
 
   const addCondition = () => {
-    setForm({ ...form, conditions: [...form.conditions, { field: 'status', operator: 'equals', value: '' }] });
+    setForm({ ...form, conditions: [...form.conditions, { field: 'status', operator: 'equals', value: 'NEW' }] });
   };
 
   const removeCondition = (index: number) => {
@@ -1034,13 +1093,32 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                   {form.conditions.map((cond: any, i: number) => (
                     <div key={i} className="flex items-center gap-2 p-3 rounded-lg bg-surface-secondary">
                       {i > 0 && <span className="text-2xs font-semibold text-text-tertiary uppercase">AND</span>}
-                      <select className="input text-sm flex-1" value={cond.field} onChange={(e) => updateCondition(i, { field: e.target.value })}>
+                      <select className="input text-sm flex-1" value={cond.field} onChange={(e) => {
+                        const newField = e.target.value;
+                        const opts = conditionFieldValueOptions[newField];
+                        const defaultValue = Array.isArray(opts) ? opts[0]?.value || '' : opts === 'number' ? '0' : '';
+                        updateCondition(i, { field: newField, value: defaultValue });
+                      }}>
                         {conditionFields.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
                       </select>
                       <select className="input text-sm w-36" value={cond.operator} onChange={(e) => updateCondition(i, { operator: e.target.value })}>
                         {Object.entries(operatorLabels).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
                       </select>
-                      <input className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />
+                      {(() => {
+                        const opts = conditionFieldValueOptions[cond.field];
+                        if (Array.isArray(opts)) {
+                          return (
+                            <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
+                              <option value="">Select...</option>
+                              {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                          );
+                        }
+                        if (opts === 'number') {
+                          return <input type="number" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />;
+                        }
+                        return <input className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />;
+                      })()}
                       <button type="button" onClick={() => removeCondition(i)} className="btn-icon h-8 w-8 text-red-500 hover:text-red-700">
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -1107,7 +1185,15 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             </div>
                             <div>
                               <label className="label">Template</label>
-                              <input className="input text-sm" value={action.config.template || ''} onChange={(e) => updateActionConfig(i, 'template', e.target.value)} placeholder="welcome, follow-up, etc." />
+                              <select className="input text-sm" value={action.config.template || ''} onChange={(e) => updateActionConfig(i, 'template', e.target.value)}>
+                                <option value="">Select template...</option>
+                                <option value="welcome">Welcome</option>
+                                <option value="follow-up">Follow Up</option>
+                                <option value="proposal">Proposal</option>
+                                <option value="meeting-reminder">Meeting Reminder</option>
+                                <option value="thank-you">Thank You</option>
+                                <option value="custom">Custom</option>
+                              </select>
                             </div>
                           </>
                         )}
@@ -1122,7 +1208,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             <label className="label">New Status</label>
                             <select className="input text-sm" value={action.config.status || ''} onChange={(e) => updateActionConfig(i, 'status', e.target.value)}>
                               <option value="">Select status...</option>
-                              {['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST'].map(s => <option key={s} value={s}>{s}</option>)}
+                              {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                             </select>
                           </div>
                         )}
@@ -1142,7 +1228,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                               <div>
                                 <label className="label">Task Type</label>
                                 <select className="input text-sm" value={action.config.taskType || 'FOLLOW_UP_CALL'} onChange={(e) => updateActionConfig(i, 'taskType', e.target.value)}>
-                                  {['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'].map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                                  {taskTypeOptions.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                                 </select>
                               </div>
                               <div>
@@ -1153,7 +1239,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             <div>
                               <label className="label">Priority</label>
                               <select className="input text-sm" value={action.config.priority || 'MEDIUM'} onChange={(e) => updateActionConfig(i, 'priority', e.target.value)}>
-                                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map(p => <option key={p} value={p}>{p}</option>)}
+                                {priorityOptions.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                               </select>
                             </div>
                           </>
@@ -1173,6 +1259,21 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                               </select>
                             </div>
                           </>
+                        )}
+                        {action.type === 'change_stage' && (
+                          <div>
+                            <label className="label">New Stage</label>
+                            <select className="input text-sm" value={action.config.stage || ''} onChange={(e) => updateActionConfig(i, 'stage', e.target.value)}>
+                              <option value="">Select stage...</option>
+                              <option value="NEW_INQUIRY">New Inquiry</option>
+                              <option value="INITIAL_CONTACT">Initial Contact</option>
+                              <option value="QUALIFICATION">Qualification</option>
+                              <option value="PROPOSAL">Proposal</option>
+                              <option value="NEGOTIATION">Negotiation</option>
+                              <option value="CLOSED_WON">Closed Won</option>
+                              <option value="CLOSED_LOST">Closed Lost</option>
+                            </select>
+                          </div>
                         )}
                         {action.type === 'assign_lead' && (
                           <div>
@@ -1242,14 +1343,19 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
               {form.conditions.length > 0 && (
                 <div className="card p-4">
                   <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider block mb-2">Conditions</span>
-                  {form.conditions.map((c, i) => (
-                    <p key={i} className="text-xs text-text-secondary">
-                      {i > 0 && <span className="text-text-tertiary font-medium">AND </span>}
-                      <span className="font-medium text-text-primary">{c.field}</span>{' '}
-                      {operatorLabels[c.operator] || c.operator}{' '}
-                      <span className="font-medium text-text-primary">{String(c.value)}</span>
-                    </p>
-                  ))}
+                  {form.conditions.map((c, i) => {
+                    const fieldLabel = conditionFields.find(f => f.value === c.field)?.label || c.field;
+                    const opts = conditionFieldValueOptions[c.field];
+                    const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value)) : String(c.value);
+                    return (
+                      <p key={i} className="text-xs text-text-secondary">
+                        {i > 0 && <span className="text-text-tertiary font-medium">AND </span>}
+                        <span className="font-medium text-text-primary">{fieldLabel}</span>{' '}
+                        {operatorLabels[c.operator] || c.operator}{' '}
+                        <span className="font-medium text-text-primary">{valueLabel}</span>
+                      </p>
+                    );
+                  })}
                 </div>
               )}
 
@@ -1263,9 +1369,12 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                       <span className="text-xs font-medium text-text-tertiary mt-0.5">{i + 1}.</span>
                       <div>
                         <p className="text-xs font-medium text-text-primary">{act?.label || a.type}</p>
-                        {Object.entries(a.config).filter(([, v]) => v).map(([k, v]) => (
-                          <p key={k} className="text-2xs text-text-tertiary">{k}: {String(v)}</p>
-                        ))}
+                        {Object.entries(a.config).filter(([, v]) => v).map(([k, v]) => {
+                          const configLabels: Record<string, string> = { status: 'Status', taskType: 'Task Type', priority: 'Priority', stage: 'Stage', template: 'Template', subject: 'Subject', message: 'Message', tagName: 'Tag', title: 'Title', dueInHours: 'Due In (hours)', url: 'URL', method: 'Method' };
+                          const valueMappers: Record<string, { value: string; label: string }[]> = { status: statusOptions, taskType: taskTypeOptions, priority: priorityOptions };
+                          const displayVal = valueMappers[k]?.find(o => o.value === String(v))?.label || String(v);
+                          return <p key={k} className="text-2xs text-text-tertiary">{configLabels[k] || k}: {displayVal}</p>;
+                        })}
                       </div>
                     </div>
                   );
