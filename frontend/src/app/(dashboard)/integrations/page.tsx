@@ -478,6 +478,7 @@ export default function IntegrationsPage() {
   const [generatedKey, setGeneratedKey] = useState<{ apiKey: string; endpoint: string } | null>(
     null
   );
+  const [apiKeyError, setApiKeyError] = useState('');
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
 
   // State: Activity log filter
@@ -871,14 +872,22 @@ export default function IntegrationsPage() {
     if (!newKeyName.trim()) return;
     try {
       setSaving(true);
+      setApiKeyError('');
       const result = (await api.generateApiKey(newKeyName)) as unknown as {
         apiKey: string;
         endpoint: string;
       };
       setGeneratedKey(result);
-      await loadData();
-    } catch {
-      // handle error
+      // Refresh just the API keys list (not full loadData which triggers loading spinner)
+      try {
+        const freshKeys = (await api.getApiKeys()) as unknown as ApiKeyItem[];
+        setApiKeys(freshKeys);
+      } catch {
+        // non-critical: key was created, list refresh failed
+      }
+    } catch (err: any) {
+      console.error('Failed to generate API key:', err);
+      setApiKeyError(err?.message || 'Failed to generate API key. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -892,7 +901,8 @@ export default function IntegrationsPage() {
       onConfirm: async () => {
         try {
           await api.revokeApiKey(key.id);
-          await loadData();
+          const freshKeys = (await api.getApiKeys()) as unknown as ApiKeyItem[];
+          setApiKeys(freshKeys);
           setConfirmAction(null);
         } catch {
           setConfirmAction(null);
@@ -2160,6 +2170,11 @@ export default function IntegrationsPage() {
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {apiKeyError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                {apiKeyError}
+              </div>
+            )}
             {generatedKey ? (
               <div className="space-y-4">
                 <div className="bg-emerald-50 rounded-lg p-4 flex items-start gap-3">
@@ -2452,6 +2467,7 @@ export default function IntegrationsPage() {
             onClick={() => {
               setNewKeyName('');
               setGeneratedKey(null);
+              setApiKeyError('');
               setActiveModal('apikey');
             }}
             className="btn-primary text-sm px-4 py-2 flex items-center gap-1.5"
