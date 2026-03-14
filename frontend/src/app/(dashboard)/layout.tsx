@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore } from '@/lib/permissions';
 import { useNotificationStore } from '@/store/notificationStore';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
 import NotificationCenter from '@/components/NotificationCenter';
@@ -152,6 +153,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     };
   }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
+
+  // Re-fetch user profile when role/user data changes (e.g. super admin changes role)
+  useRealtimeSync(['user'], useCallback((event) => {
+    if (event.action === 'updated') {
+      loadUser();
+    }
+  }, [loadUser]));
 
   // Close mobile menu on route change
   useEffect(() => {
