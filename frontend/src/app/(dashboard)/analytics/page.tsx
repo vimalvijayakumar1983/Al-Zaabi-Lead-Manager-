@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   TrendingUp, TrendingDown, Minus, Users, Trophy, BarChart3, DollarSign,
   Target, Zap, Activity, ArrowUpRight, ArrowDownRight, RefreshCw,
@@ -474,6 +475,11 @@ export default function AnalyticsPage() {
   }, [isSuperAdmin, divId]);
 
   useEffect(() => { fetchData(); }, [period, selectedDivision, fetchData]);
+
+  // Real-time sync: refresh analytics when underlying data changes
+  useRealtimeSync(['lead', 'task', 'contact', 'deal', 'campaign'], useCallback(() => {
+    fetchData(true);
+  }, [fetchData]));
 
   const days = { '7d': 7, '30d': 30, '90d': 90, '180d': 180, '365d': 365 }[period];
   const filledTrends = trends.length ? fillDates(trends, days) : [];

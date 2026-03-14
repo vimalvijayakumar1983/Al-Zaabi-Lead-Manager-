@@ -328,10 +328,28 @@ function InboxContent() {
     }
   }, [loadConversations, loadMessages, selectedLeadId]));
 
-  // Real-time sync: refresh conversations when leads change
-  useRealtimeSync(['lead'], useCallback(() => {
+  // Real-time sync: refresh conversations + right panel lead info when leads change
+  useRealtimeSync(['lead'], useCallback((event) => {
     loadConversations();
-  }, [loadConversations]));
+    // Refresh right panel lead info if the changed lead is the one we're viewing
+    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
+      loadMessages(selectedLeadId);
+    }
+  }, [loadConversations, loadMessages, selectedLeadId]));
+
+  // Real-time sync: refresh notes panel when notes change
+  useRealtimeSync(['note'], useCallback((event) => {
+    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
+      loadNotes(selectedLeadId);
+    }
+  }, [loadNotes, selectedLeadId]));
+
+  // Real-time sync: refresh lead info when tasks change (tasks can affect lead)
+  useRealtimeSync(['task'], useCallback(() => {
+    if (selectedLeadId) {
+      loadMessages(selectedLeadId);
+    }
+  }, [loadMessages, selectedLeadId]));
 
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
