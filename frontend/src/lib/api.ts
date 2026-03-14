@@ -500,6 +500,10 @@ class ApiClient {
     return this.request<void>(`/integrations/api-key/${id}/revoke`, { method: 'POST' });
   }
 
+  async deleteApiKey(id: string) {
+    return this.request<void>(`/integrations/api-key/${id}`, { method: 'DELETE' });
+  }
+
   async getApiKeys() {
     return this.request<ApiKey[]>('/integrations/api-keys');
   }

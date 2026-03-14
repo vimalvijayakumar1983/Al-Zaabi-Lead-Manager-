@@ -911,6 +911,24 @@ export default function IntegrationsPage() {
     });
   };
 
+  const handleDeleteApiKey = (key: ApiKeyItem) => {
+    setConfirmAction({
+      title: 'Delete API Key',
+      message: `Are you sure you want to permanently delete "${key.name}"? This action cannot be undone.`,
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        try {
+          await api.deleteApiKey(key.id);
+          const freshKeys = (await api.getApiKeys()) as unknown as ApiKeyItem[];
+          setApiKeys(freshKeys);
+          setConfirmAction(null);
+        } catch {
+          setConfirmAction(null);
+        }
+      },
+    });
+  };
+
   const toggleSecretVisibility = (key: string) => {
     setShowSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
   };
@@ -2554,14 +2572,23 @@ export default function IntegrationsPage() {
                         </span>
                       </td>
                       <td className="px-5 py-4 text-right">
-                        {ak.status === 'active' && (
+                        <div className="flex items-center justify-end gap-1">
+                          {ak.status === 'active' && (
+                            <button
+                              onClick={() => handleRevokeApiKey(ak)}
+                              className="text-xs text-red-600 hover:text-red-700 font-medium hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors"
+                            >
+                              Revoke
+                            </button>
+                          )}
                           <button
-                            onClick={() => handleRevokeApiKey(ak)}
-                            className="text-xs text-red-600 hover:text-red-700 font-medium hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors"
+                            onClick={() => handleDeleteApiKey(ak)}
+                            className="text-xs text-text-tertiary hover:text-red-600 hover:bg-red-50 px-2 py-1.5 rounded-lg transition-colors"
+                            title="Delete API key"
                           >
-                            Revoke
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   );

@@ -338,6 +338,28 @@ router.post('/api-key/:id/revoke', async (req, res, next) => {
   }
 });
 
+// ─── DELETE /api-key/:id — Delete API Key permanently ────────────────────────────
+
+router.delete('/api-key/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.apiKey.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    await prisma.apiKey.delete({ where: { id } });
+
+    res.json({ message: 'API key deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── POST /widget/generate — Generate Embeddable Form Widget ────────────────────
 
 router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res, next) => {
