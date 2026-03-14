@@ -35,12 +35,15 @@ const { createNotification, NOTIFICATION_TYPES } = require('../services/notifica
 async function roundRobinAssign(orgIds, eligibleUserIds) {
   const ids = Array.isArray(orgIds) ? orgIds : [orgIds];
   const where = {
-    organizationId: { in: ids },
     isActive: true,
     role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
   };
   if (eligibleUserIds && eligibleUserIds.length > 0) {
+    // When specific users are selected, use them regardless of org
     where.id = { in: eligibleUserIds };
+  } else {
+    // Default: search within the specified org(s)
+    where.organizationId = { in: ids };
   }
 
   const users = await prisma.user.findMany({
@@ -451,13 +454,22 @@ async function bulkAutoAssign(orgId, maxCount = 50) {
  * @returns {Promise<string|null>} User ID of the next assignee, or null
  */
 async function getNextAssignee(orgId, lead) {
-  // Load org and check if it's a GROUP (has child divisions)
+  // Load org to check type and settings
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
-    select: { settings: true, type: true },
+    select: { settings: true, type: true, parentId: true },
   });
 
-  const rules = (org?.settings)?.allocationRules;
+  // For DIVISION orgs, use own rules; fall back to parent GROUP rules if none configured
+  let rules = (org?.settings)?.allocationRules;
+  if (!rules && org?.parentId) {
+    const parent = await prisma.organization.findUnique({
+      where: { id: org.parentId },
+      select: { settings: true },
+    });
+    rules = (parent?.settings)?.allocationRules;
+  }
+
   const method = rules?.method || 'round_robin';
   const maxLeadsPerUser = rules?.maxLeadsPerUser || 25;
   const eligibleUserIds = rules?.eligibleUserIds || [];
@@ -465,25 +477,26 @@ async function getNextAssignee(orgId, lead) {
   // If method is manual, skip auto-assignment
   if (method === 'manual') return null;
 
-  // Resolve all org IDs to search (parent + child divisions for GROUP orgs)
-  const orgIds = [orgId];
+  // Determine which org(s) to search for users
+  // For a DIVISION: search only that division
+  // For a GROUP: include child divisions so actual sales reps are found
+  const searchOrgIds = [orgId];
   if (org?.type === 'GROUP') {
     const children = await prisma.organization.findMany({
       where: { parentId: orgId },
       select: { id: true },
     });
-    orgIds.push(...children.map(c => c.id));
+    searchOrgIds.push(...children.map(c => c.id));
   }
 
   // 1. Check source-specific rules first
   if (rules?.sourceRules?.length > 0 && lead.source) {
     const sourceRule = rules.sourceRules.find((r) => r.source === lead.source);
     if (sourceRule?.assignToId) {
-      // Verify user is active and under capacity (across all orgs in scope)
+      // Verify user is active and under capacity
       const user = await prisma.user.findFirst({
         where: {
           id: sourceRule.assignToId,
-          organizationId: { in: orgIds },
           isActive: true,
         },
         select: {
@@ -505,13 +518,13 @@ async function getNextAssignee(orgId, lead) {
     }
   }
 
-  // 2. Workload-based or round-robin (filtered by eligible users, across all orgs)
+  // 2. Workload-based or round-robin (filtered by eligible users)
   if (method === 'workload_based') {
-    return workloadBasedAssign(orgIds, maxLeadsPerUser, eligibleUserIds);
+    return workloadBasedAssign(searchOrgIds, maxLeadsPerUser, eligibleUserIds);
   }
 
   // 3. Default: round-robin
-  return roundRobinAssign(orgIds, eligibleUserIds);
+  return roundRobinAssign(searchOrgIds, eligibleUserIds);
 }
 
 /**
@@ -526,12 +539,15 @@ async function getNextAssignee(orgId, lead) {
 async function workloadBasedAssign(orgIds, maxLeadsPerUser, eligibleUserIds) {
   const ids = Array.isArray(orgIds) ? orgIds : [orgIds];
   const where = {
-    organizationId: { in: ids },
     isActive: true,
     role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
   };
   if (eligibleUserIds && eligibleUserIds.length > 0) {
+    // When specific users are selected, use them regardless of org
     where.id = { in: eligibleUserIds };
+  } else {
+    // Default: search within the specified org(s)
+    where.organizationId = { in: ids };
   }
 
   const users = await prisma.user.findMany({

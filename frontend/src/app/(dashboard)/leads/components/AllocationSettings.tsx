@@ -514,7 +514,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
                     Select which team members participate in auto-assignment. If none selected, all active team members are eligible.
                   </p>
 
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 max-h-48 overflow-y-auto space-y-1">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 max-h-64 overflow-y-auto space-y-1">
                     {users.filter((u) => u.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u.role)).map((u) => {
                       const isChecked = eligibleUserIds.includes(u.id);
                       return (
