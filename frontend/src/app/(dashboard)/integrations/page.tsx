@@ -504,21 +504,19 @@ export default function IntegrationsPage() {
       setIntegrations(integrationsData);
       setApiKeys(apiKeysData);
 
-      if (isSuperAdmin && user?.organization) {
-        const allDivisions: Organization[] = [];
-        const gather = (org: Organization) => {
-          if (org.type === 'DIVISION') allDivisions.push(org);
-          org.children?.forEach(gather);
-        };
-        gather(user.organization);
-        setDivisions(allDivisions);
+      // Load divisions for the chat widget division selector
+      try {
+        const divs = await api.getDivisions();
+        if (Array.isArray(divs)) setDivisions(divs);
+      } catch {
+        // non-group orgs won't have divisions — that's fine
       }
     } catch {
       // silently handle
     } finally {
       setLoading(false);
     }
-  }, [isSuperAdmin, user]);
+  }, [user]);
 
   useEffect(() => {
     void loadData();
