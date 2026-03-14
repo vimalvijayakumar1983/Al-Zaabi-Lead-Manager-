@@ -508,6 +508,17 @@ const statusUpdateSchema = z.object({
   status: z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST']),
 });
 
+// Map lead status to pipeline stage name for auto-sync
+const STATUS_TO_STAGE_NAME = {
+  NEW: 'New Lead',
+  CONTACTED: 'Contacted',
+  QUALIFIED: 'Qualified',
+  PROPOSAL_SENT: 'Proposal Sent',
+  NEGOTIATION: 'Negotiation',
+  WON: 'Won',
+  LOST: 'Lost',
+};
+
 router.patch('/conversations/:leadId/status', async (req, res, next) => {
   try {
     const { leadId } = req.params;
@@ -521,10 +532,23 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
+    const updateData = { status: parsed.data.status };
+
+    // Auto-sync pipeline stage to match the new status
+    const stageName = STATUS_TO_STAGE_NAME[parsed.data.status];
+    if (stageName) {
+      const matchingStage = await prisma.pipelineStage.findFirst({
+        where: { organizationId: lead.organizationId, name: { equals: stageName, mode: 'insensitive' } },
+      });
+      if (matchingStage) {
+        updateData.stageId = matchingStage.id;
+      }
+    }
+
     const updated = await prisma.lead.update({
       where: { id: leadId },
-      data: { status: parsed.data.status },
-      select: { id: true, status: true },
+      data: updateData,
+      select: { id: true, status: true, stage: { select: { id: true, name: true, color: true } } },
     });
 
     res.json(updated);

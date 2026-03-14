@@ -304,17 +304,34 @@ function InboxContent() {
     }
   }, [searchParams, selectedLeadId]);
 
+  // Map pipeline stage names to lead statuses for auto-sync
+  const STAGE_NAME_TO_STATUS: Record<string, string> = {
+    'new lead': 'NEW',
+    'contacted': 'CONTACTED',
+    'qualified': 'QUALIFIED',
+    'proposal sent': 'PROPOSAL_SENT',
+    'negotiation': 'NEGOTIATION',
+    'won': 'WON',
+    'lost': 'LOST',
+  };
+
   // ─── Update lead stage ─────────────────────────────────────────────
   const handleStageChange = useCallback(async (stageId: string) => {
     if (!selectedLeadId || !leadInfo) return;
     setUpdatingStage(true);
     try {
-      await api.updateLead(selectedLeadId, { stageId });
       const stage = pipelineStages.find(s => s.id === stageId);
+      // Auto-sync status when stage changes
+      const updateData: any = { stageId };
       if (stage) {
-        setLeadInfo({ ...leadInfo, stage: { id: stage.id, name: stage.name, color: stage.color } });
+        const matchedStatus = STAGE_NAME_TO_STATUS[stage.name.toLowerCase()];
+        if (matchedStatus) {
+          updateData.status = matchedStatus;
+        }
       }
-      // Also refresh conversations to update the stage badge in the list
+      await api.updateLead(selectedLeadId, updateData);
+      // Reload full lead info to reflect both stage + status changes
+      await loadMessages(selectedLeadId);
       loadConversations();
     } catch (err) {
       console.error('Failed to update stage:', err);
@@ -322,7 +339,7 @@ function InboxContent() {
       setUpdatingStage(false);
       setShowStageDropdown(false);
     }
-  }, [selectedLeadId, leadInfo, pipelineStages, loadConversations]);
+  }, [selectedLeadId, leadInfo, pipelineStages, loadConversations, loadMessages]);
 
   // ─── Load lead attachments ──────────────────────────────────────────
   const loadAttachments = useCallback(async (leadId: string) => {
