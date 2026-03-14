@@ -60,6 +60,17 @@ const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Also serve under /api/uploads so the Next.js proxy can reach files
 app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// ─── Widget Script (public, CORS-enabled) ───────────────────────────
+const widgetStaticOpts = {
+  setHeaders: (res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Content-Type', 'application/javascript; charset=utf-8');
+  },
+};
+app.use('/api/widget', express.static(path.join(__dirname, '../public'), widgetStaticOpts));
+app.use('/widget', express.static(path.join(__dirname, '../public'), widgetStaticOpts));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // Rate limiting

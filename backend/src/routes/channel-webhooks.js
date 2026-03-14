@@ -315,8 +315,20 @@ router.post('/google/:organizationId', async (req, res) => {
 });
 
 // ─── Website Chat Webhook ───────────────────────────────────────────
+// CORS preflight for embedded website chat widgets (external domains)
+router.options('/webchat/:organizationId', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Max-Age', '86400');
+  res.sendStatus(204);
+});
+
 // For embedded website chat widgets
 router.post('/webchat/:organizationId', async (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
   try {
     const { organizationId } = req.params;
     const { name, email, phone, message, sessionId } = req.body;

@@ -2848,6 +2848,135 @@ export default function IntegrationsPage() {
       </div>
 
       {/* ------------------------------------------------------------------ */}
+      {/* Live Chat Widget — Real-time Embed */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
+        <div className="p-5 border-b border-gray-100">
+          <h2 className="text-lg font-semibold text-text-primary flex items-center gap-2">
+            <MessageSquare className="w-5 h-5 text-emerald-600" /> Live Chat Widget
+          </h2>
+          <p className="text-sm text-text-secondary mt-1">
+            Add a floating chat widget to your website — leads appear in your CRM inbox in real-time
+          </p>
+        </div>
+        <div className="p-5">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Left: Embed code */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                <Code2 className="w-4 h-4" /> Embed Code
+              </h3>
+              <p className="text-sm text-text-secondary">
+                Copy this single line and paste it before the closing <code className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">&lt;/body&gt;</code> tag on any page of your website.
+              </p>
+              <div className="relative">
+                <pre className="px-4 py-3 bg-gray-900 rounded-lg text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap leading-relaxed">
+{`<script
+  src="${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.vercel.app'}/api/widget/alzaabi-widget.js"
+  data-org-id="${user?.organizationId || 'YOUR_ORG_ID'}"
+  data-color="#0066FF"
+  data-position="right"
+  data-title="Get in Touch"
+></script>`}
+                </pre>
+                <div className="absolute top-2 right-2">
+                  <CopyButton
+                    text={`<script src="${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.vercel.app'}/api/widget/alzaabi-widget.js" data-org-id="${user?.organizationId || 'YOUR_ORG_ID'}" data-color="#0066FF" data-position="right" data-title="Get in Touch"></script>`}
+                    label="Copy"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">Customization Options</h4>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 bg-gray-50 rounded-lg">
+                    <span className="font-mono text-brand-600">data-color</span>
+                    <p className="text-text-secondary mt-1">Widget accent color (hex)</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg">
+                    <span className="font-mono text-brand-600">data-position</span>
+                    <p className="text-text-secondary mt-1">&quot;right&quot; or &quot;left&quot;</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg">
+                    <span className="font-mono text-brand-600">data-title</span>
+                    <p className="text-text-secondary mt-1">Form heading text</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg">
+                    <span className="font-mono text-brand-600">data-org-id</span>
+                    <p className="text-text-secondary mt-1">Your organization ID</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+                <div className="flex gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-emerald-800">
+                    <p className="font-semibold">Real-time sync enabled</p>
+                    <p className="mt-0.5">When a visitor submits the form, a new lead and conversation are created instantly. Your team sees it in the Inbox within seconds.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Visual preview */}
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2 mb-3">
+                <Monitor className="w-4 h-4" /> Preview
+              </h3>
+              <div className="relative bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-6 min-h-[420px] overflow-hidden">
+                {/* Mock website content */}
+                <div className="bg-white rounded-lg shadow-sm p-4 mb-3 opacity-40">
+                  <div className="h-3 w-1/2 bg-gray-300 rounded mb-2" />
+                  <div className="h-2 w-full bg-gray-200 rounded mb-1.5" />
+                  <div className="h-2 w-3/4 bg-gray-200 rounded" />
+                </div>
+                <div className="bg-white rounded-lg shadow-sm p-4 opacity-40">
+                  <div className="h-3 w-1/3 bg-gray-300 rounded mb-2" />
+                  <div className="h-2 w-full bg-gray-200 rounded mb-1.5" />
+                  <div className="h-2 w-5/6 bg-gray-200 rounded" />
+                </div>
+
+                {/* Mock widget panel */}
+                <div className="absolute bottom-16 right-4 w-[260px] bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-100">
+                  <div className="px-4 py-3 bg-brand-600 text-white">
+                    <p className="text-sm font-semibold">Get in Touch</p>
+                    <p className="text-[10px] opacity-80">We typically reply within minutes</p>
+                  </div>
+                  <div className="px-4 py-3 space-y-2">
+                    <div>
+                      <span className="text-[9px] font-semibold text-gray-500 uppercase">Name</span>
+                      <div className="h-6 bg-gray-50 border border-gray-200 rounded mt-0.5" />
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-semibold text-gray-500 uppercase">Email</span>
+                      <div className="h-6 bg-gray-50 border border-gray-200 rounded mt-0.5" />
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-semibold text-gray-500 uppercase">Message</span>
+                      <div className="h-10 bg-gray-50 border border-gray-200 rounded mt-0.5" />
+                    </div>
+                    <div className="h-7 bg-brand-600 rounded text-white flex items-center justify-center text-[10px] font-semibold">
+                      Send Message
+                    </div>
+                  </div>
+                  <div className="px-4 py-1.5 border-t text-center">
+                    <span className="text-[9px] text-gray-400">Powered by Al Zaabi CRM</span>
+                  </div>
+                </div>
+
+                {/* Mock FAB button */}
+                <div className="absolute bottom-4 right-4 w-10 h-10 bg-brand-600 rounded-full shadow-lg flex items-center justify-center">
+                  <MessageSquare className="w-5 h-5 text-white" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
       {/* Activity Log */}
       {/* ------------------------------------------------------------------ */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
