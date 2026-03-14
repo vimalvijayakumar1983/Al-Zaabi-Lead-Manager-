@@ -154,10 +154,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
   }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
 
-  // Re-fetch user profile when role/user data changes (e.g. super admin changes role)
-  useRealtimeSync(['user'], useCallback((event) => {
+  // When a user's profile is updated (e.g. role change by super admin),
+  // re-fetch the profile. If the role actually changed, reload the page
+  // so all data is re-fetched with the correct role-based scoping.
+  const currentRoleRef = useRef(user?.role);
+  useEffect(() => { currentRoleRef.current = user?.role; }, [user?.role]);
+
+  useRealtimeSync(['user'], useCallback(async (event) => {
     if (event.action === 'updated') {
-      loadUser();
+      const prevRole = currentRoleRef.current;
+      await loadUser();
+      const newRole = useAuthStore.getState().user?.role;
+      if (prevRole && newRole && prevRole !== newRole) {
+        // Role changed — full reload so all page data respects new scoping
+        window.location.reload();
+      }
     }
   }, [loadUser]));
 
