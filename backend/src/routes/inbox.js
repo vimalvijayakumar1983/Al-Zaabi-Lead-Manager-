@@ -8,25 +8,11 @@ const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
 
-// ─── Multer config for attachments ─────────────────────────────────
-
-const UPLOAD_DIR = path.join(__dirname, '../../uploads/inbox');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, uniqueSuffix + ext);
-  },
-});
+// ─── Multer config for attachments (memory storage for serverless) ──
 
 const upload = multer({
-  storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB (base64 inflates size)
   fileFilter: (_req, file, cb) => {
     // Allow images, documents, audio, video
     const allowed = [
@@ -232,12 +218,36 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       prisma.communication.count({ where: msgWhere }),
     ]);
 
-    // Enrich messages with platform info
-    const enriched = messages.map(m => ({
-      ...m,
-      platform: resolvePlatform(m),
-      platformInfo: PLATFORM_MAP[resolvePlatform(m)] || PLATFORM_MAP.CHAT,
-    }));
+    // Look up attachment records for this lead to patch URLs
+    const leadAttachments = await prisma.attachment.findMany({
+      where: { leadId },
+      select: { id: true, filename: true, url: true },
+    });
+    const attByFilename = {};
+    for (const a of leadAttachments) {
+      attByFilename[a.filename] = a;
+    }
+
+    // Enrich messages with platform info and patched attachment URLs
+    const enriched = messages.map(m => {
+      const meta = m.metadata || {};
+      if (meta.attachments && Array.isArray(meta.attachments)) {
+        meta.attachments = meta.attachments.map((att) => {
+          // If attachment has an ID, use the serve endpoint
+          if (att.id) return { ...att, url: `/inbox/attachments/file/${att.id}` };
+          // Try to match by filename
+          const match = attByFilename[att.filename];
+          if (match) return { ...att, id: match.id, url: `/inbox/attachments/file/${match.id}` };
+          return att;
+        });
+      }
+      return {
+        ...m,
+        metadata: meta,
+        platform: resolvePlatform(m),
+        platformInfo: PLATFORM_MAP[resolvePlatform(m)] || PLATFORM_MAP.CHAT,
+      };
+    });
 
     res.json({
       lead,
@@ -338,10 +348,9 @@ router.post('/upload', upload.array('files', 10), async (req, res, next) => {
 
     const attachments = files.map(f => ({
       filename: f.originalname,
-      storedName: f.filename,
       mimeType: f.mimetype,
       size: f.size,
-      url: `/uploads/inbox/${f.filename}`,
+      data: `data:${f.mimetype};base64,${f.buffer.toString('base64')}`,
     }));
 
     res.json({ attachments });
@@ -365,18 +374,24 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-    // Build attachment metadata
+    // Build attachment metadata — store base64 in DB for serverless persistence
     const attachmentData = files.map(f => ({
       filename: f.originalname,
-      storedName: f.filename,
       mimeType: f.mimetype,
       size: f.size,
-      url: `/uploads/inbox/${f.filename}`,
+      data: `data:${f.mimetype};base64,${f.buffer.toString('base64')}`,
     }));
 
     const msgMetadata = {};
     if (platform) msgMetadata.platform = platform.toLowerCase();
-    if (attachmentData.length > 0) msgMetadata.attachments = attachmentData;
+    // Store lightweight attachment info in metadata (no base64 data)
+    if (attachmentData.length > 0) {
+      msgMetadata.attachments = attachmentData.map(a => ({
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+      }));
+    }
 
     // Create communication record
     const communication = await prisma.communication.create({
@@ -394,16 +409,40 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       },
     });
 
-    // Create Attachment records linked to lead
+    // Create Attachment records linked to lead (store base64 data in DB)
+    const savedAttachments = [];
     for (const att of attachmentData) {
-      await prisma.attachment.create({
+      const record = await prisma.attachment.create({
         data: {
           leadId,
           filename: att.filename,
           mimeType: att.mimeType,
           size: att.size,
-          url: att.url,
+          url: '', // will set after we have the ID
+          data: att.data,
         },
+      });
+      // Set URL to the serve endpoint using the attachment ID
+      const url = `/inbox/attachments/file/${record.id}`;
+      await prisma.attachment.update({ where: { id: record.id }, data: { url } });
+      savedAttachments.push({ ...att, url, id: record.id });
+    }
+
+    // Update communication metadata with persistent URLs
+    if (savedAttachments.length > 0) {
+      const updatedMeta = {
+        ...msgMetadata,
+        attachments: savedAttachments.map(a => ({
+          id: a.id,
+          filename: a.filename,
+          mimeType: a.mimeType,
+          size: a.size,
+          url: a.url,
+        })),
+      };
+      await prisma.communication.update({
+        where: { id: communication.id },
+        data: { metadata: updatedMeta },
       });
     }
 
@@ -455,10 +494,58 @@ router.get('/conversations/:leadId/attachments', async (req, res, next) => {
 
     const attachments = await prisma.attachment.findMany({
       where: { leadId },
+      select: { id: true, filename: true, mimeType: true, size: true, url: true, createdAt: true, leadId: true },
       orderBy: { createdAt: 'desc' },
     });
 
-    res.json(attachments);
+    // Ensure URLs point to the serve endpoint
+    const mapped = attachments.map(a => ({
+      ...a,
+      url: a.url || `/inbox/attachments/file/${a.id}`,
+    }));
+
+    res.json(mapped);
+  } catch (err) { next(err); }
+});
+
+// ─── Serve Attachment File from DB ────────────────────────────────────
+
+router.get('/attachments/file/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const attachment = await prisma.attachment.findFirst({
+      where: { id },
+      select: { id: true, filename: true, mimeType: true, data: true, size: true },
+    });
+
+    if (!attachment) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    // If we have base64 data stored, serve it
+    if (attachment.data) {
+      // data is stored as "data:<mimeType>;base64,<base64data>"
+      const base64Match = attachment.data.match(/^data:([^;]+);base64,(.+)$/);
+      if (base64Match) {
+        const mimeType = base64Match[1];
+        const buffer = Buffer.from(base64Match[2], 'base64');
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${attachment.filename}"`);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return res.send(buffer);
+      }
+    }
+
+    // Fallback: try to serve from filesystem (legacy uploads)
+    const filePath = path.join(__dirname, '../../uploads/inbox', path.basename(attachment.filename));
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Content-Type', attachment.mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return res.sendFile(filePath);
+    }
+
+    return res.status(404).json({ error: 'Attachment file not found' });
   } catch (err) { next(err); }
 });
 

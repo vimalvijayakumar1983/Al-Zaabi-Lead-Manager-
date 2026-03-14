@@ -61,6 +61,9 @@ async function proxyRequest(req: NextRequest) {
           ...(res.headers.get('content-length')
             ? { 'content-length': res.headers.get('content-length')! }
             : {}),
+          ...(res.headers.get('cache-control')
+            ? { 'cache-control': res.headers.get('cache-control')! }
+            : {}),
         },
       });
     }
