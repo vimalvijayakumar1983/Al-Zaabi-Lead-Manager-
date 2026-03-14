@@ -209,6 +209,182 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// ─── GET /api-keys — List API Keys ──────────────────────────────────────────────
+// IMPORTANT: Must be before /:id to avoid being caught by the wildcard route
+
+router.get('/api-keys', async (req, res, next) => {
+  try {
+    const keys = await prisma.apiKey.findMany({
+      where: { organizationId: { in: req.orgIds } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(
+      keys.map((k) => ({
+        id: k.id,
+        key: k.key,
+        name: k.name,
+        isActive: k.isActive,
+        lastUsedAt: k.lastUsedAt,
+        createdAt: k.createdAt,
+      }))
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api-key/generate — Generate API Key ─────────────────────────────────
+
+router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res, next) => {
+  try {
+    const { name, organizationId } = req.validated;
+    const targetOrgId = organizationId || req.orgId;
+
+    if (!req.orgIds.includes(targetOrgId)) {
+      return res.status(403).json({ error: 'Access denied to specified organization' });
+    }
+
+    const apiKey = generateApiKeyString();
+
+    const created = await prisma.apiKey.create({
+      data: {
+        key: apiKey,
+        name,
+        organizationId: targetOrgId,
+      },
+    });
+
+    res.status(201).json({
+      id: created.id,
+      apiKey,
+      name,
+      organizationId: targetOrgId,
+      createdAt: created.createdAt,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api-key/revoke — Revoke API Key (body-based) ─────────────────────────
+
+router.post('/api-key/revoke', validate(revokeApiKeySchema), async (req, res, next) => {
+  try {
+    const { apiKeyId } = req.validated;
+
+    const existing = await prisma.apiKey.findFirst({
+      where: { id: apiKeyId, organizationId: { in: req.orgIds } },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    await prisma.apiKey.update({
+      where: { id: apiKeyId },
+      data: { isActive: false },
+    });
+
+    res.json({ message: 'API key revoked successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api-key/:id/revoke — Revoke API Key (URL param) ──────────────────────
+
+router.post('/api-key/:id/revoke', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.apiKey.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    await prisma.apiKey.update({
+      where: { id },
+      data: { isActive: false },
+    });
+
+    res.json({ message: 'API key revoked successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /widget/generate — Generate Embeddable Form Widget ────────────────────
+
+router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res, next) => {
+  try {
+    const targetOrgId = req.body.organizationId || req.orgId;
+    if (!req.orgIds.includes(targetOrgId)) {
+      return res.status(403).json({ error: 'Access denied to specified organization' });
+    }
+
+    const org = await prisma.organization.findFirst({
+      where: { id: targetOrgId },
+      select: { id: true, name: true },
+    });
+
+    if (!org) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    const existingKey = await prisma.apiKey.findFirst({
+      where: { organizationId: targetOrgId, isActive: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    let apiKey;
+    if (!existingKey) {
+      apiKey = generateApiKeyString();
+      await prisma.apiKey.create({
+        data: {
+          key: apiKey,
+          name: 'Widget Auto-generated Key',
+          organizationId: targetOrgId,
+        },
+      });
+    } else {
+      apiKey = existingKey.key;
+    }
+
+    const fields = req.body.fields || [
+      { name: 'firstName', label: 'First Name', type: 'text', required: true },
+      { name: 'lastName', label: 'Last Name', type: 'text', required: true },
+      { name: 'email', label: 'Email', type: 'email', required: true },
+      { name: 'phone', label: 'Phone', type: 'tel', required: false },
+      { name: 'company', label: 'Company', type: 'text', required: false },
+    ];
+
+    const theme = req.body.theme || {
+      primaryColor: '#0066FF',
+      borderRadius: '8px',
+      fontFamily: 'Inter, sans-serif',
+    };
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const endpoint = `${baseUrl}/api/public/leads`;
+    const widgetHtml = generateWidgetSnippet(apiKey, fields, theme, org.name, endpoint);
+
+    res.json({
+      html: widgetHtml,
+      code: widgetHtml,
+      apiKey,
+      endpoint,
+      previewUrl: '',
+      organizationId: targetOrgId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── GET /:id — Get Integration Details + Recent Logs ───────────────────────────
 
 router.get('/:id', async (req, res, next) => {
@@ -474,182 +650,6 @@ router.get('/:id/logs', validateQuery(logsQuerySchema), async (req, res, next) =
         totalPages: Math.ceil(total / limitNum),
       },
     });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── POST /widget/generate — Generate Embeddable Form Widget ────────────────────
-
-router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res, next) => {
-  try {
-    const targetOrgId = req.body.organizationId || req.orgId;
-    if (!req.orgIds.includes(targetOrgId)) {
-      return res.status(403).json({ error: 'Access denied to specified organization' });
-    }
-
-    const org = await prisma.organization.findFirst({
-      where: { id: targetOrgId },
-      select: { id: true, name: true },
-    });
-
-    if (!org) {
-      return res.status(404).json({ error: 'Organization not found' });
-    }
-
-    const existingKey = await prisma.apiKey.findFirst({
-      where: { organizationId: targetOrgId, isActive: true },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    let apiKey;
-    if (!existingKey) {
-      apiKey = generateApiKeyString();
-      await prisma.apiKey.create({
-        data: {
-          key: apiKey,
-          name: 'Widget Auto-generated Key',
-          organizationId: targetOrgId,
-        },
-      });
-    } else {
-      apiKey = existingKey.key;
-    }
-
-    const fields = req.body.fields || [
-      { name: 'firstName', label: 'First Name', type: 'text', required: true },
-      { name: 'lastName', label: 'Last Name', type: 'text', required: true },
-      { name: 'email', label: 'Email', type: 'email', required: true },
-      { name: 'phone', label: 'Phone', type: 'tel', required: false },
-      { name: 'company', label: 'Company', type: 'text', required: false },
-    ];
-
-    const theme = req.body.theme || {
-      primaryColor: '#0066FF',
-      borderRadius: '8px',
-      fontFamily: 'Inter, sans-serif',
-    };
-
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
-    const endpoint = `${baseUrl}/api/public/leads`;
-    const widgetHtml = generateWidgetSnippet(apiKey, fields, theme, org.name, endpoint);
-
-    res.json({
-      html: widgetHtml,
-      code: widgetHtml,
-      apiKey,
-      endpoint,
-      previewUrl: '',
-      organizationId: targetOrgId,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── GET /api-keys — List API Keys ──────────────────────────────────────────────
-
-router.get('/api-keys', async (req, res, next) => {
-  try {
-    const keys = await prisma.apiKey.findMany({
-      where: { organizationId: { in: req.orgIds } },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    res.json(
-      keys.map((k) => ({
-        id: k.id,
-        key: k.key,
-        name: k.name,
-        isActive: k.isActive,
-        lastUsedAt: k.lastUsedAt,
-        createdAt: k.createdAt,
-      }))
-    );
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── POST /api-key/generate — Generate API Key ─────────────────────────────────
-
-router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res, next) => {
-  try {
-    const { name, organizationId } = req.validated;
-    const targetOrgId = organizationId || req.orgId;
-
-    if (!req.orgIds.includes(targetOrgId)) {
-      return res.status(403).json({ error: 'Access denied to specified organization' });
-    }
-
-    const apiKey = generateApiKeyString();
-
-    const created = await prisma.apiKey.create({
-      data: {
-        key: apiKey,
-        name,
-        organizationId: targetOrgId,
-      },
-    });
-
-    res.status(201).json({
-      id: created.id,
-      apiKey,
-      name,
-      endpoint: 'https://api.alzaabi.ae/api/public/leads',
-      organizationId: targetOrgId,
-      createdAt: created.createdAt,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── POST /api-key/revoke — Revoke API Key ─────────────────────────────────────
-
-router.post('/api-key/revoke', validate(revokeApiKeySchema), async (req, res, next) => {
-  try {
-    const { apiKeyId } = req.validated;
-
-    const existing = await prisma.apiKey.findFirst({
-      where: { id: apiKeyId, organizationId: { in: req.orgIds } },
-    });
-
-    if (!existing) {
-      return res.status(404).json({ error: 'API key not found' });
-    }
-
-    await prisma.apiKey.update({
-      where: { id: apiKeyId },
-      data: { isActive: false },
-    });
-
-    res.json({ message: 'API key revoked successfully' });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── POST /api-key/:id/revoke — Revoke API Key (by URL param) ───────────────────
-
-router.post('/api-key/:id/revoke', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-
-    const existing = await prisma.apiKey.findFirst({
-      where: { id, organizationId: { in: req.orgIds } },
-    });
-
-    if (!existing) {
-      return res.status(404).json({ error: 'API key not found' });
-    }
-
-    await prisma.apiKey.update({
-      where: { id },
-      data: { isActive: false },
-    });
-
-    res.json({ message: 'API key revoked successfully' });
   } catch (err) {
     next(err);
   }
