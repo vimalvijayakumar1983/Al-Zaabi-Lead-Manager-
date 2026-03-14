@@ -472,6 +472,7 @@ export default function IntegrationsPage() {
   });
   const [widgetCode, setWidgetCode] = useState('');
   const [widgetPreviewUrl, setWidgetPreviewUrl] = useState('');
+  const [chatWidgetDivision, setChatWidgetDivision] = useState('');
 
   // State: API Key form
   const [newKeyName, setNewKeyName] = useState('');
@@ -2866,14 +2867,37 @@ export default function IntegrationsPage() {
               <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
                 <Code2 className="w-4 h-4" /> Embed Code
               </h3>
+
+              {/* Division selector */}
+              {divisions.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-text-primary mb-1">
+                    Target Division
+                  </label>
+                  <select
+                    value={chatWidgetDivision}
+                    onChange={(e) => setChatWidgetDivision(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  >
+                    <option value="">All Divisions (root organization)</option>
+                    {divisions.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-text-secondary mt-1">
+                    Leads captured by this widget will be assigned to the selected division.
+                  </p>
+                </div>
+              )}
+
               <p className="text-sm text-text-secondary">
-                Copy this single line and paste it before the closing <code className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">&lt;/body&gt;</code> tag on any page of your website.
+                Copy this snippet and paste it before the closing <code className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">&lt;/body&gt;</code> tag on any page of your website.
               </p>
               <div className="relative">
                 <pre className="px-4 py-3 bg-gray-900 rounded-lg text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap leading-relaxed">
 {`<script
   src="${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.vercel.app'}/api/widget/alzaabi-widget.js"
-  data-org-id="${user?.organizationId || 'YOUR_ORG_ID'}"
+  data-org-id="${user?.organizationId || 'YOUR_ORG_ID'}"${chatWidgetDivision ? `\n  data-division-id="${chatWidgetDivision}"` : ''}
   data-color="#0066FF"
   data-position="right"
   data-title="Get in Touch"
@@ -2881,7 +2905,7 @@ export default function IntegrationsPage() {
                 </pre>
                 <div className="absolute top-2 right-2">
                   <CopyButton
-                    text={`<script src="${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.vercel.app'}/api/widget/alzaabi-widget.js" data-org-id="${user?.organizationId || 'YOUR_ORG_ID'}" data-color="#0066FF" data-position="right" data-title="Get in Touch"></script>`}
+                    text={`<script src="${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.vercel.app'}/api/widget/alzaabi-widget.js" data-org-id="${user?.organizationId || 'YOUR_ORG_ID'}"${chatWidgetDivision ? ` data-division-id="${chatWidgetDivision}"` : ''} data-color="#0066FF" data-position="right" data-title="Get in Touch"></script>`}
                     label="Copy"
                   />
                 </div>
@@ -2903,8 +2927,8 @@ export default function IntegrationsPage() {
                     <p className="text-text-secondary mt-1">Form heading text</p>
                   </div>
                   <div className="p-3 bg-gray-50 rounded-lg">
-                    <span className="font-mono text-brand-600">data-org-id</span>
-                    <p className="text-text-secondary mt-1">Your organization ID</p>
+                    <span className="font-mono text-brand-600">data-division-id</span>
+                    <p className="text-text-secondary mt-1">Route leads to a specific division</p>
                   </div>
                 </div>
               </div>

@@ -5,6 +5,7 @@
  *   <script
  *     src="https://YOUR_BACKEND/api/widget/alzaabi-widget.js"
  *     data-org-id="YOUR_ORGANIZATION_ID"
+ *     data-division-id="OPTIONAL_DIVISION_ID"
  *     data-color="#0066FF"
  *     data-position="right"
  *     data-title="Get in Touch"
@@ -27,6 +28,7 @@
     return;
   }
 
+  var DIVISION_ID = scriptTag.getAttribute('data-division-id') || '';
   var BASE_URL = scriptTag.src.replace(/\/api\/widget\/alzaabi-widget\.js.*$/, '').replace(/\/widget\/alzaabi-widget\.js.*$/, '');
   var ENDPOINT = BASE_URL + '/api/channels/webchat/' + ORG_ID;
   var COLOR = scriptTag.getAttribute('data-color') || '#0066FF';
@@ -160,6 +162,7 @@
       phone: form.phone.value.trim() || undefined,
       message: form.message.value.trim(),
       sessionId: SESSION_ID,
+      divisionId: DIVISION_ID || undefined,
     };
 
     fetch(ENDPOINT, {

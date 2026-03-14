@@ -331,13 +331,26 @@ router.post('/webchat/:organizationId', async (req, res) => {
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   try {
     const { organizationId } = req.params;
-    const { name, email, phone, message, sessionId } = req.body;
+    const { name, email, phone, message, sessionId, divisionId } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message body is required' });
     }
 
-    const lead = await findOrCreateLead(organizationId, {
+    // If a divisionId is provided, validate it belongs to this organization
+    let targetOrgId = organizationId;
+    if (divisionId) {
+      const division = await prisma.organization.findFirst({
+        where: { id: divisionId, parentId: organizationId },
+      });
+      if (division) {
+        targetOrgId = divisionId;
+      } else {
+        logger.warn(`Widget divisionId ${divisionId} not found under org ${organizationId}, using root org`);
+      }
+    }
+
+    const lead = await findOrCreateLead(targetOrgId, {
       phone: phone || null,
       email: email || null,
       name: name || 'Website Visitor',
@@ -352,6 +365,7 @@ router.post('/webchat/:organizationId', async (req, res) => {
         sessionId,
         visitorEmail: email,
         visitorName: name,
+        divisionId: targetOrgId !== organizationId ? targetOrgId : undefined,
       },
     });
 
