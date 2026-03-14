@@ -35,6 +35,49 @@ const upload = multer({
 });
 
 const router = Router();
+
+// ─── Serve Attachment File from DB (public — UUID acts as access token) ──
+
+router.get('/attachments/file/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const attachment = await prisma.attachment.findFirst({
+      where: { id },
+      select: { id: true, filename: true, mimeType: true, data: true, size: true },
+    });
+
+    if (!attachment) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    // If we have base64 data stored, serve it
+    if (attachment.data) {
+      // data is stored as "data:<mimeType>;base64,<base64data>"
+      const base64Match = attachment.data.match(/^data:([^;]+);base64,(.+)$/);
+      if (base64Match) {
+        const mimeType = base64Match[1];
+        const buffer = Buffer.from(base64Match[2], 'base64');
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${attachment.filename}"`);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return res.send(buffer);
+      }
+    }
+
+    // Fallback: try to serve from filesystem (legacy uploads)
+    const filePath = path.join(__dirname, '../../uploads/inbox', path.basename(attachment.filename));
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Content-Type', attachment.mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return res.sendFile(filePath);
+    }
+
+    return res.status(404).json({ error: 'Attachment file not found' });
+  } catch (err) { next(err); }
+});
+
+// All routes below require authentication
 router.use(authenticate, orgScope);
 
 // ─── Channel metadata helpers ─────────────────────────────────────
@@ -505,47 +548,6 @@ router.get('/conversations/:leadId/attachments', async (req, res, next) => {
     }));
 
     res.json(mapped);
-  } catch (err) { next(err); }
-});
-
-// ─── Serve Attachment File from DB ────────────────────────────────────
-
-router.get('/attachments/file/:id', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-
-    const attachment = await prisma.attachment.findFirst({
-      where: { id },
-      select: { id: true, filename: true, mimeType: true, data: true, size: true },
-    });
-
-    if (!attachment) {
-      return res.status(404).json({ error: 'Attachment not found' });
-    }
-
-    // If we have base64 data stored, serve it
-    if (attachment.data) {
-      // data is stored as "data:<mimeType>;base64,<base64data>"
-      const base64Match = attachment.data.match(/^data:([^;]+);base64,(.+)$/);
-      if (base64Match) {
-        const mimeType = base64Match[1];
-        const buffer = Buffer.from(base64Match[2], 'base64');
-        res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Disposition', `inline; filename="${attachment.filename}"`);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        return res.send(buffer);
-      }
-    }
-
-    // Fallback: try to serve from filesystem (legacy uploads)
-    const filePath = path.join(__dirname, '../../uploads/inbox', path.basename(attachment.filename));
-    if (fs.existsSync(filePath)) {
-      res.setHeader('Content-Type', attachment.mimeType);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      return res.sendFile(filePath);
-    }
-
-    return res.status(404).json({ error: 'Attachment file not found' });
   } catch (err) { next(err); }
 });
 
