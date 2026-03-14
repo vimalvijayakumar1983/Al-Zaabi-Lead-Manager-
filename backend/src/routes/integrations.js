@@ -219,12 +219,18 @@ router.get('/api-keys', async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
     });
 
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const endpoint = `${baseUrl}/api/public/leads`;
+
     res.json(
       keys.map((k) => ({
         id: k.id,
         key: k.key,
         name: k.name,
+        status: k.isActive ? 'active' : 'revoked',
         isActive: k.isActive,
+        endpoint,
+        lastUsed: k.lastUsedAt,
         lastUsedAt: k.lastUsedAt,
         createdAt: k.createdAt,
       }))
@@ -255,10 +261,14 @@ router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res
       },
     });
 
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const endpoint = `${baseUrl}/api/public/leads`;
+
     res.status(201).json({
       id: created.id,
       apiKey,
       name,
+      endpoint,
       organizationId: targetOrgId,
       createdAt: created.createdAt,
     });
