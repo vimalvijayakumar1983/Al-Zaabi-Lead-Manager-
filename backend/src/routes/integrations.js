@@ -530,14 +530,42 @@ router.post('/widget/generate', validate(widgetGenerateSchema), async (req, res,
       fontFamily: 'Inter, sans-serif',
     };
 
-    const widgetHtml = generateWidgetSnippet(apiKey, fields, theme, org.name);
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const endpoint = `${baseUrl}/api/public/leads`;
+    const widgetHtml = generateWidgetSnippet(apiKey, fields, theme, org.name, endpoint);
 
     res.json({
       html: widgetHtml,
+      code: widgetHtml,
       apiKey,
-      endpoint: 'https://api.alzaabi.ae/api/public/leads',
+      endpoint,
+      previewUrl: '',
       organizationId: targetOrgId,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api-keys — List API Keys ──────────────────────────────────────────────
+
+router.get('/api-keys', async (req, res, next) => {
+  try {
+    const keys = await prisma.apiKey.findMany({
+      where: { organizationId: { in: req.orgIds } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(
+      keys.map((k) => ({
+        id: k.id,
+        key: k.key,
+        name: k.name,
+        isActive: k.isActive,
+        lastUsedAt: k.lastUsedAt,
+        createdAt: k.createdAt,
+      }))
+    );
   } catch (err) {
     next(err);
   }
@@ -593,6 +621,31 @@ router.post('/api-key/revoke', validate(revokeApiKeySchema), async (req, res, ne
 
     await prisma.apiKey.update({
       where: { id: apiKeyId },
+      data: { isActive: false },
+    });
+
+    res.json({ message: 'API key revoked successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api-key/:id/revoke — Revoke API Key (by URL param) ───────────────────
+
+router.post('/api-key/:id/revoke', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.apiKey.findFirst({
+      where: { id, organizationId: { in: req.orgIds } },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    await prisma.apiKey.update({
+      where: { id },
       data: { isActive: false },
     });
 
@@ -682,7 +735,7 @@ async function logIntegrationAction(integrationId, action, payload, status, erro
   }
 }
 
-function generateWidgetSnippet(apiKey, fields, theme, orgName) {
+function generateWidgetSnippet(apiKey, fields, theme, orgName, endpoint) {
   const fieldInputs = fields
     .map((f) => {
       const requiredAttr = f.required ? 'required' : '';
@@ -731,7 +784,7 @@ function generateWidgetSnippet(apiKey, fields, theme, orgName) {
     msg.className = 'alzaabi-msg'; msg.style.display = 'none';
     var data = {};
     new FormData(form).forEach(function(v,k){ data[k] = v; });
-    fetch('https://api.alzaabi.ae/api/public/leads', {
+    fetch('${endpoint}', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': '${apiKey}' },
       body: JSON.stringify(data)

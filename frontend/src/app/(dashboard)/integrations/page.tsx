@@ -150,7 +150,7 @@ const PLATFORM_DEFS: PlatformDef[] = [
     available: true,
   },
   {
-    slug: 'google_ads',
+    slug: 'google',
     name: 'Google Ads',
     description: 'Import leads from Google Ads campaigns and forms',
     icon: <Search className="w-6 h-6" />,
@@ -171,7 +171,7 @@ const PLATFORM_DEFS: PlatformDef[] = [
     comingSoon: true,
   },
   {
-    slug: 'website_forms',
+    slug: 'website',
     name: 'Website Forms',
     description: 'Embed customizable lead capture forms on your website',
     icon: <Globe className="w-6 h-6" />,
@@ -201,7 +201,7 @@ const PLATFORM_DEFS: PlatformDef[] = [
     available: true,
   },
   {
-    slug: 'webhooks',
+    slug: 'webhook',
     name: 'Webhooks',
     description: 'Create custom webhook endpoints for any data source',
     icon: <Link2 className="w-6 h-6" />,
@@ -612,7 +612,7 @@ export default function IntegrationsPage() {
         setFbLeadFormIds((cfg.leadFormIds as string) ?? '');
         setFbFieldMapping(intg.fieldMapping ?? []);
         break;
-      case 'google_ads':
+      case 'google':
         setGaCustomerId((cfg.customerId as string) ?? '');
         setGaCampaignId((cfg.campaignId as string) ?? '');
         setGaUtmSource((cfg.utmSource as boolean) ?? true);
@@ -653,7 +653,7 @@ export default function IntegrationsPage() {
           { source: 'phone_number', target: 'phone' },
         ]);
         break;
-      case 'google_ads':
+      case 'google':
         setGaCustomerId('');
         setGaCampaignId('');
         setGaUtmSource(true);
@@ -700,9 +700,9 @@ export default function IntegrationsPage() {
           fieldMapping: fbFieldMapping,
           divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
         };
-      case 'google_ads':
+      case 'google':
         return {
-          platform: 'google_ads',
+          platform: 'google',
           name: 'Google Ads',
           config: {
             customerId: gaCustomerId,
@@ -816,7 +816,7 @@ export default function IntegrationsPage() {
     try {
       setSaving(true);
       const payload = {
-        platform: 'webhooks',
+        platform: 'webhook',
         name: webhookName,
         config: {
           events: webhookEvents,
@@ -847,12 +847,12 @@ export default function IntegrationsPage() {
       setWidgetPreviewUrl(result.previewUrl);
 
       const payload = {
-        platform: 'website_forms',
+        platform: 'website',
         name: 'Website Form',
         config: { ...widgetConfig },
         divisionId: divId || undefined,
       };
-      const existing = getIntegrationForPlatform('website_forms');
+      const existing = getIntegrationForPlatform('website');
       if (existing) {
         await api.updateIntegration(existing.id, payload as never);
       } else {
@@ -1082,7 +1082,7 @@ export default function IntegrationsPage() {
           </div>
         );
 
-      case 'google_ads':
+      case 'google':
         return (
           <div className="space-y-4">
             <div>
@@ -1355,7 +1355,7 @@ export default function IntegrationsPage() {
           </div>
         );
 
-      case 'website_forms':
+      case 'website':
         return (
           <div className="space-y-4">
             <div>
@@ -1507,7 +1507,7 @@ export default function IntegrationsPage() {
           </div>
         );
 
-      case 'webhooks':
+      case 'webhook':
         return (
           <div className="space-y-4">
             <div>
@@ -1780,9 +1780,9 @@ export default function IntegrationsPage() {
   const renderConnectModal = () => {
     if (activeModal !== 'connect' || !selectedPlatform) return null;
     const existing = getIntegrationForPlatform(selectedPlatform.slug);
-    const isWebhook = selectedPlatform.slug === 'webhooks';
+    const isWebhook = selectedPlatform.slug === 'webhook';
     const isZapier = selectedPlatform.slug === 'zapier';
-    const isWebsiteForms = selectedPlatform.slug === 'website_forms';
+    const isWebsiteForms = selectedPlatform.slug === 'website';
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -2363,7 +2363,7 @@ export default function IntegrationsPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Existing Webhooks List */}
       {/* ------------------------------------------------------------------ */}
-      {filteredIntegrations.filter((i) => i.platform === 'webhooks').length > 0 && (
+      {filteredIntegrations.filter((i) => i.platform === 'webhook').length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
           <div className="p-5 border-b border-gray-100">
             <h2 className="text-lg font-semibold text-text-primary flex items-center gap-2">
@@ -2375,7 +2375,7 @@ export default function IntegrationsPage() {
           </div>
           <div className="divide-y divide-gray-100">
             {filteredIntegrations
-              .filter((i) => i.platform === 'webhooks')
+              .filter((i) => i.platform === 'webhook')
               .map((wh) => {
                 const cfg = (wh.config as unknown) as Record<string, unknown>;
                 const webhookUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/${wh.id}`;
@@ -2414,7 +2414,7 @@ export default function IntegrationsPage() {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <button
-                        onClick={() => void openManageModal(PLATFORM_DEFS.find((p) => p.slug === 'webhooks')!)}
+                        onClick={() => void openManageModal(PLATFORM_DEFS.find((p) => p.slug === 'webhook')!)}
                         className="btn-secondary text-sm p-2"
                         title="Manage"
                       >
