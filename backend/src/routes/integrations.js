@@ -144,6 +144,7 @@ const widgetGenerateSchema = z.object({
 // ─── Apply Auth Middleware ──────────────────────────────────────────────────────
 
 router.use(authenticate);
+router.use(orgScope);
 
 // ─── GET /platforms — List Available Platforms ───────────────────────────────────
 
@@ -251,12 +252,22 @@ router.post('/api-key/generate', validate(generateApiKeySchema), async (req, res
       return res.status(403).json({ error: 'Access denied to specified organization' });
     }
 
+    // Verify the target organization exists
+    const org = await prisma.organization.findFirst({
+      where: { id: targetOrgId },
+      select: { id: true, name: true },
+    });
+
+    if (!org) {
+      return res.status(404).json({ error: 'Organization not found for API key creation' });
+    }
+
     const apiKey = generateApiKeyString();
 
     const created = await prisma.apiKey.create({
       data: {
         key: apiKey,
-        name,
+        name: name || 'Default API Key',
         organizationId: targetOrgId,
       },
     });
