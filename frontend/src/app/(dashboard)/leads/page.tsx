@@ -29,7 +29,7 @@ const statusColors: Record<string, string> = {
 };
 
 const sourceLabels: Record<string, string> = {
-  WEBSITE_FORM: 'Website Form', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
+  WEBSITE_FORM: 'Website Form', LIVE_CHAT: 'Live Chat Widget', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
   FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', TIKTOK_ADS: 'TikTok Ads',
   MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',

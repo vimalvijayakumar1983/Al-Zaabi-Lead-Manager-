@@ -48,6 +48,7 @@ import {
   SlidersHorizontal,
   Keyboard,
   Check,
+  MessageSquare,
 } from 'lucide-react';
 import type { Campaign, PaginatedResponse, User, Organization } from '@/types';
 import { api } from '@/lib/api';
@@ -128,6 +129,7 @@ const CAMPAIGN_TYPES = [
   { value: 'REFERRAL', label: 'Referral', icon: Share2, color: 'text-pink-600 bg-pink-50 ring-pink-600/10' },
   { value: 'TIKTOK_ADS', label: 'TikTok Ads', icon: Zap, color: 'text-cyan-600 bg-cyan-50 ring-cyan-600/10' },
   { value: 'WEBSITE_FORM', label: 'Website Form', icon: Globe, color: 'text-indigo-600 bg-indigo-50 ring-indigo-600/10' },
+  { value: 'LIVE_CHAT', label: 'Live Chat', icon: MessageSquare, color: 'text-violet-600 bg-violet-50 ring-violet-600/10' },
   { value: 'OTHER', label: 'Other', icon: Megaphone, color: 'text-gray-600 bg-gray-50 ring-gray-600/10' },
 ] as const;
 

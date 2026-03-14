@@ -100,8 +100,11 @@ const broadcastDataChange = async (orgId, entity, action, actorId, meta = {}) =>
     });
     orgIds.push(...childOrgs.map(c => c.id));
 
+    const whereClause = { organizationId: { in: orgIds }, isActive: true };
+    if (actorId) whereClause.id = { not: actorId };
+
     const users = await prisma.user.findMany({
-      where: { organizationId: { in: orgIds }, isActive: true, id: { not: actorId } },
+      where: whereClause,
       select: { id: true },
     });
 

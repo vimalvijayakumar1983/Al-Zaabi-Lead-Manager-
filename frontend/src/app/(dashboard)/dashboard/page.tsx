@@ -35,7 +35,7 @@ const statusColors: Record<string, { bg: string; text: string; ring: string; dot
 };
 
 const sourceLabels: Record<string, string> = {
-  WEBSITE_FORM: 'Website', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
+  WEBSITE_FORM: 'Website', LIVE_CHAT: 'Live Chat', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
   FACEBOOK_ADS: 'Facebook', GOOGLE_ADS: 'Google', TIKTOK_ADS: 'TikTok',
   MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',

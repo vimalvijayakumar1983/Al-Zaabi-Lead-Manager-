@@ -15,7 +15,7 @@ const PLATFORM_SOURCE_MAP = {
   facebook: 'FACEBOOK_ADS',
   instagram: 'FACEBOOK_ADS',
   google: 'GOOGLE_ADS',
-  webchat: 'WEBSITE_FORM',
+  webchat: 'LIVE_CHAT',
   email: 'EMAIL',
   sms: 'PHONE',
   phone: 'PHONE',

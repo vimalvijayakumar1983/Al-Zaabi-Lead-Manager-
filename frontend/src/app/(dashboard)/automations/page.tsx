@@ -58,6 +58,7 @@ const statusOptions = [
 
 const sourceOptions = [
   { value: 'WEBSITE_FORM', label: 'Website Form' },
+  { value: 'LIVE_CHAT', label: 'Live Chat Widget' },
   { value: 'LANDING_PAGE', label: 'Landing Page' },
   { value: 'WHATSAPP', label: 'WhatsApp' },
   { value: 'FACEBOOK_ADS', label: 'Facebook Ads' },

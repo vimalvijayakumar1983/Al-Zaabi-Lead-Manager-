@@ -173,6 +173,7 @@ model Lead {
 
 enum LeadSource {
   WEBSITE_FORM
+  LIVE_CHAT
   LANDING_PAGE
   WHATSAPP
   FACEBOOK_ADS

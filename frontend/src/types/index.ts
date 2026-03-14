@@ -69,7 +69,7 @@ export interface AuthResponse {
 
 // ─── Lead ────────────────────────────────────────────────────────
 export type LeadSource =
-  | 'WEBSITE_FORM' | 'LANDING_PAGE' | 'WHATSAPP' | 'FACEBOOK_ADS'
+  | 'WEBSITE_FORM' | 'LIVE_CHAT' | 'LANDING_PAGE' | 'WHATSAPP' | 'FACEBOOK_ADS'
   | 'GOOGLE_ADS' | 'TIKTOK_ADS' | 'MANUAL' | 'CSV_IMPORT' | 'API'
   | 'REFERRAL' | 'EMAIL' | 'PHONE' | 'OTHER';
 

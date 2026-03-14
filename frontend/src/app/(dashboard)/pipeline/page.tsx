@@ -10,13 +10,14 @@ import {
   GripVertical, DollarSign, User2, Plus, Search, X, Filter,
   ChevronDown, ChevronUp, SlidersHorizontal, LayoutGrid, List,
   TrendingUp, ArrowUpDown, Flame, Thermometer, Snowflake,
-  Globe, Users as UsersIcon, Phone, Mail, Share2, Megaphone,
+  Globe, Users as UsersIcon, Phone, Mail, Share2, Megaphone, MessageSquare,
   Calendar, BarChart3, Hash, Target,
 } from 'lucide-react';
 
 // ─── Source config ─────────────────────────────────────────────────
 const sourceOptions = [
   { value: 'WEBSITE_FORM', label: 'Website', icon: Globe },
+  { value: 'LIVE_CHAT', label: 'Live Chat', icon: MessageSquare },
   { value: 'REFERRAL', label: 'Referral', icon: Share2 },
   { value: 'FACEBOOK_ADS', label: 'Facebook Ads', icon: Megaphone },
   { value: 'GOOGLE_ADS', label: 'Google Ads', icon: Megaphone },

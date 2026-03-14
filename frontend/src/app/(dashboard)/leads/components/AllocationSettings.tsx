@@ -17,6 +17,7 @@ import type {
 
 const LEAD_SOURCES = [
   'WEBSITE_FORM',
+  'LIVE_CHAT',
   'LANDING_PAGE',
   'WHATSAPP',
   'FACEBOOK_ADS',
@@ -33,6 +34,7 @@ const LEAD_SOURCES = [
 
 const SOURCE_LABELS: Record<string, string> = {
   WEBSITE_FORM: 'Website Form',
+  LIVE_CHAT: 'Live Chat Widget',
   LANDING_PAGE: 'Landing Page',
   WHATSAPP: 'WhatsApp',
   FACEBOOK_ADS: 'Facebook Ads',
