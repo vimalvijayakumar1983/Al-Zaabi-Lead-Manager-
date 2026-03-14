@@ -9,7 +9,7 @@ const { detectDuplicates } = require('../utils/duplicateDetection');
 const { createAuditLog } = require('../middleware/auditLog');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
-const { autoAssign } = require('../services/leadAssignment');
+const { autoAssign, getNextAssignee } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
 
 const router = Router();
@@ -374,7 +374,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     delete data.divisionId;
 
 
-    // Auto-assign if no assignee specified
+    // Auto-assign if no assignee specified — uses org's configured allocation method
     if (!data.assignedToId) {
       try {
         const orgSettings = await prisma.organization.findUnique({
@@ -383,18 +383,8 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
         });
         const rules = (orgSettings?.settings)?.allocationRules;
         if (rules?.autoAssignOnCreate !== false) {
-          // Check source-specific rules first
-          if (rules?.sourceRules?.length > 0 && data.source) {
-            const sourceRule = rules.sourceRules.find(r => r.source === data.source);
-            if (sourceRule?.assignToId) {
-              data.assignedToId = sourceRule.assignToId;
-            }
-          }
-          // Fall back to auto-assign (round-robin / workload-based)
-          if (!data.assignedToId) {
-            const assigneeId = await autoAssign(targetOrgId, data);
-            if (assigneeId) data.assignedToId = assigneeId;
-          }
+          const assigneeId = await getNextAssignee(targetOrgId, data);
+          if (assigneeId) data.assignedToId = assigneeId;
         }
       } catch (autoAssignErr) {
         // Non-critical: continue without auto-assignment
@@ -825,16 +815,15 @@ router.post('/:id/reassign', validate(z.object({
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-    // Handle auto-assign: find best user via round-robin/rules
+    // Handle auto-assign: find best user via org's configured allocation rules
     if (assignedToId === '__auto__') {
-      const { autoAssign } = require('../services/leadAssignment');
       // Try lead's own org first
-      let autoId = await autoAssign(lead.organizationId, lead);
+      let autoId = await getNextAssignee(lead.organizationId, lead);
       // If no users in lead's org, try other orgs in scope
       if (!autoId && req.orgIds.length > 1) {
         for (const altOrgId of req.orgIds) {
           if (altOrgId === lead.organizationId) continue;
-          autoId = await autoAssign(altOrgId, lead);
+          autoId = await getNextAssignee(altOrgId, lead);
           if (autoId) break;
         }
       }

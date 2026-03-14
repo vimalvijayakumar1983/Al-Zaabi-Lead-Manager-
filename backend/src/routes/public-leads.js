@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
-const { autoAssign } = require('../services/leadAssignment');
+const { getNextAssignee } = require('../services/leadAssignment');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyOrgAdmins, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { executeAutomations } = require('../services/automationEngine');
@@ -113,7 +113,7 @@ router.post('/leads', async (req, res, next) => {
       organizationId,
     };
 
-    // Auto-assign based on allocation rules
+    // Auto-assign using org's configured allocation rules
     try {
       const orgSettings = await prisma.organization.findUnique({
         where: { id: organizationId },
@@ -121,18 +121,8 @@ router.post('/leads', async (req, res, next) => {
       });
       const rules = orgSettings?.settings?.allocationRules;
       if (rules?.autoAssignOnCreate !== false) {
-        // Check source-specific rules first
-        if (rules?.sourceRules?.length > 0 && leadSource) {
-          const sourceRule = rules.sourceRules.find(r => r.source === leadSource);
-          if (sourceRule?.assignToId) {
-            leadData.assignedToId = sourceRule.assignToId;
-          }
-        }
-        // Fall back to round-robin / workload-based
-        if (!leadData.assignedToId) {
-          const assigneeId = await autoAssign(organizationId, leadData);
-          if (assigneeId) leadData.assignedToId = assigneeId;
-        }
+        const assigneeId = await getNextAssignee(organizationId, leadData);
+        if (assigneeId) leadData.assignedToId = assigneeId;
       }
     } catch (autoAssignErr) {
       console.error('Public lead auto-assign error (non-critical):', autoAssignErr.message);
