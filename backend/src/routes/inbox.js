@@ -590,6 +590,70 @@ router.get('/conversations/:leadId/notes', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Edit Message ────────────────────────────────────────────────────
+
+router.patch('/messages/:messageId', validate(z.object({
+  body: z.string().min(1),
+})), async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const message = await prisma.communication.findUnique({
+      where: { id: messageId },
+      include: { lead: { select: { organizationId: true } } },
+    });
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    if (message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    // Only the sender can edit their own outbound messages
+    if (message.direction !== 'OUTBOUND' || message.userId !== req.user.id) {
+      return res.status(403).json({ error: 'You can only edit your own sent messages' });
+    }
+    if (message.isDeleted) {
+      return res.status(400).json({ error: 'Cannot edit a deleted message' });
+    }
+
+    const updated = await prisma.communication.update({
+      where: { id: messageId },
+      data: { body: req.validated.body, isEdited: true },
+      include: { user: { select: { id: true, firstName: true, lastName: true } } },
+    });
+
+    res.json(updated);
+
+    broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
+  } catch (err) { next(err); }
+});
+
+// ─── Delete Message (soft delete) ────────────────────────────────────
+
+router.delete('/messages/:messageId', async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const message = await prisma.communication.findUnique({
+      where: { id: messageId },
+      include: { lead: { select: { organizationId: true } } },
+    });
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    if (message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    // Only the sender can delete their own outbound messages
+    if (message.direction !== 'OUTBOUND' || message.userId !== req.user.id) {
+      return res.status(403).json({ error: 'You can only delete your own sent messages' });
+    }
+
+    await prisma.communication.update({
+      where: { id: messageId },
+      data: { isDeleted: true, body: '' },
+    });
+
+    res.json({ message: 'Message deleted' });
+
+    broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
+  } catch (err) { next(err); }
+});
+
 // ─── Canned Responses ───────────────────────────────────────────────
 
 const CANNED_RESPONSES = [

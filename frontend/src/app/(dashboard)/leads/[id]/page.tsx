@@ -67,6 +67,12 @@ export default function LeadDetailPage() {
   const [chatPlatform, setChatPlatform] = useState<string>('');
   const [sendingChat, setSendingChat] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // WhatsApp-like features
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [menuOpenMsgId, setMenuOpenMsgId] = useState<string | null>(null);
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editingBody, setEditingBody] = useState('');
+  const editInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     api.getCustomFields().then(setCustomFields).catch(() => {});
@@ -275,16 +281,18 @@ export default function LeadDetailPage() {
     }
   }, [activeTab, lead?.id, loadChatMessages]);
 
-  // Real-time sync: refresh lead data when lead, note, task, or communication changes
-  useRealtimeSync(['lead', 'note', 'communication'], useCallback((event) => {
+  // Real-time sync: refresh lead data when lead or note changes
+  useRealtimeSync(['lead', 'note'], useCallback((event) => {
     // For lead events, only refresh if it's this lead (or no entityId specified)
     if (event.entity === 'lead' && event.entityId && event.entityId !== id) return;
     refreshLead();
-    // Also refresh chat messages if on communications tab
-    if (event.entity === 'communication') {
-      loadChatMessages();
-    }
-  }, [id, refreshLead, loadChatMessages]));
+  }, [id, refreshLead]));
+
+  // Real-time sync: refresh chat messages when communications change (from other users)
+  useRealtimeSync(['communication'], useCallback((event) => {
+    if (event.entityId && event.entityId !== id) return;
+    loadChatMessages();
+  }, [id, loadChatMessages]));
 
   // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
   useRealtimeSync(['task'], useCallback(() => {
@@ -311,21 +319,64 @@ export default function LeadDetailPage() {
 
   const handleSendChatMessage = async () => {
     if (!lead || !chatMessage.trim()) return;
+    const body = chatMessage.trim();
+    const tempId = `temp-${Date.now()}`;
+    const platform = chatPlatform || chatChannel;
+
+    // Optimistic: add message instantly
+    const optimisticMsg = {
+      id: tempId,
+      direction: 'OUTBOUND',
+      channel: chatChannel,
+      body,
+      platform: platform.toUpperCase(),
+      metadata: chatPlatform ? { platform: chatPlatform } : {},
+      createdAt: new Date().toISOString(),
+      user: { id: currentUserId, firstName: 'You', lastName: '' },
+      _optimistic: true,
+    };
+    setChatMessages(prev => [...prev, optimisticMsg]);
+    setChatMessage('');
     setSendingChat(true);
+
     try {
-      await api.sendInboxMessage({
+      const sent = await api.sendInboxMessage({
         leadId: lead.id,
         channel: chatChannel,
-        body: chatMessage.trim(),
+        body,
         platform: chatPlatform || undefined,
       });
-      setChatMessage('');
-      await loadChatMessages();
-      await refreshLead();
+      // Replace optimistic message with real one
+      setChatMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: platform.toUpperCase() } : m));
     } catch (err: any) {
+      // Remove optimistic message on failure
+      setChatMessages(prev => prev.filter(m => m.id !== tempId));
       alert(err.message);
     } finally {
       setSendingChat(false);
+    }
+  };
+
+  const handleEditMessage = async (messageId: string) => {
+    if (!editingBody.trim()) return;
+    try {
+      const updated = await api.editInboxMessage(messageId, editingBody.trim());
+      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      setEditingMsgId(null);
+      setEditingBody('');
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!confirm('Delete this message? It will be shown as "message was deleted".')) return;
+    try {
+      await api.deleteInboxMessage(messageId);
+      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      setMenuOpenMsgId(null);
+    } catch (err: any) {
+      alert(err.message);
     }
   };
 
@@ -858,40 +909,163 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
 
-                {/* Messages Area */}
-                <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-0">
+                {/* Messages Area — WhatsApp-like */}
+                <div className="flex-1 overflow-y-auto pr-1 min-h-0 bg-[#f0f2f5] rounded-lg p-3" onClick={() => setMenuOpenMsgId(null)}>
                   {chatLoading ? (
                     <div className="flex items-center justify-center h-full">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-600" />
                     </div>
                   ) : chatMessages.length > 0 ? (
                     <>
-                      {chatMessages.map((msg) => {
+                      {chatMessages.reduce((acc: { elements: React.ReactNode[]; lastDate: string }, msg, idx) => {
+                        const msgDate = new Date(msg.createdAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+                        if (msgDate !== acc.lastDate) {
+                          acc.elements.push(
+                            <div key={`date-${idx}`} className="flex justify-center my-3">
+                              <span className="bg-white/80 text-gray-500 text-[11px] font-medium px-3 py-1 rounded-lg shadow-sm">{msgDate}</span>
+                            </div>
+                          );
+                          acc.lastDate = msgDate;
+                        }
+
                         const isOutbound = msg.direction === 'OUTBOUND';
                         const platform = msg.platform || msg.metadata?.platform || msg.channel;
                         const platformLabel = (platform || msg.channel).toUpperCase();
-                        return (
-                          <div key={msg.id} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${isOutbound ? 'bg-brand-600 text-white rounded-br-md' : 'bg-gray-100 text-gray-900 rounded-bl-md'}`}>
-                              {msg.subject && (
-                                <p className={`text-xs font-semibold mb-1 ${isOutbound ? 'text-white/80' : 'text-gray-500'}`}>{msg.subject}</p>
-                              )}
-                              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.body}</p>
-                              <div className={`flex items-center gap-1.5 mt-1 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-                                <ChatChannelBadge channel={platformLabel} isOutbound={isOutbound} />
-                                <span className={`text-[10px] ${isOutbound ? 'text-white/60' : 'text-gray-400'}`}>
-                                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </span>
-                                {msg.user && isOutbound && (
-                                  <span className={`text-[10px] ${isOutbound ? 'text-white/60' : 'text-gray-400'}`}>
-                                    · {msg.user.firstName}
-                                  </span>
+                        const isOwnMessage = isOutbound && msg.user?.id === currentUserId;
+                        const isHovered = hoveredMsgId === msg.id;
+                        const isMenuOpen = menuOpenMsgId === msg.id;
+                        const isEditing = editingMsgId === msg.id;
+
+                        acc.elements.push(
+                          <div
+                            key={msg.id}
+                            className={`flex ${isOutbound ? 'justify-end' : 'justify-start'} mb-1 group relative`}
+                            onMouseEnter={() => setHoveredMsgId(msg.id)}
+                            onMouseLeave={() => { if (!isMenuOpen) setHoveredMsgId(null); }}
+                          >
+                            {/* Action button — appears on hover for own outbound messages */}
+                            {isOwnMessage && !msg.isDeleted && !msg._optimistic && (isHovered || isMenuOpen) && !isEditing && (
+                              <div className={`flex items-center mr-1 ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setMenuOpenMsgId(isMenuOpen ? null : msg.id); }}
+                                  className="p-1 rounded-full hover:bg-gray-200/80 text-gray-400 hover:text-gray-600"
+                                >
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                                </button>
+                                {/* Dropdown menu */}
+                                {isMenuOpen && (
+                                  <div className="absolute right-[85%] top-0 z-20 bg-white rounded-lg shadow-lg border py-1 min-w-[120px]" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      onClick={() => { setEditingMsgId(msg.id); setEditingBody(msg.body); setMenuOpenMsgId(null); setTimeout(() => editInputRef.current?.focus(), 50); }}
+                                      className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                    >
+                                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                      Edit
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteMessage(msg.id)}
+                                      className="w-full px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                    >
+                                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                      Delete
+                                    </button>
+                                  </div>
                                 )}
                               </div>
+                            )}
+
+                            <div className={`max-w-[80%] relative ${isOutbound
+                              ? 'bg-[#d9fdd3] text-gray-900 rounded-lg rounded-tr-none'
+                              : 'bg-white text-gray-900 rounded-lg rounded-tl-none'
+                            } px-3 py-2 shadow-sm ${msg._optimistic ? 'opacity-70' : ''}`}>
+                              {/* WhatsApp tail */}
+                              <div className={`absolute top-0 w-3 h-3 ${isOutbound
+                                ? '-right-1.5 text-[#d9fdd3]'
+                                : '-left-1.5 text-white'
+                              }`}>
+                                <svg viewBox="0 0 8 13" className="w-full h-full fill-current">
+                                  {isOutbound
+                                    ? <path d="M5.188 0H0v11.193l6.467-8.625C7.526 1.156 6.958 0 5.188 0z" />
+                                    : <path d="M2.812 0H8v11.193L1.533 2.568C.474 1.156 1.042 0 2.812 0z" />
+                                  }
+                                </svg>
+                              </div>
+
+                              {/* Sender name for inbound */}
+                              {!isOutbound && (
+                                <p className="text-xs font-semibold text-teal-700 mb-0.5">
+                                  {lead.firstName} {lead.lastName}
+                                </p>
+                              )}
+                              {isOutbound && msg.user && (
+                                <p className="text-xs font-semibold text-indigo-700 mb-0.5">
+                                  {msg.user.firstName} {msg.user.lastName}
+                                </p>
+                              )}
+
+                              {/* Deleted message */}
+                              {msg.isDeleted ? (
+                                <p className="text-sm italic text-gray-400 flex items-center gap-1">
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+                                  This message was deleted
+                                </p>
+                              ) : isEditing ? (
+                                /* Inline edit mode */
+                                <div className="space-y-1.5">
+                                  <textarea
+                                    ref={editInputRef}
+                                    value={editingBody}
+                                    onChange={(e) => setEditingBody(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditMessage(msg.id); }
+                                      if (e.key === 'Escape') { setEditingMsgId(null); setEditingBody(''); }
+                                    }}
+                                    className="w-full text-sm border rounded-md px-2 py-1 resize-none focus:ring-1 focus:ring-brand-500 focus:border-brand-500 bg-white"
+                                    rows={2}
+                                  />
+                                  <div className="flex justify-end gap-1">
+                                    <button onClick={() => { setEditingMsgId(null); setEditingBody(''); }} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-0.5 rounded hover:bg-gray-100">Cancel</button>
+                                    <button onClick={() => handleEditMessage(msg.id)} className="text-xs text-white bg-brand-600 hover:bg-brand-700 px-2 py-0.5 rounded" disabled={!editingBody.trim()}>Save</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  {msg.subject && (
+                                    <p className="text-xs font-semibold text-gray-500 mb-0.5">{msg.subject}</p>
+                                  )}
+                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.body}</p>
+                                </>
+                              )}
+
+                              {/* Footer: time, channel, edited badge */}
+                              {!isEditing && (
+                                <div className="flex items-center gap-1 mt-1 justify-end">
+                                  <ChatChannelBadge channel={platformLabel} isOutbound={false} />
+                                  {msg.isEdited && !msg.isDeleted && (
+                                    <span className="text-[10px] text-gray-400 italic">edited</span>
+                                  )}
+                                  <span className="text-[10px] text-gray-400">
+                                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                  {/* Double-tick for outbound */}
+                                  {isOutbound && !msg._optimistic && (
+                                    <svg className="h-3.5 w-3.5 text-blue-500" viewBox="0 0 16 15" fill="currentColor">
+                                      <path d="M15.01 3.316l-.478-.372a.365.365 0 00-.51.063L8.666 9.88a.32.32 0 01-.484.032l-.358-.325a.32.32 0 00-.484.032l-.378.48a.418.418 0 00.036.54l1.32 1.267a.32.32 0 00.484-.034l6.272-8.048a.366.366 0 00-.064-.512zm-4.1 0l-.478-.372a.365.365 0 00-.51.063L4.566 9.88a.32.32 0 01-.484.032L1.892 7.77a.366.366 0 00-.516.005l-.423.433a.364.364 0 00.006.514l3.255 3.185a.32.32 0 00.484-.033l6.272-8.048a.365.365 0 00-.063-.51z" />
+                                    </svg>
+                                  )}
+                                  {/* Single tick (sending) for optimistic */}
+                                  {msg._optimistic && (
+                                    <svg className="h-3 w-3 text-gray-400" viewBox="0 0 16 15" fill="currentColor">
+                                      <path d="M10.91 3.316l-.478-.372a.365.365 0 00-.51.063L4.566 9.88a.32.32 0 01-.484.032L1.892 7.77a.366.366 0 00-.516.005l-.423.433a.364.364 0 00.006.514l3.255 3.185a.32.32 0 00.484-.033l6.272-8.048a.365.365 0 00-.063-.51z" />
+                                    </svg>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
-                      })}
+                        return acc;
+                      }, { elements: [] as React.ReactNode[], lastDate: '' }).elements}
                       <div ref={chatEndRef} />
                     </>
                   ) : (
@@ -899,14 +1073,14 @@ export default function LeadDetailPage() {
                   )}
                 </div>
 
-                {/* Compose Area */}
-                <div className="pt-3 border-t mt-3">
+                {/* Compose Area — WhatsApp-style */}
+                <div className="pt-3 border-t mt-3 bg-[#f0f2f5] rounded-b-lg px-2 pb-2">
                   <div className="flex items-center gap-2 mb-2">
                     <label className="text-xs text-gray-500">Channel:</label>
                     <select
                       value={chatPlatform ? chatPlatform.toUpperCase() : chatChannel}
                       onChange={(e) => handleChannelSelect(e.target.value)}
-                      className="text-xs border rounded-md px-2 py-1 text-gray-700 focus:ring-1 focus:ring-brand-500 focus:border-brand-500"
+                      className="text-xs border rounded-full px-2.5 py-1 text-gray-700 bg-white focus:ring-1 focus:ring-brand-500 focus:border-brand-500"
                     >
                       <option value="WHATSAPP">WhatsApp</option>
                       <option value="EMAIL">Email</option>
@@ -917,27 +1091,26 @@ export default function LeadDetailPage() {
                       <option value="WEBCHAT">Website Chat</option>
                     </select>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-end">
                     <input
                       type="text"
                       value={chatMessage}
                       onChange={(e) => setChatMessage(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChatMessage(); } }}
-                      placeholder="Type your message..."
-                      className="flex-1 input text-sm"
+                      placeholder="Type a message"
+                      className="flex-1 text-sm rounded-full border border-gray-300 bg-white px-4 py-2 focus:ring-1 focus:ring-brand-500 focus:border-brand-500 focus:outline-none"
                       disabled={sendingChat}
                     />
                     <button
                       onClick={handleSendChatMessage}
                       disabled={sendingChat || !chatMessage.trim()}
-                      className="btn-primary px-4 text-sm gap-1.5"
+                      className="h-9 w-9 rounded-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-white flex-shrink-0 transition-colors"
                     >
                       {sendingChat ? (
                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
                       ) : (
                         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                       )}
-                      Send
                     </button>
                   </div>
                 </div>

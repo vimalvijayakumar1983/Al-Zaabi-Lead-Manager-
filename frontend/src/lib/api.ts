@@ -910,6 +910,19 @@ class ApiClient {
     return this.request<any[]>(`/inbox/conversations/${leadId}/notes`);
   }
 
+  async editInboxMessage(messageId: string, body: string) {
+    return this.request<any>(`/inbox/messages/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async deleteInboxMessage(messageId: string) {
+    return this.request<any>(`/inbox/messages/${messageId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async getCannedResponses() {
     return this.request<any[]>('/inbox/canned-responses');
   }

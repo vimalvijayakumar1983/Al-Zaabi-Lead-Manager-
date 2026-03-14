@@ -501,7 +501,10 @@ model Communication {
   subject     String?
   body        String
   metadata    Json              @default("{}")
+  isEdited    Boolean           @default(false)
+  isDeleted   Boolean           @default(false)
   createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   leadId      String
   lead        Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
