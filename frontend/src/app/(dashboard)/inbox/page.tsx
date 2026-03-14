@@ -4,6 +4,7 @@ import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'rea
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   MessageCircle, Send, Search, Phone, Mail, ArrowLeft,
   User, Building2, Star, Clock, ChevronDown, Smile, X, ExternalLink,
@@ -11,6 +12,7 @@ import {
   Archive, Tag, Filter, MoreHorizontal, Bookmark, Pin,
   ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase, Paperclip,
   Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft, FileText, Image, Download,
+  Pencil, Trash2, Ban,
 } from 'lucide-react';
 
 // ─── Platform Icons (SVG) ───────────────────────────────────────────
@@ -127,6 +129,9 @@ interface Message {
   platform: string;
   platformInfo: { label: string; color: string; icon: string };
   user: { id: string; firstName: string; lastName: string } | null;
+  isEdited?: boolean;
+  isDeleted?: boolean;
+  _optimistic?: boolean;
 }
 
 interface LeadInfo {
@@ -204,9 +209,16 @@ function InboxContent() {
   const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Edit/delete state
+  const [menuOpenMsgId, setMenuOpenMsgId] = useState<string | null>(null);
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editingBody, setEditingBody] = useState('');
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editInputRef = useRef<HTMLTextAreaElement>(null);
   const searchTimeout = useRef<any>(null);
 
   // ─── Debounce search ──────────────────────────────────────────────
@@ -301,51 +313,107 @@ function InboxContent() {
     }
   }, [selectedLeadId, loadMessages, loadNotes, loadAttachments]);
 
-  // Auto-scroll
+  // Auto-scroll within the messages container (not the page)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   }, [messages]);
 
-  // Auto-refresh conversations every 15s
-  useEffect(() => {
-    const interval = setInterval(loadConversations, 15000);
-    return () => clearInterval(interval);
-  }, [loadConversations]);
+  // Real-time sync: refresh conversations and messages on communication changes
+  useRealtimeSync(['communication'], useCallback((event) => {
+    loadConversations();
+    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
+      loadMessages(selectedLeadId);
+    }
+  }, [loadConversations, loadMessages, selectedLeadId]));
 
-  // ─── Send message ─────────────────────────────────────────────────
+  // Real-time sync: refresh conversations when leads change
+  useRealtimeSync(['lead'], useCallback(() => {
+    loadConversations();
+  }, [loadConversations]));
+
+  // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
     if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
-    try {
-      setSending(true);
-      let channel = sendChannel;
-      let platform: string | undefined;
-      if (['FACEBOOK', 'INSTAGRAM', 'GOOGLE', 'WEBCHAT'].includes(sendChannel)) {
-        channel = 'CHAT';
-        platform = sendChannel.toLowerCase();
-      }
+    const body = messageText.trim();
+    const tempId = `temp-${Date.now()}`;
 
+    let channel = sendChannel;
+    let platform: string | undefined;
+    if (['FACEBOOK', 'INSTAGRAM', 'GOOGLE', 'WEBCHAT'].includes(sendChannel)) {
+      channel = 'CHAT';
+      platform = sendChannel.toLowerCase();
+    }
+
+    // Optimistic: add message instantly (only for text-only messages)
+    if (attachedFiles.length === 0) {
+      const optimisticMsg: Message = {
+        id: tempId,
+        direction: 'OUTBOUND',
+        channel,
+        body,
+        subject: null,
+        platform: (platform || sendChannel).toUpperCase(),
+        platformInfo: { label: PLATFORM_LABELS[sendChannel] || sendChannel, color: PLATFORM_COLORS[sendChannel] || '#6366f1', icon: '' },
+        metadata: platform ? { platform } : {},
+        createdAt: new Date().toISOString(),
+        user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
+        _optimistic: true,
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
+    }
+
+    setMessageText('');
+    setSending(true);
+
+    try {
       if (attachedFiles.length > 0) {
         await api.sendInboxMessageWithAttachments({
-          leadId: selectedLeadId,
-          channel,
-          body: messageText.trim(),
-          platform,
-          files: attachedFiles,
+          leadId: selectedLeadId, channel, body, platform, files: attachedFiles,
         });
+        setAttachedFiles([]);
+        // For attachments, do a full reload since we need attachment metadata
+        await loadMessages(selectedLeadId);
+        loadAttachments(selectedLeadId);
       } else {
-        await api.sendInboxMessage({ leadId: selectedLeadId, channel, body: messageText.trim(), platform });
+        const sent = await api.sendInboxMessage({ leadId: selectedLeadId, channel, body, platform });
+        // Replace optimistic message with real one
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: (platform || sendChannel).toUpperCase() } : m));
       }
-
-      setMessageText('');
-      setAttachedFiles([]);
-      await loadMessages(selectedLeadId);
-      loadAttachments(selectedLeadId);
       loadConversations();
       inputRef.current?.focus();
-    } catch (err) {
+    } catch (err: any) {
+      // Remove optimistic message on failure
+      setMessages(prev => prev.filter(m => m.id !== tempId));
       console.error('Failed to send:', err);
     } finally {
       setSending(false);
+    }
+  };
+
+  // ─── Edit message ──────────────────────────────────────────────
+  const handleEditMessage = async (messageId: string) => {
+    if (!editingBody.trim()) return;
+    try {
+      const updated = await api.editInboxMessage(messageId, editingBody.trim());
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      setEditingMsgId(null);
+      setEditingBody('');
+    } catch (err: any) {
+      console.error('Failed to edit:', err);
+    }
+  };
+
+  // ─── Delete message ────────────────────────────────────────────
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!confirm('Delete this message? It will be shown as "message was deleted".')) return;
+    try {
+      await api.deleteInboxMessage(messageId);
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      setMenuOpenMsgId(null);
+    } catch (err: any) {
+      console.error('Failed to delete:', err);
     }
   };
 
@@ -880,7 +948,7 @@ function InboxContent() {
             </div>
 
             {/* ── Messages area ─────────────────────────────────────── */}
-            <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#f8f9fb]">
+            <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
               {loadingMessages ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
@@ -898,38 +966,56 @@ function InboxContent() {
                 groupMessagesByDate(messages).map((group, gi) => (
                   <div key={gi}>
                     {/* Date separator */}
-                    <div className="flex items-center gap-3 my-4">
-                      <div className="flex-1 h-px bg-border-subtle" />
-                      <span className="text-2xs font-semibold text-text-tertiary bg-surface-secondary px-3 py-1 rounded-full shadow-xs">
+                    <div className="flex justify-center my-4">
+                      <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
                         {group.date}
                       </span>
-                      <div className="flex-1 h-px bg-border-subtle" />
                     </div>
 
                     {group.messages.map((msg, mi) => {
                       const isOutbound = msg.direction === 'OUTBOUND';
-                      const showAvatar = !isOutbound && (mi === 0 || group.messages[mi - 1]?.direction === 'OUTBOUND');
+                      const isOwnMessage = isOutbound && msg.user?.id === user?.id;
+                      const isMenuOpen = menuOpenMsgId === msg.id;
+                      const isEditing = editingMsgId === msg.id;
 
                       return (
                         <div
                           key={msg.id}
-                          className={`flex mb-2 ${isOutbound ? 'justify-end' : 'justify-start'} group/msg`}
+                          className={`flex mb-1.5 ${isOutbound ? 'justify-end' : 'justify-start'} group/msg relative`}
                         >
-                          {/* Inbound avatar */}
-                          {!isOutbound && (
-                            <div className="w-8 flex-shrink-0 mr-2">
-                              {showAvatar && (
-                                <div
-                                  className="h-7 w-7 rounded-full flex items-center justify-center text-white text-2xs font-bold"
-                                  style={{ backgroundColor: PLATFORM_COLORS[msg.platform] || '#6366f1' }}
+                          {/* Action menu for own outbound messages */}
+                          {isOwnMessage && !msg.isDeleted && !msg._optimistic && !isEditing && (
+                            <div className={`flex items-start mr-1 opacity-0 group-hover/msg:opacity-100 ${isMenuOpen ? '!opacity-100' : ''} transition-opacity`}>
+                              <div className="relative">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setMenuOpenMsgId(isMenuOpen ? null : msg.id); }}
+                                  className="p-1 rounded-full hover:bg-black/5 text-gray-400 hover:text-gray-600"
                                 >
-                                  {leadInfo?.firstName?.charAt(0) || '?'}
-                                </div>
-                              )}
+                                  <ChevronDown className="h-4 w-4" />
+                                </button>
+                                {isMenuOpen && (
+                                  <div className="absolute right-0 top-7 z-20 bg-white rounded-xl shadow-lg border py-1 min-w-[130px]" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      onClick={() => { setEditingMsgId(msg.id); setEditingBody(msg.body); setMenuOpenMsgId(null); setTimeout(() => editInputRef.current?.focus(), 50); }}
+                                      className="w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                      Edit
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteMessage(msg.id)}
+                                      className="w-full px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      Delete
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           )}
 
-                          <div className={`max-w-[75%] sm:max-w-[65%]`}>
+                          <div className={`max-w-[75%] sm:max-w-[65%] relative`}>
                             {/* Channel indicator on first msg or channel change */}
                             {(mi === 0 || group.messages[mi - 1]?.platform !== msg.platform) && (
                               <div className={`flex items-center gap-1 mb-1 ${isOutbound ? 'justify-end' : ''}`}>
@@ -940,88 +1026,130 @@ function InboxContent() {
                               </div>
                             )}
 
-                            {/* Bubble */}
+                            {/* WhatsApp-style bubble */}
                             <div className="relative group/bubble">
                               <div
-                                className={`rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed ${
+                                className={`rounded-lg px-3 py-2 text-[13px] leading-relaxed relative ${
                                   isOutbound
-                                    ? 'bg-brand-600 text-white rounded-br-sm'
-                                    : 'bg-white text-text-primary border border-border/60 shadow-xs rounded-bl-sm'
-                                }`}
+                                    ? 'bg-[#d9fdd3] text-gray-900 rounded-tr-none'
+                                    : 'bg-white text-gray-900 rounded-tl-none shadow-sm'
+                                } ${msg._optimistic ? 'opacity-70' : ''}`}
                               >
-                                {msg.subject && (
-                                  <p className={`text-2xs font-bold mb-1 ${isOutbound ? 'text-white/70' : 'text-text-tertiary'}`}>
-                                    Re: {msg.subject}
+                                {/* WhatsApp tail */}
+                                <div className={`absolute top-0 w-2 h-3 overflow-hidden ${isOutbound ? '-right-2' : '-left-2'}`}>
+                                  <div className={`w-4 h-4 transform rotate-45 ${isOutbound ? 'bg-[#d9fdd3] -translate-x-2' : 'bg-white translate-x-0'}`} />
+                                </div>
+
+                                {/* Sender name */}
+                                {isOutbound && msg.user && (
+                                  <p className="text-xs font-semibold text-indigo-700 mb-0.5">
+                                    {msg.user.firstName} {msg.user.lastName}
                                   </p>
                                 )}
-                                {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
-
-                                {/* Attachments in message */}
-                                {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
-                                  <div className="mt-2 space-y-1.5">
-                                    {msg.metadata.attachments.map((att: any, ai: number) => (
-                                      <a
-                                        key={ai}
-                                        href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={`flex items-center gap-2 p-2 rounded-lg transition-colors ${
-                                          isOutbound
-                                            ? 'bg-white/10 hover:bg-white/20'
-                                            : 'bg-surface-secondary hover:bg-surface-tertiary'
-                                        }`}
-                                      >
-                                        {isImageFile(att.mimeType) ? (
-                                          <img
-                                            src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
-                                            alt={att.filename}
-                                            className="h-16 w-16 rounded object-cover flex-shrink-0"
-                                          />
-                                        ) : (
-                                          <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
-                                        )}
-                                        <div className="min-w-0 flex-1">
-                                          <p className={`text-2xs font-medium truncate ${isOutbound ? 'text-white' : 'text-text-primary'}`}>
-                                            {att.filename}
-                                          </p>
-                                          <p className={`text-2xs ${isOutbound ? 'text-white/60' : 'text-text-tertiary'}`}>
-                                            {formatFileSize(att.size)}
-                                          </p>
-                                        </div>
-                                        <ExternalLink className={`h-3 w-3 flex-shrink-0 ${isOutbound ? 'text-white/50' : 'text-text-tertiary'}`} />
-                                      </a>
-                                    ))}
-                                  </div>
+                                {!isOutbound && (
+                                  <p className="text-xs font-semibold text-teal-700 mb-0.5">
+                                    {leadInfo?.firstName} {leadInfo?.lastName}
+                                  </p>
                                 )}
 
-                                <div className={`flex items-center gap-1.5 mt-1 ${isOutbound ? 'justify-end' : ''}`}>
-                                  <span className={`text-[10px] ${isOutbound ? 'text-white/50' : 'text-text-tertiary'}`}>
-                                    {formatTime(msg.createdAt)}
-                                  </span>
-                                  {isOutbound && (
-                                    <CheckCheck className={`h-3 w-3 ${isOutbound ? 'text-white/50' : 'text-text-tertiary'}`} />
-                                  )}
+                                {/* Deleted message */}
+                                {msg.isDeleted ? (
+                                  <p className="text-sm italic text-gray-400 flex items-center gap-1">
+                                    <Ban className="h-3.5 w-3.5" />
+                                    This message was deleted
+                                  </p>
+                                ) : isEditing ? (
+                                  /* Inline edit */
+                                  <div className="space-y-1.5">
+                                    <textarea
+                                      ref={editInputRef}
+                                      value={editingBody}
+                                      onChange={(e) => setEditingBody(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditMessage(msg.id); }
+                                        if (e.key === 'Escape') { setEditingMsgId(null); setEditingBody(''); }
+                                      }}
+                                      className="w-full text-sm border rounded-md px-2 py-1 resize-none focus:ring-1 focus:ring-brand-500 focus:border-brand-500 bg-white"
+                                      rows={2}
+                                    />
+                                    <div className="flex justify-end gap-1">
+                                      <button onClick={() => { setEditingMsgId(null); setEditingBody(''); }} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-0.5 rounded hover:bg-gray-100">Cancel</button>
+                                      <button onClick={() => handleEditMessage(msg.id)} className="text-xs text-white bg-brand-600 hover:bg-brand-700 px-2 py-0.5 rounded" disabled={!editingBody.trim()}>Save</button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    {msg.subject && (
+                                      <p className="text-2xs font-bold mb-1 text-gray-500">
+                                        Re: {msg.subject}
+                                      </p>
+                                    )}
+                                    {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
+
+                                    {/* Attachments in message */}
+                                    {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
+                                      <div className="mt-2 space-y-1.5">
+                                        {msg.metadata.attachments.map((att: any, ai: number) => (
+                                          <a
+                                            key={ai}
+                                            href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
+                                          >
+                                            {isImageFile(att.mimeType) ? (
+                                              <img
+                                                src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                                                alt={att.filename}
+                                                className="h-16 w-16 rounded object-cover flex-shrink-0"
+                                              />
+                                            ) : (
+                                              <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                            )}
+                                            <div className="min-w-0 flex-1">
+                                              <p className="text-2xs font-medium truncate text-gray-800">{att.filename}</p>
+                                              <p className="text-2xs text-gray-500">{formatFileSize(att.size)}</p>
+                                            </div>
+                                            <Download className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                                          </a>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+
+                                {/* Footer: time, edited, ticks */}
+                                {!isEditing && (
+                                  <div className="flex items-center gap-1 mt-1 justify-end">
+                                    {msg.isEdited && !msg.isDeleted && (
+                                      <span className="text-[10px] text-gray-400 italic">edited</span>
+                                    )}
+                                    <span className="text-[10px] text-gray-400">
+                                      {formatTime(msg.createdAt)}
+                                    </span>
+                                    {isOutbound && !msg._optimistic && (
+                                      <CheckCheck className="h-3 w-3 text-blue-500" />
+                                    )}
+                                    {msg._optimistic && (
+                                      <Check className="h-3 w-3 text-gray-400" />
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Reply action on hover — for non-own messages */}
+                              {!isOwnMessage && !msg.isDeleted && (
+                                <div className={`absolute top-0 ${isOutbound ? '-left-8' : '-right-8'} hidden group-hover/bubble:flex`}>
+                                  <button
+                                    onClick={() => { setMessageText(`> ${msg.body.substring(0, 50)}...\n\n`); inputRef.current?.focus(); }}
+                                    className="h-6 w-6 rounded-full bg-white shadow-sm border border-border flex items-center justify-center text-text-tertiary hover:text-text-primary"
+                                    title="Reply"
+                                  >
+                                    <CornerUpLeft className="h-3 w-3" />
+                                  </button>
                                 </div>
-                              </div>
-
-                              {/* Reply action on hover */}
-                              <div className={`absolute top-0 ${isOutbound ? '-left-8' : '-right-8'} hidden group-hover/bubble:flex`}>
-                                <button
-                                  onClick={() => { setMessageText(`> ${msg.body.substring(0, 50)}...\n\n`); inputRef.current?.focus(); }}
-                                  className="h-6 w-6 rounded-full bg-white shadow-sm border border-border flex items-center justify-center text-text-tertiary hover:text-text-primary"
-                                  title="Reply"
-                                >
-                                  <CornerUpLeft className="h-3 w-3" />
-                                </button>
-                              </div>
+                              )}
                             </div>
-
-                            {/* Sender name for outbound */}
-                            {isOutbound && msg.user && (
-                              <p className="text-2xs text-text-tertiary text-right mt-0.5">
-                                {msg.user.firstName} {msg.user.lastName}
-                              </p>
-                            )}
                           </div>
                         </div>
                       );
