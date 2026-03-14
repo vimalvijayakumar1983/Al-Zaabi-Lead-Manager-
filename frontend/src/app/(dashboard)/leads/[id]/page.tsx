@@ -67,6 +67,7 @@ export default function LeadDetailPage() {
   const [chatPlatform, setChatPlatform] = useState<string>('');
   const [sendingChat, setSendingChat] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   // WhatsApp-like features
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [menuOpenMsgId, setMenuOpenMsgId] = useState<string | null>(null);
@@ -299,10 +300,10 @@ export default function LeadDetailPage() {
     refreshLead();
   }, [refreshLead]));
 
-  // Auto-scroll to bottom of chat
+  // Auto-scroll chat container to bottom (without moving the page)
   useEffect(() => {
-    if (chatEndRef.current && activeTab === 'communications') {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (chatContainerRef.current && activeTab === 'communications') {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [chatMessages, activeTab]);
 
@@ -910,7 +911,7 @@ export default function LeadDetailPage() {
                 </div>
 
                 {/* Messages Area — WhatsApp-like */}
-                <div className="flex-1 overflow-y-auto pr-1 min-h-0 bg-[#f0f2f5] rounded-lg p-3" onClick={() => setMenuOpenMsgId(null)}>
+                <div ref={chatContainerRef} className="flex-1 overflow-y-auto pr-1 min-h-0 bg-[#f0f2f5] rounded-lg p-3" onClick={() => setMenuOpenMsgId(null)}>
                   {chatLoading ? (
                     <div className="flex items-center justify-center h-full">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-600" />
