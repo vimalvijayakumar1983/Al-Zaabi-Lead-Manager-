@@ -77,6 +77,16 @@ export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNa
   );
   const canAccessSettings = !user || hasPermission(user.id, user.role, 'settings');
 
+  // Sync --sidebar-width CSS variable with collapsed state so main content shifts
+  useEffect(() => {
+    const root = document.documentElement;
+    if (collapsed) {
+      root.style.setProperty('--sidebar-width', 'var(--sidebar-collapsed-width)');
+    } else {
+      root.style.removeProperty('--sidebar-width');
+    }
+  }, [collapsed]);
+
   // Keyboard shortcut: Cmd+B to toggle sidebar (desktop only)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
