@@ -209,6 +209,11 @@ function InboxContent() {
   const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Pipeline stages for stage editing
+  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [showStageDropdown, setShowStageDropdown] = useState(false);
+  const [updatingStage, setUpdatingStage] = useState(false);
+
   // Edit/delete state
   const [menuOpenMsgId, setMenuOpenMsgId] = useState<string | null>(null);
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
@@ -278,6 +283,9 @@ function InboxContent() {
     api.getCannedResponses()
       .then((data: any) => setCannedResponses(data || []))
       .catch(() => setCannedResponses([]));
+    api.getPipelineStages()
+      .then((data: any) => setPipelineStages(data.stages || data || []))
+      .catch(() => setPipelineStages([]));
   }, []);
 
   // ─── Load stats ───────────────────────────────────────────────────
@@ -295,6 +303,26 @@ function InboxContent() {
       setMobileView('chat');
     }
   }, [searchParams, selectedLeadId]);
+
+  // ─── Update lead stage ─────────────────────────────────────────────
+  const handleStageChange = useCallback(async (stageId: string) => {
+    if (!selectedLeadId || !leadInfo) return;
+    setUpdatingStage(true);
+    try {
+      await api.updateLead(selectedLeadId, { stageId });
+      const stage = pipelineStages.find(s => s.id === stageId);
+      if (stage) {
+        setLeadInfo({ ...leadInfo, stage: { id: stage.id, name: stage.name, color: stage.color } });
+      }
+      // Also refresh conversations to update the stage badge in the list
+      loadConversations();
+    } catch (err) {
+      console.error('Failed to update stage:', err);
+    } finally {
+      setUpdatingStage(false);
+      setShowStageDropdown(false);
+    }
+  }, [selectedLeadId, leadInfo, pipelineStages, loadConversations]);
 
   // ─── Load lead attachments ──────────────────────────────────────────
   const loadAttachments = useCallback(async (leadId: string) => {
@@ -1445,17 +1473,36 @@ function InboxContent() {
                   <p className="text-2xs font-bold text-text-tertiary uppercase tracking-wider mb-2">Lead Properties</p>
 
                   <div className="grid grid-cols-2 gap-2">
-                    {leadInfo.stage && (
-                      <div className="p-2 rounded-lg bg-surface-secondary/50">
-                        <p className="text-2xs text-text-tertiary mb-0.5">Stage</p>
-                        <span
-                          className="inline-flex px-2 py-0.5 rounded text-2xs font-semibold text-white"
-                          style={{ backgroundColor: leadInfo.stage.color || '#6366f1' }}
-                        >
-                          {leadInfo.stage.name}
-                        </span>
-                      </div>
-                    )}
+                    <div className="p-2 rounded-lg bg-surface-secondary/50 relative">
+                      <p className="text-2xs text-text-tertiary mb-0.5">Stage</p>
+                      <button
+                        onClick={() => setShowStageDropdown(!showStageDropdown)}
+                        disabled={updatingStage}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-semibold text-white cursor-pointer hover:opacity-90 transition-opacity"
+                        style={{ backgroundColor: leadInfo.stage?.color || '#6366f1' }}
+                      >
+                        {updatingStage ? 'Updating...' : (leadInfo.stage?.name || 'No Stage')}
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                      {showStageDropdown && (
+                        <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowStageDropdown(false)} />
+                        <div className="absolute top-full left-0 mt-1 z-50 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-border-subtle py-1 min-w-[160px] max-h-48 overflow-y-auto">
+                          {pipelineStages.map(stage => (
+                            <button
+                              key={stage.id}
+                              onClick={() => handleStageChange(stage.id)}
+                              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-surface-secondary flex items-center gap-2 ${leadInfo.stage?.id === stage.id ? 'font-bold' : ''}`}
+                            >
+                              <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: stage.color || '#6366f1' }} />
+                              {stage.name}
+                              {leadInfo.stage?.id === stage.id && <Check className="h-3 w-3 ml-auto text-brand-600" />}
+                            </button>
+                          ))}
+                        </div>
+                        </>
+                      )}
+                    </div>
                     <div className="p-2 rounded-lg bg-surface-secondary/50">
                       <p className="text-2xs text-text-tertiary mb-0.5">Source</p>
                       <p className="text-xs font-medium text-text-primary">{leadInfo.source}</p>

@@ -75,8 +75,13 @@ export default function LeadDetailPage() {
   const [editingBody, setEditingBody] = useState('');
   const editInputRef = useRef<HTMLTextAreaElement>(null);
 
+  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
+
   useEffect(() => {
     api.getCustomFields().then(setCustomFields).catch(() => {});
+    api.getPipelineStages()
+      .then((data: any) => setPipelineStages(data.stages || data || []))
+      .catch(() => setPipelineStages([]));
   }, []);
 
   // Fetch users for assignment panel
@@ -146,6 +151,7 @@ export default function LeadDetailPage() {
       productInterest: lead.productInterest || '',
       budget: lead.budget?.toString() || '',
       campaign: lead.campaign || '',
+      stageId: lead.stage?.id || '',
     });
     // Load custom field values for editing
     const cd = (lead.customData || {}) as Record<string, unknown>;
@@ -552,6 +558,13 @@ export default function LeadDetailPage() {
                 <div>
                   <label className="text-xs text-gray-500">Campaign</label>
                   <input className="input text-sm" value={editForm.campaign} onChange={(e) => setEditForm({ ...editForm, campaign: e.target.value })} />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">Pipeline Stage</label>
+                  <select className="input text-sm" value={editForm.stageId || ''} onChange={(e) => setEditForm({ ...editForm, stageId: e.target.value || null })}>
+                    <option value="">No Stage</option>
+                    {pipelineStages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
                 </div>
                 {/* Custom fields in edit mode */}
                 {customFields.map(cf => (
