@@ -590,6 +590,7 @@ export interface AllocationRules {
   autoAssignOnCreate: boolean;
   maxLeadsPerUser: number;
   sourceRules: SourceAllocationRule[];
+  eligibleUserIds: string[];
 }
 
 export interface WorkloadUser {

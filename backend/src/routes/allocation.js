@@ -50,6 +50,7 @@ const allocationRulesSchema = z.object({
   autoAssignOnCreate: z.boolean(),
   maxLeadsPerUser: z.number().int().min(1).max(1000),
   sourceRules: z.array(sourceRuleSchema).max(50).optional().default([]),
+  eligibleUserIds: z.array(z.string().uuid()).optional().default([]),
 });
 
 // ---------------------------------------------------------------------------
@@ -351,6 +352,7 @@ router.get('/rules', async (req, res, next) => {
       autoAssignOnCreate: true,
       maxLeadsPerUser: 25,
       sourceRules: [],
+      eligibleUserIds: [],
     };
 
     const rules = { ...defaults, ...(settings.allocationRules || {}) };

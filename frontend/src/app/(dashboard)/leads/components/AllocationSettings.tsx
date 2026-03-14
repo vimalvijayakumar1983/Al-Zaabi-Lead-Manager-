@@ -321,6 +321,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
   const [autoAssign, setAutoAssign] = useState(true);
   const [maxLeads, setMaxLeads] = useState(25);
   const [sourceRules, setSourceRules] = useState<SourceAllocationRule[]>([]);
+  const [eligibleUserIds, setEligibleUserIds] = useState<string[]>([]);
 
   const [stats, setStats] = useState<AllocationStats | null>(null);
   const [autoAllocating, setAutoAllocating] = useState(false);
@@ -339,6 +340,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
       setAutoAssign(rules.autoAssignOnCreate);
       setMaxLeads(rules.maxLeadsPerUser);
       setSourceRules(rules.sourceRules);
+      setEligibleUserIds(rules.eligibleUserIds || []);
       setStats(allocationStats);
     } catch (err) {
       setError('Failed to load allocation settings. Please try again.');
@@ -367,6 +369,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
         autoAssignOnCreate: autoAssign,
         maxLeadsPerUser: maxLeads,
         sourceRules: sourceRules.filter((r) => r.source && r.assignToId),
+        eligibleUserIds,
       };
       await api.updateAllocationRules(payload);
       setSuccessMsg('Allocation settings saved successfully.');
@@ -500,7 +503,76 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
                 </div>
               </section>
 
-              {/* ──────── Section 2: Source-Based Rules ──────── */}
+              {/* ──────── Section 2: Eligible Team Members ──────── */}
+              {method !== 'manual' && (
+                <section>
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className="text-base">👥</span>
+                    <h3 className="text-sm font-semibold text-gray-900">Eligible Team Members</h3>
+                  </div>
+                  <p className="mb-3 text-xs text-gray-500">
+                    Select which team members participate in auto-assignment. If none selected, all active team members are eligible.
+                  </p>
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 max-h-48 overflow-y-auto space-y-1">
+                    {users.filter((u) => u.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u.role)).map((u) => {
+                      const isChecked = eligibleUserIds.includes(u.id);
+                      return (
+                        <label key={u.id} className="flex items-center gap-3 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-white transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={eligibleUserIds.length === 0 || isChecked}
+                            onChange={(e) => {
+                              if (eligibleUserIds.length === 0) {
+                                // Switching from "all" to specific: select all except this one
+                                const allIds = users
+                                  .filter((u2) => u2.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u2.role))
+                                  .map((u2) => u2.id);
+                                setEligibleUserIds(allIds.filter((id) => id !== u.id));
+                              } else if (e.target.checked) {
+                                setEligibleUserIds((prev) => [...prev, u.id]);
+                              } else {
+                                const next = eligibleUserIds.filter((id) => id !== u.id);
+                                // If unchecking would leave 0 selected, keep at least this user
+                                setEligibleUserIds(next.length > 0 ? next : []);
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                          />
+                          <span className="text-sm text-gray-700">
+                            {u.firstName} {u.lastName}
+                          </span>
+                          <span className="text-xs text-gray-400 ml-auto">
+                            {u.role.replace('_', ' ')}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  {eligibleUserIds.length === 0 && (
+                    <p className="mt-2 text-xs text-brand-600 font-medium">
+                      All active team members are currently eligible for assignment.
+                    </p>
+                  )}
+                  {eligibleUserIds.length > 0 && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <p className="text-xs text-gray-500">
+                        {eligibleUserIds.length} member{eligibleUserIds.length !== 1 ? 's' : ''} selected
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setEligibleUserIds([])}
+                        className="text-xs text-brand-600 hover:text-brand-700 font-medium"
+                      >
+                        Reset to all
+                      </button>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* ──────── Section 3: Source-Based Rules ──────── */}
               <section>
                 <div className="mb-1 flex items-center gap-2">
                   <span className="text-base">🎯</span>

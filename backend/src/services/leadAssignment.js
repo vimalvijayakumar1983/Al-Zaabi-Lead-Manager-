@@ -29,15 +29,21 @@ const { createNotification, NOTIFICATION_TYPES } = require('../services/notifica
 /**
  * Round-robin assignment — finds the active user with the fewest active leads.
  * @param {string} organizationId
+ * @param {string[]} [eligibleUserIds] - If provided, only these users are considered
  * @returns {Promise<string|null>} User ID of the assignee, or null
  */
-async function roundRobinAssign(organizationId) {
+async function roundRobinAssign(organizationId, eligibleUserIds) {
+  const where = {
+    organizationId,
+    isActive: true,
+    role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
+  };
+  if (eligibleUserIds && eligibleUserIds.length > 0) {
+    where.id = { in: eligibleUserIds };
+  }
+
   const users = await prisma.user.findMany({
-    where: {
-      organizationId,
-      isActive: true,
-      role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
-    },
+    where,
     select: {
       id: true,
       _count: {
@@ -453,6 +459,10 @@ async function getNextAssignee(orgId, lead) {
   const rules = (org?.settings)?.allocationRules;
   const method = rules?.method || 'round_robin';
   const maxLeadsPerUser = rules?.maxLeadsPerUser || 25;
+  const eligibleUserIds = rules?.eligibleUserIds || [];
+
+  // If method is manual, skip auto-assignment
+  if (method === 'manual') return null;
 
   // 1. Check source-specific rules first
   if (rules?.sourceRules?.length > 0 && lead.source) {
@@ -484,13 +494,13 @@ async function getNextAssignee(orgId, lead) {
     }
   }
 
-  // 2. Workload-based or round-robin
+  // 2. Workload-based or round-robin (filtered by eligible users)
   if (method === 'workload_based') {
-    return workloadBasedAssign(orgId, maxLeadsPerUser);
+    return workloadBasedAssign(orgId, maxLeadsPerUser, eligibleUserIds);
   }
 
   // 3. Default: round-robin
-  return roundRobinAssign(orgId);
+  return roundRobinAssign(orgId, eligibleUserIds);
 }
 
 /**
@@ -502,13 +512,18 @@ async function getNextAssignee(orgId, lead) {
  * @returns {Promise<string|null>} User ID of the assignee, or null
  * @private
  */
-async function workloadBasedAssign(orgId, maxLeadsPerUser) {
+async function workloadBasedAssign(orgId, maxLeadsPerUser, eligibleUserIds) {
+  const where = {
+    organizationId: orgId,
+    isActive: true,
+    role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
+  };
+  if (eligibleUserIds && eligibleUserIds.length > 0) {
+    where.id = { in: eligibleUserIds };
+  }
+
   const users = await prisma.user.findMany({
-    where: {
-      organizationId: orgId,
-      isActive: true,
-      role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
-    },
+    where,
     select: {
       id: true,
       _count: {
