@@ -171,7 +171,7 @@ export default function LeadDetailPage() {
       if (data.budget) data.budget = parseFloat(data.budget);
       else data.budget = null;
       // Convert empty strings to null
-      for (const key of ['email', 'phone', 'company', 'jobTitle', 'location', 'website', 'productInterest', 'campaign']) {
+      for (const key of ['email', 'phone', 'company', 'jobTitle', 'location', 'website', 'productInterest', 'campaign', 'stageId']) {
         if (!data[key]) data[key] = null;
       }
       // Build custom data

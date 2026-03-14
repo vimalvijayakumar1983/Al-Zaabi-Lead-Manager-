@@ -88,8 +88,8 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> =
   NEW: { bg: 'bg-blue-50', text: 'text-blue-700', dot: 'bg-blue-500' },
   CONTACTED: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
   QUALIFIED: { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500' },
+  PROPOSAL_SENT: { bg: 'bg-indigo-50', text: 'text-indigo-700', dot: 'bg-indigo-500' },
   NEGOTIATION: { bg: 'bg-purple-50', text: 'text-purple-700', dot: 'bg-purple-500' },
-  PROPOSAL: { bg: 'bg-indigo-50', text: 'text-indigo-700', dot: 'bg-indigo-500' },
   WON: { bg: 'bg-green-50', text: 'text-green-700', dot: 'bg-green-500' },
   LOST: { bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-500' },
 };
@@ -698,7 +698,7 @@ function InboxContent() {
 
           {/* Status filter row */}
           <div className="flex gap-1 mt-1.5 overflow-x-auto scrollbar-thin">
-            {['', 'NEW', 'CONTACTED', 'QUALIFIED', 'WON', 'LOST'].map(s => (
+            {['', 'NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST'].map(s => (
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
@@ -708,7 +708,7 @@ function InboxContent() {
                     : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary'
                 }`}
               >
-                {s || 'All Status'}
+                {s ? s.replace(/_/g, ' ') : 'All Status'}
               </button>
             ))}
           </div>
@@ -832,7 +832,7 @@ function InboxContent() {
                           {/* Status pill */}
                           <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
                             <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
-                            {convo.leadStatus}
+                            {(convo.leadStatus || 'NEW').replace(/_/g, ' ')}
                           </span>
 
                           {/* Message count */}
@@ -953,7 +953,7 @@ function InboxContent() {
                         } ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}
                       >
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {leadInfo.status}
+                        {(leadInfo.status || 'NEW').replace(/_/g, ' ')}
                         <ChevronDown className="h-2.5 w-2.5" />
                       </button>
 
@@ -968,7 +968,7 @@ function InboxContent() {
                               }`}
                             >
                               <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-                              {status}
+                              {status.replace(/_/g, ' ')}
                             </button>
                           ))}
                         </div>
@@ -1502,6 +1502,13 @@ function InboxContent() {
                         </div>
                         </>
                       )}
+                    </div>
+                    <div className="p-2 rounded-lg bg-surface-secondary/50">
+                      <p className="text-2xs text-text-tertiary mb-0.5">Status</p>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium ${STATUS_COLORS[leadInfo.status]?.bg || 'bg-gray-50'} ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
+                        {(leadInfo.status || 'NEW').replace(/_/g, ' ')}
+                      </span>
                     </div>
                     <div className="p-2 rounded-lg bg-surface-secondary/50">
                       <p className="text-2xs text-text-tertiary mb-0.5">Source</p>
