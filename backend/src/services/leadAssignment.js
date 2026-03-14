@@ -28,13 +28,14 @@ const { createNotification, NOTIFICATION_TYPES } = require('../services/notifica
 
 /**
  * Round-robin assignment — finds the active user with the fewest active leads.
- * @param {string} organizationId
+ * @param {string[]} orgIds - Organization IDs to search across
  * @param {string[]} [eligibleUserIds] - If provided, only these users are considered
  * @returns {Promise<string|null>} User ID of the assignee, or null
  */
-async function roundRobinAssign(organizationId, eligibleUserIds) {
+async function roundRobinAssign(orgIds, eligibleUserIds) {
+  const ids = Array.isArray(orgIds) ? orgIds : [orgIds];
   const where = {
-    organizationId,
+    organizationId: { in: ids },
     isActive: true,
     role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
   };
@@ -450,10 +451,10 @@ async function bulkAutoAssign(orgId, maxCount = 50) {
  * @returns {Promise<string|null>} User ID of the next assignee, or null
  */
 async function getNextAssignee(orgId, lead) {
-  // Load org allocation rules
+  // Load org and check if it's a GROUP (has child divisions)
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
-    select: { settings: true },
+    select: { settings: true, type: true },
   });
 
   const rules = (org?.settings)?.allocationRules;
@@ -464,15 +465,25 @@ async function getNextAssignee(orgId, lead) {
   // If method is manual, skip auto-assignment
   if (method === 'manual') return null;
 
+  // Resolve all org IDs to search (parent + child divisions for GROUP orgs)
+  const orgIds = [orgId];
+  if (org?.type === 'GROUP') {
+    const children = await prisma.organization.findMany({
+      where: { parentId: orgId },
+      select: { id: true },
+    });
+    orgIds.push(...children.map(c => c.id));
+  }
+
   // 1. Check source-specific rules first
   if (rules?.sourceRules?.length > 0 && lead.source) {
     const sourceRule = rules.sourceRules.find((r) => r.source === lead.source);
     if (sourceRule?.assignToId) {
-      // Verify user is active and under capacity
+      // Verify user is active and under capacity (across all orgs in scope)
       const user = await prisma.user.findFirst({
         where: {
           id: sourceRule.assignToId,
-          organizationId: orgId,
+          organizationId: { in: orgIds },
           isActive: true,
         },
         select: {
@@ -494,13 +505,13 @@ async function getNextAssignee(orgId, lead) {
     }
   }
 
-  // 2. Workload-based or round-robin (filtered by eligible users)
+  // 2. Workload-based or round-robin (filtered by eligible users, across all orgs)
   if (method === 'workload_based') {
-    return workloadBasedAssign(orgId, maxLeadsPerUser, eligibleUserIds);
+    return workloadBasedAssign(orgIds, maxLeadsPerUser, eligibleUserIds);
   }
 
   // 3. Default: round-robin
-  return roundRobinAssign(orgId, eligibleUserIds);
+  return roundRobinAssign(orgIds, eligibleUserIds);
 }
 
 /**
@@ -512,9 +523,10 @@ async function getNextAssignee(orgId, lead) {
  * @returns {Promise<string|null>} User ID of the assignee, or null
  * @private
  */
-async function workloadBasedAssign(orgId, maxLeadsPerUser, eligibleUserIds) {
+async function workloadBasedAssign(orgIds, maxLeadsPerUser, eligibleUserIds) {
+  const ids = Array.isArray(orgIds) ? orgIds : [orgIds];
   const where = {
-    organizationId: orgId,
+    organizationId: { in: ids },
     isActive: true,
     role: { in: ['SALES_REP', 'MANAGER', 'ADMIN'] },
   };
