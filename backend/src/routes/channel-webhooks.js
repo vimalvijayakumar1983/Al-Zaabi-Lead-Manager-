@@ -1,7 +1,11 @@
 const { Router } = require('express');
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
-const { broadcastDataChange } = require('../websocket/server');
+const { notifyUser, broadcastDataChange } = require('../websocket/server');
+const { autoAssign } = require('../services/leadAssignment');
+const { createNotification, notifyOrgAdmins, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { executeAutomations } = require('../services/automationEngine');
+const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
 
 const router = Router();
 
@@ -46,18 +50,54 @@ async function findOrCreateLead(organizationId, { phone, email, name, source, pl
   // Resolve source from platform
   const resolvedSource = PLATFORM_SOURCE_MAP[platform?.toLowerCase()] || source || 'OTHER';
 
+  // Build lead data
+  const leadData = {
+    organizationId,
+    firstName,
+    lastName,
+    phone: phone || null,
+    email: email || null,
+    source: resolvedSource,
+    status: 'NEW',
+    stageId: defaultStage?.id || undefined,
+  };
+
+  // Calculate lead score
+  try {
+    leadData.score = calculateLeadScore(leadData);
+    leadData.conversionProb = predictConversion(leadData.score, 'NEW');
+  } catch {
+    leadData.score = 10;
+  }
+
+  // Auto-assign based on allocation rules
+  try {
+    const orgSettings = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { settings: true },
+    });
+    const rules = orgSettings?.settings?.allocationRules;
+    if (rules?.autoAssignOnCreate !== false) {
+      if (rules?.sourceRules?.length > 0 && resolvedSource) {
+        const sourceRule = rules.sourceRules.find(r => r.source === resolvedSource);
+        if (sourceRule?.assignToId) {
+          leadData.assignedToId = sourceRule.assignToId;
+        }
+      }
+      if (!leadData.assignedToId) {
+        const assigneeId = await autoAssign(organizationId, leadData);
+        if (assigneeId) leadData.assignedToId = assigneeId;
+      }
+    }
+  } catch (err) {
+    logger.warn('Auto-assign error (non-critical):', err.message);
+  }
+
   // Create new lead
   const lead = await prisma.lead.create({
-    data: {
-      organizationId,
-      firstName,
-      lastName,
-      phone: phone || null,
-      email: email || null,
-      source: resolvedSource,
-      status: 'NEW',
-      score: 10,
-      stageId: defaultStage?.id || undefined,
+    data: leadData,
+    include: {
+      assignedTo: { select: { id: true, firstName: true, lastName: true } },
     },
   });
 
@@ -71,7 +111,36 @@ async function findOrCreateLead(organizationId, { phone, email, name, source, pl
     },
   });
 
-  logger.info(`Auto-created lead ${lead.id} from ${platform} DM for org ${organizationId}`);
+  logger.info(`Auto-created lead ${lead.id} from ${platform} DM for org ${organizationId}${lead.assignedToId ? ` (assigned to ${lead.assignedToId})` : ''}`);
+
+  // Fire-and-forget: notifications, automations, broadcast
+  if (lead.assignedToId) {
+    notifyUser(lead.assignedToId, {
+      type: 'lead_assigned',
+      lead: { id: lead.id, firstName: lead.firstName, lastName: lead.lastName },
+    });
+    createNotification({
+      type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+      title: 'New Lead Assigned',
+      message: `New lead ${lead.firstName} ${lead.lastName} from ${resolvedSource} has been assigned to you`,
+      userId: lead.assignedToId,
+      entityType: 'lead',
+      entityId: lead.id,
+      organizationId,
+    }).catch(() => {});
+  }
+
+  notifyOrgAdmins(organizationId, {
+    type: NOTIFICATION_TYPES.LEAD_CREATED,
+    title: 'New Inbound Lead',
+    message: `New lead ${lead.firstName} ${lead.lastName} from ${platform || 'inbound'} channel`,
+    entityType: 'lead',
+    entityId: lead.id,
+  }).catch(() => {});
+
+  executeAutomations('LEAD_CREATED', { organizationId, lead }).catch(() => {});
+  broadcastDataChange(organizationId, 'lead', 'created', null, { entityId: lead.id }).catch(() => {});
+
   return lead;
 }
 
