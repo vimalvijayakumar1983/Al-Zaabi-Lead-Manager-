@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Allow large file uploads (25MB per file, up to 10 files)
-export const config = {
-  api: { bodyParser: false },
-};
+// App Router route segment config for large file uploads
 export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
 
 // Server-side env var (not NEXT_PUBLIC_) — only accessible on the server
 const BACKEND_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
