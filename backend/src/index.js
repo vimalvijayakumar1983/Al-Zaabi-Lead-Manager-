@@ -58,6 +58,8 @@ app.use(express.urlencoded({ extended: true }));
 // ─── Static File Serving (uploads) ─────────────────────────────────
 const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Also serve under /api/uploads so the Next.js proxy can reach files
+app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // Rate limiting

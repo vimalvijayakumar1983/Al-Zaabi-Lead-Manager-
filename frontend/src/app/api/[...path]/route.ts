@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Allow large file uploads (25MB per file, up to 10 files)
+export const config = {
+  api: { bodyParser: false },
+};
+export const maxDuration = 60;
+
 // Server-side env var (not NEXT_PUBLIC_) — only accessible on the server
 const BACKEND_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -23,15 +29,45 @@ async function proxyRequest(req: NextRequest) {
   };
 
   // Forward body for non-GET/HEAD requests
+  // Use arrayBuffer() to preserve binary data (multipart/form-data, file uploads)
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    init.body = await req.text();
+    const buffer = await req.arrayBuffer();
+    if (buffer.byteLength > 0) {
+      init.body = buffer;
+    }
   }
 
   try {
     const res = await fetch(target, {
       ...init,
-      signal: AbortSignal.timeout(30000),
+      // @ts-expect-error duplex is needed for streaming request bodies
+      duplex: 'half',
+      signal: AbortSignal.timeout(60000),
     });
+
+    const resContentType = res.headers.get('content-type') || '';
+
+    // For binary responses (files, images, etc.), preserve raw bytes
+    if (
+      !resContentType.includes('application/json') &&
+      !resContentType.includes('text/')
+    ) {
+      const buffer = await res.arrayBuffer();
+      return new NextResponse(buffer, {
+        status: res.status,
+        headers: {
+          'content-type': resContentType,
+          ...(res.headers.get('content-disposition')
+            ? { 'content-disposition': res.headers.get('content-disposition')! }
+            : {}),
+          ...(res.headers.get('content-length')
+            ? { 'content-length': res.headers.get('content-length')! }
+            : {}),
+        },
+      });
+    }
+
+    // For text/JSON responses, use text
     const body = await res.text();
 
     // Log non-2xx responses for debugging
@@ -42,7 +78,7 @@ async function proxyRequest(req: NextRequest) {
     return new NextResponse(body, {
       status: res.status,
       headers: {
-        'content-type': res.headers.get('content-type') || 'application/json',
+        'content-type': resContentType || 'application/json',
       },
     });
   } catch (error: any) {

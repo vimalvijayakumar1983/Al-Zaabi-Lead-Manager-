@@ -1110,14 +1110,14 @@ function InboxContent() {
                                         {msg.metadata.attachments.map((att: any, ai: number) => (
                                           <a
                                             key={ai}
-                                            href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                                            href={`/api${att.url}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
                                           >
                                             {isImageFile(att.mimeType) ? (
                                               <img
-                                                src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                                                src={`/api${att.url}`}
                                                 alt={att.filename}
                                                 className="h-16 w-16 rounded object-cover flex-shrink-0"
                                               />
@@ -1585,7 +1585,7 @@ function InboxContent() {
                     {leadAttachments.map((att: any) => (
                       <a
                         key={att.id}
-                        href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                        href={`/api${att.url}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border hover:border-brand-300 hover:bg-brand-50/20 transition-all group/att"
@@ -1593,7 +1593,7 @@ function InboxContent() {
                         {isImageFile(att.mimeType) ? (
                           <div className="h-10 w-10 rounded-lg overflow-hidden flex-shrink-0 bg-surface-tertiary">
                             <img
-                              src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${att.url}`}
+                              src={`/api${att.url}`}
                               alt={att.filename}
                               className="h-full w-full object-cover"
                             />
