@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
+const { broadcastDataChange } = require('../websocket/server');
 
 const router = Router();
 
@@ -103,10 +104,13 @@ async function storeInboundMessage(leadId, { channel, body, subject, platform, m
   });
 
   // Touch lead for conversation ordering
-  await prisma.lead.update({
+  const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { updatedAt: new Date() },
   });
+
+  // Broadcast real-time update so open lead detail pages refresh
+  broadcastDataChange(lead.organizationId, 'communication', 'created', null, { entityId: leadId }).catch(() => {});
 
   return communication;
 }

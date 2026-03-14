@@ -800,6 +800,8 @@ router.post('/:id/notes', validate(z.object({
     });
 
     res.status(201).json(note);
+
+    broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
   } catch (err) {
     next(err);
   }

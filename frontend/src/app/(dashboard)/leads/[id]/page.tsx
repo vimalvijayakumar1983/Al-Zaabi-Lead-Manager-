@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 
 const statusColors: Record<string, string> = {
   NEW: 'bg-indigo-100 text-indigo-800 border-indigo-200',
@@ -273,6 +274,22 @@ export default function LeadDetailPage() {
       loadChatMessages();
     }
   }, [activeTab, lead?.id, loadChatMessages]);
+
+  // Real-time sync: refresh lead data when lead, note, task, or communication changes
+  useRealtimeSync(['lead', 'note', 'communication'], useCallback((event) => {
+    // For lead events, only refresh if it's this lead (or no entityId specified)
+    if (event.entity === 'lead' && event.entityId && event.entityId !== id) return;
+    refreshLead();
+    // Also refresh chat messages if on communications tab
+    if (event.entity === 'communication') {
+      loadChatMessages();
+    }
+  }, [id, refreshLead, loadChatMessages]));
+
+  // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
+  useRealtimeSync(['task'], useCallback(() => {
+    refreshLead();
+  }, [refreshLead]));
 
   // Auto-scroll to bottom of chat
   useEffect(() => {

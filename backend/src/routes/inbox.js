@@ -6,6 +6,7 @@ const multer = require('multer');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
+const { broadcastDataChange } = require('../websocket/server');
 
 // ─── Multer config for attachments ─────────────────────────────────
 
@@ -321,6 +322,8 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
     };
 
     res.status(201).json(enriched);
+
+    broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
 });
 
@@ -434,6 +437,8 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     };
 
     res.status(201).json(enriched);
+
+    broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
 });
 
@@ -557,6 +562,8 @@ router.post('/conversations/:leadId/notes', async (req, res, next) => {
     });
 
     res.status(201).json(note);
+
+    broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
 });
 
