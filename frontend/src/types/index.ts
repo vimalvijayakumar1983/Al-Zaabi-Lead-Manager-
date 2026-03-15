@@ -109,6 +109,7 @@ export interface Lead {
   communications?: Communication[];
   attachments?: Attachment[];
   _count?: { activities: number; tasks: number; communications: number };
+  organizationId?: string;
   createdAt: string;
   updatedAt: string;
 }
