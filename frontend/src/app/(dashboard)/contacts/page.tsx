@@ -553,23 +553,7 @@ export default function ContactsPage() {
           </table>
         </div>
 
-        {/* Pagination */}
-        {pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle">
-            <span className="text-xs text-text-tertiary">
-              Showing {((pagination.page - 1) * pagination.limit) + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
-            </span>
-            <div className="flex items-center gap-1">
-              <button disabled={pagination.page <= 1} onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))} className="btn-icon h-7 w-7">
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="text-xs text-text-secondary px-2">Page {pagination.page} of {pagination.totalPages}</span>
-              <button disabled={pagination.page >= pagination.totalPages} onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))} className="btn-icon h-7 w-7">
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
+        <ContactPagination pagination={pagination} setPagination={setPagination} />
       </div>
       )}
 
@@ -650,23 +634,9 @@ export default function ContactsPage() {
                   );
                 })}
               </div>
-              {/* Card View Pagination */}
-              {pagination.totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4">
-                  <span className="text-xs text-text-tertiary">
-                    Showing {((pagination.page - 1) * pagination.limit) + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <button disabled={pagination.page <= 1} onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))} className="btn-icon h-7 w-7">
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <span className="text-xs text-text-secondary px-2">Page {pagination.page} of {pagination.totalPages}</span>
-                    <button disabled={pagination.page >= pagination.totalPages} onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))} className="btn-icon h-7 w-7">
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
+              <div className="mt-4">
+                <ContactPagination pagination={pagination} setPagination={setPagination} />
+              </div>
             </>
           )}
         </div>
@@ -731,6 +701,9 @@ export default function ContactsPage() {
               })}
             </div>
           )}
+          <div className="mt-4">
+            <ContactPagination pagination={pagination} setPagination={setPagination} />
+          </div>
         </div>
       )}
 
@@ -758,6 +731,75 @@ function StatCard({ icon: Icon, label, value, color }: { icon: any; label: strin
         <p className="text-lg font-bold text-text-primary">{value}</p>
         <p className="text-2xs text-text-tertiary">{label}</p>
       </div>
+    </div>
+  );
+}
+
+// ─── Pagination ─────────────────────────────────────────────────
+
+function ContactPagination({ pagination, setPagination }: {
+  pagination: { total: number; page: number; limit: number; totalPages: number };
+  setPagination: (fn: (p: any) => any) => void;
+}) {
+  const limit = pagination.limit || 25;
+  const start = ((pagination.page - 1) * limit) + 1;
+  const end = Math.min(pagination.page * limit, pagination.total);
+
+  const pageNumbers = (): (number | string)[] => {
+    const pages: (number | string)[] = [];
+    const total = pagination.totalPages;
+    const current = pagination.page;
+    if (total <= 7) {
+      for (let i = 1; i <= total; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      if (current > 3) pages.push('...');
+      for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) pages.push(i);
+      if (current < total - 2) pages.push('...');
+      pages.push(total);
+    }
+    return pages;
+  };
+
+  return (
+    <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle">
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-text-tertiary">
+          {pagination.total > 0 ? `Showing ${start}–${end} of ${pagination.total}` : 'No contacts'}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="contacts-page-size" className="text-xs text-gray-400">Per page</label>
+          <select
+            id="contacts-page-size"
+            value={limit}
+            onChange={(e) => setPagination((p: any) => ({ ...p, limit: Number(e.target.value), page: 1 }))}
+            className="text-xs border border-gray-200 rounded-md px-1.5 py-1 text-gray-600 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          >
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+      </div>
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center gap-1">
+          <button disabled={pagination.page <= 1} onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))} className="btn-icon h-7 w-7">
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          {pageNumbers().map((p, i) => (
+            typeof p === 'number' ? (
+              <button key={i} onClick={() => setPagination((prev: any) => ({ ...prev, page: p }))}
+                className={`min-w-[28px] h-7 rounded text-xs font-medium ${p === pagination.page ? 'bg-brand-600 text-white' : 'text-text-secondary hover:bg-surface-secondary'}`}>
+                {p}
+              </button>
+            ) : <span key={i} className="px-1 text-text-quaternary">...</span>
+          ))}
+          <button disabled={pagination.page >= pagination.totalPages} onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))} className="btn-icon h-7 w-7">
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
