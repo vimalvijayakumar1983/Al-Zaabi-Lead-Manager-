@@ -227,13 +227,30 @@ router.post('/whatsapp/:organizationId', async (req, res) => {
 });
 
 // WhatsApp verification (GET)
-router.get('/whatsapp/:organizationId', (req, res) => {
+router.get('/whatsapp/:organizationId', async (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  // In production, verify token against stored org webhook secret
   if (mode === 'subscribe' && token) {
+    // Verify token against stored integration verify token
+    try {
+      const integration = await prisma.integration.findFirst({
+        where: {
+          organizationId: req.params.organizationId,
+          platform: 'whatsapp',
+          status: { not: 'disconnected' },
+        },
+        select: { config: true },
+      });
+      const storedToken = integration?.config?.verifyToken;
+      if (storedToken && storedToken !== token) {
+        logger.warn(`WhatsApp verify token mismatch for org ${req.params.organizationId}`);
+        return res.sendStatus(403);
+      }
+    } catch (err) {
+      logger.warn('Error checking verify token:', err.message);
+    }
     return res.status(200).send(challenge);
   }
   res.sendStatus(403);

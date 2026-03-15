@@ -626,7 +626,7 @@ export default function IntegrationsPage() {
       case 'whatsapp':
         setWaAccountId((cfg.accountId as string) ?? '');
         setWaPhoneNumberId((cfg.phoneNumberId as string) ?? '');
-        setWaAccessToken((cfg.accessToken as string) ?? '');
+        setWaAccessToken(''); // credentials are not returned for security
         setWaVerifyToken((cfg.verifyToken as string) ?? '');
         setWaAutoCreateLead((cfg.autoCreateLead as boolean) ?? true);
         break;
@@ -727,10 +727,12 @@ export default function IntegrationsPage() {
         return {
           platform: 'whatsapp',
           name: 'WhatsApp Business',
+          credentials: {
+            accessToken: waAccessToken,
+          },
           config: {
             accountId: waAccountId,
             phoneNumberId: waPhoneNumberId,
-            accessToken: waAccessToken,
             verifyToken: waVerifyToken,
             autoCreateLead: waAutoCreateLead,
           },
@@ -1314,14 +1316,14 @@ export default function IntegrationsPage() {
               <p className="text-xs font-medium text-emerald-800 mb-1">Webhook URL</p>
               <div className="flex items-center gap-2">
                 <code className="text-xs bg-white rounded px-2 py-1 text-emerald-700 flex-1 overflow-x-auto">
-                  {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/whatsapp`}
+                  {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/channels/whatsapp/${user?.organizationId || '<your-org-id>'}`}
                 </code>
                 <CopyButton
-                  text={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhooks/whatsapp`}
+                  text={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/channels/whatsapp/${user?.organizationId || ''}`}
                 />
               </div>
               <p className="text-xs text-emerald-600 mt-2">
-                Configure this URL in your Meta Developer Dashboard → WhatsApp → Configuration
+                Configure this URL in your Meta Developer Dashboard → WhatsApp → Configuration → Webhook URL
               </p>
             </div>
             <label className="flex items-center gap-3 cursor-pointer">

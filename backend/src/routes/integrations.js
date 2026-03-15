@@ -551,7 +551,18 @@ router.put('/:id', validate(updateIntegrationSchema), async (req, res, next) => 
     const updateData = {};
 
     if (body.config !== undefined) updateData.config = body.config;
-    if (body.credentials !== undefined) updateData.credentials = body.credentials;
+    if (body.credentials !== undefined) {
+      // Merge credentials: keep existing values for empty/missing sensitive fields
+      const existingCreds = existing.credentials && typeof existing.credentials === 'object' ? existing.credentials : {};
+      const newCreds = { ...body.credentials };
+      const sensitiveKeys = ['accessToken', 'refreshToken', 'secret', 'password', 'apiKey', 'token'];
+      for (const key of sensitiveKeys) {
+        if ((!newCreds[key] || newCreds[key] === '') && existingCreds[key]) {
+          newCreds[key] = existingCreds[key];
+        }
+      }
+      updateData.credentials = newCreds;
+    }
     if (body.status !== undefined) updateData.status = body.status;
     if (body.campaignId !== undefined) updateData.campaignId = body.campaignId;
 
