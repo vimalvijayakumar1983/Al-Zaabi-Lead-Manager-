@@ -1100,17 +1100,17 @@ function CreateLeadModal({
           }
         });
 
-        // Handle custom fields
-        const customFieldValues: Record<string, unknown> = {};
+        // Handle custom fields — store in customData keyed by cf.name
+        const customData: Record<string, unknown> = {};
         customFields.forEach((cf) => {
-          const val = submitData[`custom_${cf.id}`];
+          const val = submitData[`custom_${cf.name}`];
           if (val !== undefined && val !== '') {
-            customFieldValues[cf.id] = val;
+            customData[cf.name] = val;
           }
-          delete submitData[`custom_${cf.id}`];
+          delete submitData[`custom_${cf.name}`];
         });
-        if (Object.keys(customFieldValues).length > 0) {
-          submitData.customFieldValues = customFieldValues;
+        if (Object.keys(customData).length > 0) {
+          submitData.customData = customData;
         }
 
         await onSubmit(submitData);
@@ -1289,12 +1289,32 @@ function CreateLeadModal({
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {customFields.map((cf) => {
-                    const fieldKey = `custom_${cf.id}`;
+                    const fieldKey = `custom_${cf.name}`;
 
                     if (cf.type === 'SELECT' && cf.options && cf.options.length > 0) {
                       return (
                         <div key={cf.id}>
-                          <label className="label">{cf.name}</label>
+                          <label className="label">{cf.label}</label>
+                          <select
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          >
+                            <option value="">Select…</option>
+                            {cf.options.map((opt: string) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'MULTI_SELECT' && cf.options && cf.options.length > 0) {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
                           <select
                             value={String(formData[fieldKey] ?? '')}
                             onChange={(e) => updateField(fieldKey, e.target.value)}
@@ -1314,7 +1334,7 @@ function CreateLeadModal({
                     if (cf.type === 'TEXTAREA') {
                       return (
                         <div key={cf.id} className="sm:col-span-2">
-                          <label className="label">{cf.name}</label>
+                          <label className="label">{cf.label}</label>
                           <textarea
                             value={String(formData[fieldKey] ?? '')}
                             onChange={(e) => updateField(fieldKey, e.target.value)}
@@ -1325,7 +1345,7 @@ function CreateLeadModal({
                       );
                     }
 
-                    if (cf.type === 'CHECKBOX') {
+                    if (cf.type === 'BOOLEAN' || cf.type === 'CHECKBOX') {
                       return (
                         <div key={cf.id} className="flex items-center gap-2">
                           <input
@@ -1336,7 +1356,7 @@ function CreateLeadModal({
                             className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
                           />
                           <label htmlFor={fieldKey} className="text-sm text-gray-700">
-                            {cf.name}
+                            {cf.label}
                           </label>
                         </div>
                       );
@@ -1345,7 +1365,7 @@ function CreateLeadModal({
                     if (cf.type === 'NUMBER') {
                       return (
                         <div key={cf.id}>
-                          <label className="label">{cf.name}</label>
+                          <label className="label">{cf.label}</label>
                           <input
                             type="number"
                             value={String(formData[fieldKey] ?? '')}
@@ -1359,9 +1379,52 @@ function CreateLeadModal({
                     if (cf.type === 'DATE') {
                       return (
                         <div key={cf.id}>
-                          <label className="label">{cf.name}</label>
+                          <label className="label">{cf.label}</label>
                           <input
                             type="date"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'URL') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="url"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                            placeholder="https://"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'EMAIL') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="email"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'PHONE') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="tel"
                             value={String(formData[fieldKey] ?? '')}
                             onChange={(e) => updateField(fieldKey, e.target.value)}
                             className="input w-full"
@@ -1373,7 +1436,7 @@ function CreateLeadModal({
                     // Default: TEXT
                     return (
                       <div key={cf.id}>
-                        <label className="label">{cf.name}</label>
+                        <label className="label">{cf.label}</label>
                         <input
                           type="text"
                           value={String(formData[fieldKey] ?? '')}
