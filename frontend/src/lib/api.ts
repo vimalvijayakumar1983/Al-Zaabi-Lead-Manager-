@@ -1,5 +1,5 @@
 import type {
-  Organization, DivisionUser, DivisionStats,
+  Organization, DivisionUser, DivisionStats, IndustryTemplate,
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
   ApiKey, WidgetConfig, Contact, ContactStats, Deal,
