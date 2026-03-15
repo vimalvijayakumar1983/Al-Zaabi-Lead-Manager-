@@ -6,6 +6,13 @@ const { getNextAssignee } = require('../services/leadAssignment');
 const { createNotification, notifyOrgAdmins, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { executeAutomations } = require('../services/automationEngine');
 const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
+const {
+  fetchLeadData,
+  parseFieldData,
+  applyFieldMapping,
+  findFacebookIntegration,
+  verifyWebhookSignature,
+} = require('../services/facebookLeadAds');
 
 const router = Router();
 
@@ -284,6 +291,176 @@ router.get('/facebook/:organizationId', (req, res) => {
   }
   res.sendStatus(403);
 });
+
+// ─── Facebook Lead Ads Webhook (Leadgen) ────────────────────────────
+// Receives leadgen events when users submit Facebook Lead Ad forms.
+// Facebook sends: { entry: [{ id, time, changes: [{ field: "leadgen", value: { ... } }] }] }
+router.post('/facebook-leads/:organizationId', async (req, res) => {
+  try {
+    const { organizationId } = req.params;
+    const payload = req.body;
+
+    const entries = payload?.entry || [];
+    let processedCount = 0;
+
+    for (const entry of entries) {
+      const pageId = entry.id;
+      const changes = entry.changes || [];
+
+      for (const change of changes) {
+        if (change.field !== 'leadgen') continue;
+
+        const leadgenId = change.value?.leadgen_id;
+        const formId = change.value?.form_id;
+        const adId = change.value?.ad_id;
+        const adgroupId = change.value?.adgroup_id;
+        const createdTime = change.value?.created_time;
+
+        if (!leadgenId) {
+          logger.warn('Facebook leadgen webhook missing leadgen_id', { organizationId, pageId });
+          continue;
+        }
+
+        // Find the Facebook integration for this org (and optionally page)
+        const integration = await findFacebookIntegration(organizationId, pageId);
+        if (!integration) {
+          logger.warn(`No connected Facebook integration found for org ${organizationId} (page ${pageId})`);
+          continue;
+        }
+
+        const accessToken = integration.credentials?.accessToken;
+        if (!accessToken) {
+          logger.warn(`Facebook integration ${integration.id} missing access token`);
+          await logLeadgenEvent(integration.id, leadgenId, 'error', 'Missing access token');
+          continue;
+        }
+
+        // Optionally filter by form ID if configured
+        const configuredFormIds = integration.config?.leadFormIds;
+        if (configuredFormIds) {
+          const allowedIds = String(configuredFormIds).split(',').map((s) => s.trim()).filter(Boolean);
+          if (allowedIds.length > 0 && !allowedIds.includes(String(formId))) {
+            logger.info(`Skipping leadgen ${leadgenId} - form ${formId} not in allowed list`);
+            continue;
+          }
+        }
+
+        // Fetch the actual lead data from Facebook Graph API
+        let fbLeadData;
+        try {
+          fbLeadData = await fetchLeadData(leadgenId, accessToken);
+        } catch (fetchErr) {
+          logger.error(`Failed to fetch lead ${leadgenId} from Facebook:`, fetchErr.message);
+          await logLeadgenEvent(integration.id, leadgenId, 'error', fetchErr.message);
+          continue;
+        }
+
+        // Parse field data from Facebook's format
+        const fbFields = parseFieldData(fbLeadData.field_data);
+
+        // Apply field mapping (custom or defaults)
+        const fieldMapping = integration.config?.fieldMapping || null;
+        const mapped = applyFieldMapping(fbFields, fieldMapping);
+
+        // Create or find existing lead
+        const lead = await findOrCreateLead(organizationId, {
+          email: mapped.email || null,
+          phone: mapped.phone || null,
+          name: `${mapped.firstName || ''} ${mapped.lastName || ''}`.trim() || 'Facebook Lead',
+          platform: 'facebook',
+        });
+
+        // Update lead with additional mapped fields if available
+        const updateData = {};
+        if (mapped.company && !lead.company) updateData.company = mapped.company;
+        if (mapped.jobTitle && !lead.jobTitle) updateData.jobTitle = mapped.jobTitle;
+        if (mapped.city && !lead.location) updateData.location = mapped.city;
+
+        // Store all raw Facebook fields in customData
+        const existingCustomData = lead.customData && typeof lead.customData === 'object' ? lead.customData : {};
+        updateData.customData = {
+          ...existingCustomData,
+          fbLeadgenId: leadgenId,
+          fbFormId: formId,
+          fbAdId: adId,
+          fbAdgroupId: adgroupId,
+          fbCreatedTime: createdTime,
+          fbRawFields: fbFields,
+        };
+
+        if (Object.keys(updateData).length > 0) {
+          await prisma.lead.update({
+            where: { id: lead.id },
+            data: updateData,
+          });
+        }
+
+        // Log activity
+        await prisma.leadActivity.create({
+          data: {
+            leadId: lead.id,
+            type: 'CUSTOM',
+            description: `Lead captured from Facebook Lead Ad form`,
+            metadata: {
+              platform: 'facebook_lead_ads',
+              leadgenId,
+              formId,
+              adId,
+              source: 'FACEBOOK_ADS',
+            },
+          },
+        });
+
+        // Log integration event
+        await logLeadgenEvent(integration.id, leadgenId, 'success', null, lead.id);
+
+        // Update integration lastSyncAt
+        await prisma.integration.update({
+          where: { id: integration.id },
+          data: { lastSyncAt: new Date() },
+        });
+
+        processedCount++;
+        logger.info(`Facebook Lead Ad captured: lead ${lead.id} from leadgen ${leadgenId} for org ${organizationId}`);
+      }
+    }
+
+    res.status(200).json({ status: 'ok', processed: processedCount });
+  } catch (err) {
+    logger.error('Facebook Lead Ads webhook error:', err);
+    res.status(200).json({ status: 'error' }); // Always 200 to prevent Facebook retries
+  }
+});
+
+// Facebook Lead Ads verification (GET) — shared hub.verify_token pattern
+router.get('/facebook-leads/:organizationId', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+// Helper: log leadgen event to integration logs
+async function logLeadgenEvent(integrationId, leadgenId, status, errorMessage, leadId) {
+  try {
+    await prisma.integrationLog.create({
+      data: {
+        integrationId,
+        action: 'leadgen_received',
+        payload: { leadgenId },
+        status: status || 'success',
+        errorMessage: errorMessage || null,
+        leadId: leadId || null,
+      },
+    });
+  } catch (err) {
+    logger.error('Failed to log leadgen event:', err.message);
+  }
+}
 
 // ─── Instagram Webhook ──────────────────────────────────────────────
 router.post('/instagram/:organizationId', async (req, res) => {

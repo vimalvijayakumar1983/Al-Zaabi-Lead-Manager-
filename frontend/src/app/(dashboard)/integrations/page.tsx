@@ -419,6 +419,7 @@ export default function IntegrationsPage() {
 
   // State: Facebook form
   const [fbPageId, setFbPageId] = useState('');
+  const [fbPageAccessToken, setFbPageAccessToken] = useState('');
   const [fbAppSecret, setFbAppSecret] = useState('');
   const [fbLeadFormIds, setFbLeadFormIds] = useState('');
   const [fbFieldMapping, setFbFieldMapping] = useState<FieldMapping[]>([
@@ -608,6 +609,7 @@ export default function IntegrationsPage() {
     switch (slug) {
       case 'facebook':
         setFbPageId((cfg.pageId as string) ?? '');
+        setFbPageAccessToken((cfg.pageAccessToken as string) ?? '');
         setFbAppSecret((cfg.appSecret as string) ?? '');
         setFbLeadFormIds((cfg.leadFormIds as string) ?? '');
         setFbFieldMapping(intg.fieldMapping ?? []);
@@ -645,6 +647,7 @@ export default function IntegrationsPage() {
     switch (slug) {
       case 'facebook':
         setFbPageId('');
+        setFbPageAccessToken('');
         setFbAppSecret('');
         setFbLeadFormIds('');
         setFbFieldMapping([
@@ -692,10 +695,15 @@ export default function IntegrationsPage() {
         return {
           platform: 'facebook',
           name: 'Facebook Lead Ads',
+          credentials: {
+            accessToken: fbPageAccessToken,
+          },
           config: {
             pageId: fbPageId,
+            pageAccessToken: fbPageAccessToken,
             appSecret: fbAppSecret,
             leadFormIds: fbLeadFormIds,
+            fieldMapping: fbFieldMapping,
           },
           fieldMapping: fbFieldMapping,
           divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
@@ -1050,8 +1058,8 @@ export default function IntegrationsPage() {
           <div className="space-y-4">
             <p className="text-xs text-text-tertiary bg-blue-50 rounded-lg p-3 flex items-start gap-2">
               <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-blue-500" />
-              These credentials will be used when Facebook OAuth is configured. Enter your Facebook
-              app details to enable lead ad webhook reception.
+              Connect your Facebook Page to automatically capture leads from Lead Ad forms.
+              You need a Page Access Token with <code className="bg-blue-100 px-1 rounded">leads_retrieval</code> and <code className="bg-blue-100 px-1 rounded">pages_manage_ads</code> permissions.
             </p>
             <div>
               <label className="block text-sm font-medium text-text-primary mb-1">
@@ -1067,7 +1075,35 @@ export default function IntegrationsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-text-primary mb-1">
-                Facebook App Secret
+                Page Access Token
+              </label>
+              <div className="relative">
+                <input
+                  type={showSecrets['fbPageAccessToken'] ? 'text' : 'password'}
+                  value={fbPageAccessToken}
+                  onChange={(e) => setFbPageAccessToken(e.target.value)}
+                  className="w-full px-3 py-2 pr-10 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  placeholder="Generate from Facebook Developer Console"
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleSecretVisibility('fbPageAccessToken')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-secondary"
+                >
+                  {showSecrets['fbPageAccessToken'] ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              <p className="text-xs text-text-tertiary mt-1">
+                Required to fetch lead data from Facebook. Use a long-lived token for production.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">
+                App Secret <span className="text-text-tertiary font-normal">(optional)</span>
               </label>
               <div className="relative">
                 <input
@@ -1075,7 +1111,7 @@ export default function IntegrationsPage() {
                   value={fbAppSecret}
                   onChange={(e) => setFbAppSecret(e.target.value)}
                   className="w-full px-3 py-2 pr-10 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
-                  placeholder="Used for webhook verification"
+                  placeholder="Used for webhook signature verification"
                 />
                 <button
                   type="button"
@@ -1092,7 +1128,7 @@ export default function IntegrationsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-text-primary mb-1">
-                Lead Form ID(s)
+                Lead Form ID(s) <span className="text-text-tertiary font-normal">(optional)</span>
               </label>
               <input
                 type="text"
@@ -1104,6 +1140,32 @@ export default function IntegrationsPage() {
               <p className="text-xs text-text-tertiary mt-1">
                 Leave empty to capture from all forms on this page
               </p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+              <label className="block text-sm font-medium text-text-primary">
+                Webhook URL
+              </label>
+              <p className="text-xs text-text-tertiary">
+                Configure this URL in your Facebook App&apos;s Webhooks settings. Subscribe to the <code className="bg-gray-200 px-1 rounded">leadgen</code> field.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 break-all select-all">
+                  {typeof window !== 'undefined'
+                    ? `${window.location.origin.replace(':3000', ':4000')}/api/channels/facebook-leads/${user?.organizationId || '<org-id>'}`
+                    : `/api/channels/facebook-leads/<org-id>`}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = `${window.location.origin.replace(':3000', ':4000')}/api/channels/facebook-leads/${user?.organizationId || ''}`;
+                    navigator.clipboard.writeText(url);
+                  }}
+                  className="p-2 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-gray-100"
+                  title="Copy webhook URL"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             {renderFieldMappingTable(fbFieldMapping, setFbFieldMapping, 'Facebook')}
           </div>

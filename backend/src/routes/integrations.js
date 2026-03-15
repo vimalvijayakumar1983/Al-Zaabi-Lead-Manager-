@@ -7,6 +7,8 @@ const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 
+const { validateAccessToken, subscribeToLeadgen } = require('../services/facebookLeadAds');
+
 const router = Router();
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -723,9 +725,25 @@ async function testPlatformConnection(integration) {
   switch (platform) {
     case 'facebook': {
       if (!credentials?.accessToken) {
-        return { success: false, message: 'Facebook access token is required. Please complete OAuth setup.' };
+        return { success: false, message: 'Facebook Page Access Token is required. Generate one from Facebook Developer Console.' };
       }
-      return { success: true, message: 'Facebook connection verified successfully' };
+      // Validate the token against the Graph API
+      const tokenResult = await validateAccessToken(credentials.accessToken);
+      if (!tokenResult.valid) {
+        return { success: false, message: tokenResult.message };
+      }
+      // Attempt to subscribe the page to leadgen webhooks
+      const pageId = config?.pageId || tokenResult.pageId;
+      if (pageId) {
+        const subResult = await subscribeToLeadgen(pageId, credentials.accessToken);
+        if (!subResult.success) {
+          return {
+            success: true,
+            message: `${tokenResult.message}. Note: Auto-subscription to leadgen failed — ${subResult.message}. You may need to subscribe manually in Facebook App settings.`,
+          };
+        }
+      }
+      return { success: true, message: tokenResult.message };
     }
     case 'google': {
       if (!credentials?.accessToken) {
