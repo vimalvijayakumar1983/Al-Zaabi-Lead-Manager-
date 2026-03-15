@@ -641,6 +641,19 @@ class ApiClient {
     return this.request<any>('/communications', { method: 'POST', body: JSON.stringify(data) });
   }
 
+  // Call Logs
+  async logCall(data: any) {
+    return this.request<any>('/call-logs', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getCallLogs(leadId: string) {
+    return this.request<any[]>(`/call-logs/lead/${leadId}`);
+  }
+
+  async getDispositions() {
+    return this.request<any[]>('/call-logs/dispositions');
+  }
+
   // Settings
   async getProfile() {
     return this.request<any>('/settings/profile');

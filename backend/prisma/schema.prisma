@@ -88,6 +88,7 @@ model User {
   tasks          Task[]          @relation("TaskAssignee")
   createdTasks   Task[]          @relation("TaskCreator")
   communications Communication[]
+  callLogs       CallLog[]
   auditLogs      AuditLog[]
   imports        ImportHistory[]
   notifications         Notification[] @relation("NotificationRecipient")
@@ -158,6 +159,7 @@ model Lead {
   notes           LeadNote[]
   tasks           Task[]
   communications  Communication[]
+  callLogs        CallLog[]
   tags            LeadTag[]
   attachments     Attachment[]
   convertedContact Contact? @relation("ConvertedContact")
@@ -376,6 +378,51 @@ model PipelineStage {
 
   @@unique([organizationId, order])
   @@map("pipeline_stages")
+}
+
+// ─── Call Logs ──────────────────────────────────────────────────
+
+model CallLog {
+  id              String          @id @default(uuid())
+  disposition     CallDisposition
+  notes           String?
+  duration        Int?            // call duration in seconds
+  callbackDate    DateTime?       // when to call back (for CALLBACK disposition)
+  meetingDate     DateTime?       // scheduled meeting date (for MEETING_ARRANGED)
+  appointmentDate DateTime?       // booked appointment date (for APPOINTMENT_BOOKED)
+  metadata        Json            @default("{}")
+  createdAt       DateTime        @default(now())
+
+  leadId          String
+  lead            Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  userId          String?
+  user            User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Auto-created follow-up task (if any)
+  followUpTaskId  String?
+
+  @@index([leadId, createdAt])
+  @@index([disposition])
+  @@map("call_logs")
+}
+
+enum CallDisposition {
+  CALLBACK          // Customer asked to call back later
+  MEETING_ARRANGED  // Meeting has been scheduled
+  APPOINTMENT_BOOKED // Appointment confirmed
+  INTERESTED        // Customer showed interest, send info
+  NOT_INTERESTED    // Customer not interested
+  NO_ANSWER         // No one picked up
+  VOICEMAIL_LEFT    // Left voicemail
+  WRONG_NUMBER      // Wrong contact number
+  BUSY              // Line busy, try again
+  GATEKEEPER        // Reached gatekeeper, not decision maker
+  FOLLOW_UP_EMAIL   // Customer requested info via email
+  QUALIFIED         // Lead qualified during call
+  PROPOSAL_REQUESTED // Customer requested a proposal
+  DO_NOT_CALL       // Customer asked not to be called
+  OTHER             // Other outcome
 }
 
 // ─── Activities ──────────────────────────────────────────────────

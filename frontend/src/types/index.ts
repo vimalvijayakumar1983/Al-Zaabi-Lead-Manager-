@@ -182,6 +182,43 @@ export interface Communication {
   user?: Pick<User, 'id' | 'firstName' | 'lastName'>;
 }
 
+// ─── Call Log ────────────────────────────────────────────────────
+export type CallDisposition =
+  | 'CALLBACK' | 'MEETING_ARRANGED' | 'APPOINTMENT_BOOKED' | 'INTERESTED'
+  | 'NOT_INTERESTED' | 'NO_ANSWER' | 'VOICEMAIL_LEFT' | 'WRONG_NUMBER'
+  | 'BUSY' | 'GATEKEEPER' | 'FOLLOW_UP_EMAIL' | 'QUALIFIED'
+  | 'PROPOSAL_REQUESTED' | 'DO_NOT_CALL' | 'OTHER';
+
+export interface CallLog {
+  id: string;
+  disposition: CallDisposition;
+  notes?: string;
+  duration?: number;
+  callbackDate?: string;
+  meetingDate?: string;
+  appointmentDate?: string;
+  followUpTaskId?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  user?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+}
+
+export interface CallLogResponse {
+  callLog: CallLog;
+  followUpTaskId: string | null;
+  autoActions: {
+    statusChanged: string | null;
+    taskCreated: boolean;
+  };
+}
+
+export interface DispositionOption {
+  value: CallDisposition;
+  label: string;
+  hasFollowUp: boolean;
+  autoStatus: string | null;
+}
+
 // ─── Tag ─────────────────────────────────────────────────────────
 export interface Tag {
   id: string;
