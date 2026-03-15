@@ -111,6 +111,9 @@ function LeadsContent() {
         sortBy,
         sortOrder,
       };
+      // Scope leads to the active division for super admin
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      if (activeDivisionId) params.divisionId = activeDivisionId;
       if (filters.search) params.search = filters.search;
       if (filters.status) params.status = filters.status;
       if (filters.source) params.source = filters.source;
@@ -146,7 +149,8 @@ function LeadsContent() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const data = await api.getDashboard();
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const data = await api.getDashboard(activeDivisionId || undefined);
       setStats(data);
     } catch { /* non-critical */ }
   }, []);
