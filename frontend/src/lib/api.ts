@@ -733,7 +733,11 @@ class ApiClient {
     return this.request<Organization[]>('/divisions');
   }
 
-  async createDivision(data: Partial<Organization>): Promise<Organization> {
+  async getDivisionTemplates(): Promise<IndustryTemplate[]> {
+    return this.request<IndustryTemplate[]>('/divisions/templates');
+  }
+
+  async createDivision(data: Record<string, unknown>): Promise<Organization> {
     return this.request<Organization>('/divisions', { method: 'POST', body: JSON.stringify(data) });
   }
 

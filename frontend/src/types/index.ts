@@ -645,3 +645,16 @@ export interface AssignmentHistoryEntry {
     lastName: string;
   };
 }
+
+// ─── Industry Templates ──────────────────────────────────────────────
+
+export interface IndustryTemplate {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  stageCount: number;
+  fieldCount: number;
+  tagCount: number;
+}

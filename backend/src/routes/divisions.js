@@ -4,6 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { getTemplate, getAllTemplates, labelToFieldName } = require('../config/industryTemplates');
 
 const bcrypt = require('bcryptjs');
 
@@ -17,6 +18,7 @@ const createDivisionSchema = z.object({
   logo: z.string().optional().or(z.literal('')),
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
+  templateId: z.string().optional(),
 });
 
 const updateDivisionSchema = z.object({
@@ -78,30 +80,79 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// ─── GET /templates — List available industry templates ──────────
+router.get('/templates', authorize('SUPER_ADMIN', 'ADMIN'), (req, res) => {
+  res.json(getAllTemplates());
+});
+
 // ─── POST / — Create a new division (SUPER_ADMIN only) ─────────
 router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async (req, res, next) => {
   try {
-    const { name, tradeName, logo, primaryColor, secondaryColor } = req.validated;
+    const { name, tradeName, logo, primaryColor, secondaryColor, templateId } = req.validated;
+
+    // Resolve template: use selected template or fall back to defaults
+    const template = templateId ? getTemplate(templateId) : null;
+    const stages = template ? template.pipelineStages : DEFAULT_PIPELINE_STAGES;
 
     const result = await prisma.$transaction(async (tx) => {
-      // Create the division organization
+      // Create the division organization, store templateId in settings
       const division = await tx.organization.create({
         data: {
           name,
           tradeName: tradeName || null,
           logo: logo || null,
-          primaryColor: primaryColor || '#6366f1',
+          primaryColor: primaryColor || (template ? template.color : '#6366f1'),
           secondaryColor: secondaryColor || '#1e293b',
           type: 'DIVISION',
           parentId: req.user.organizationId,
+          settings: template ? { templateId: template.id, templateName: template.name } : {},
         },
       });
 
-      // Create default pipeline stages for the new division
-      for (const stage of DEFAULT_PIPELINE_STAGES) {
+      // Create pipeline stages from template (or defaults)
+      for (const stage of stages) {
         await tx.pipelineStage.create({
-          data: { ...stage, organizationId: division.id },
+          data: {
+            name: stage.name,
+            order: stage.order,
+            color: stage.color || '#6366f1',
+            isDefault: stage.isDefault || false,
+            isWonStage: stage.isWonStage || false,
+            isLostStage: stage.isLostStage || false,
+            organizationId: division.id,
+          },
         });
+      }
+
+      // Create custom fields from template
+      if (template && template.customFields) {
+        for (let i = 0; i < template.customFields.length; i++) {
+          const field = template.customFields[i];
+          await tx.customField.create({
+            data: {
+              name: labelToFieldName(field.label),
+              label: field.label,
+              type: field.type,
+              options: field.options || null,
+              isRequired: field.isRequired || false,
+              order: i,
+              organizationId: division.id,
+            },
+          });
+        }
+      }
+
+      // Create tags from template
+      if (template && template.tags) {
+        for (const tag of template.tags) {
+          await tx.tag.create({
+            data: {
+              name: tag.name,
+              color: tag.color || '#6366f1',
+              organizationId: division.id,
+            },
+          });
+        }
       }
 
       return division;
@@ -123,7 +174,7 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
     notifyOrgAdmins(req.user.organizationId, {
       type: NOTIFICATION_TYPES.DIVISION_CREATED,
       title: 'New Division Created',
-      message: `${req.user.firstName} ${req.user.lastName} created division: ${name}`,
+      message: `${req.user.firstName} ${req.user.lastName} created division: ${name}${template ? ` (${template.name} template)` : ''}`,
       entityType: 'division',
       entityId: division.id,
     }, req.user.id).catch(() => {});

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import type { Organization, DivisionUser, DivisionStats } from '@/types';
+import type { Organization, DivisionUser, DivisionStats, IndustryTemplate } from '@/types';
 import {
   Building2,
   Plus,
@@ -44,6 +44,20 @@ import {
   SlidersHorizontal,
   Hash,
   Calendar,
+  Layers,
+  ArrowLeft,
+  Heart,
+  Car,
+  Package,
+  GraduationCap,
+  Landmark,
+  Hotel,
+  Dumbbell,
+  Wrench,
+  ShoppingCart,
+  Briefcase,
+  Tags,
+  GitBranch,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -70,6 +84,25 @@ type DivisionUserCountFilter = 'ALL' | '0' | '1-5' | '5-10' | '10+';
 type DivisionLeadCountFilter = 'ALL' | 'NONE' | '1-10' | '10-50' | '50+';
 type DivisionSortKey = 'name-asc' | 'name-desc' | 'most-users' | 'most-leads' | 'highest-pipeline' | 'newest' | 'oldest';
 type UserStatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
+
+const TEMPLATE_ICONS: Record<string, React.ReactNode> = {
+  building: <Building2 className="h-4 w-4" />,
+  'heart-pulse': <Heart className="h-4 w-4" />,
+  car: <Car className="h-4 w-4" />,
+  package: <Package className="h-4 w-4" />,
+  'graduation-cap': <GraduationCap className="h-4 w-4" />,
+  shield: <Shield className="h-4 w-4" />,
+  landmark: <Landmark className="h-4 w-4" />,
+  hotel: <Hotel className="h-4 w-4" />,
+  dumbbell: <Dumbbell className="h-4 w-4" />,
+  wrench: <Wrench className="h-4 w-4" />,
+  'shopping-cart': <ShoppingCart className="h-4 w-4" />,
+  briefcase: <Briefcase className="h-4 w-4" />,
+};
+
+function TemplateIcon({ icon }: { icon: string }) {
+  return <>{TEMPLATE_ICONS[icon] || <Layers className="h-4 w-4" />}</>;
+}
 
 function formatAED(value: number): string {
   if (value >= 1_000_000) return `AED ${(value / 1_000_000).toFixed(1)}M`;
@@ -459,6 +492,11 @@ export default function DivisionsPage() {
   const [divisionStats, setDivisionStats] = useState<Record<string, DivisionStats>>({});
   const [divisionStatsLoading, setDivisionStatsLoading] = useState<Record<string, boolean>>({});
 
+  // Industry Templates
+  const [templates, setTemplates] = useState<IndustryTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<IndustryTemplate | null>(null);
+  const [modalStep, setModalStep] = useState<'template' | 'details'>('template');
+
   // Create/Edit Division Modal
   const [showDivisionModal, setShowDivisionModal] = useState(false);
   const [editingDivision, setEditingDivision] = useState<Organization | null>(null);
@@ -533,6 +571,13 @@ export default function DivisionsPage() {
   useEffect(() => {
     if (authorized) fetchDivisions();
   }, [authorized, fetchDivisions]);
+
+  // ── Fetch Industry Templates ────────────────────────────────────
+  useEffect(() => {
+    if (authorized) {
+      api.getDivisionTemplates().then(setTemplates).catch(() => {});
+    }
+  }, [authorized]);
 
   // ── Fetch Users for a Division ────────────────────────────────────
   const fetchDivisionUsers = useCallback(async (divisionId: string) => {
@@ -686,6 +731,8 @@ export default function DivisionsPage() {
     setFormPrimaryColor('#6366f1');
     setFormSecondaryColor('#1e293b');
     setModalError('');
+    setSelectedTemplate(null);
+    setModalStep('template');
     setShowDivisionModal(true);
   };
 
@@ -697,6 +744,8 @@ export default function DivisionsPage() {
     setFormPrimaryColor(division.primaryColor || '#6366f1');
     setFormSecondaryColor(division.secondaryColor || '#1e293b');
     setModalError('');
+    setSelectedTemplate(null);
+    setModalStep('details');
     setShowDivisionModal(true);
   };
 
@@ -708,7 +757,7 @@ export default function DivisionsPage() {
     setSaving(true);
     setModalError('');
     try {
-      const payload: Partial<Organization> = {
+      const payload: Record<string, unknown> = {
         name: formName.trim(),
         tradeName: formTradeName.trim() || undefined,
         logo: formLogo.trim() || undefined,
@@ -716,11 +765,14 @@ export default function DivisionsPage() {
         secondaryColor: formSecondaryColor,
       };
       if (editingDivision) {
-        await api.updateDivision(editingDivision.id, payload);
+        await api.updateDivision(editingDivision.id, payload as Partial<Organization>);
         showToast('Division updated successfully');
       } else {
+        if (selectedTemplate) {
+          payload.templateId = selectedTemplate.id;
+        }
         await api.createDivision(payload);
-        showToast('Division created successfully');
+        showToast(`Division created successfully${selectedTemplate ? ` with ${selectedTemplate.name} template` : ''}`);
       }
       setShowDivisionModal(false);
       fetchDivisions();
@@ -1738,8 +1790,22 @@ export default function DivisionsPage() {
       <Modal open={showDivisionModal} onClose={() => setShowDivisionModal(false)}>
         <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
-            <Building2 className="h-5 w-5 text-brand-500" />
-            {editingDivision ? 'Edit Division' : 'Add Division'}
+            {editingDivision ? (
+              <>
+                <Building2 className="h-5 w-5 text-brand-500" />
+                Edit Division
+              </>
+            ) : modalStep === 'template' ? (
+              <>
+                <Layers className="h-5 w-5 text-brand-500" />
+                Choose Industry Template
+              </>
+            ) : (
+              <>
+                <Building2 className="h-5 w-5 text-brand-500" />
+                Division Details
+              </>
+            )}
           </h3>
           <button onClick={() => setShowDivisionModal(false)} className="btn-icon h-8 w-8">
             <X className="h-4 w-4" />
@@ -1752,159 +1818,265 @@ export default function DivisionsPage() {
               <span>{modalError}</span>
             </div>
           )}
-          <div>
-            <label className="label">Division Name <span className="text-red-500">*</span></label>
-            <input
-              type="text"
-              className="input"
-              value={formName}
-              onChange={(e) => setFormName(e.target.value)}
-              placeholder="e.g. Healthcare Division"
-              autoFocus
-            />
-          </div>
-          <div>
-            <label className="label">Trade Name</label>
-            <input
-              type="text"
-              className="input"
-              value={formTradeName}
-              onChange={(e) => setFormTradeName(e.target.value)}
-              placeholder="e.g. Al-Zaabi Healthcare"
-            />
-          </div>
-          <div>
-            <label className="label">Division Logo</label>
-            {formLogo ? (
-              <div className="flex items-center gap-3 p-3 rounded-xl border border-border-subtle bg-surface-secondary/30">
-                <img
-                  src={formLogo}
-                  alt="Logo preview"
-                  className="h-14 w-14 rounded-xl object-cover border border-border-subtle"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = '';
-                  }}
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-text-primary truncate">Logo uploaded</p>
-                  <p className="text-xs text-text-tertiary">Click remove to change</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setFormLogo('')}
-                  className="btn-icon h-8 w-8 text-red-500 hover:bg-red-50"
-                  title="Remove logo"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            ) : (
-              <label className="group flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-border-subtle hover:border-brand-400 hover:bg-brand-50/30 cursor-pointer transition-colors">
-                <input
-                  type="file"
-                  className="hidden"
-                  accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    if (file.size > 2 * 1024 * 1024) {
-                      setModalError('Logo file must be under 2MB');
-                      return;
-                    }
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      setFormLogo(reader.result as string);
-                    };
-                    reader.readAsDataURL(file);
-                    e.target.value = '';
-                  }}
-                />
-                <div className="h-10 w-10 rounded-full bg-brand-50 flex items-center justify-center mb-2 group-hover:bg-brand-100 transition-colors">
-                  <Upload className="h-5 w-5 text-brand-500" />
-                </div>
-                <span className="text-sm font-medium text-text-secondary group-hover:text-brand-600">
-                  Click to upload logo
-                </span>
-                <span className="text-xs text-text-tertiary mt-0.5">
-                  PNG, JPG, SVG up to 2MB
-                </span>
-              </label>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label flex items-center gap-1.5">
-                <Palette className="h-3.5 w-3.5" />
-                Primary Color
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  className="h-9 w-12 rounded-lg border border-border-subtle cursor-pointer"
-                  value={formPrimaryColor}
-                  onChange={(e) => setFormPrimaryColor(e.target.value)}
-                />
-                <input
-                  type="text"
-                  className="input flex-1 font-mono text-sm"
-                  value={formPrimaryColor}
-                  onChange={(e) => setFormPrimaryColor(e.target.value)}
-                  placeholder="#6366f1"
-                />
+
+          {/* ── Step 1: Template Selection (only for new divisions) ── */}
+          {!editingDivision && modalStep === 'template' && (
+            <div className="space-y-3">
+              <p className="text-sm text-text-secondary">
+                Select an industry template to auto-configure pipeline stages, custom fields, and tags for your division.
+              </p>
+              <div className="grid grid-cols-2 gap-2.5 max-h-[420px] overflow-y-auto pr-1">
+                {templates.map((tpl) => {
+                  const isSelected = selectedTemplate?.id === tpl.id;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTemplate(isSelected ? null : tpl);
+                        setFormPrimaryColor(tpl.color);
+                      }}
+                      className={`group relative text-left p-3 rounded-xl border-2 transition-all ${
+                        isSelected
+                          ? 'border-brand-500 bg-brand-50/50 ring-1 ring-brand-500/20'
+                          : 'border-border-subtle hover:border-gray-300 hover:bg-surface-secondary/40'
+                      }`}
+                    >
+                      {isSelected && (
+                        <div className="absolute top-2 right-2">
+                          <CheckCircle2 className="h-4 w-4 text-brand-600" />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div
+                          className="h-8 w-8 rounded-lg flex items-center justify-center text-white flex-shrink-0"
+                          style={{ backgroundColor: tpl.color }}
+                        >
+                          <TemplateIcon icon={tpl.icon} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-text-primary truncate">{tpl.name}</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-text-tertiary mb-2.5 line-clamp-2">{tpl.description}</p>
+                      <div className="flex items-center gap-3 text-[10px] text-text-tertiary">
+                        <span className="flex items-center gap-1">
+                          <GitBranch className="h-3 w-3" />
+                          {tpl.stageCount} stages
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Layers className="h-3 w-3" />
+                          {tpl.fieldCount} fields
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Tags className="h-3 w-3" />
+                          {tpl.tagCount} tags
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-            <div>
-              <label className="label flex items-center gap-1.5">
-                <Palette className="h-3.5 w-3.5" />
-                Secondary Color
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  className="h-9 w-12 rounded-lg border border-border-subtle cursor-pointer"
-                  value={formSecondaryColor}
-                  onChange={(e) => setFormSecondaryColor(e.target.value)}
-                />
-                <input
-                  type="text"
-                  className="input flex-1 font-mono text-sm"
-                  value={formSecondaryColor}
-                  onChange={(e) => setFormSecondaryColor(e.target.value)}
-                  placeholder="#1e293b"
-                />
-              </div>
-            </div>
-          </div>
-          <div className="rounded-xl overflow-hidden border border-border-subtle">
-            <div className="h-1.5" style={{ backgroundColor: formPrimaryColor }} />
-            <div className="px-3 py-2 flex items-center gap-2.5" style={{ backgroundColor: formSecondaryColor }}>
-              {formLogo ? (
-                <img src={formLogo} alt="" className="h-6 w-6 rounded-md object-cover" />
-              ) : (
-                <div
-                  className="h-6 w-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold"
-                  style={{ backgroundColor: formPrimaryColor }}
-                >
-                  {formName.charAt(0).toUpperCase() || 'D'}
+          )}
+
+          {/* ── Step 2: Division Details ── */}
+          {(editingDivision || modalStep === 'details') && (
+            <>
+              {!editingDivision && selectedTemplate && (
+                <div className="flex items-center gap-2.5 p-2.5 rounded-lg bg-brand-50/50 border border-brand-200">
+                  <div
+                    className="h-7 w-7 rounded-md flex items-center justify-center text-white flex-shrink-0"
+                    style={{ backgroundColor: selectedTemplate.color }}
+                  >
+                    <TemplateIcon icon={selectedTemplate.icon} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-text-primary">{selectedTemplate.name} Template</p>
+                    <p className="text-xs text-text-tertiary">
+                      {selectedTemplate.stageCount} stages, {selectedTemplate.fieldCount} fields, {selectedTemplate.tagCount} tags will be created
+                    </p>
+                  </div>
                 </div>
               )}
-              <span className="text-xs font-medium text-white">
-                {formTradeName || formName || 'Division Preview'}
-              </span>
-            </div>
-          </div>
+              <div>
+                <label className="label">Division Name <span className="text-red-500">*</span></label>
+                <input
+                  type="text"
+                  className="input"
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="e.g. Healthcare Division"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label">Trade Name</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={formTradeName}
+                  onChange={(e) => setFormTradeName(e.target.value)}
+                  placeholder="e.g. Al-Zaabi Healthcare"
+                />
+              </div>
+              <div>
+                <label className="label">Division Logo</label>
+                {formLogo ? (
+                  <div className="flex items-center gap-3 p-3 rounded-xl border border-border-subtle bg-surface-secondary/30">
+                    <img
+                      src={formLogo}
+                      alt="Logo preview"
+                      className="h-14 w-14 rounded-xl object-cover border border-border-subtle"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = '';
+                      }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-text-primary truncate">Logo uploaded</p>
+                      <p className="text-xs text-text-tertiary">Click remove to change</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFormLogo('')}
+                      className="btn-icon h-8 w-8 text-red-500 hover:bg-red-50"
+                      title="Remove logo"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="group flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-border-subtle hover:border-brand-400 hover:bg-brand-50/30 cursor-pointer transition-colors">
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        if (file.size > 2 * 1024 * 1024) {
+                          setModalError('Logo file must be under 2MB');
+                          return;
+                        }
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          setFormLogo(reader.result as string);
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }}
+                    />
+                    <div className="h-10 w-10 rounded-full bg-brand-50 flex items-center justify-center mb-2 group-hover:bg-brand-100 transition-colors">
+                      <Upload className="h-5 w-5 text-brand-500" />
+                    </div>
+                    <span className="text-sm font-medium text-text-secondary group-hover:text-brand-600">
+                      Click to upload logo
+                    </span>
+                    <span className="text-xs text-text-tertiary mt-0.5">
+                      PNG, JPG, SVG up to 2MB
+                    </span>
+                  </label>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label flex items-center gap-1.5">
+                    <Palette className="h-3.5 w-3.5" />
+                    Primary Color
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      className="h-9 w-12 rounded-lg border border-border-subtle cursor-pointer"
+                      value={formPrimaryColor}
+                      onChange={(e) => setFormPrimaryColor(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      className="input flex-1 font-mono text-sm"
+                      value={formPrimaryColor}
+                      onChange={(e) => setFormPrimaryColor(e.target.value)}
+                      placeholder="#6366f1"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="label flex items-center gap-1.5">
+                    <Palette className="h-3.5 w-3.5" />
+                    Secondary Color
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      className="h-9 w-12 rounded-lg border border-border-subtle cursor-pointer"
+                      value={formSecondaryColor}
+                      onChange={(e) => setFormSecondaryColor(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      className="input flex-1 font-mono text-sm"
+                      value={formSecondaryColor}
+                      onChange={(e) => setFormSecondaryColor(e.target.value)}
+                      placeholder="#1e293b"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-xl overflow-hidden border border-border-subtle">
+                <div className="h-1.5" style={{ backgroundColor: formPrimaryColor }} />
+                <div className="px-3 py-2 flex items-center gap-2.5" style={{ backgroundColor: formSecondaryColor }}>
+                  {formLogo ? (
+                    <img src={formLogo} alt="" className="h-6 w-6 rounded-md object-cover" />
+                  ) : (
+                    <div
+                      className="h-6 w-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold"
+                      style={{ backgroundColor: formPrimaryColor }}
+                    >
+                      {formName.charAt(0).toUpperCase() || 'D'}
+                    </div>
+                  )}
+                  <span className="text-xs font-medium text-white">
+                    {formTradeName || formName || 'Division Preview'}
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
-        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
-          <button onClick={() => setShowDivisionModal(false)} className="btn-secondary" disabled={saving}>
-            Cancel
-          </button>
-          <button onClick={handleSaveDivision} className="btn-primary flex items-center gap-2" disabled={saving}>
-            {saving ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</>
-            ) : (
-              editingDivision ? 'Update Division' : 'Create Division'
+        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+          <div>
+            {!editingDivision && modalStep === 'details' && (
+              <button
+                onClick={() => setModalStep('template')}
+                className="btn-secondary flex items-center gap-1.5 text-sm"
+                disabled={saving}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Templates
+              </button>
             )}
-          </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setShowDivisionModal(false)} className="btn-secondary" disabled={saving}>
+              Cancel
+            </button>
+            {!editingDivision && modalStep === 'template' ? (
+              <button
+                onClick={() => setModalStep('details')}
+                className="btn-primary flex items-center gap-2"
+              >
+                {selectedTemplate ? `Continue with ${selectedTemplate.name}` : 'Skip — Use Defaults'}
+              </button>
+            ) : (
+              <button onClick={handleSaveDivision} className="btn-primary flex items-center gap-2" disabled={saving}>
+                {saving ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</>
+                ) : (
+                  editingDivision ? 'Update Division' : 'Create Division'
+                )}
+              </button>
+            )}
+          </div>
         </div>
       </Modal>
 
