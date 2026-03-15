@@ -59,6 +59,7 @@ import {
   Tags,
   GitBranch,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Constants ──────────────────────────────────────────────────────
 const ROLES = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'] as const;
@@ -1122,10 +1123,13 @@ export default function DivisionsPage() {
             Create and manage your organization&apos;s divisions
           </p>
         </div>
-        <button onClick={openCreateModal} className="btn-primary flex items-center gap-2">
-          <Plus className="h-4 w-4" />
-          Add Division
-        </button>
+        <div className="flex items-center gap-2">
+          <RefreshButton onRefresh={fetchDivisions} />
+          <button onClick={openCreateModal} className="btn-primary flex items-center gap-2">
+            <Plus className="h-4 w-4" />
+            Add Division
+          </button>
+        </div>
       </div>
 
       {/* ═══ Sticky Search & Filter Bar ═══════════════════════════════ */}

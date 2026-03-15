@@ -13,6 +13,7 @@ import {
   Globe, Users as UsersIcon, Phone, Mail, Share2, Megaphone, MessageSquare,
   Calendar, BarChart3, Hash, Target,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Source config ─────────────────────────────────────────────────
 const sourceOptions = [
@@ -308,6 +309,7 @@ export default function PipelinePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <RefreshButton onRefresh={fetchStages} />
           {/* View toggle */}
           <div className="flex gap-1 bg-surface-tertiary rounded-lg p-1">
             <button

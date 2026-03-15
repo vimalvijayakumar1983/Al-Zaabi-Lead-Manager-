@@ -54,6 +54,7 @@ import type { Campaign, PaginatedResponse, User, Organization } from '@/types';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ---------------------------------------------------------------------------
 // Local Interfaces
@@ -1919,6 +1920,7 @@ export default function CampaignsPage() {
               <span className="mx-1 text-gray-300">·</span>
               <span><kbd className="font-mono font-bold">⌘K</kbd> Search</span>
             </div>
+            <RefreshButton onRefresh={() => { fetchCampaigns(); fetchStats(); }} />
             <button
               onClick={() => setCreateModalOpen(true)}
               className="btn-primary px-4 py-2.5 text-sm rounded-lg flex items-center gap-2 shadow-sm"

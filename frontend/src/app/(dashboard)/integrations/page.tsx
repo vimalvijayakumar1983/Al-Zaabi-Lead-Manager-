@@ -44,6 +44,7 @@ import {
   Workflow,
   Info,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import type { User, Organization } from '@/types';
@@ -2392,24 +2393,27 @@ export default function IntegrationsPage() {
           </p>
         </div>
 
-        {/* Division Selector (Super Admin only) */}
-        {isSuperAdmin && divisions.length > 0 && (
-          <div className="flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-text-tertiary" />
-            <select
-              value={selectedDivision}
-              onChange={(e) => setSelectedDivision(e.target.value)}
-              className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
-            >
-              <option value="all">All Divisions</option>
-              {divisions.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Division Selector (Super Admin only) */}
+          {isSuperAdmin && divisions.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-text-tertiary" />
+              <select
+                value={selectedDivision}
+                onChange={(e) => setSelectedDivision(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              >
+                <option value="all">All Divisions</option>
+                {divisions.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <RefreshButton onRefresh={loadData} />
+        </div>
       </div>
 
       {/* ------------------------------------------------------------------ */}

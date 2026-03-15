@@ -13,6 +13,7 @@ import {
   Briefcase, UserCheck, Merge, ChevronLeft, ChevronRight,
   BarChart3, TrendingUp, Clock, Hash,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -193,6 +194,7 @@ export default function ContactsPage() {
           <p className="text-text-secondary text-sm mt-0.5">{stats?.total ?? 0} contacts in your CRM</p>
         </div>
         <div className="flex items-center gap-2">
+          <RefreshButton onRefresh={() => { fetchContacts(); fetchStats(); }} />
           <button onClick={handleExport} disabled={exporting} className="btn-secondary text-sm">
             <Download className="h-4 w-4" /> {exporting ? 'Exporting...' : 'Export'}
           </button>

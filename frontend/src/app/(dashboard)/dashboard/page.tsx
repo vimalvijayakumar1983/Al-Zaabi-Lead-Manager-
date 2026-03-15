@@ -23,6 +23,7 @@ import {
   BarChart3,
   ChevronDown,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 
 const statusColors: Record<string, { bg: string; text: string; ring: string; dot: string }> = {
   NEW: { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-600/10', dot: 'bg-indigo-500' },
@@ -290,6 +291,7 @@ export default function DashboardPage() {
             <option>Last 90 days</option>
             <option>This year</option>
           </select>
+          <RefreshButton onRefresh={refreshDashboard} />
         </div>
       </div>
 

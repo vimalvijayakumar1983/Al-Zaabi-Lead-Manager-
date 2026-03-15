@@ -11,6 +11,7 @@ import {
   Sparkles, Target, Bell, Mail, MessageSquare, UserPlus, Tag,
   ListTodo, Globe, TrendingUp, Shield, BarChart3,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -272,6 +273,7 @@ export default function AutomationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <RefreshButton onRefresh={() => { fetchRules(); fetchStats(); }} />
           <button onClick={() => setView('templates')} className="btn-secondary text-sm">
             <LayoutTemplate className="h-4 w-4" />
             Templates

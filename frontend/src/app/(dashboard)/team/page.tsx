@@ -15,6 +15,7 @@ import {
   Clock, TrendingUp, ListChecks, Hash, SlidersHorizontal,
   UserCog, Zap,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Config ────────────────────────────────────────────────────────
 const roleConfig: Record<string, { bg: string; text: string; ring: string; icon: React.ComponentType<{ className?: string }>; label: string; description: string }> = {
@@ -396,6 +397,7 @@ export default function TeamPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <RefreshButton onRefresh={fetchUsers} />
           <button onClick={() => setShowRoles(true)} className="btn-secondary">
             <Shield className="h-4 w-4" />
             Roles &amp; Access
