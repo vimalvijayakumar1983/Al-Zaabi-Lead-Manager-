@@ -11,11 +11,13 @@ import {
   ArrowUpDown, Check, X, UserPlus, Loader2, Download, Upload,
   Globe, Linkedin, Twitter, Calendar, Shield, Star, Heart,
   Briefcase, UserCheck, Merge, ChevronLeft, ChevronRight,
-  BarChart3, TrendingUp, Clock, Hash,
+  BarChart3, TrendingUp, Clock, Hash, LayoutGrid, List, Columns,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Constants ───────────────────────────────────────────────────
+
+type ViewMode = 'table' | 'cards' | 'kanban';
 
 const lifecycleLabels: Record<ContactLifecycle, { label: string; color: string }> = {
   SUBSCRIBER: { label: 'Subscriber', color: 'bg-gray-100 text-gray-700' },
@@ -56,6 +58,9 @@ export default function ContactsPage() {
   const [filterValues, setFilterValues] = useState<any>(null);
   const [showMerge, setShowMerge] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showViewSidebar, setShowViewSidebar] = useState(false);
 
   const fetchContacts = useCallback(async () => {
     setLoading(true);
@@ -168,6 +173,8 @@ export default function ContactsPage() {
     }
   };
 
+  const activeFilterCount = [filters.type, filters.source, filters.ownerId, filters.company].filter(v => v !== '').length;
+
   const handleFormClose = () => {
     setShowForm(false);
     setEditingContact(null);
@@ -215,34 +222,143 @@ export default function ContactsPage() {
         </div>
       )}
 
-      {/* Search & Filters Bar */}
-      <div className="card p-3 flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
-          <input
-            className="input pl-10 text-sm"
-            placeholder="Search contacts by name, email, phone, company..."
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPagination(p => ({ ...p, page: 1 })); }}
-          />
-        </div>
-        <div className="flex gap-2">
-          <select className="input text-sm w-40" value={filters.lifecycle} onChange={(e) => { setFilters(f => ({ ...f, lifecycle: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
-            <option value="">All Lifecycles</option>
+      {/* Toolbar */}
+      <div className="card p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Toggle Sidebar */}
+          <button onClick={() => setShowViewSidebar(!showViewSidebar)}
+            className={`p-2 rounded-lg border transition-colors ${showViewSidebar ? 'bg-brand-50 border-brand-200 text-brand-600' : 'border-gray-300 text-gray-400 hover:text-gray-600'}`}
+            title="Toggle view sidebar">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
+          </button>
+
+          {/* Search */}
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input type="text" placeholder="Search by name, email, company, phone..." className="input pl-9 text-sm"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPagination(p => ({ ...p, page: 1 })); }}
+            />
+          </div>
+
+          {/* Quick Lifecycle Filter */}
+          <select className="input max-w-[140px] text-sm" value={filters.lifecycle}
+            onChange={(e) => { setFilters(f => ({ ...f, lifecycle: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
+            <option value="">All Statuses</option>
             {Object.entries(lifecycleLabels).map(([val, { label }]) => <option key={val} value={val}>{label}</option>)}
           </select>
-          <select className="input text-sm w-36" value={filters.type} onChange={(e) => { setFilters(f => ({ ...f, type: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
-            <option value="">All Types</option>
-            {Object.entries(typeLabels).map(([val, { label }]) => <option key={val} value={val}>{label}</option>)}
-          </select>
-          {filterValues?.companies?.length > 0 && (
-            <select className="input text-sm w-40 hidden lg:block" value={filters.company} onChange={(e) => { setFilters(f => ({ ...f, company: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
-              <option value="">All Companies</option>
-              {filterValues.companies.map((c: string) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          )}
+
+          {/* Advanced Filters Toggle */}
+          <button onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className={`p-2 rounded-lg border transition-colors relative ${showAdvancedFilters || activeFilterCount > 0 ? 'bg-brand-50 border-brand-200 text-brand-600' : 'border-gray-300 text-gray-400 hover:text-gray-600'}`}
+            title="Advanced filters">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+            {activeFilterCount > 0 && (
+              <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-brand-600 text-white text-[10px] flex items-center justify-center">{activeFilterCount}</span>
+            )}
+          </button>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Column Manager (placeholder for table view) */}
+          <button
+            className="p-2 rounded-lg border border-gray-300 text-gray-400 hover:text-gray-600 transition-colors"
+            title="Manage columns"
+            onClick={() => { /* column manager could be added later */ }}>
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" /></svg>
+          </button>
+
+          {/* View Toggle */}
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+            <button onClick={() => setViewMode('table')}
+              className={`p-2 ${viewMode === 'table' ? 'bg-brand-50 text-brand-600' : 'text-gray-400 hover:text-gray-600'}`} title="Table view">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>
+            </button>
+            <button onClick={() => setViewMode('cards')}
+              className={`p-2 border-l border-gray-300 ${viewMode === 'cards' ? 'bg-brand-50 text-brand-600' : 'text-gray-400 hover:text-gray-600'}`} title="Card view">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+            </button>
+            <button onClick={() => setViewMode('kanban')}
+              className={`p-2 border-l border-gray-300 ${viewMode === 'kanban' ? 'bg-brand-50 text-brand-600' : 'text-gray-400 hover:text-gray-600'}`} title="Kanban view">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" /></svg>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Advanced Filters Panel */}
+      {showAdvancedFilters && (
+        <div className="card p-4 animate-fade-in">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-text-primary">Advanced Filters</h3>
+            <button onClick={() => setShowAdvancedFilters(false)} className="btn-icon h-7 w-7"><X className="h-3.5 w-3.5" /></button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div>
+              <label className="text-2xs font-medium text-text-tertiary uppercase mb-1 block">Type</label>
+              <select className="input text-sm" value={filters.type} onChange={(e) => { setFilters(f => ({ ...f, type: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
+                <option value="">All Types</option>
+                {Object.entries(typeLabels).map(([val, { label }]) => <option key={val} value={val}>{label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-2xs font-medium text-text-tertiary uppercase mb-1 block">Source</label>
+              <select className="input text-sm" value={filters.source} onChange={(e) => { setFilters(f => ({ ...f, source: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
+                <option value="">All Sources</option>
+                {['WEBSITE_FORM', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS', 'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER'].map(s => (
+                  <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+                ))}
+              </select>
+            </div>
+            {filterValues?.companies?.length > 0 && (
+              <div>
+                <label className="text-2xs font-medium text-text-tertiary uppercase mb-1 block">Company</label>
+                <select className="input text-sm" value={filters.company} onChange={(e) => { setFilters(f => ({ ...f, company: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
+                  <option value="">All Companies</option>
+                  {filterValues.companies.map((c: string) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="flex items-end">
+              <button onClick={() => { setFilters({ lifecycle: '', type: '', source: '', ownerId: '', company: '' }); setPagination(p => ({ ...p, page: 1 })); }}
+                className="btn-secondary text-xs">
+                <X className="h-3 w-3" /> Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active Filter Badges */}
+      {activeFilterCount > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {filters.type && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
+              Type: {typeLabels[filters.type as ContactType]?.label || filters.type}
+              <button onClick={() => { setFilters(f => ({ ...f, type: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
+            </span>
+          )}
+          {filters.source && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
+              Source: {filters.source.replace(/_/g, ' ')}
+              <button onClick={() => { setFilters(f => ({ ...f, source: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
+            </span>
+          )}
+          {filters.company && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
+              Company: {filters.company}
+              <button onClick={() => { setFilters(f => ({ ...f, company: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
+            </span>
+          )}
+          {filters.ownerId && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
+              Owner filter active
+              <button onClick={() => { setFilters(f => ({ ...f, ownerId: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Bulk Actions */}
       {selectedIds.size > 0 && (
@@ -265,7 +381,8 @@ export default function ContactsPage() {
         </div>
       )}
 
-      {/* Table */}
+      {/* ═══════════════════ TABLE VIEW ═══════════════════ */}
+      {viewMode === 'table' && (
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -396,6 +513,168 @@ export default function ContactsPage() {
           </div>
         )}
       </div>
+      )}
+
+      {/* ═══════════════════ CARD VIEW ═══════════════════ */}
+      {viewMode === 'cards' && (
+        <div>
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-6 w-6 animate-spin text-text-tertiary" />
+            </div>
+          ) : contacts.length === 0 ? (
+            <div className="card p-16 text-center">
+              <Users className="h-10 w-10 text-text-tertiary mx-auto mb-3" />
+              <p className="text-sm font-medium text-text-secondary">No contacts found</p>
+              <p className="text-xs text-text-tertiary mt-1">Add your first contact or convert a lead</p>
+              <button onClick={handleCreate} className="btn-primary text-xs mt-3"><Plus className="h-3.5 w-3.5" /> Add Contact</button>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {contacts.map((contact) => {
+                  const lifecycle = lifecycleLabels[contact.lifecycle] || lifecycleLabels.OTHER;
+                  const contactType = typeLabels[contact.type] || typeLabels.OTHER;
+                  const TypeIcon = contactType.icon;
+                  return (
+                    <div key={contact.id} className="card p-4 hover:shadow-md transition-shadow cursor-pointer" onClick={() => router.push(`/contacts/${contact.id}`)}>
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                            {contact.firstName[0]}{contact.lastName[0]}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-text-primary truncate">
+                              {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
+                            </p>
+                            {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <button onClick={() => handleEdit(contact)} className="btn-icon h-7 w-7" title="Edit"><Pencil className="h-3 w-3" /></button>
+                          <button onClick={() => handleDelete(contact.id)} className="btn-icon h-7 w-7 text-red-500" title="Delete"><Trash2 className="h-3 w-3" /></button>
+                        </div>
+                      </div>
+                      <div className="space-y-2 text-xs">
+                        {contact.email && (
+                          <div className="flex items-center gap-2 text-text-secondary">
+                            <Mail className="h-3 w-3 text-text-tertiary flex-shrink-0" />
+                            <span className="truncate">{contact.email}</span>
+                          </div>
+                        )}
+                        {contact.phone && (
+                          <div className="flex items-center gap-2 text-text-secondary">
+                            <Phone className="h-3 w-3 text-text-tertiary flex-shrink-0" />
+                            <span>{contact.phone}</span>
+                          </div>
+                        )}
+                        {contact.company && (
+                          <div className="flex items-center gap-2 text-text-secondary">
+                            <Building2 className="h-3 w-3 text-text-tertiary flex-shrink-0" />
+                            <span className="truncate">{contact.company}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border-subtle">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-medium ${lifecycle.color}`}>
+                          {lifecycle.label}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-2xs text-text-tertiary">
+                          <TypeIcon className="h-3 w-3" />
+                          {contactType.label}
+                        </span>
+                        <div className="ml-auto flex items-center gap-1">
+                          <div className={`h-2 w-2 rounded-full ${contact.score >= 70 ? 'bg-emerald-500' : contact.score >= 40 ? 'bg-amber-500' : 'bg-gray-300'}`} />
+                          <span className="text-2xs font-medium text-text-secondary">{contact.score}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Card View Pagination */}
+              {pagination.totalPages > 1 && (
+                <div className="flex items-center justify-between mt-4">
+                  <span className="text-xs text-text-tertiary">
+                    Showing {((pagination.page - 1) * pagination.limit) + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button disabled={pagination.page <= 1} onClick={() => setPagination(p => ({ ...p, page: p.page - 1 }))} className="btn-icon h-7 w-7">
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <span className="text-xs text-text-secondary px-2">Page {pagination.page} of {pagination.totalPages}</span>
+                    <button disabled={pagination.page >= pagination.totalPages} onClick={() => setPagination(p => ({ ...p, page: p.page + 1 }))} className="btn-icon h-7 w-7">
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ═══════════════════ KANBAN VIEW ═══════════════════ */}
+      {viewMode === 'kanban' && (
+        <div>
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-6 w-6 animate-spin text-text-tertiary" />
+            </div>
+          ) : (
+            <div className="flex gap-4 overflow-x-auto pb-4">
+              {Object.entries(lifecycleLabels).map(([lifecycle, { label, color }]) => {
+                const columnContacts = contacts.filter(c => c.lifecycle === lifecycle);
+                return (
+                  <div key={lifecycle} className="flex-shrink-0 w-72">
+                    <div className={`rounded-t-lg px-3 py-2 flex items-center justify-between ${color}`}>
+                      <span className="text-xs font-semibold">{label}</span>
+                      <span className="text-2xs font-medium opacity-70">{columnContacts.length}</span>
+                    </div>
+                    <div className="bg-surface-secondary rounded-b-lg p-2 space-y-2 min-h-[200px]">
+                      {columnContacts.length === 0 ? (
+                        <p className="text-2xs text-text-tertiary text-center py-8">No contacts</p>
+                      ) : columnContacts.map((contact) => {
+                        const contactType = typeLabels[contact.type] || typeLabels.OTHER;
+                        const TypeIcon = contactType.icon;
+                        return (
+                          <div key={contact.id} className="card p-3 hover:shadow-md transition-shadow cursor-pointer" onClick={() => router.push(`/contacts/${contact.id}`)}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                                {contact.firstName[0]}{contact.lastName[0]}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-text-primary truncate">{contact.firstName} {contact.lastName}</p>
+                                {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
+                              </div>
+                            </div>
+                            {contact.company && (
+                              <div className="flex items-center gap-1 mb-1.5">
+                                <Building2 className="h-3 w-3 text-text-tertiary flex-shrink-0" />
+                                <span className="text-2xs text-text-secondary truncate">{contact.company}</span>
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between">
+                              <span className="inline-flex items-center gap-1 text-2xs text-text-tertiary">
+                                <TypeIcon className="h-3 w-3" />
+                                {contactType.label}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <div className={`h-1.5 w-1.5 rounded-full ${contact.score >= 70 ? 'bg-emerald-500' : contact.score >= 40 ? 'bg-amber-500' : 'bg-gray-300'}`} />
+                                <span className="text-2xs font-medium text-text-secondary">{contact.score}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Create/Edit Modal */}
       {showForm && (
