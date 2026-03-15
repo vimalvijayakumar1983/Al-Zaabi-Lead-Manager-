@@ -14,6 +14,7 @@ import {
   BarChart3, TrendingUp, Clock, Hash, LayoutGrid, List, Columns,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { ContactColumnManager, loadContactColumns, saveContactColumns, type ContactColumnDef } from './components/column-config';
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -61,6 +62,9 @@ export default function ContactsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showViewSidebar, setShowViewSidebar] = useState(false);
+  const [columns, setColumns] = useState<ContactColumnDef[]>(() => loadContactColumns());
+  const [showColumnManager, setShowColumnManager] = useState(false);
+  const visibleColumns = columns.filter(c => c.visible);
 
   const fetchContacts = useCallback(async () => {
     setLoading(true);
@@ -261,11 +265,11 @@ export default function ContactsPage() {
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Column Manager (placeholder for table view) */}
+          {/* Column Manager */}
           <button
-            className="p-2 rounded-lg border border-gray-300 text-gray-400 hover:text-gray-600 transition-colors"
+            className={`p-2 rounded-lg border transition-colors ${showColumnManager ? 'bg-brand-50 border-brand-200 text-brand-600' : 'border-gray-300 text-gray-400 hover:text-gray-600'}`}
             title="Manage columns"
-            onClick={() => { /* column manager could be added later */ }}>
+            onClick={() => setShowColumnManager(true)}>
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" /></svg>
           </button>
 
@@ -381,6 +385,15 @@ export default function ContactsPage() {
         </div>
       )}
 
+      {/* Column Manager Modal */}
+      {showColumnManager && (
+        <ContactColumnManager
+          columns={columns}
+          onChange={(updated) => { setColumns(updated); saveContactColumns(updated); }}
+          onClose={() => setShowColumnManager(false)}
+        />
+      )}
+
       {/* ═══════════════════ TABLE VIEW ═══════════════════ */}
       {viewMode === 'table' && (
       <div className="card overflow-hidden">
@@ -388,26 +401,25 @@ export default function ContactsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border-subtle bg-surface-secondary">
-                <th className="w-10 px-3 py-3">
-                  <input type="checkbox" checked={contacts.length > 0 && selectedIds.size === contacts.length} onChange={handleSelectAll} className="rounded border-gray-300" />
-                </th>
-                <SortHeader label="Name" field="firstName" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />
-                <th className="px-3 py-3 text-left text-xs font-semibold text-text-tertiary uppercase">Email / Phone</th>
-                <SortHeader label="Company" field="company" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />
-                <th className="px-3 py-3 text-left text-xs font-semibold text-text-tertiary uppercase">Lifecycle</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold text-text-tertiary uppercase">Type</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold text-text-tertiary uppercase">Owner</th>
-                <SortHeader label="Score" field="score" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />
-                <th className="px-3 py-3 text-left text-xs font-semibold text-text-tertiary uppercase">Tags</th>
-                <SortHeader label="Created" field="createdAt" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />
-                <th className="w-12 px-3 py-3"></th>
+                {visibleColumns.map((col) => {
+                  if (col.id === 'select') return (
+                    <th key={col.id} className="w-10 px-3 py-3">
+                      <input type="checkbox" checked={contacts.length > 0 && selectedIds.size === contacts.length} onChange={handleSelectAll} className="rounded border-gray-300" />
+                    </th>
+                  );
+                  if (col.id === 'actions') return <th key={col.id} className="w-12 px-3 py-3"></th>;
+                  if (col.sortable && col.sortField) return (
+                    <SortHeader key={col.id} label={col.label} field={col.sortField} sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />
+                  );
+                  return <th key={col.id} className="px-3 py-3 text-left text-xs font-semibold text-text-tertiary uppercase">{col.label}</th>;
+                })}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={11} className="text-center py-16"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary mx-auto" /></td></tr>
+                <tr><td colSpan={visibleColumns.length} className="text-center py-16"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary mx-auto" /></td></tr>
               ) : contacts.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-16">
+                <tr><td colSpan={visibleColumns.length} className="text-center py-16">
                   <Users className="h-10 w-10 text-text-tertiary mx-auto mb-3" />
                   <p className="text-sm font-medium text-text-secondary">No contacts found</p>
                   <p className="text-xs text-text-tertiary mt-1">Add your first contact or convert a lead</p>
@@ -419,75 +431,121 @@ export default function ContactsPage() {
                 const TypeIcon = contactType.icon;
                 return (
                   <tr key={contact.id} className="border-b border-border-subtle hover:bg-surface-secondary/50 transition-colors cursor-pointer" onClick={() => router.push(`/contacts/${contact.id}`)}>
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" checked={selectedIds.has(contact.id)} onChange={() => handleSelect(contact.id)} className="rounded border-gray-300" />
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                          {contact.firstName[0]}{contact.lastName[0]}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-text-primary truncate">
-                            {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
-                          </p>
-                          {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="space-y-0.5">
-                        {contact.email && <p className="text-xs text-text-secondary truncate max-w-[180px]">{contact.email}</p>}
-                        {contact.phone && <p className="text-2xs text-text-tertiary">{contact.phone}</p>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      {contact.company && (
-                        <div className="flex items-center gap-1">
-                          <Building2 className="h-3 w-3 text-text-tertiary flex-shrink-0" />
-                          <span className="text-xs text-text-secondary truncate max-w-[120px]">{contact.company}</span>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-medium ${lifecycle.color}`}>
-                        {lifecycle.label}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className="inline-flex items-center gap-1 text-xs text-text-secondary">
-                        <TypeIcon className="h-3 w-3" />
-                        {contactType.label}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3">
-                      {contact.owner && (
-                        <span className="text-xs text-text-secondary">{contact.owner.firstName} {contact.owner.lastName[0]}.</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-1">
-                        <div className={`h-2 w-2 rounded-full ${contact.score >= 70 ? 'bg-emerald-500' : contact.score >= 40 ? 'bg-amber-500' : 'bg-gray-300'}`} />
-                        <span className="text-xs font-medium text-text-secondary">{contact.score}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {contact.tags?.slice(0, 2).map((t) => (
-                          <span key={t.tag.id} className="px-1.5 py-0.5 rounded text-2xs font-medium bg-surface-tertiary text-text-secondary">{t.tag.name}</span>
-                        ))}
-                        {(contact.tags?.length || 0) > 2 && <span className="text-2xs text-text-tertiary">+{contact.tags!.length - 2}</span>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className="text-2xs text-text-tertiary">{new Date(contact.createdAt).toLocaleDateString()}</span>
-                    </td>
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-0.5">
-                        <button onClick={() => handleEdit(contact)} className="btn-icon h-7 w-7" title="Edit"><Pencil className="h-3 w-3" /></button>
-                        <button onClick={() => handleDelete(contact.id)} className="btn-icon h-7 w-7 text-red-500" title="Delete"><Trash2 className="h-3 w-3" /></button>
-                      </div>
-                    </td>
+                    {visibleColumns.map((col) => {
+                      switch (col.id) {
+                        case 'select':
+                          return <td key={col.id} className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            <input type="checkbox" checked={selectedIds.has(contact.id)} onChange={() => handleSelect(contact.id)} className="rounded border-gray-300" />
+                          </td>;
+                        case 'name':
+                          return <td key={col.id} className="px-3 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                                {contact.firstName[0]}{contact.lastName[0]}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-text-primary truncate">
+                                  {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
+                                </p>
+                                {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
+                              </div>
+                            </div>
+                          </td>;
+                        case 'emailPhone':
+                          return <td key={col.id} className="px-3 py-3">
+                            <div className="space-y-0.5">
+                              {contact.email && <p className="text-xs text-text-secondary truncate max-w-[180px]">{contact.email}</p>}
+                              {contact.phone && <p className="text-2xs text-text-tertiary">{contact.phone}</p>}
+                            </div>
+                          </td>;
+                        case 'company':
+                          return <td key={col.id} className="px-3 py-3">
+                            {contact.company && (
+                              <div className="flex items-center gap-1">
+                                <Building2 className="h-3 w-3 text-text-tertiary flex-shrink-0" />
+                                <span className="text-xs text-text-secondary truncate max-w-[120px]">{contact.company}</span>
+                              </div>
+                            )}
+                          </td>;
+                        case 'jobTitle':
+                          return <td key={col.id} className="px-3 py-3">
+                            <span className="text-xs text-text-secondary">{contact.jobTitle || ''}</span>
+                          </td>;
+                        case 'lifecycle':
+                          return <td key={col.id} className="px-3 py-3">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-medium ${lifecycle.color}`}>
+                              {lifecycle.label}
+                            </span>
+                          </td>;
+                        case 'type':
+                          return <td key={col.id} className="px-3 py-3">
+                            <span className="inline-flex items-center gap-1 text-xs text-text-secondary">
+                              <TypeIcon className="h-3 w-3" />
+                              {contactType.label}
+                            </span>
+                          </td>;
+                        case 'owner':
+                          return <td key={col.id} className="px-3 py-3">
+                            {contact.owner && (
+                              <span className="text-xs text-text-secondary">{contact.owner.firstName} {contact.owner.lastName[0]}.</span>
+                            )}
+                          </td>;
+                        case 'score':
+                          return <td key={col.id} className="px-3 py-3">
+                            <div className="flex items-center gap-1">
+                              <div className={`h-2 w-2 rounded-full ${contact.score >= 70 ? 'bg-emerald-500' : contact.score >= 40 ? 'bg-amber-500' : 'bg-gray-300'}`} />
+                              <span className="text-xs font-medium text-text-secondary">{contact.score}</span>
+                            </div>
+                          </td>;
+                        case 'tags':
+                          return <td key={col.id} className="px-3 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              {contact.tags?.slice(0, 2).map((t) => (
+                                <span key={t.tag.id} className="px-1.5 py-0.5 rounded text-2xs font-medium bg-surface-tertiary text-text-secondary">{t.tag.name}</span>
+                              ))}
+                              {(contact.tags?.length || 0) > 2 && <span className="text-2xs text-text-tertiary">+{contact.tags!.length - 2}</span>}
+                            </div>
+                          </td>;
+                        case 'location':
+                          return <td key={col.id} className="px-3 py-3">
+                            {(contact as any).location && (
+                              <div className="flex items-center gap-1">
+                                <MapPin className="h-3 w-3 text-text-tertiary flex-shrink-0" />
+                                <span className="text-xs text-text-secondary truncate max-w-[120px]">{(contact as any).location}</span>
+                              </div>
+                            )}
+                          </td>;
+                        case 'website':
+                          return <td key={col.id} className="px-3 py-3">
+                            {(contact as any).website && (
+                              <span className="text-xs text-text-secondary truncate max-w-[150px] block">{(contact as any).website}</span>
+                            )}
+                          </td>;
+                        case 'linkedin':
+                          return <td key={col.id} className="px-3 py-3">
+                            {(contact as any).linkedin && (
+                              <span className="text-xs text-text-secondary truncate max-w-[150px] block">{(contact as any).linkedin}</span>
+                            )}
+                          </td>;
+                        case 'createdAt':
+                          return <td key={col.id} className="px-3 py-3">
+                            <span className="text-2xs text-text-tertiary">{new Date(contact.createdAt).toLocaleDateString()}</span>
+                          </td>;
+                        case 'updatedAt':
+                          return <td key={col.id} className="px-3 py-3">
+                            <span className="text-2xs text-text-tertiary">{new Date(contact.updatedAt).toLocaleDateString()}</span>
+                          </td>;
+                        case 'actions':
+                          return <td key={col.id} className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-0.5">
+                              <button onClick={() => handleEdit(contact)} className="btn-icon h-7 w-7" title="Edit"><Pencil className="h-3 w-3" /></button>
+                              <button onClick={() => handleDelete(contact.id)} className="btn-icon h-7 w-7 text-red-500" title="Delete"><Trash2 className="h-3 w-3" /></button>
+                            </div>
+                          </td>;
+                        default:
+                          return <td key={col.id} className="px-3 py-3" />;
+                      }
+                    })}
                   </tr>
                 );
               })}
