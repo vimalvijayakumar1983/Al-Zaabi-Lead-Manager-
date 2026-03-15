@@ -43,7 +43,7 @@ export function customFieldToColumn(cf: CustomField): ColumnDef {
   return {
     id: `cf_${cf.name}`,
     label: cf.label,
-    visible: false,
+    visible: true,
     sortable: false,
     isCustom: true,
     customFieldType: cf.type,
