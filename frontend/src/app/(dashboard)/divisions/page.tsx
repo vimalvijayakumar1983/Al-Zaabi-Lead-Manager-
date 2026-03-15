@@ -508,6 +508,15 @@ export default function DivisionsPage() {
   const [formPrimaryColor, setFormPrimaryColor] = useState('#6366f1');
   const [formSecondaryColor, setFormSecondaryColor] = useState('#1e293b');
 
+  // Apply Template to Existing Division
+  const [applyTemplateDivision, setApplyTemplateDivision] = useState<Organization | null>(null);
+  const [applyTemplateSelection, setApplyTemplateSelection] = useState<IndustryTemplate | null>(null);
+  const [applyReplaceStages, setApplyReplaceStages] = useState(false);
+  const [applyReplaceFields, setApplyReplaceFields] = useState(false);
+  const [applyReplaceTags, setApplyReplaceTags] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
+  const [applyTemplateError, setApplyTemplateError] = useState('');
+
   // Delete Confirmation
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState('');
@@ -784,6 +793,42 @@ export default function DivisionsPage() {
       setModalError(err.message || 'Failed to save division');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── Apply Template to Existing Division ──────────────────────────
+  const openApplyTemplateModal = (division: Organization) => {
+    setApplyTemplateDivision(division);
+    setApplyTemplateSelection(null);
+    setApplyReplaceStages(false);
+    setApplyReplaceFields(false);
+    setApplyReplaceTags(false);
+    setApplyTemplateError('');
+  };
+
+  const handleApplyTemplate = async () => {
+    if (!applyTemplateDivision || !applyTemplateSelection) return;
+    setApplyingTemplate(true);
+    setApplyTemplateError('');
+    try {
+      const result = await api.applyDivisionTemplate(applyTemplateDivision.id, {
+        templateId: applyTemplateSelection.id,
+        replaceStages: applyReplaceStages,
+        replaceFields: applyReplaceFields,
+        replaceTags: applyReplaceTags,
+      });
+      const s = result.summary;
+      const parts: string[] = [];
+      if (s.stagesAdded) parts.push(`${s.stagesAdded} stages`);
+      if (s.fieldsAdded) parts.push(`${s.fieldsAdded} fields`);
+      if (s.tagsAdded) parts.push(`${s.tagsAdded} tags`);
+      showToast(parts.length > 0 ? `Template applied: added ${parts.join(', ')}` : 'Template applied — no new items needed');
+      setApplyTemplateDivision(null);
+      fetchDivisions();
+    } catch (err: any) {
+      setApplyTemplateError(err.message || 'Failed to apply template');
+    } finally {
+      setApplyingTemplate(false);
     }
   };
 
@@ -1449,6 +1494,13 @@ export default function DivisionsPage() {
                         <BarChart3 className="h-3.5 w-3.5" />
                         Stats
                         {statsExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      </button>
+                      <button
+                        onClick={() => openApplyTemplateModal(division)}
+                        className="btn-icon h-8 w-8 text-brand-500 hover:bg-brand-50"
+                        title="Apply industry template"
+                      >
+                        <Layers className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => openEditModal(division)}
@@ -2129,6 +2181,134 @@ export default function DivisionsPage() {
               <><Loader2 className="h-4 w-4 animate-spin" /> Deleting...</>
             ) : (
               <><Trash2 className="h-4 w-4" /> Delete Division</>
+            )}
+          </button>
+        </div>
+      </Modal>
+
+      {/* ── Apply Template Modal ─────────────────────────────────────── */}
+      <Modal open={!!applyTemplateDivision} onClose={() => setApplyTemplateDivision(null)}>
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+          <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
+            <Layers className="h-5 w-5 text-brand-500" />
+            Apply Industry Template
+          </h3>
+          <button onClick={() => setApplyTemplateDivision(null)} className="btn-icon h-8 w-8">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 px-6 py-5 space-y-4 overflow-y-auto">
+          {applyTemplateError && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 p-3 text-sm text-red-700">
+              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>{applyTemplateError}</span>
+            </div>
+          )}
+          <p className="text-sm text-text-secondary">
+            Apply a template to <span className="font-semibold text-text-primary">{applyTemplateDivision?.name}</span> to add
+            industry-specific pipeline stages, custom fields, and tags.
+          </p>
+
+          {/* Template Grid */}
+          <div className="grid grid-cols-2 gap-2.5 max-h-[300px] overflow-y-auto pr-1">
+            {templates.map((tpl) => {
+              const isSelected = applyTemplateSelection?.id === tpl.id;
+              return (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => setApplyTemplateSelection(isSelected ? null : tpl)}
+                  className={`group relative text-left p-3 rounded-xl border-2 transition-all ${
+                    isSelected
+                      ? 'border-brand-500 bg-brand-50/50 ring-1 ring-brand-500/20'
+                      : 'border-border-subtle hover:border-gray-300 hover:bg-surface-secondary/40'
+                  }`}
+                >
+                  {isSelected && (
+                    <div className="absolute top-2 right-2">
+                      <CheckCircle2 className="h-4 w-4 text-brand-600" />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <div
+                      className="h-8 w-8 rounded-lg flex items-center justify-center text-white flex-shrink-0"
+                      style={{ backgroundColor: tpl.color }}
+                    >
+                      <TemplateIcon icon={tpl.icon} />
+                    </div>
+                    <p className="text-sm font-semibold text-text-primary truncate">{tpl.name}</p>
+                  </div>
+                  <p className="text-xs text-text-tertiary mb-2 line-clamp-2">{tpl.description}</p>
+                  <div className="flex items-center gap-3 text-[10px] text-text-tertiary">
+                    <span className="flex items-center gap-1"><GitBranch className="h-3 w-3" />{tpl.stageCount} stages</span>
+                    <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{tpl.fieldCount} fields</span>
+                    <span className="flex items-center gap-1"><Tags className="h-3 w-3" />{tpl.tagCount} tags</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Replace Options */}
+          {applyTemplateSelection && (
+            <div className="space-y-2 p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <p className="text-xs font-medium text-amber-800 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Merge or Replace Options
+              </p>
+              <p className="text-xs text-amber-700 mb-2">
+                By default, template items are <span className="font-medium">merged</span> (only new items are added).
+                Enable replace to remove existing items first.
+              </p>
+              <label className="flex items-center gap-2.5 cursor-pointer py-1">
+                <input
+                  type="checkbox"
+                  checked={applyReplaceStages}
+                  onChange={(e) => setApplyReplaceStages(e.target.checked)}
+                  className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span className="text-xs text-amber-800">
+                  Replace pipeline stages <span className="text-amber-600">(safe if no leads assigned)</span>
+                </span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer py-1">
+                <input
+                  type="checkbox"
+                  checked={applyReplaceFields}
+                  onChange={(e) => setApplyReplaceFields(e.target.checked)}
+                  className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span className="text-xs text-amber-800">
+                  Replace custom fields <span className="text-amber-600">(existing field data will be lost)</span>
+                </span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer py-1">
+                <input
+                  type="checkbox"
+                  checked={applyReplaceTags}
+                  onChange={(e) => setApplyReplaceTags(e.target.checked)}
+                  className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                />
+                <span className="text-xs text-amber-800">
+                  Replace tags <span className="text-amber-600">(tags attached to leads are preserved)</span>
+                </span>
+              </label>
+            </div>
+          )}
+        </div>
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+          <button onClick={() => setApplyTemplateDivision(null)} className="btn-secondary" disabled={applyingTemplate}>
+            Cancel
+          </button>
+          <button
+            onClick={handleApplyTemplate}
+            className="btn-primary flex items-center gap-2"
+            disabled={!applyTemplateSelection || applyingTemplate}
+          >
+            {applyingTemplate ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Applying...</>
+            ) : (
+              <>Apply {applyTemplateSelection?.name || 'Template'}</>
             )}
           </button>
         </div>

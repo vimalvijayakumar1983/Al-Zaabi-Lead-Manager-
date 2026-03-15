@@ -288,6 +288,224 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
   }
 });
 
+// ─── POST /:id/apply-template — Apply industry template to existing division ──
+router.post('/:id/apply-template', authorize('SUPER_ADMIN', 'ADMIN'), validate(z.object({
+  templateId: z.string().min(1, 'Template ID is required'),
+  replaceStages: z.boolean().optional().default(false),
+  replaceFields: z.boolean().optional().default(false),
+  replaceTags: z.boolean().optional().default(false),
+})), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { templateId, replaceStages, replaceFields, replaceTags } = req.validated;
+
+    // Verify access
+    const division = await prisma.organization.findFirst({
+      where: {
+        id,
+        ...(req.user.role === 'SUPER_ADMIN'
+          ? { parentId: req.user.organizationId, type: 'DIVISION' }
+          : { id: req.user.organizationId }),
+      },
+    });
+
+    if (!division) {
+      return res.status(404).json({ error: 'Division not found' });
+    }
+
+    const template = getTemplate(templateId);
+    if (!template) {
+      return res.status(400).json({ error: 'Invalid template ID' });
+    }
+
+    const summary = { stagesAdded: 0, fieldsAdded: 0, tagsAdded: 0, stagesRemoved: 0, fieldsRemoved: 0, tagsRemoved: 0 };
+
+    await prisma.$transaction(async (tx) => {
+      // ── Pipeline Stages ──
+      if (replaceStages) {
+        // Check if any leads are assigned to existing stages
+        const leadsOnStages = await tx.lead.count({
+          where: { organizationId: id, stageId: { not: null } },
+        });
+
+        if (leadsOnStages > 0) {
+          // Don't delete stages with leads — just add missing ones
+          const existingStages = await tx.pipelineStage.findMany({ where: { organizationId: id } });
+          const existingNames = new Set(existingStages.map((s) => s.name.toLowerCase()));
+          let maxOrder = existingStages.reduce((m, s) => Math.max(m, s.order), -1);
+
+          for (const stage of template.pipelineStages) {
+            if (!existingNames.has(stage.name.toLowerCase())) {
+              maxOrder++;
+              await tx.pipelineStage.create({
+                data: {
+                  name: stage.name,
+                  order: maxOrder,
+                  color: stage.color || '#6366f1',
+                  isDefault: false,
+                  isWonStage: stage.isWonStage || false,
+                  isLostStage: stage.isLostStage || false,
+                  organizationId: id,
+                },
+              });
+              summary.stagesAdded++;
+            }
+          }
+        } else {
+          // Safe to replace — no leads on stages
+          const deleted = await tx.pipelineStage.deleteMany({ where: { organizationId: id } });
+          summary.stagesRemoved = deleted.count;
+
+          for (const stage of template.pipelineStages) {
+            await tx.pipelineStage.create({
+              data: {
+                name: stage.name,
+                order: stage.order,
+                color: stage.color || '#6366f1',
+                isDefault: stage.isDefault || false,
+                isWonStage: stage.isWonStage || false,
+                isLostStage: stage.isLostStage || false,
+                organizationId: id,
+              },
+            });
+            summary.stagesAdded++;
+          }
+        }
+      } else {
+        // Merge: add only stages that don't exist yet
+        const existingStages = await tx.pipelineStage.findMany({ where: { organizationId: id } });
+        const existingNames = new Set(existingStages.map((s) => s.name.toLowerCase()));
+        let maxOrder = existingStages.reduce((m, s) => Math.max(m, s.order), -1);
+
+        for (const stage of template.pipelineStages) {
+          if (!existingNames.has(stage.name.toLowerCase())) {
+            maxOrder++;
+            await tx.pipelineStage.create({
+              data: {
+                name: stage.name,
+                order: maxOrder,
+                color: stage.color || '#6366f1',
+                isDefault: false,
+                isWonStage: stage.isWonStage || false,
+                isLostStage: stage.isLostStage || false,
+                organizationId: id,
+              },
+            });
+            summary.stagesAdded++;
+          }
+        }
+      }
+
+      // ── Custom Fields ──
+      if (replaceFields) {
+        const deleted = await tx.customField.deleteMany({ where: { organizationId: id } });
+        summary.fieldsRemoved = deleted.count;
+
+        for (let i = 0; i < template.customFields.length; i++) {
+          const field = template.customFields[i];
+          await tx.customField.create({
+            data: {
+              name: labelToFieldName(field.label),
+              label: field.label,
+              type: field.type,
+              options: field.options || null,
+              isRequired: field.isRequired || false,
+              order: i,
+              organizationId: id,
+            },
+          });
+          summary.fieldsAdded++;
+        }
+      } else {
+        // Merge: add only fields that don't exist yet
+        const existingFields = await tx.customField.findMany({ where: { organizationId: id } });
+        const existingNames = new Set(existingFields.map((f) => f.name.toLowerCase()));
+        let maxOrder = existingFields.reduce((m, f) => Math.max(m, f.order), -1);
+
+        for (const field of template.customFields) {
+          const fieldName = labelToFieldName(field.label);
+          if (!existingNames.has(fieldName.toLowerCase())) {
+            maxOrder++;
+            await tx.customField.create({
+              data: {
+                name: fieldName,
+                label: field.label,
+                type: field.type,
+                options: field.options || null,
+                isRequired: field.isRequired || false,
+                order: maxOrder,
+                organizationId: id,
+              },
+            });
+            summary.fieldsAdded++;
+          }
+        }
+      }
+
+      // ── Tags ──
+      if (replaceTags) {
+        // Only delete tags not attached to any leads
+        const tagsWithLeads = await tx.leadTag.findMany({
+          where: { tag: { organizationId: id } },
+          select: { tagId: true },
+        });
+        const usedTagIds = new Set(tagsWithLeads.map((t) => t.tagId));
+
+        const allTags = await tx.tag.findMany({ where: { organizationId: id } });
+        const deletableIds = allTags.filter((t) => !usedTagIds.has(t.id)).map((t) => t.id);
+
+        if (deletableIds.length > 0) {
+          const deleted = await tx.tag.deleteMany({ where: { id: { in: deletableIds } } });
+          summary.tagsRemoved = deleted.count;
+        }
+
+        // Add template tags
+        const remainingTags = await tx.tag.findMany({ where: { organizationId: id } });
+        const remainingNames = new Set(remainingTags.map((t) => t.name.toLowerCase()));
+
+        for (const tag of template.tags) {
+          if (!remainingNames.has(tag.name.toLowerCase())) {
+            await tx.tag.create({
+              data: { name: tag.name, color: tag.color || '#6366f1', organizationId: id },
+            });
+            summary.tagsAdded++;
+          }
+        }
+      } else {
+        // Merge: add only tags that don't exist yet
+        const existingTags = await tx.tag.findMany({ where: { organizationId: id } });
+        const existingNames = new Set(existingTags.map((t) => t.name.toLowerCase()));
+
+        for (const tag of template.tags) {
+          if (!existingNames.has(tag.name.toLowerCase())) {
+            await tx.tag.create({
+              data: { name: tag.name, color: tag.color || '#6366f1', organizationId: id },
+            });
+            summary.tagsAdded++;
+          }
+        }
+      }
+
+      // Update division settings with template info
+      const currentSettings = division.settings && typeof division.settings === 'object' ? division.settings : {};
+      await tx.organization.update({
+        where: { id },
+        data: {
+          settings: { ...currentSettings, templateId: template.id, templateName: template.name },
+        },
+      });
+    });
+
+    res.json({
+      message: `Template "${template.name}" applied successfully`,
+      template: { id: template.id, name: template.name },
+      summary,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── DELETE /:id — Delete a division (SUPER_ADMIN only) ─────────
 router.delete('/:id', authorize('SUPER_ADMIN'), async (req, res, next) => {
   try {

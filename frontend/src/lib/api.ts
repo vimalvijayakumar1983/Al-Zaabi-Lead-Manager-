@@ -753,6 +753,10 @@ class ApiClient {
     return this.request<void>(`/divisions/${id}`, { method: 'DELETE' });
   }
 
+  async applyDivisionTemplate(divisionId: string, data: { templateId: string; replaceStages?: boolean; replaceFields?: boolean; replaceTags?: boolean }): Promise<{ message: string; summary: { stagesAdded: number; fieldsAdded: number; tagsAdded: number; stagesRemoved: number; fieldsRemoved: number; tagsRemoved: number } }> {
+    return this.request(`/divisions/${divisionId}/apply-template`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
   // ─── Division Users & Stats (NEW) ────────────────────────────────
   async getDivisionUsers(divisionId: string, params?: { search?: string; role?: string; isActive?: string }): Promise<DivisionUser[]> {
     const queryParams = new URLSearchParams();
