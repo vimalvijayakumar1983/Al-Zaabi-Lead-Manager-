@@ -107,7 +107,7 @@ function LeadsContent() {
     try {
       const params: Record<string, string | number> = {
         page: pagination.page,
-        limit: 20,
+        limit: pagination.limit,
         sortBy,
         sortOrder,
       };
@@ -145,7 +145,7 @@ function LeadsContent() {
     } finally {
       setLoading(false);
     }
-  }, [pagination.page, filters, sortBy, sortOrder]);
+  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -917,13 +917,18 @@ function LeadsContent() {
 
           {/* ═══════════════════ KANBAN VIEW ═══════════════════ */}
           {viewMode === 'kanban' && (
-            <KanbanView
-              leads={leads}
-              customFields={customFields}
-              onStatusChange={async (leadId, status) => {
-                await handleQuickStatus(leadId, status);
-              }}
-            />
+            <div>
+              <KanbanView
+                leads={leads}
+                customFields={customFields}
+                onStatusChange={async (leadId, status) => {
+                  await handleQuickStatus(leadId, status);
+                }}
+              />
+              <div className="mt-4">
+                <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -974,34 +979,54 @@ function StatCard({ label, value, color }: { label: string; value: string | numb
 }
 
 function Pagination({ pagination, setPagination, pageNumbers }: {
-  pagination: { total: number; page: number; totalPages: number };
+  pagination: { total: number; page: number; limit: number; totalPages: number };
   setPagination: (fn: (p: any) => any) => void;
   pageNumbers: () => (number | string)[];
 }) {
-  if (pagination.totalPages <= 1) return null;
+  const limit = pagination.limit || 20;
+  const start = ((pagination.page - 1) * limit) + 1;
+  const end = Math.min(pagination.page * limit, pagination.total);
   return (
     <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3">
-      <p className="text-sm text-gray-500">
-        Showing {((pagination.page - 1) * 20) + 1}-{Math.min(pagination.page * 20, pagination.total)} of {pagination.total}
-      </p>
-      <div className="flex items-center gap-1">
-        <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page <= 1}
-          onClick={() => setPagination((p: any) => ({ ...p, page: p.page - 1 }))}>
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-        </button>
-        {pageNumbers().map((p, i) => (
-          typeof p === 'number' ? (
-            <button key={i} onClick={() => setPagination((prev: any) => ({ ...prev, page: p }))}
-              className={`min-w-[32px] h-8 rounded text-sm font-medium ${p === pagination.page ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-              {p}
-            </button>
-          ) : <span key={i} className="px-1 text-gray-400">...</span>
-        ))}
-        <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page >= pagination.totalPages}
-          onClick={() => setPagination((p: any) => ({ ...p, page: p.page + 1 }))}>
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-        </button>
+      <div className="flex items-center gap-3">
+        <p className="text-sm text-gray-500">
+          {pagination.total > 0 ? `Showing ${start}-${end} of ${pagination.total}` : 'No leads'}
+        </p>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="page-size" className="text-xs text-gray-400">Per page</label>
+          <select
+            id="page-size"
+            value={limit}
+            onChange={(e) => setPagination((p: any) => ({ ...p, limit: Number(e.target.value), page: 1 }))}
+            className="text-xs border border-gray-200 rounded-md px-1.5 py-1 text-gray-600 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          >
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
       </div>
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center gap-1">
+          <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page <= 1}
+            onClick={() => setPagination((p: any) => ({ ...p, page: p.page - 1 }))}>
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          </button>
+          {pageNumbers().map((p, i) => (
+            typeof p === 'number' ? (
+              <button key={i} onClick={() => setPagination((prev: any) => ({ ...prev, page: p }))}
+                className={`min-w-[32px] h-8 rounded text-sm font-medium ${p === pagination.page ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                {p}
+              </button>
+            ) : <span key={i} className="px-1 text-gray-400">...</span>
+          ))}
+          <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page >= pagination.totalPages}
+            onClick={() => setPagination((p: any) => ({ ...p, page: p.page + 1 }))}>
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
