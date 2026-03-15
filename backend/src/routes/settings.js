@@ -267,10 +267,35 @@ router.delete('/account', validate(z.object({
 // List custom fields
 router.get('/custom-fields', async (req, res, next) => {
   try {
+    const { divisionId } = req.query;
+
+    // If super admin requests fields for a specific division, scope to that division only
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
+      orgFilter = { organizationId: divisionId };
+    } else {
+      orgFilter = { organizationId: { in: req.orgIds } };
+    }
+
     const fields = await prisma.customField.findMany({
-      where: { organizationId: { in: req.orgIds } },
+      where: orgFilter,
       orderBy: { order: 'asc' },
     });
+
+    // For super admin viewing all divisions: deduplicate fields by name
+    // so the same template field across divisions appears as one column
+    if (!divisionId && req.isSuperAdmin && fields.length > 0) {
+      const seen = new Map();
+      const deduped = [];
+      for (const field of fields) {
+        if (!seen.has(field.name)) {
+          seen.set(field.name, true);
+          deduped.push(field);
+        }
+      }
+      return res.json(deduped);
+    }
+
     res.json(fields);
   } catch (err) {
     next(err);

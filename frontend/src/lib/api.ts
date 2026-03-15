@@ -679,8 +679,9 @@ class ApiClient {
   }
 
   // Custom Fields
-  async getCustomFields() {
-    return this.request<any[]>('/settings/custom-fields');
+  async getCustomFields(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/settings/custom-fields${q}`);
   }
 
   async createCustomField(data: { label: string; type: string; options?: string[]; isRequired?: boolean }) {

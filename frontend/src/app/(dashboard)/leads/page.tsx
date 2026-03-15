@@ -167,7 +167,9 @@ function LeadsContent() {
 
   const fetchCustomFields = useCallback(async () => {
     try {
-      const data = await api.getCustomFields();
+      // Scope custom fields to the active division (if super admin has one selected)
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const data = await api.getCustomFields(activeDivisionId || undefined);
       setCustomFields(data as CustomField[]);
       // Rebuild columns with custom fields
       setColumns(prev => {

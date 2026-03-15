@@ -78,7 +78,12 @@ export default function LeadDetailPage() {
   const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
 
   useEffect(() => {
-    api.getCustomFields().then(setCustomFields).catch(() => {});
+    // Scope custom fields to the lead's division when available
+    const divisionId = lead?.organizationId;
+    api.getCustomFields(divisionId || undefined).then(setCustomFields).catch(() => {});
+  }, [lead?.organizationId]);
+
+  useEffect(() => {
     api.getPipelineStages()
       .then((data: any) => setPipelineStages(data.stages || data || []))
       .catch(() => setPipelineStages([]));
