@@ -269,6 +269,13 @@ router.get('/custom-fields', async (req, res, next) => {
   try {
     const { divisionId } = req.query;
 
+    // For super admin viewing all divisions (no specific divisionId):
+    // return empty array since custom fields are division-specific and
+    // showing all fields from all division templates is confusing
+    if (!divisionId && req.isSuperAdmin) {
+      return res.json([]);
+    }
+
     // If super admin requests fields for a specific division, scope to that division only
     let orgFilter;
     if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
@@ -281,20 +288,6 @@ router.get('/custom-fields', async (req, res, next) => {
       where: orgFilter,
       orderBy: { order: 'asc' },
     });
-
-    // For super admin viewing all divisions: deduplicate fields by name
-    // so the same template field across divisions appears as one column
-    if (!divisionId && req.isSuperAdmin && fields.length > 0) {
-      const seen = new Map();
-      const deduped = [];
-      for (const field of fields) {
-        if (!seen.has(field.name)) {
-          seen.set(field.name, true);
-          deduped.push(field);
-        }
-      }
-      return res.json(deduped);
-    }
 
     res.json(fields);
   } catch (err) {

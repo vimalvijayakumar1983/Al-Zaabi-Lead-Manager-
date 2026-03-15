@@ -37,7 +37,13 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
   { id: 'actions', label: '', visible: true, sortable: false, width: 'w-10', locked: true },
 ];
 
-const STORAGE_KEY = 'leads-column-config';
+const STORAGE_KEY_PREFIX = 'leads-column-config';
+
+function getStorageKey(): string {
+  if (typeof window === 'undefined') return STORAGE_KEY_PREFIX;
+  const divisionId = localStorage.getItem('activeDivisionId');
+  return divisionId ? `${STORAGE_KEY_PREFIX}-${divisionId}` : STORAGE_KEY_PREFIX;
+}
 
 export function customFieldToColumn(cf: CustomField): ColumnDef {
   return {
@@ -64,7 +70,7 @@ export function loadColumns(customFields?: CustomField[]): ColumnDef[] {
   if (typeof window === 'undefined') return allColumns;
 
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(getStorageKey());
     if (saved) {
       const parsed: ColumnDef[] = JSON.parse(saved);
       const savedIds = new Set(parsed.map((c) => c.id));
@@ -99,7 +105,7 @@ export function loadColumns(customFields?: CustomField[]): ColumnDef[] {
 
 export function saveColumns(columns: ColumnDef[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(columns));
+  localStorage.setItem(getStorageKey(), JSON.stringify(columns));
 }
 
 interface ColumnManagerProps {
