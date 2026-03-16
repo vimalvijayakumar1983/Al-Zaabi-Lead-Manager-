@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { sendText } = require('../services/whatsappService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -104,6 +105,55 @@ router.post('/send-email', validate(z.object({
         userId: req.user.id,
         type: 'EMAIL_SENT',
         description: `Email sent: ${subject}`,
+      },
+    });
+
+    res.status(201).json(communication);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Send WhatsApp ──────────────────────────────────────────────
+router.post('/send-whatsapp', validate(z.object({
+  leadId: z.string().uuid(),
+  body: z.string().min(1).max(4096),
+})), async (req, res, next) => {
+  try {
+    const { leadId, body } = req.validated;
+
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: req.orgId },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const phone = lead.phone?.replace(/\D/g, '');
+    if (!phone) {
+      return res.status(400).json({ error: 'Lead has no phone number' });
+    }
+
+    await sendText(phone, body, req.orgId);
+
+    const communication = await prisma.communication.create({
+      data: {
+        leadId,
+        userId: req.user.id,
+        channel: 'WHATSAPP',
+        direction: 'OUTBOUND',
+        body,
+        metadata: { to: lead.phone },
+      },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId,
+        userId: req.user.id,
+        type: 'WHATSAPP_SENT',
+        description: `WhatsApp sent: ${body.substring(0, 100)}${body.length > 100 ? '...' : ''}`,
       },
     });
 

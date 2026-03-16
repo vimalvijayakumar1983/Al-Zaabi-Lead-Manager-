@@ -26,6 +26,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const { isAuthenticated, isLoading, loadUser, user } = useAuthStore();
+  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
@@ -81,7 +82,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   };
 
   const requiredPermission = routePermissions[basePath];
-  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
   const hasAccess = !requiredPermission || !user || !permissionsLoaded ||
     hasPermission(user.id, user.role, requiredPermission);
 

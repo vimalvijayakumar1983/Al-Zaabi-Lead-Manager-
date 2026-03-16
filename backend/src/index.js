@@ -21,6 +21,7 @@ const automationRoutes = require('./routes/automations');
 const analyticsRoutes = require('./routes/analytics');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
+const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
 
@@ -30,20 +31,27 @@ const server = createServer(app);
 // ─── Global Middleware ───────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use(helmet());
-app.use(cors({
+// CORS: allow all origins in development; in production use FRONTEND_URL whitelist
+const corsOptions = {
+  credentials: true,
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
-    const allowed = config.frontendUrl.split(',').map(u => u.trim().replace(/\/$/, ''));
+    // In development, allow any origin
+    if (config.nodeEnv === 'development') return callback(null, true);
+    const allowed = (config.frontendUrl || '')
+      .split(',')
+      .map(u => u.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+    if (allowed.length === 0) return callback(null, true);
     const normalized = origin.replace(/\/$/, '');
-    // Check exact match or Vercel preview deployments
     if (allowed.includes(normalized) || /\.vercel\.app$/.test(normalized)) {
       return callback(null, true);
     }
     callback(new Error('Not allowed by CORS'));
   },
-  credentials: true,
-}));
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
@@ -74,6 +82,7 @@ app.use('/api/automations', automationRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/whatsapp/webhook', whatsappWebhookRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/settings', settingsRoutes);
 

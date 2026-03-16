@@ -28,6 +28,7 @@ const config = {
     apiUrl: process.env.WHATSAPP_API_URL,
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
   },
 
   // AI

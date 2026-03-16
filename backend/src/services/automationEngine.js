@@ -1,6 +1,7 @@
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 const { notifyUser } = require('../websocket/server');
+const { sendText } = require('./whatsappService');
 
 /**
  * Evaluate and execute automation rules for a given trigger event
@@ -146,10 +147,42 @@ const executeActions = async (actions, context) => {
         logger.info(`[Automation] Send email to ${context.lead.email}: ${action.config.subject}`);
         break;
 
-      case 'send_whatsapp':
-        // Integration point: use WhatsApp service
-        logger.info(`[Automation] Send WhatsApp to ${context.lead.phone}: ${action.config.message}`);
+      case 'send_whatsapp': {
+        const message = action.config?.message;
+        const phone = context.lead.phone?.replace(/\D/g, '');
+        if (!phone) {
+          logger.warn(`[Automation] Send WhatsApp skipped: lead ${context.lead.id} has no phone`);
+          break;
+        }
+        if (!message) {
+          logger.warn('[Automation] Send WhatsApp skipped: no message in action config');
+          break;
+        }
+        try {
+          await sendText(phone, message, context.organizationId);
+          await prisma.communication.create({
+            data: {
+              leadId: context.lead.id,
+              channel: 'WHATSAPP',
+              direction: 'OUTBOUND',
+              body: message,
+              metadata: { automation: true },
+              userId: null,
+            },
+          });
+          await prisma.leadActivity.create({
+            data: {
+              leadId: context.lead.id,
+              userId: null,
+              type: 'WHATSAPP_SENT',
+              description: `WhatsApp (automation): ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`,
+            },
+          });
+        } catch (err) {
+          logger.error(`[Automation] Send WhatsApp failed for lead ${context.lead.id}:`, err.message);
+        }
         break;
+      }
 
       case 'webhook':
         // Integration point: fire webhook
