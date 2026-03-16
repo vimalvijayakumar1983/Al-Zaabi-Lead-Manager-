@@ -18,8 +18,6 @@ const statusColors: Record<string, string> = {
   LOST: 'bg-red-100 text-red-800 border-red-200',
 };
 
-const statusFlow = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST'];
-
 const activityIcons: Record<string, { icon: string; color: string }> = {
   STATUS_CHANGE: { icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15', color: 'text-blue-500 bg-blue-100' },
   STAGE_CHANGE: { icon: 'M9 5l7 7-7 7', color: 'text-purple-500 bg-purple-100' },
@@ -91,9 +89,18 @@ export default function LeadDetailPage() {
 
   useEffect(() => {
     api.getPipelineStages()
-      .then((data: any) => setPipelineStages(data.stages || data || []))
+      .then((data: any) => {
+        const allStages = data.stages || data || [];
+        // Scope to the lead's division if available
+        if (lead?.organizationId) {
+          const divisionStages = allStages.filter((s: any) => s.organizationId === lead.organizationId);
+          setPipelineStages(divisionStages.length > 0 ? divisionStages : allStages);
+        } else {
+          setPipelineStages(allStages);
+        }
+      })
       .catch(() => setPipelineStages([]));
-  }, []);
+  }, [lead?.organizationId]);
 
   // Fetch users for assignment panel
   useEffect(() => {
@@ -124,11 +131,11 @@ export default function LeadDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  const handleStatusChange = async (status: string) => {
+  const handleStageClick = async (stage: { id: string; name: string; color: string; isWonStage?: boolean; isLostStage?: boolean }) => {
     if (!lead) return;
+    if (stage.id === lead.stageId) return;
     try {
-      const updated = await api.updateLead(lead.id, { status });
-      setLead({ ...lead, ...updated, activities: lead.activities, notes: lead.notes, tasks: lead.tasks, communications: lead.communications });
+      await api.moveLead(lead.id, stage.id, 0);
       await refreshLead();
     } catch (err: any) {
       alert(err.message);
@@ -443,7 +450,11 @@ export default function LeadDetailPage() {
     </div>
   );
 
-  const currentStatusIndex = statusFlow.indexOf(lead.status);
+  // Build stage flow from division's pipeline stages (excluding lost stage which is shown separately)
+  const mainStages = pipelineStages.filter((s: any) => !s.isLostStage).sort((a: any, b: any) => a.order - b.order);
+  const lostStage = pipelineStages.find((s: any) => s.isLostStage);
+  const currentStageIndex = mainStages.findIndex((s: any) => s.id === lead.stageId);
+  const isOnLostStage = lostStage && lead.stageId === lostStage.id;
 
   return (
     <div className="space-y-6">
@@ -476,47 +487,58 @@ export default function LeadDetailPage() {
         </div>
       </div>
 
-      {/* Status Progress Bar */}
-      <div className="card p-4">
-        <div className="flex items-center justify-between">
-          {statusFlow.slice(0, -1).map((s, i) => {
-            const isActive = i <= currentStatusIndex && lead.status !== 'LOST';
-            const isCurrent = s === lead.status;
-            return (
-              <div key={s} className="flex items-center flex-1">
-                <button
-                  onClick={() => handleStatusChange(s)}
-                  className={`relative flex flex-col items-center group ${i < statusFlow.length - 2 ? 'flex-1' : ''}`}
-                >
-                  <div className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                    isCurrent ? 'bg-brand-600 text-white ring-4 ring-brand-100 scale-110' :
-                    isActive ? 'bg-brand-500 text-white' :
-                    'bg-gray-200 text-gray-500 group-hover:bg-gray-300'
-                  }`}>
-                    {isActive && !isCurrent ? (
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
-                    ) : (
-                      i + 1
-                    )}
-                  </div>
-                  <span className={`text-[10px] mt-1 font-medium whitespace-nowrap ${isCurrent ? 'text-brand-600' : 'text-gray-500'}`}>
-                    {s.replace(/_/g, ' ')}
-                  </span>
-                </button>
-                {i < statusFlow.length - 2 && (
-                  <div className={`flex-1 h-0.5 mx-1 rounded ${i < currentStatusIndex && lead.status !== 'LOST' ? 'bg-brand-500' : 'bg-gray-200'}`} />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        {lead.status === 'LOST' && (
-          <div className="mt-3 flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
-            This lead is marked as Lost {lead.lostReason ? `— ${lead.lostReason}` : ''}
+      {/* Stage Progress Bar — driven by division's custom pipeline stages */}
+      {mainStages.length > 0 ? (
+        <div className="card p-4">
+          <div className="flex items-center justify-between">
+            {mainStages.map((stage: any, i: number) => {
+              const isActive = i <= currentStageIndex && !isOnLostStage;
+              const isCurrent = stage.id === lead.stageId;
+              return (
+                <div key={stage.id} className="flex items-center flex-1">
+                  <button
+                    onClick={() => handleStageClick(stage)}
+                    className={`relative flex flex-col items-center group ${i < mainStages.length - 1 ? 'flex-1' : ''}`}
+                  >
+                    <div
+                      className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                        isCurrent ? 'text-white ring-4 ring-opacity-30 scale-110' :
+                        isActive ? 'text-white' :
+                        'bg-gray-200 text-gray-500 group-hover:bg-gray-300'
+                      }`}
+                      style={isCurrent ? { backgroundColor: stage.color, boxShadow: `0 0 0 4px ${stage.color}33` } :
+                             isActive ? { backgroundColor: stage.color } : undefined}
+                    >
+                      {isActive && !isCurrent ? (
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                      ) : (
+                        i + 1
+                      )}
+                    </div>
+                    <span className={`text-[10px] mt-1 font-medium whitespace-nowrap ${isCurrent ? 'font-semibold' : 'text-gray-500'}`}
+                      style={isCurrent ? { color: stage.color } : undefined}
+                    >
+                      {stage.name}
+                    </span>
+                  </button>
+                  {i < mainStages.length - 1 && (
+                    <div
+                      className={`flex-1 h-0.5 mx-1 rounded ${i < currentStageIndex && !isOnLostStage ? '' : 'bg-gray-200'}`}
+                      style={i < currentStageIndex && !isOnLostStage ? { backgroundColor: stage.color } : undefined}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
-        )}
-      </div>
+          {isOnLostStage && (
+            <div className="mt-3 flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+              This lead is marked as Lost {lead.lostReason ? `— ${lead.lostReason}` : ''}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Lead Info */}
