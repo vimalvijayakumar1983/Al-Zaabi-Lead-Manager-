@@ -1,6 +1,7 @@
 const { prisma } = require('../config/database');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
+const { broadcastDataChange } = require('../websocket/server');
 
 /**
  * Normalize phone to digits-only (wa_id format). WhatsApp "from" is already digits.
@@ -12,9 +13,11 @@ function normalizePhone(waId) {
 /**
  * Resolve organizationId from webhook phone_number_id.
  * Checks settings.whatsappNumbers[] first, then settings.whatsappPhoneNumberId, then env.
+ * Normalizes all IDs to string for comparison (Meta may send number or string).
  */
 async function resolveOrganizationId(phoneNumberId) {
-  const id = String(phoneNumberId || '');
+  const id = String(phoneNumberId ?? '').trim();
+  if (!id) return null;
 
   const orgs = await prisma.organization.findMany({
     select: { id: true, settings: true },
@@ -25,21 +28,24 @@ async function resolveOrganizationId(phoneNumberId) {
     const numbers = settings.whatsappNumbers;
     if (Array.isArray(numbers)) {
       for (const entry of numbers) {
-        const entryId = entry && String(entry.phoneNumberId || '');
-        if (entryId === id) return org.id;
+        const entryId = String(entry?.phoneNumberId ?? '').trim();
+        if (entryId && entryId === id) return org.id;
       }
     }
-    if (settings.whatsappPhoneNumberId === id) {
-      return org.id;
-    }
+    const singleId = String(settings.whatsappPhoneNumberId ?? '').trim();
+    if (singleId && singleId === id) return org.id;
   }
 
   const globalId = config.whatsapp?.phoneNumberId;
-  if (globalId && String(globalId) === id) {
+  if (globalId && String(globalId).trim() === id) {
     const first = await prisma.organization.findFirst({ select: { id: true } });
     return first?.id ?? null;
   }
 
+  logger.warn('WhatsApp inbound: no organization for phone_number_id', {
+    phoneNumberId: id,
+    hint: 'Add this Phone Number ID in Settings → WhatsApp (admin). Or set WHATSAPP_PHONE_NUMBER_ID in .env.',
+  });
   return null;
 }
 
@@ -86,18 +92,16 @@ async function findOrCreateLead(organizationId, phoneNormalized, contactName) {
 async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, bodyText, contactName }) {
   const organizationId = await resolveOrganizationId(phoneNumberId);
   if (!organizationId) {
-    logger.warn('WhatsApp inbound: no organization for phone_number_id – add this number in Settings → WhatsApp (Phone Number ID)', { phoneNumberId });
     return;
   }
 
   const phoneNormalized = normalizePhone(from);
   if (!phoneNormalized) {
-    logger.warn('WhatsApp inbound: missing from (wa_id)');
+    logger.warn('WhatsApp inbound: missing from (wa_id)', { phoneNumberId });
     return;
   }
 
   const lead = await findOrCreateLead(organizationId, phoneNormalized, contactName);
-
   const body = bodyText || '(no text)';
 
   await prisma.communication.create({
@@ -111,6 +115,8 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
     },
   });
 
+  broadcastDataChange(lead.organizationId, 'communication', 'created', null, { entityId: lead.id }).catch(() => {});
+
   await prisma.leadActivity.create({
     data: {
       leadId: lead.id,
@@ -118,6 +124,13 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
       type: 'WHATSAPP_RECEIVED',
       description: `WhatsApp received: ${body.substring(0, 100)}${body.length > 100 ? '...' : ''}`,
     },
+  });
+
+  logger.info('WhatsApp inbound: lead and message saved', {
+    leadId: lead.id,
+    organizationId: lead.organizationId,
+    from: `+${phoneNormalized}`,
+    messageId,
   });
 }
 

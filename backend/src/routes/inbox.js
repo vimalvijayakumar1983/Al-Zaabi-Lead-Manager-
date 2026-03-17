@@ -248,18 +248,20 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       }
     }
 
-    const [messages, total] = await Promise.all([
+    // Fetch newest-first so page 1 = latest messages; then reverse for chronological display
+    const [rawMessages, total] = await Promise.all([
       prisma.communication.findMany({
         where: msgWhere,
         include: {
           user: { select: { id: true, firstName: true, lastName: true } },
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: 'desc' },
         skip,
         take,
       }),
       prisma.communication.count({ where: msgWhere }),
     ]);
+    const messages = rawMessages.reverse();
 
     // Look up attachment records for this lead to patch URLs
     const leadAttachments = await prisma.attachment.findMany({

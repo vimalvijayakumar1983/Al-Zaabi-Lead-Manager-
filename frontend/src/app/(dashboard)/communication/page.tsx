@@ -269,13 +269,14 @@ function WhatsAppView() {
     }
   }, [newLeadPhone, allChats]);
 
-  const fetchMessages = useCallback(async (leadId: string | null) => {
+  const fetchMessages = useCallback(async (leadId: string | null, options?: { background?: boolean }) => {
+    const background = options?.background === true;
     if (!leadId) {
       setCommunications([]);
       setMessagesLoading(false);
       return;
     }
-    setMessagesLoading(true);
+    if (!background) setMessagesLoading(true);
     try {
       const raw = await api.getCommunications(leadId);
       let list: Communication[] = [];
@@ -291,9 +292,9 @@ function WhatsAppView() {
       );
       setCommunications(whatsappOnly);
     } catch {
-      setCommunications([]);
+      if (!background) setCommunications([]);
     } finally {
-      setMessagesLoading(false);
+      if (!background) setMessagesLoading(false);
     }
   }, []);
 
@@ -301,18 +302,25 @@ function WhatsAppView() {
     fetchAllChats();
   }, []);
 
+  // Initial load when selecting a chat – show loading
   useEffect(() => {
     fetchMessages(selectedLeadId);
   }, [selectedLeadId, fetchMessages]);
 
-  // Poll for new conversations and messages every 15 seconds
+  // Background poll: refresh messages every 1s without loading state (sockets later)
   useEffect(() => {
+    if (!selectedLeadId) return;
     const interval = setInterval(() => {
-      fetchAllChats();
-      if (selectedLeadId) fetchMessages(selectedLeadId);
-    }, 15000);
+      fetchMessages(selectedLeadId, { background: true });
+    }, 1000);
     return () => clearInterval(interval);
-  }, [selectedLeadId, fetchAllChats, fetchMessages]);
+  }, [selectedLeadId, fetchMessages]);
+
+  // Poll conversation list every 15 seconds (background)
+  useEffect(() => {
+    const interval = setInterval(() => fetchAllChats(), 15000);
+    return () => clearInterval(interval);
+  }, [fetchAllChats]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -327,7 +335,7 @@ function WhatsAppView() {
     try {
       await api.sendWhatsApp({ leadId: selectedLeadId, body: messageText.trim() });
       setMessageText('');
-      await Promise.all([fetchMessages(selectedLeadId), fetchAllChats()]);
+      await Promise.all([fetchMessages(selectedLeadId, { background: true }), fetchAllChats()]);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to send');
     } finally {

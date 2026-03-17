@@ -126,7 +126,13 @@ router.post('/', (req, res) => {
             bodyText,
             contactName,
           }).catch((err) => {
-            logger.error('[WhatsApp Webhook] Inbound processing failed', { err: err.message, from, messageId });
+            logger.error('[WhatsApp Webhook] Inbound processing failed', {
+              err: err.message,
+              stack: err.stack,
+              from,
+              messageId,
+              phoneNumberId,
+            });
           });
         });
       }

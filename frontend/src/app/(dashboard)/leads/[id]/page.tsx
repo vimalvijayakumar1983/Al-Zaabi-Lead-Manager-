@@ -346,25 +346,31 @@ export default function LeadDetailPage() {
     }
   };
 
+  // Sort messages chronologically (oldest first) for display
+  const sortMessagesByDate = useCallback((list: any[]) => {
+    return [...list].sort((a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+  }, []);
+
   // Load chat messages when Communications tab is active
   const loadChatMessages = useCallback(async () => {
     if (!id) return;
     setChatLoading(true);
     try {
       const data = await api.getInboxMessages(id, { limit: 100 });
-      setChatMessages(data.messages || []);
+      const list = data.messages || [];
+      setChatMessages(sortMessagesByDate(list));
     } catch {
       // Fallback to lead's communications if inbox API fails
       if (lead?.communications) {
-        setChatMessages([...lead.communications].sort((a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        ));
+        setChatMessages(sortMessagesByDate(lead.communications));
       }
     } finally {
       setChatLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, sortMessagesByDate]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
@@ -374,6 +380,13 @@ export default function LeadDetailPage() {
       loadCallLogs();
     }
   }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
+
+  // Poll for new messages when Communications tab is active (catches new inbound e.g. WhatsApp)
+  useEffect(() => {
+    if (activeTab !== 'communications' || !lead?.id) return;
+    const interval = setInterval(() => loadChatMessages(), 10000);
+    return () => clearInterval(interval);
+  }, [activeTab, lead?.id, loadChatMessages]);
 
   // Real-time sync: refresh lead data when lead or note changes
   useRealtimeSync(['lead', 'note'], useCallback((event) => {

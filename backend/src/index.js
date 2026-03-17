@@ -117,6 +117,7 @@ const routeMounts = [
   ['/analytics', analyticsRoutes],
   ['/users', userRoutes],
   ['/webhooks', webhookRoutes],
+  ['/whatsapp/webhook', whatsappWebhookRoutes],
   ['/import', importRoutes],
   ['/settings', settingsRoutes],
   ['/integrations', integrationsRoutes],
