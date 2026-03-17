@@ -88,13 +88,16 @@ export default function LeadDetailPage() {
   }, [lead?.organizationId]);
 
   useEffect(() => {
-    api.getPipelineStages(lead?.organizationId || undefined)
+    // Use the stage's organizationId to determine which division's pipeline to show,
+    // falling back to the lead's organizationId
+    const stageOrgId = lead?.stage?.organizationId || lead?.organizationId;
+    api.getPipelineStages(stageOrgId || undefined)
       .then((data: any) => {
         const stages = data.stages || data || [];
         setPipelineStages(stages);
       })
       .catch(() => setPipelineStages([]));
-  }, [lead?.organizationId]);
+  }, [lead?.stage?.organizationId, lead?.organizationId]);
 
   // Fetch users for assignment panel
   useEffect(() => {
