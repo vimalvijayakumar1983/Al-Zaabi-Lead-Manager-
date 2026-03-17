@@ -160,8 +160,9 @@ class ApiClient {
   }
 
   // Pipeline
-  async getPipelineStages() {
-    return this.request<any[]>('/pipeline/stages');
+  async getPipelineStages(organizationId?: string) {
+    const query = organizationId ? `?organizationId=${organizationId}` : '';
+    return this.request<any[]>(`/pipeline/stages${query}`);
   }
 
   async moveLead(leadId: string, stageId: string, order: number) {

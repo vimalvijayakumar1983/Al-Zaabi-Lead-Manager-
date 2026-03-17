@@ -88,16 +88,10 @@ export default function LeadDetailPage() {
   }, [lead?.organizationId]);
 
   useEffect(() => {
-    api.getPipelineStages()
+    api.getPipelineStages(lead?.organizationId || undefined)
       .then((data: any) => {
-        const allStages = data.stages || data || [];
-        // Scope to the lead's division if available
-        if (lead?.organizationId) {
-          const divisionStages = allStages.filter((s: any) => s.organizationId === lead.organizationId);
-          setPipelineStages(divisionStages.length > 0 ? divisionStages : allStages);
-        } else {
-          setPipelineStages(allStages);
-        }
+        const stages = data.stages || data || [];
+        setPipelineStages(stages);
       })
       .catch(() => setPipelineStages([]));
   }, [lead?.organizationId]);

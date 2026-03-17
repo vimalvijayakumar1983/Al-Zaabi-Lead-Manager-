@@ -15,8 +15,13 @@ router.get('/stages', async (req, res, next) => {
     const leadFilter = { isArchived: false };
     if (req.isRestrictedRole) leadFilter.assignedToId = req.user.id;
 
+    // Allow filtering to a single division via ?organizationId=
+    const orgFilter = req.query.organizationId && req.orgIds.includes(req.query.organizationId)
+      ? req.query.organizationId
+      : undefined;
+
     const stages = await prisma.pipelineStage.findMany({
-      where: { organizationId: { in: req.orgIds } },
+      where: { organizationId: orgFilter ? orgFilter : { in: req.orgIds } },
       orderBy: { order: 'asc' },
       include: {
         _count: { select: { leads: { where: leadFilter } } },
