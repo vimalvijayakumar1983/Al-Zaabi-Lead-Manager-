@@ -98,8 +98,8 @@ export default function TeamPage() {
   const [customDateTo, setCustomDateTo] = useState('');
   const [performanceFilter, setPerformanceFilter] = useState<string>('all');
   const [tasksFilter, setTasksFilter] = useState<string>('all');
-  const [sortField, setSortField] = useState<SortField>('name');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [sortField, setSortField] = useState<SortField>('lastActive');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   // Multi-tenant state

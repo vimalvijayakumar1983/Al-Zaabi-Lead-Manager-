@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { useNotificationStore } from '@/store/notificationStore';
 import {
   MessageCircle, Send, Search, Phone, Mail, ArrowLeft,
   User, Building2, Star, Clock, ChevronDown, Smile, X, ExternalLink,
@@ -12,7 +13,7 @@ import {
   Archive, Tag, Filter, MoreHorizontal, Bookmark, Pin,
   ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase, Paperclip,
   Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft, FileText, Image, Download,
-  Pencil, Trash2, Ban,
+  Pencil, Trash2, Ban, ArrowUpDown,
 } from 'lucide-react';
 
 // ─── Platform Icons (SVG) ───────────────────────────────────────────
@@ -107,6 +108,7 @@ interface Conversation {
   source: string;
   assignedTo: { id: string; firstName: string; lastName: string } | null;
   messageCount: number;
+  unreadCount: number;
   lastMessage: {
     id: string;
     body: string;
@@ -203,6 +205,7 @@ function InboxContent() {
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showConvoActions, setShowConvoActions] = useState<string | null>(null);
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
+  const [inboxSortBy, setInboxSortBy] = useState<'latest' | 'oldest' | 'unread' | 'name'>('latest');
 
   // Attachments
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -568,12 +571,26 @@ function InboxContent() {
     inputRef.current?.focus();
   };
 
-  // ─── Select conversation ──────────────────────────────────────────
-  const selectConversation = (leadId: string) => {
+  // ─── Select conversation & mark as read ──────────────────────────
+  const { fetchUnreadCount } = useNotificationStore();
+
+  const selectConversation = useCallback((leadId: string) => {
     setSelectedLeadId(leadId);
     setMobileView('chat');
     setShowConvoActions(null);
-  };
+
+    // Find conversation and mark as read if it has unread messages
+    const convo = conversations.find(c => c.leadId === leadId);
+    if (convo && convo.unreadCount > 0) {
+      // Optimistically clear the unread count in the UI
+      setConversations(prev =>
+        prev.map(c => c.leadId === leadId ? { ...c, unreadCount: 0 } : c)
+      );
+      // Mark as read on the server and refresh global notification count
+      api.markConversationRead(leadId).catch(() => {});
+      fetchUnreadCount();
+    }
+  }, [conversations, fetchUnreadCount]);
 
   // ─── Toggle pin ───────────────────────────────────────────────────
   const togglePin = (leadId: string) => {
@@ -585,12 +602,25 @@ function InboxContent() {
     setShowConvoActions(null);
   };
 
-  // ─── Sorted conversations (pinned first) ──────────────────────────
+  // ─── Sorted conversations (pinned first, then by sort preference) ─
   const sortedConversations = useMemo(() => {
-    const pinned = conversations.filter(c => pinnedConvos.has(c.leadId));
-    const rest = conversations.filter(c => !pinnedConvos.has(c.leadId));
+    const sortFn = (a: Conversation, b: Conversation) => {
+      switch (inboxSortBy) {
+        case 'oldest':
+          return new Date(a.lastMessage?.createdAt || 0).getTime() - new Date(b.lastMessage?.createdAt || 0).getTime();
+        case 'unread':
+          return (b.unreadCount || 0) - (a.unreadCount || 0);
+        case 'name':
+          return (a.contactName || '').localeCompare(b.contactName || '');
+        case 'latest':
+        default:
+          return new Date(b.lastMessage?.createdAt || 0).getTime() - new Date(a.lastMessage?.createdAt || 0).getTime();
+      }
+    };
+    const pinned = conversations.filter(c => pinnedConvos.has(c.leadId)).sort(sortFn);
+    const rest = conversations.filter(c => !pinnedConvos.has(c.leadId)).sort(sortFn);
     return [...pinned, ...rest];
-  }, [conversations, pinnedConvos]);
+  }, [conversations, pinnedConvos, inboxSortBy]);
 
   // ─── Time formatting ─────────────────────────────────────────────
   function timeAgo(dateStr: string) {
@@ -729,6 +759,24 @@ function InboxContent() {
               </button>
             ))}
           </div>
+
+          {/* Sort by */}
+          <div className="flex items-center gap-1.5 mt-1.5">
+            <ArrowUpDown className="h-3 w-3 text-text-tertiary" />
+            {(['latest', 'oldest', 'unread', 'name'] as const).map(opt => (
+              <button
+                key={opt}
+                onClick={() => setInboxSortBy(opt)}
+                className={`px-1.5 py-0.5 rounded text-2xs font-medium transition-all ${
+                  inboxSortBy === opt
+                    ? 'bg-brand-50 text-brand-700'
+                    : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary'
+                }`}
+              >
+                {opt === 'latest' ? 'Latest' : opt === 'oldest' ? 'Oldest' : opt === 'unread' ? 'Unread' : 'Name'}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ── Conversation list ─────────────────────────────────────── */}
@@ -797,7 +845,7 @@ function InboxContent() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1.5">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-[13px] font-semibold text-text-primary truncate">
+                            <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
                               {convo.contactName || 'Unknown Contact'}
                             </span>
                             {/* Score badge */}
@@ -822,7 +870,7 @@ function InboxContent() {
                         )}
 
                         {convo.lastMessage && (
-                          <p className="text-xs text-text-secondary truncate mt-0.5 leading-snug">
+                          <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
                             {convo.lastMessage.direction === 'OUTBOUND' && (
                               <span className="text-text-tertiary">
                                 <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
@@ -852,10 +900,16 @@ function InboxContent() {
                             {(convo.leadStatus || 'NEW').replace(/_/g, ' ')}
                           </span>
 
-                          {/* Message count */}
-                          <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
-                            {convo.messageCount}
-                          </span>
+                          {/* Unread count badge or message count */}
+                          {convo.unreadCount > 0 ? (
+                            <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
+                              {convo.unreadCount}
+                            </span>
+                          ) : (
+                            <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
+                              {convo.messageCount}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

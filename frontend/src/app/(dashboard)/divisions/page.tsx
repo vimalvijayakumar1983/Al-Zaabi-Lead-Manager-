@@ -471,7 +471,7 @@ export default function DivisionsPage() {
   const [statusFilter, setStatusFilter] = useState<DivisionStatusFilter>('ALL');
   const [userCountFilter, setUserCountFilter] = useState<DivisionUserCountFilter>('ALL');
   const [leadCountFilter, setLeadCountFilter] = useState<DivisionLeadCountFilter>('ALL');
-  const [sortKey, setSortKey] = useState<DivisionSortKey>('name-asc');
+  const [sortKey, setSortKey] = useState<DivisionSortKey>('newest');
   const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   // Per-division user filters

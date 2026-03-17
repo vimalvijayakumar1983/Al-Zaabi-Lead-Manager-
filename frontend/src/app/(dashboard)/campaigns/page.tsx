@@ -142,6 +142,7 @@ const CAMPAIGN_STATUSES = [
 ] as const;
 
 const SORT_OPTIONS = [
+  { value: 'updated_desc', label: 'Recently Updated' },
   { value: 'name_asc', label: 'Name A → Z' },
   { value: 'name_desc', label: 'Name Z → A' },
   { value: 'budget_desc', label: 'Budget High → Low' },
@@ -149,6 +150,7 @@ const SORT_OPTIONS = [
   { value: 'leads_desc', label: 'Most Leads' },
   { value: 'created_desc', label: 'Newest' },
   { value: 'created_asc', label: 'Oldest' },
+  { value: 'updated_asc', label: 'Least Recently Updated' },
 ] as const;
 
 const DATE_PRESETS = [
@@ -173,7 +175,7 @@ const DEFAULT_FILTER_STATE: FilterState = {
   dateTo: '',
   budgetMin: '',
   budgetMax: '',
-  sort: 'created_desc',
+  sort: 'updated_desc',
 };
 
 const EMPTY_FORM_DATA: CampaignFormData = {

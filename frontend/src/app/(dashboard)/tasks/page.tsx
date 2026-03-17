@@ -238,8 +238,8 @@ export default function TasksPage() {
   const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   // ── Sort & View ───────────────────────────────────────────────────
-  const [sortField, setSortField] = useState<SortField>('dueAt');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortField, setSortField] = useState<SortField>('createdAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
 
   // ── Task Form ─────────────────────────────────────────────────────

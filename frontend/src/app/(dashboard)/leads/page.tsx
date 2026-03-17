@@ -67,7 +67,7 @@ function LeadsContent() {
     }
     return initial;
   });
-  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortBy, setSortBy] = useState('updatedAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [showForm, setShowForm] = useState(false);
