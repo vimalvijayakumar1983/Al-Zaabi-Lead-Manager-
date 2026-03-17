@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
@@ -12,7 +11,6 @@ const features = [
 ];
 
 export default function LoginPage() {
-  const router = useRouter();
   const { login, register } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,7 +45,10 @@ export default function LoginPage() {
           }
         }
       }
-      router.push('/dashboard');
+      // Full page redirect so dashboard loads with token in localStorage and avoids
+      // race with layout's loadUser() which could clear auth on client-side nav
+      window.location.href = '/dashboard';
+      return;
     } catch (err: any) {
       setError(err.message || 'Authentication failed');
     } finally {

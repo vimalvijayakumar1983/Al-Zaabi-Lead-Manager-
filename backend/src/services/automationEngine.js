@@ -247,24 +247,10 @@ const executeSingleAction = async (action, context) => {
       } catch (logErr) {
         logger.warn('Failed to log automation email communication:', logErr.message);
       }
+      break;
+    }
 
-      case 'notify_user':
-        const userId = action.config.userId || context.lead.assignedToId;
-        if (userId) {
-          notifyUser(userId, {
-            type: 'automation_notification',
-            message: action.config.message || 'Automation triggered',
-            lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
-          });
-        }
-        break;
-
-      case 'send_email':
-        // Integration point: use email service
-        logger.info(`[Automation] Send email to ${context.lead.email}: ${action.config.subject}`);
-        break;
-
-      case 'send_whatsapp': {
+    case 'send_whatsapp': {
         const message = action.config?.message;
         const phone = context.lead.phone?.replace(/\D/g, '');
         if (!phone) {
@@ -308,18 +294,6 @@ const executeSingleAction = async (action, context) => {
 
       default:
         logger.warn(`Unknown automation action type: ${action.type}`);
-    }
-
-    case 'send_whatsapp':
-      logger.info(`[Automation] Send WhatsApp to ${context.lead.phone}: ${action.config.message}`);
-      break;
-
-    case 'webhook':
-      logger.info(`[Automation] Fire webhook: ${action.config.url}`);
-      break;
-
-    default:
-      logger.warn(`Unknown automation action type: ${action.type}`);
   }
 };
 

@@ -45,13 +45,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket } =
     useNotificationStore();
 
-  // IMPORTANT: usePermissionsStore must be called here at the top level,
-  // BEFORE any conditional returns. React requires hooks to always be
-  // called in the same order on every render. Moving this after a
-  // conditional return (like `if (!isAuthenticated) return null`) causes
-  // "Rendered fewer hooks than expected" crashes during sign-out.
-  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
-
   // Organization branding state
   const [orgBranding, setOrgBranding] = useState<{
     name: string;
