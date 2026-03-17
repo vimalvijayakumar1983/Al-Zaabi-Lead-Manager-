@@ -654,6 +654,13 @@ class ApiClient {
     });
   }
 
+  async sendWhatsAppTemplate(data: { leadId: string; templateName?: string; languageCode?: string }) {
+    return this.request<any>('/communications/send-whatsapp-template', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   async logCommunication(data: any) {
     return this.request<any>('/communications', { method: 'POST', body: JSON.stringify(data) });
   }

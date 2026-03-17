@@ -87,6 +87,7 @@ function WhatsAppView() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendingTemplate, setSendingTemplate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showCreateLead, setShowCreateLead] = useState(false);
@@ -343,6 +344,19 @@ function WhatsAppView() {
     }
   };
 
+  const handleSendTemplate = async () => {
+    if (!selectedLeadId || sendingTemplate) return;
+    setSendingTemplate(true);
+    try {
+      await api.sendWhatsAppTemplate({ leadId: selectedLeadId });
+      await Promise.all([fetchMessages(selectedLeadId, { background: true }), fetchAllChats()]);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to send template');
+    } finally {
+      setSendingTemplate(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center rounded-xl border border-border-subtle bg-surface-secondary/30">
@@ -563,9 +577,9 @@ function WhatsAppView() {
               </div>
             </div>
 
-            {/* Messages */}
+            {/* Messages (full loading only when no messages yet; refresh in place for real-time feel) */}
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {messagesLoading ? (
+              {messagesLoading && communications.length === 0 ? (
                 <div className="flex flex-col items-center justify-center min-h-[200px]">
                   <div className="animate-spin h-8 w-8 border-2 border-[#25D366] border-t-transparent rounded-full" />
                   <p className="text-sm text-text-tertiary mt-3">Loading messages…</p>
@@ -577,8 +591,16 @@ function WhatsAppView() {
                   </div>
                   <p className="font-medium text-text-primary">No messages yet</p>
                   <p className="text-sm text-text-tertiary mt-1 max-w-xs">
-                    Start the conversation — type your message below and send. The lead will receive it on WhatsApp.
+                    WhatsApp only delivers messages within 24h of the customer&apos;s last message. Send the &quot;Hello World&quot; template first to open the conversation, then you can send normal messages.
                   </p>
+                  <button
+                    type="button"
+                    onClick={handleSendTemplate}
+                    disabled={sendingTemplate}
+                    className="mt-4 px-4 py-2 rounded-lg bg-[#25D366] text-white text-sm font-medium hover:bg-[#20bd5a] disabled:opacity-50"
+                  >
+                    {sendingTemplate ? 'Sending…' : 'Send Hello World template'}
+                  </button>
                   <p className="text-xs text-text-tertiary mt-3">
                     Incoming messages from your business number will appear here automatically.
                   </p>

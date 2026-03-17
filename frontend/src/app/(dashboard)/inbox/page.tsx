@@ -251,10 +251,11 @@ function InboxContent() {
     }
   }, [channelFilter, debouncedSearch, statusFilter]);
 
-  // ─── Load messages for selected lead ──────────────────────────────
-  const loadMessages = useCallback(async (leadId: string) => {
+  // ─── Load messages for selected lead (background = no full loading, feels real-time) ──────────────────────────────
+  const loadMessages = useCallback(async (leadId: string, options?: { background?: boolean }) => {
+    const background = options?.background === true;
     try {
-      setLoadingMessages(true);
+      if (!background) setLoadingMessages(true);
       const res = await api.getInboxMessages(leadId);
       setMessages(res.messages || []);
       setLeadInfo(res.lead || null);
@@ -266,7 +267,7 @@ function InboxContent() {
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {
-      setLoadingMessages(false);
+      if (!background) setLoadingMessages(false);
     }
   }, []);
 
@@ -330,8 +331,8 @@ function InboxContent() {
         }
       }
       await api.updateLead(selectedLeadId, updateData);
-      // Reload full lead info to reflect both stage + status changes
-      await loadMessages(selectedLeadId);
+      // Reload lead info in background so conversation doesn't flash loading
+      await loadMessages(selectedLeadId, { background: true });
       loadConversations();
     } catch (err) {
       console.error('Failed to update stage:', err);
@@ -365,20 +366,19 @@ function InboxContent() {
     }
   }, [messages]);
 
-  // Real-time sync: refresh conversations and messages on communication changes
+  // Real-time sync: refresh conversations and messages on communication changes (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
     loadConversations();
     if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId);
+      loadMessages(selectedLeadId, { background: true });
     }
   }, [loadConversations, loadMessages, selectedLeadId]));
 
-  // Real-time sync: refresh conversations + right panel lead info when leads change
+  // Real-time sync: refresh conversations + right panel lead info when leads change (background)
   useRealtimeSync(['lead'], useCallback((event) => {
     loadConversations();
-    // Refresh right panel lead info if the changed lead is the one we're viewing
     if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId);
+      loadMessages(selectedLeadId, { background: true });
     }
   }, [loadConversations, loadMessages, selectedLeadId]));
 
@@ -389,10 +389,10 @@ function InboxContent() {
     }
   }, [loadNotes, selectedLeadId]));
 
-  // Real-time sync: refresh lead info when tasks change (tasks can affect lead)
+  // Real-time sync: refresh lead info when tasks change (background)
   useRealtimeSync(['task'], useCallback(() => {
     if (selectedLeadId) {
-      loadMessages(selectedLeadId);
+      loadMessages(selectedLeadId, { background: true });
     }
   }, [loadMessages, selectedLeadId]));
 
@@ -436,8 +436,8 @@ function InboxContent() {
           leadId: selectedLeadId, channel, body, platform, files: attachedFiles,
         });
         setAttachedFiles([]);
-        // For attachments, do a full reload since we need attachment metadata
-        await loadMessages(selectedLeadId);
+        // Reload messages in background so conversation doesn't flash loading
+        await loadMessages(selectedLeadId, { background: true });
         loadAttachments(selectedLeadId);
       } else {
         const sent = await api.sendInboxMessage({ leadId: selectedLeadId, channel, body, platform });
@@ -554,7 +554,7 @@ function InboxContent() {
     try {
       await api.updateConversationStatus(selectedLeadId, status);
       setShowStatusDropdown(false);
-      await loadMessages(selectedLeadId);
+      await loadMessages(selectedLeadId, { background: true });
       loadConversations();
     } catch (err) {
       console.error('Failed to update status:', err);
@@ -1010,9 +1010,9 @@ function InboxContent() {
               </div>
             </div>
 
-            {/* ── Messages area ─────────────────────────────────────── */}
+            {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
             <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
-              {loadingMessages ? (
+              {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
                     <div className="h-8 w-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />

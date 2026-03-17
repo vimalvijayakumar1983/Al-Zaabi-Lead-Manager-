@@ -3,7 +3,7 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { sendText } = require('../services/whatsappService');
+const { sendText, sendTemplate } = require('../services/whatsappService');
 const { sendEmail } = require('../services/emailService');
 const { logger } = require('../config/logger');
 
@@ -222,6 +222,56 @@ router.post('/send-whatsapp', validate(z.object({
       }).catch(() => {});
       throw sendErr;
     }
+
+    res.status(201).json(communication);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Send WhatsApp template (e.g. hello_world) to open 24h window ─
+router.post('/send-whatsapp-template', validate(z.object({
+  leadId: z.string().uuid(),
+  templateName: z.string().optional(),
+  languageCode: z.string().optional(),
+})), async (req, res, next) => {
+  try {
+    const { leadId, templateName = 'hello_world', languageCode = 'en_US' } = req.validated;
+
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: req.orgId },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const phone = lead.phone?.replace(/\D/g, '');
+    if (!phone) {
+      return res.status(400).json({ error: 'Lead has no phone number' });
+    }
+
+    await sendTemplate(phone, templateName, languageCode, req.orgId);
+
+    const communication = await prisma.communication.create({
+      data: {
+        leadId,
+        userId: req.user.id,
+        channel: 'WHATSAPP',
+        direction: 'OUTBOUND',
+        body: `[Template: ${templateName}]`,
+        metadata: { to: lead.phone, template: templateName },
+      },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId,
+        userId: req.user.id,
+        type: 'WHATSAPP_SENT',
+        description: `WhatsApp template sent: ${templateName}`,
+      },
+    });
 
     res.status(201).json(communication);
   } catch (err) {

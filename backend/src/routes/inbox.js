@@ -7,6 +7,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
+const { sendText: sendWhatsAppText } = require('../services/whatsappService');
 
 // ─── Multer config for attachments (memory storage for serverless) ──
 
@@ -362,13 +363,26 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
       data: { updatedAt: new Date() },
     });
 
-    // TODO: Dispatch to actual channel APIs (WhatsApp Business API, Facebook Graph API, etc.)
-    // This is where platform-specific sending logic would go:
-    // - WHATSAPP: Call WhatsApp Business API
-    // - FACEBOOK: Call Facebook Messenger Send API
-    // - INSTAGRAM: Call Instagram Messaging API
-    // - EMAIL: Call email service (SendGrid, etc.)
-    // - GOOGLE: Call Google Business Messages API
+    // Dispatch to WhatsApp when channel is WHATSAPP
+    if (channel === 'WHATSAPP') {
+      const phone = lead.phone?.replace(/\D/g, '');
+      if (!phone) {
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: { ...(communication.metadata || {}), sendError: 'Lead has no phone number' } },
+        }).catch(() => {});
+        return res.status(400).json({ error: 'Lead has no phone number' });
+      }
+      try {
+        await sendWhatsAppText(phone, body, lead.organizationId);
+      } catch (sendErr) {
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: { ...(communication.metadata || {}), sendError: sendErr.message } },
+        }).catch(() => {});
+        throw sendErr;
+      }
+    }
 
     const enriched = {
       ...communication,

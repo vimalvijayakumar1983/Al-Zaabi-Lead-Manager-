@@ -353,10 +353,10 @@ export default function LeadDetailPage() {
     );
   }, []);
 
-  // Load chat messages when Communications tab is active
-  const loadChatMessages = useCallback(async () => {
+  // Load chat messages when Communications tab is active (background = no full loading, feels real-time)
+  const loadChatMessages = useCallback(async (background = false) => {
     if (!id) return;
-    setChatLoading(true);
+    if (!background) setChatLoading(true);
     try {
       const data = await api.getInboxMessages(id, { limit: 100 });
       const list = data.messages || [];
@@ -367,24 +367,24 @@ export default function LeadDetailPage() {
         setChatMessages(sortMessagesByDate(lead.communications));
       }
     } finally {
-      setChatLoading(false);
+      if (!background) setChatLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, sortMessagesByDate]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
-      loadChatMessages();
+      loadChatMessages(false); // initial load: show loading
     }
     if (activeTab === 'call_logs' && lead?.id) {
       loadCallLogs();
     }
   }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
 
-  // Poll for new messages when Communications tab is active (catches new inbound e.g. WhatsApp)
+  // Poll for new messages when Communications tab is active (background refresh, no loading overlay)
   useEffect(() => {
     if (activeTab !== 'communications' || !lead?.id) return;
-    const interval = setInterval(() => loadChatMessages(), 10000);
+    const interval = setInterval(() => loadChatMessages(true), 10000);
     return () => clearInterval(interval);
   }, [activeTab, lead?.id, loadChatMessages]);
 
@@ -395,10 +395,10 @@ export default function LeadDetailPage() {
     refreshLead();
   }, [id, refreshLead]));
 
-  // Real-time sync: refresh chat messages when communications change (from other users)
+  // Real-time sync: refresh chat messages when communications change (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
     if (event.entityId && event.entityId !== id) return;
-    loadChatMessages();
+    loadChatMessages(true);
   }, [id, loadChatMessages]));
 
   // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
@@ -1125,9 +1125,9 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
 
-                {/* Messages Area — WhatsApp-like */}
+                {/* Messages Area — WhatsApp-like (full loading only when no messages yet; refresh in place for real-time feel) */}
                 <div ref={chatContainerRef} className="flex-1 overflow-y-auto pr-1 min-h-0 bg-[#f0f2f5] rounded-lg p-3" onClick={() => setMenuOpenMsgId(null)}>
-                  {chatLoading ? (
+                  {chatLoading && chatMessages.length === 0 ? (
                     <div className="flex items-center justify-center h-full">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-600" />
                     </div>

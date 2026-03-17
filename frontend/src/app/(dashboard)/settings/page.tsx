@@ -570,6 +570,7 @@ function WhatsAppSection() {
   const [org, setOrg] = useState<{ settings?: Record<string, unknown> } | null>(null);
   const [numbers, setNumbers] = useState<WhatsAppNumberEntry[]>([]);
   const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+  const [whatsappApiUrl, setWhatsappApiUrl] = useState('');
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
@@ -579,6 +580,7 @@ function WhatsAppSection() {
       setOrg(data);
       const settings = (data.settings as Record<string, unknown>) || {};
       setWebhookVerifyToken((settings.whatsappWebhookVerifyToken as string) || '');
+      setWhatsappApiUrl((settings.whatsappApiUrl as string) || '');
       const raw = settings.whatsappNumbers;
       if (Array.isArray(raw) && raw.length > 0) {
         setNumbers(
@@ -626,6 +628,7 @@ function WhatsAppSection() {
         settings: {
           whatsappNumbers: payload.length > 0 ? payload : [],
           whatsappWebhookVerifyToken: webhookVerifyToken.trim() || undefined,
+          whatsappApiUrl: whatsappApiUrl.trim() || undefined,
         },
       });
       setSuccess(true);
@@ -672,6 +675,17 @@ function WhatsAppSection() {
               onChange={(e) => setWebhookVerifyToken(e.target.value)}
               placeholder="e.g. my-secret-verify-token-123"
             />
+          </div>
+          <div>
+            <label className="label">WhatsApp API URL (optional)</label>
+            <input
+              type="url"
+              className="input font-mono text-sm"
+              value={whatsappApiUrl}
+              onChange={(e) => setWhatsappApiUrl(e.target.value)}
+              placeholder="e.g. https://graph.facebook.com/v22.0"
+            />
+            <p className="text-xs text-text-tertiary mt-1">Leave empty to use server default. Required for sending messages.</p>
           </div>
         </div>
 
