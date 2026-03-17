@@ -212,7 +212,49 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       prisma.lead.count({ where }),
     ]);
 
-    res.json(paginatedResponse(leads, total, page, limit));
+    // Fetch per-channel communication counts and last message info for the current page of leads
+    const leadIds = leads.map(l => l.id);
+    let channelCountsMap = {};
+    let lastMessageMap = {};
+    if (leadIds.length > 0) {
+      const [channelCounts, lastMessages] = await Promise.all([
+        prisma.communication.groupBy({
+          by: ['leadId', 'channel'],
+          where: { leadId: { in: leadIds } },
+          _count: { id: true },
+        }),
+        prisma.communication.findMany({
+          where: { leadId: { in: leadIds }, direction: 'INBOUND' },
+          orderBy: { createdAt: 'desc' },
+          distinct: ['leadId'],
+          select: { leadId: true, channel: true, body: true, createdAt: true },
+        }),
+      ]);
+
+      // Build channel counts map: { leadId: { WHATSAPP: 3, EMAIL: 5, ... } }
+      for (const row of channelCounts) {
+        if (!channelCountsMap[row.leadId]) channelCountsMap[row.leadId] = {};
+        channelCountsMap[row.leadId][row.channel] = row._count.id;
+      }
+
+      // Build last message map: { leadId: { channel, body, createdAt } }
+      for (const msg of lastMessages) {
+        lastMessageMap[msg.leadId] = {
+          channel: msg.channel,
+          body: msg.body?.substring(0, 100) || '',
+          createdAt: msg.createdAt,
+        };
+      }
+    }
+
+    // Enrich leads with channel counts and last message
+    const enrichedLeads = leads.map(lead => ({
+      ...lead,
+      channelCounts: channelCountsMap[lead.id] || {},
+      lastInboundMessage: lastMessageMap[lead.id] || null,
+    }));
+
+    res.json(paginatedResponse(enrichedLeads, total, page, limit));
   } catch (err) {
     next(err);
   }

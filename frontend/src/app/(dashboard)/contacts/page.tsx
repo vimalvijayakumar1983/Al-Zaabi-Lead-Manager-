@@ -50,7 +50,7 @@ export default function ContactsPage() {
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ lifecycle: '', type: '', source: '', ownerId: '', company: '' });
-  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortBy, setSortBy] = useState('updatedAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showForm, setShowForm] = useState(false);

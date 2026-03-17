@@ -960,6 +960,12 @@ class ApiClient {
     return this.request<any[]>(`/inbox/conversations/${leadId}/notes`);
   }
 
+  async markConversationRead(leadId: string) {
+    return this.request<{ success: boolean }>(`/inbox/conversations/${leadId}/read`, {
+      method: 'POST',
+    });
+  }
+
   async editInboxMessage(messageId: string, body: string) {
     return this.request<any>(`/inbox/messages/${messageId}`, {
       method: 'PATCH',

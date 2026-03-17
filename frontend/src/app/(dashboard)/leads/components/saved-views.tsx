@@ -29,6 +29,8 @@ export const SYSTEM_VIEWS: SavedView[] = [
     icon: 'M4 6h16M4 10h16M4 14h16M4 18h16',
     isSystem: true,
     filters: {},
+    sortBy: 'updatedAt',
+    sortOrder: 'desc',
   },
   {
     id: 'my-leads',
