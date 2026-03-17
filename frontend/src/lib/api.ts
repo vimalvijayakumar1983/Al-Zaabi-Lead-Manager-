@@ -331,8 +331,24 @@ class ApiClient {
   }
 
   // Communications
+  async getCommunications(leadId: string) {
+    return this.request<any[]>('/communications/lead/' + leadId);
+  }
+
+  /** Leads that have at least one WhatsApp message, with last message preview (for Communication → WhatsApp tab). */
+  async getWhatsAppConversations() {
+    return this.request<Array<{ lead: { id: string; firstName: string; lastName: string; phone: string | null }; lastMessage: { body: string; createdAt: string; direction: string } }>>('/communications/whatsapp-conversations');
+  }
+
   async sendEmail(data: { leadId: string; to: string; subject: string; body: string }) {
     return this.request<any>('/communications/send-email', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsApp(data: { leadId: string; body: string }) {
+    return this.request<any>('/communications/send-whatsapp', {
       method: 'POST',
       body: JSON.stringify(data),
     });

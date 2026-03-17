@@ -11,7 +11,7 @@ function normalizePhone(waId) {
 
 /**
  * Resolve organizationId from webhook phone_number_id.
- * Option B: find org where settings.whatsappPhoneNumberId matches; else fallback to env + first org.
+ * Checks settings.whatsappNumbers[] first, then settings.whatsappPhoneNumberId, then env.
  */
 async function resolveOrganizationId(phoneNumberId) {
   const id = String(phoneNumberId || '');
@@ -22,6 +22,13 @@ async function resolveOrganizationId(phoneNumberId) {
 
   for (const org of orgs) {
     const settings = typeof org.settings === 'object' ? org.settings : {};
+    const numbers = settings.whatsappNumbers;
+    if (Array.isArray(numbers)) {
+      for (const entry of numbers) {
+        const entryId = entry && String(entry.phoneNumberId || '');
+        if (entryId === id) return org.id;
+      }
+    }
     if (settings.whatsappPhoneNumberId === id) {
       return org.id;
     }
@@ -79,7 +86,7 @@ async function findOrCreateLead(organizationId, phoneNormalized, contactName) {
 async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, bodyText, contactName }) {
   const organizationId = await resolveOrganizationId(phoneNumberId);
   if (!organizationId) {
-    logger.warn('WhatsApp inbound: no organization for phone_number_id', { phoneNumberId });
+    logger.warn('WhatsApp inbound: no organization for phone_number_id – add this number in Settings → WhatsApp (Phone Number ID)', { phoneNumberId });
     return;
   }
 

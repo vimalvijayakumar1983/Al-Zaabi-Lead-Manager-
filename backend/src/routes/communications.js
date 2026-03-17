@@ -17,6 +17,45 @@ const communicationSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+// ─── List WhatsApp conversations (leads with ≥1 WHATSAPP message) ─
+router.get('/whatsapp-conversations', async (req, res, next) => {
+  try {
+    const comms = await prisma.communication.findMany({
+      where: {
+        channel: 'WHATSAPP',
+        lead: { organizationId: req.orgId },
+      },
+      select: {
+        id: true,
+        body: true,
+        direction: true,
+        createdAt: true,
+        leadId: true,
+        lead: {
+          select: { id: true, firstName: true, lastName: true, phone: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    const byLead = new Map();
+    for (const c of comms) {
+      if (!byLead.has(c.leadId)) {
+        byLead.set(c.leadId, {
+          lead: c.lead,
+          lastMessage: { body: c.body, createdAt: c.createdAt, direction: c.direction },
+        });
+      }
+    }
+    const list = Array.from(byLead.values()).sort(
+      (a, b) => new Date(b.lastMessage.createdAt) - new Date(a.lastMessage.createdAt)
+    );
+    res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── List Communications for a Lead ──────────────────────────────
 router.get('/lead/:leadId', async (req, res, next) => {
   try {
@@ -132,8 +171,7 @@ router.post('/send-whatsapp', validate(z.object({
       return res.status(400).json({ error: 'Lead has no phone number' });
     }
 
-    await sendText(phone, body, req.orgId);
-
+    // Save communication first so it always appears in chat; then send via API
     const communication = await prisma.communication.create({
       data: {
         leadId,
@@ -156,6 +194,16 @@ router.post('/send-whatsapp', validate(z.object({
         description: `WhatsApp sent: ${body.substring(0, 100)}${body.length > 100 ? '...' : ''}`,
       },
     });
+
+    try {
+      await sendText(phone, body, req.orgId);
+    } catch (sendErr) {
+      await prisma.communication.update({
+        where: { id: communication.id },
+        data: { metadata: { ...(communication.metadata || {}), sendError: sendErr.message } },
+      }).catch(() => {});
+      throw sendErr;
+    }
 
     res.status(201).json(communication);
   } catch (err) {

@@ -1,3 +1,6 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), override: true });
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -99,6 +102,8 @@ const PORT = config.port || 4000;
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
+  const waOk = config.whatsapp?.token && config.whatsapp?.phoneNumberId;
+  logger.info(`WhatsApp: ${waOk ? 'configured' : 'not configured (missing token or phoneNumberId)'}`);
 });
 
 // Graceful shutdown

@@ -14,6 +14,7 @@ import {
   BarChart3,
   Zap,
   Megaphone,
+  MessageCircle,
   UserCog,
   Search,
   ChevronsLeft,
@@ -30,11 +31,12 @@ const navItems = [
   { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null, permission: 'leads' },
   { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
-  { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
-  { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
-  { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
-  { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
-  { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'leads' },
+  { href: '/communication', label: 'Communication', icon: MessageCircle, shortcut: '5', permission: 'leads' },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '6', permission: 'analytics' },
+  { href: '/automations', label: 'Automations', icon: Zap, shortcut: '7', permission: 'automations' },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '8', permission: 'campaigns' },
+  { href: '/team', label: 'Team', icon: UserCog, shortcut: '9', permission: 'team' },
+  { href: '/import', label: 'Import', icon: Upload, shortcut: '0', permission: 'leads' },
 ];
 
 export default function Sidebar() {

@@ -8,16 +8,17 @@ import {
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
   FileText, Trash2, LogOut, Columns3, Plus, GripVertical,
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
-  AtSign,
+  AtSign, MessageCircle, KeyRound,
 } from 'lucide-react';
 import type { CustomField, FieldType } from '@/types';
 
-type Tab = 'profile' | 'security' | 'organization' | 'customFields' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'whatsapp' | 'customFields' | 'notifications' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
   { key: 'security', label: 'Security', icon: Lock },
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
+  { key: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, adminOnly: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'audit', label: 'Audit Log', icon: Shield, adminOnly: true },
@@ -75,6 +76,7 @@ export default function SettingsPage() {
           {activeTab === 'profile' && <ProfileSection />}
           {activeTab === 'security' && <SecuritySection />}
           {activeTab === 'organization' && isAdmin && <OrganizationSection />}
+          {activeTab === 'whatsapp' && isAdmin && <WhatsAppSection />}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
           {activeTab === 'audit' && isAdmin && <AuditLogSection />}
@@ -541,6 +543,216 @@ function OrganizationSection() {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/* ─── WhatsApp Section (admin only) ───────────────────────────────── */
+type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; token: string };
+
+function WhatsAppSection() {
+  const [org, setOrg] = useState<{ settings?: Record<string, unknown> } | null>(null);
+  const [numbers, setNumbers] = useState<WhatsAppNumberEntry[]>([]);
+  const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.getOrganization().then((data) => {
+      setOrg(data);
+      const settings = (data.settings as Record<string, unknown>) || {};
+      setWebhookVerifyToken((settings.whatsappWebhookVerifyToken as string) || '');
+      const raw = settings.whatsappNumbers;
+      if (Array.isArray(raw) && raw.length > 0) {
+        setNumbers(
+          raw.map((n: Record<string, string>, i: number) => ({
+            id: (n as Record<string, string>).id || `n-${i}`,
+            label: (n as Record<string, string>).label || '',
+            phoneNumberId: (n as Record<string, string>).phoneNumberId || '',
+            token: (n as Record<string, string>).token || '',
+          }))
+        );
+      } else {
+        const singleId = (settings.whatsappPhoneNumberId as string) || '';
+        const singleToken = (settings.whatsappToken as string) || '';
+        if (singleId || singleToken) {
+          setNumbers([{ id: 'n-0', label: '', phoneNumberId: singleId, token: singleToken }]);
+        } else {
+          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
+        }
+      }
+    });
+  }, []);
+
+  const addNumber = () => {
+    setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', token: '' }]);
+  };
+
+  const removeNumber = (id: string) => {
+    setNumbers((prev) => (prev.length <= 1 ? prev : prev.filter((n) => n.id !== id)));
+  };
+
+  const updateNumber = (id: string, field: keyof WhatsAppNumberEntry, value: string) => {
+    setNumbers((prev) => prev.map((n) => (n.id === id ? { ...n, [field]: value } : n)));
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSaving(true);
+    setSuccess(false);
+    try {
+      const payload = numbers
+        .filter((n) => n.phoneNumberId.trim() || n.token.trim())
+        .map(({ label, phoneNumberId, token }) => ({ label: label.trim() || undefined, phoneNumberId: phoneNumberId.trim(), token: token.trim() }));
+      await api.updateOrganization({
+        settings: {
+          whatsappNumbers: payload.length > 0 ? payload : [],
+          whatsappWebhookVerifyToken: webhookVerifyToken.trim() || undefined,
+        },
+      });
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!org) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader title="WhatsApp" description="Connect your WhatsApp Business number" />
+        <div className="card p-6 space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i}><div className="skeleton h-4 w-24 mb-2" /><div className="skeleton h-10 w-full rounded-lg" /></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <SectionHeader
+        title="WhatsApp"
+        description="Add one or more WhatsApp Business numbers. Incoming messages to any of these numbers will create or update leads."
+      />
+
+      <form onSubmit={handleSave} className="space-y-4">
+        <div className="card p-5 space-y-4 border border-border-subtle">
+          <h3 className="text-sm font-semibold text-text-primary">Webhook verify token (Meta)</h3>
+          <p className="text-sm text-text-secondary">
+            Set this in Meta Developer Console → WhatsApp → Configuration → Webhook as the &quot;Verify token&quot;. It must match exactly when Meta verifies your webhook.
+          </p>
+          <div>
+            <label className="label">Verify token</label>
+            <input
+              type="text"
+              className="input font-mono text-sm"
+              value={webhookVerifyToken}
+              onChange={(e) => setWebhookVerifyToken(e.target.value)}
+              placeholder="e.g. my-secret-verify-token-123-asdgasjhdgajshgd"
+            />
+          </div>
+        </div>
+
+        {numbers.map((entry) => (
+          <div key={entry.id} className="card p-5 space-y-4 border border-border-subtle">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-text-primary">
+                Number {numbers.indexOf(entry) + 1}
+                {entry.label ? ` · ${entry.label}` : ''}
+              </span>
+              {numbers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeNumber(entry.id)}
+                  className="text-sm text-red-600 hover:text-red-700"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            <div>
+              <label className="label">Label (optional)</label>
+              <input
+                type="text"
+                className="input"
+                value={entry.label}
+                onChange={(e) => updateNumber(entry.id, 'label', e.target.value)}
+                placeholder="e.g. Sales, Support"
+              />
+            </div>
+            <div>
+              <label className="label">Phone Number ID</label>
+              <div className="relative">
+                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                <input
+                  type="text"
+                  className="input pl-10 font-mono text-sm"
+                  value={entry.phoneNumberId}
+                  onChange={(e) => updateNumber(entry.id, 'phoneNumberId', e.target.value)}
+                  placeholder="e.g. 1010197338847846"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="label">Access Token</label>
+              <div className="relative">
+                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                <input
+                  type="password"
+                  className="input pl-10 font-mono text-sm"
+                  value={entry.token}
+                  onChange={(e) => updateNumber(entry.id, 'token', e.target.value)}
+                  placeholder="Paste your WhatsApp access token"
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+
+        <button type="button" onClick={addNumber} className="btn-secondary w-full gap-2">
+          <MessageCircle className="h-4 w-4" />
+          Add another number
+        </button>
+
+        {error && (
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          {success && (
+            <div className="flex items-center gap-1.5 text-sm text-emerald-600 animate-fade-in">
+              <Check className="h-4 w-4" />
+              WhatsApp credentials saved
+            </div>
+          )}
+          {!success && <div />}
+          <button type="submit" disabled={saving} className="btn-primary">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </form>
+
+      <div className="card p-5 bg-surface-secondary/50">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
+          <MessageCircle className="h-4 w-4 text-text-tertiary" />
+          How to get these
+        </h3>
+        <ul className="text-sm text-text-secondary space-y-1.5 list-disc list-inside">
+          <li>Go to <a href="https://developers.facebook.com" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">developers.facebook.com</a> → your app → WhatsApp → API setup</li>
+          <li><strong>Phone number ID</strong> is shown next to your WhatsApp Business number</li>
+          <li><strong>Access token</strong> is under “Temporary access token” (testing) or create a system user token for production</li>
+          <li>You can add multiple numbers; incoming messages to any of them will be linked to this organization.</li>
+        </ul>
+      </div>
     </div>
   );
 }

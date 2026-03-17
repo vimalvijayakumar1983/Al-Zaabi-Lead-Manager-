@@ -1,31 +1,67 @@
 const { Router } = require('express');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
+const { prisma } = require('../config/database');
 const { processInboundWhatsAppMessage } = require('../services/whatsappInbound');
 
 const router = Router();
 
+/** Check if token is valid: env WHATSAPP_WEBHOOK_VERIFY_TOKEN or any org's settings.whatsappWebhookVerifyToken */
+async function isVerifyTokenValid(token) {
+  if (!token || typeof token !== 'string') return false;
+  if (config.whatsapp?.webhookVerifyToken && token === config.whatsapp.webhookVerifyToken) return true;
+  const orgs = await prisma.organization.findMany({ select: { settings: true } });
+  for (const org of orgs) {
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    if (settings.whatsappWebhookVerifyToken === token) return true;
+  }
+  return false;
+}
+
 // ─── GET: Webhook verification (Meta subscribes to webhook) ───────
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === config.whatsapp?.webhookVerifyToken) {
-    logger.info('WhatsApp webhook verified');
+  const valid = mode === 'subscribe' && (await isVerifyTokenValid(token));
+  logger.info('[WhatsApp Webhook] GET verification', {
+    mode,
+    challengeLength: challenge ? String(challenge).length : 0,
+    tokenLength: token ? String(token).length : 0,
+    tokenMatch: valid,
+    envTokenSet: !!config.whatsapp?.webhookVerifyToken,
+  });
+
+  if (valid) {
+    logger.info('[WhatsApp Webhook] Verified successfully');
     res.status(200).send(challenge);
   } else {
-    logger.warn('WhatsApp webhook verification failed', { mode, tokenPresent: !!token });
+    logger.warn('[WhatsApp Webhook] Verification failed – token must match env WHATSAPP_WEBHOOK_VERIFY_TOKEN or Settings → WhatsApp → Verify token', {
+      mode,
+      tokenPresent: !!token,
+      tokenLength: token ? String(token).length : 0,
+    });
     res.status(403).send('Forbidden');
   }
 });
 
 // ─── POST: Incoming events from Meta ──────────────────────────────
 router.post('/', (req, res) => {
+  const body = req.body;
+
+  logger.info('[WhatsApp Webhook] POST received', {
+    object: body?.object,
+    entryCount: Array.isArray(body?.entry) ? body.entry.length : 0,
+    hasBody: !!body,
+  });
+
   res.status(200).send('OK');
 
-  const body = req.body;
   if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
+    if (body && body.object !== 'whatsapp_business_account') {
+      logger.debug('[WhatsApp Webhook] Ignored payload (not whatsapp_business_account)', { object: body?.object });
+    }
     return;
   }
 
@@ -36,11 +72,23 @@ router.post('/', (req, res) => {
       if (!value || !value.metadata) continue;
 
       const phoneNumberId = value.metadata.phone_number_id;
+      const displayPhoneNumber = value.metadata.display_phone_number;
       const messages = value.messages || [];
+      const statuses = value.statuses || [];
+      const errors = value.errors || [];
+
+      logger.info('[WhatsApp Webhook] Entry', {
+        phoneNumberId,
+        displayPhoneNumber,
+        messageCount: messages.length,
+        statusCount: statuses.length,
+        errorCount: errors.length,
+      });
 
       for (const msg of messages) {
         const from = msg.from;
         const messageId = msg.id;
+        const msgType = msg.type;
 
         let bodyText = '';
         if (msg.type === 'text' && msg.text) {
@@ -59,6 +107,17 @@ router.post('/', (req, res) => {
 
         const contactName = value.contacts?.[0]?.profile?.name;
 
+        logger.info('[WhatsApp Webhook] Incoming message', {
+          phoneNumberId,
+          displayPhoneNumber,
+          from,
+          fromFormatted: from ? `+${from}` : undefined,
+          messageId,
+          type: msgType,
+          bodyPreview: bodyText ? bodyText.substring(0, 80) + (bodyText.length > 80 ? '...' : '') : '(empty)',
+          contactName,
+        });
+
         setImmediate(() => {
           processInboundWhatsAppMessage({
             phoneNumberId,
@@ -67,9 +126,16 @@ router.post('/', (req, res) => {
             bodyText,
             contactName,
           }).catch((err) => {
-            logger.error('WhatsApp inbound processing failed', { err: err.message, from, messageId });
+            logger.error('[WhatsApp Webhook] Inbound processing failed', { err: err.message, from, messageId });
           });
         });
+      }
+
+      if (statuses.length > 0) {
+        logger.info('[WhatsApp Webhook] Status updates', { phoneNumberId, statuses: statuses.map((s) => ({ id: s.id, status: s.status, recipient_id: s.recipient_id })) });
+      }
+      if (errors.length > 0) {
+        logger.warn('[WhatsApp Webhook] Errors in payload', { phoneNumberId, errors });
       }
     }
   }

@@ -3,11 +3,11 @@ const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
 
 /**
- * Resolve phoneNumberId and token for sending. Uses org settings if provided and set.
+ * Resolve phoneNumberId and token for sending. Uses org settings (whatsappNumbers[] or single) or env.
  */
 async function resolveSendConfig(organizationId) {
-  const globalId = config.whatsapp?.phoneNumberId;
-  const globalToken = config.whatsapp?.token;
+  const globalId = config.whatsapp?.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const globalToken = config.whatsapp?.token || process.env.WHATSAPP_TOKEN;
 
   if (organizationId) {
     const org = await prisma.organization.findUnique({
@@ -15,6 +15,15 @@ async function resolveSendConfig(organizationId) {
       select: { settings: true },
     });
     const settings = typeof org?.settings === 'object' ? org.settings : {};
+    const numbers = settings.whatsappNumbers;
+    if (Array.isArray(numbers) && numbers.length > 0) {
+      const first = numbers[0];
+      const id = first && first.phoneNumberId;
+      const token = first && first.token;
+      if (id && token) {
+        return { phoneNumberId: id, token };
+      }
+    }
     const orgPhoneNumberId = settings.whatsappPhoneNumberId;
     const orgToken = settings.whatsappToken;
     return {
@@ -45,7 +54,7 @@ async function sendText(to, body, organizationId = null) {
     throw err;
   }
 
-  const apiUrl = config.whatsapp?.apiUrl?.replace(/\/$/, '');
+  const apiUrl = (config.whatsapp?.apiUrl || process.env.WHATSAPP_API_URL)?.replace(/\/$/, '');
   if (!apiUrl) {
     const err = new Error('WhatsApp not configured: missing WHATSAPP_API_URL');
     err.statusCode = 503;
