@@ -143,9 +143,18 @@ function LeadsContent() {
       if (filters.conversionMin) params.conversionMin = filters.conversionMin;
       if (filters.conversionMax) params.conversionMax = filters.conversionMax;
       if (filters.stageId) params.stageId = filters.stageId;
-      const res: PaginatedResponse<Lead> = await api.getLeads(params);
-      setLeads(res.data);
-      setPagination(res.pagination as any);
+      const res = await api.getLeads(params) as any;
+      const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setLeads(leadsData);
+      if (res?.pagination) {
+        setPagination(prev => ({
+          ...prev,
+          total: res.pagination.total ?? prev.total,
+          page: res.pagination.page ?? prev.page,
+          limit: res.pagination.limit ?? prev.limit,
+          totalPages: res.pagination.totalPages ?? prev.totalPages,
+        }));
+      }
     } catch (err: any) {
       console.error('Failed to fetch leads:', err);
       setError(err.message || 'Failed to load leads. Please check that the backend server is running.');
@@ -446,7 +455,7 @@ function LeadsContent() {
         return (
           <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
             <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
-              {lead.firstName[0]}{lead.lastName[0]}
+              {(lead.firstName || '?')[0]}{(lead.lastName || '?')[0]}
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{lead.firstName} {lead.lastName}</p>
@@ -900,7 +909,7 @@ function LeadsContent() {
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
-                              {lead.firstName[0]}{lead.lastName[0]}
+                              {(lead.firstName || '?')[0]}{(lead.lastName || '?')[0]}
                             </div>
                             <div>
                               <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{lead.firstName} {lead.lastName}</p>

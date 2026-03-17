@@ -50,7 +50,7 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, E
           <p className="text-sm text-text-secondary mb-4 text-center max-w-md">
             An unexpected error occurred while loading this page. Please try refreshing.
           </p>
-          {process.env.NODE_ENV === 'development' && this.state.error && (
+          {this.state.error && (
             <pre className="text-xs text-red-600 bg-red-50 rounded-lg p-3 mb-4 max-w-lg overflow-auto">
               {this.state.error.message}
             </pre>
