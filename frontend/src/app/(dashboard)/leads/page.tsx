@@ -53,6 +53,7 @@ function LeadsContent() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 1 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<FilterState>(() => {
     // Initialize filters from URL params (for drill-down from analytics)
     const initial = { ...emptyFilters };
@@ -104,6 +105,7 @@ function LeadsContent() {
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const params: Record<string, string | number> = {
         page: pagination.page,
@@ -119,6 +121,8 @@ function LeadsContent() {
       if (filters.source) params.source = filters.source;
       if (filters.assignedToId === '__unassigned__') {
         params.assignedToId = 'unassigned';
+      } else if (filters.assignedToId === '__current_user__' && currentUser) {
+        params.assignedToId = currentUser.id;
       } else if (filters.assignedToId && filters.assignedToId !== '__current_user__') {
         params.assignedToId = filters.assignedToId;
       }
@@ -142,10 +146,13 @@ function LeadsContent() {
       const res: PaginatedResponse<Lead> = await api.getLeads(params);
       setLeads(res.data);
       setPagination(res.pagination as any);
+    } catch (err: any) {
+      console.error('Failed to fetch leads:', err);
+      setError(err.message || 'Failed to load leads. Please check that the backend server is running.');
     } finally {
       setLoading(false);
     }
-  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder]);
+  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -189,6 +196,7 @@ function LeadsContent() {
     } catch { /* non-critical */ }
   }, []);
 
+  useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
 
@@ -831,6 +839,17 @@ function LeadsContent() {
                           <span className="text-sm text-text-tertiary">Loading leads...</span>
                         </div>
                       </td></tr>
+                    ) : error ? (
+                      <tr><td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
+                        <div className="flex flex-col items-center gap-3 py-8">
+                          <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center">
+                            <svg className="h-6 w-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
+                          </div>
+                          <p className="text-sm font-medium text-red-800">Failed to load leads</p>
+                          <p className="text-xs text-red-600 max-w-md">{error}</p>
+                          <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-2">Retry</button>
+                        </div>
+                      </td></tr>
                     ) : leads.length === 0 ? (
                       <tr><td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
                         <div className="empty-state py-8">
@@ -863,6 +882,12 @@ function LeadsContent() {
             <div>
               {loading ? (
                 <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" /></div>
+              ) : error ? (
+                <div className="card p-12 text-center">
+                  <p className="text-sm font-medium text-red-800">Failed to load leads</p>
+                  <p className="text-xs text-red-600 mt-1">{error}</p>
+                  <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-3">Retry</button>
+                </div>
               ) : leads.length === 0 ? (
                 <div className="card p-12 text-center">
                   <p className="text-sm text-gray-500">No leads found</p>

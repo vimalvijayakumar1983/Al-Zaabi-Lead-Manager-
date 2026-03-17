@@ -24,7 +24,7 @@ const createLeadSchema = z.object({
   company: z.string().optional().nullable(),
   jobTitle: z.string().optional().nullable(),
   source: z.enum([
-    'WEBSITE_FORM', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+    'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
     'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
   ]).optional(),
   budget: z.number().optional().nullable(),
@@ -106,7 +106,13 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         where.source = source;
       }
     }
-    if (assignedToId && !req.isRestrictedRole) where.assignedToId = assignedToId;
+    if (assignedToId && !req.isRestrictedRole) {
+      if (assignedToId === 'unassigned') {
+        where.assignedToId = null;
+      } else {
+        where.assignedToId = assignedToId;
+      }
+    }
     if (stageId) {
       // Support comma-separated stage IDs for multi-org drill-down
       const ids = stageId.split(',').filter(Boolean);
