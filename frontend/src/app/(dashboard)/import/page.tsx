@@ -603,6 +603,7 @@ function ImportWizard() {
                   <select value={defaultSource} onChange={(e) => setDefaultSource(e.target.value)} className="input">
                     <option value="">CSV Import (default)</option>
                     <option value="WEBSITE_FORM">Website Form</option>
+                    <option value="LIVE_CHAT">Live Chat Widget</option>
                     <option value="FACEBOOK_ADS">Facebook Ads</option>
                     <option value="GOOGLE_ADS">Google Ads</option>
                     <option value="REFERRAL">Referral</option>
@@ -909,6 +910,7 @@ function ExportTab() {
               >
                 <option value="">All Sources</option>
                 <option value="WEBSITE_FORM">Website Form</option>
+                <option value="LIVE_CHAT">Live Chat Widget</option>
                 <option value="FACEBOOK_ADS">Facebook Ads</option>
                 <option value="GOOGLE_ADS">Google Ads</option>
                 <option value="CSV_IMPORT">CSV Import</option>

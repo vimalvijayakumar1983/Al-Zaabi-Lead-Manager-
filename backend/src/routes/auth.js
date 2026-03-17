@@ -22,7 +22,18 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-// ─── Register (creates org + admin user) ─────────────────────────
+// Default pipeline stages used for new divisions
+const DEFAULT_PIPELINE_STAGES = [
+  { name: 'New Lead', order: 0, color: '#6366f1', isDefault: true },
+  { name: 'Contacted', order: 1, color: '#3b82f6' },
+  { name: 'Qualified', order: 2, color: '#06b6d4' },
+  { name: 'Proposal Sent', order: 3, color: '#f59e0b' },
+  { name: 'Negotiation', order: 4, color: '#f97316' },
+  { name: 'Won', order: 5, color: '#22c55e', isWonStage: true },
+  { name: 'Lost', order: 6, color: '#ef4444', isLostStage: true },
+];
+
+// ─── Register (creates group org + default division + super admin user) ───
 router.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
     const { email, password, firstName, lastName, organizationName } = req.validated;
@@ -35,39 +46,40 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     const result = await prisma.$transaction(async (tx) => {
+      // Create group organization
       const org = await tx.organization.create({
-        data: { name: organizationName },
+        data: { name: organizationName, type: 'GROUP' },
       });
 
-      // Create default pipeline stages
-      const defaultStages = [
-        { name: 'New Lead', order: 0, color: '#6366f1', isDefault: true },
-        { name: 'Contacted', order: 1, color: '#3b82f6' },
-        { name: 'Qualified', order: 2, color: '#06b6d4' },
-        { name: 'Proposal Sent', order: 3, color: '#f59e0b' },
-        { name: 'Negotiation', order: 4, color: '#f97316' },
-        { name: 'Won', order: 5, color: '#22c55e', isWonStage: true },
-        { name: 'Lost', order: 6, color: '#ef4444', isLostStage: true },
-      ];
+      // Create default "General" division under the group
+      const division = await tx.organization.create({
+        data: {
+          name: 'General',
+          type: 'DIVISION',
+          parentId: org.id,
+        },
+      });
 
-      for (const stage of defaultStages) {
+      // Create default pipeline stages for the division
+      for (const stage of DEFAULT_PIPELINE_STAGES) {
         await tx.pipelineStage.create({
-          data: { ...stage, organizationId: org.id },
+          data: { ...stage, organizationId: division.id },
         });
       }
 
+      // Create SUPER_ADMIN user attached to the group org
       const user = await tx.user.create({
         data: {
           email,
           passwordHash,
           firstName,
           lastName,
-          role: 'ADMIN',
+          role: 'SUPER_ADMIN',
           organizationId: org.id,
         },
       });
 
-      return { org, user };
+      return { org, division, user };
     });
 
     const token = jwt.sign({ userId: result.user.id }, config.jwtSecret, {
@@ -84,7 +96,21 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
         role: result.user.role,
         organizationId: result.org.id,
         organizationName: result.org.name,
+        organization: {
+          id: result.org.id,
+          name: result.org.name,
+          type: result.org.type,
+        },
       },
+      divisions: [
+        {
+          id: result.division.id,
+          name: result.division.name,
+          type: result.division.type,
+          parentId: result.division.parentId,
+          _count: { users: 0, leads: 0 },
+        },
+      ],
     });
   } catch (err) {
     next(err);
@@ -98,7 +124,20 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { email },
-      include: { organization: { select: { name: true } } },
+      include: {
+        organization: {
+          select: {
+            id: true,
+            name: true,
+            tradeName: true,
+            logo: true,
+            primaryColor: true,
+            secondaryColor: true,
+            type: true,
+            parentId: true,
+          },
+        },
+      },
     });
 
     if (!user || !user.isActive) {
@@ -119,7 +158,7 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
       expiresIn: config.jwtExpiresIn,
     });
 
-    res.json({
+    const response = {
       token,
       user: {
         id: user.id,
@@ -129,8 +168,31 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
         role: user.role,
         organizationId: user.organizationId,
         organizationName: user.organization.name,
+        organization: user.organization,
       },
-    });
+    };
+
+    // For SUPER_ADMIN, include divisions
+    if (user.role === 'SUPER_ADMIN') {
+      const divisions = await prisma.organization.findMany({
+        where: { parentId: user.organizationId },
+        select: {
+          id: true,
+          name: true,
+          tradeName: true,
+          logo: true,
+          primaryColor: true,
+          secondaryColor: true,
+          type: true,
+          parentId: true,
+          _count: { select: { users: true, leads: true } },
+        },
+        orderBy: { name: 'asc' },
+      });
+      response.divisions = divisions;
+    }
+
+    res.json(response);
   } catch (err) {
     next(err);
   }
@@ -150,10 +212,45 @@ router.get('/me', authenticate, async (req, res, next) => {
         avatar: true,
         phone: true,
         organizationId: true,
-        organization: { select: { name: true, plan: true } },
+        organization: {
+          select: {
+            id: true,
+            name: true,
+            tradeName: true,
+            logo: true,
+            primaryColor: true,
+            secondaryColor: true,
+            type: true,
+            parentId: true,
+            plan: true,
+          },
+        },
       },
     });
-    res.json(user);
+
+    const response = { ...user };
+
+    // For SUPER_ADMIN, include divisions
+    if (user.role === 'SUPER_ADMIN') {
+      const divisions = await prisma.organization.findMany({
+        where: { parentId: user.organizationId },
+        select: {
+          id: true,
+          name: true,
+          tradeName: true,
+          logo: true,
+          primaryColor: true,
+          secondaryColor: true,
+          type: true,
+          parentId: true,
+          _count: { select: { users: true, leads: true } },
+        },
+        orderBy: { name: 'asc' },
+      });
+      response.divisions = divisions;
+    }
+
+    res.json(response);
   } catch (err) {
     next(err);
   }

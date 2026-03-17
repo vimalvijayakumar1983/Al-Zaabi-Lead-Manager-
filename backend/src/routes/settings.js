@@ -18,7 +18,11 @@ router.get('/profile', async (req, res, next) => {
         role: true, avatar: true, phone: true, isActive: true,
         lastLoginAt: true, createdAt: true, updatedAt: true,
         organization: {
-          select: { id: true, name: true, plan: true },
+          select: {
+            id: true, name: true, tradeName: true, logo: true,
+            primaryColor: true, secondaryColor: true, type: true,
+            parentId: true, plan: true,
+          },
         },
         _count: { select: { assignedLeads: true, tasks: true } },
       },
@@ -87,7 +91,9 @@ router.get('/organization', async (req, res, next) => {
     const org = await prisma.organization.findUnique({
       where: { id: req.orgId },
       select: {
-        id: true, name: true, domain: true, plan: true,
+        id: true, name: true, tradeName: true, logo: true,
+        primaryColor: true, secondaryColor: true, type: true,
+        parentId: true, domain: true, plan: true,
         settings: true, createdAt: true, updatedAt: true,
         _count: {
           select: { users: true, leads: true, campaigns: true, automationRules: true },
@@ -103,6 +109,10 @@ router.get('/organization', async (req, res, next) => {
 // ─── Update Organization ────────────────────────────────────────
 router.put('/organization', authorize('ADMIN'), validate(z.object({
   name: z.string().min(1).max(200).optional(),
+  tradeName: z.string().max(200).optional().nullable(),
+  logo: z.string().optional().nullable(),
+  primaryColor: z.string().optional(),
+  secondaryColor: z.string().optional(),
   domain: z.string().max(200).optional().nullable(),
   settings: z.record(z.any()).optional(),
 })), async (req, res, next) => {
@@ -123,8 +133,9 @@ router.put('/organization', authorize('ADMIN'), validate(z.object({
       where: { id: req.orgId },
       data,
       select: {
-        id: true, name: true, domain: true, plan: true,
-        settings: true, updatedAt: true,
+        id: true, name: true, tradeName: true, logo: true,
+        primaryColor: true, secondaryColor: true, type: true,
+        domain: true, plan: true, settings: true, updatedAt: true,
       },
     });
     res.json(org);
@@ -200,7 +211,7 @@ router.put('/notifications', validate(z.object({
 router.get('/audit-log', authorize('ADMIN'), async (req, res, next) => {
   try {
     const logs = await prisma.auditLog.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: { in: req.orgIds } },
       select: {
         id: true, action: true, entity: true, entityId: true,
         createdAt: true, ipAddress: true,
@@ -230,10 +241,10 @@ router.delete('/account', validate(z.object({
       return res.status(400).json({ error: 'Password is incorrect' });
     }
 
-    // Don't allow last admin to delete account
-    if (user.role === 'ADMIN') {
+    // Don't allow last admin/super_admin to delete account
+    if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') {
       const adminCount = await prisma.user.count({
-        where: { organizationId: req.orgId, role: 'ADMIN', isActive: true },
+        where: { organizationId: req.orgId, role: { in: ['ADMIN', 'SUPER_ADMIN'] }, isActive: true },
       });
       if (adminCount <= 1) {
         return res.status(400).json({ error: 'Cannot delete the last admin account. Transfer admin role first.' });
@@ -256,10 +267,28 @@ router.delete('/account', validate(z.object({
 // List custom fields
 router.get('/custom-fields', async (req, res, next) => {
   try {
+    const { divisionId } = req.query;
+
+    // For super admin viewing all divisions (no specific divisionId):
+    // return empty array since custom fields are division-specific and
+    // showing all fields from all division templates is confusing
+    if (!divisionId && req.isSuperAdmin) {
+      return res.json([]);
+    }
+
+    // If super admin requests fields for a specific division, scope to that division only
+    let orgFilter;
+    if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
+      orgFilter = { organizationId: divisionId };
+    } else {
+      orgFilter = { organizationId: { in: req.orgIds } };
+    }
+
     const fields = await prisma.customField.findMany({
-      where: { organizationId: req.orgId },
+      where: orgFilter,
       orderBy: { order: 'asc' },
     });
+
     res.json(fields);
   } catch (err) {
     next(err);
@@ -272,9 +301,11 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
   type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']),
   options: z.array(z.string()).optional(),
   isRequired: z.boolean().optional(),
+  divisionId: z.string().uuid().optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const { label, type, options, isRequired } = req.validated;
+    const { label, type, options, isRequired, divisionId } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
 
     // Generate name from label (e.g. "Company Size" -> "companySize")
     const name = label
@@ -285,7 +316,7 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
 
     // Get next order number
     const maxOrder = await prisma.customField.aggregate({
-      where: { organizationId: req.orgId },
+      where: { organizationId: targetOrgId },
       _max: { order: true },
     });
 
@@ -297,7 +328,7 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
         options: (type === 'SELECT' || type === 'MULTI_SELECT') ? (options || []) : null,
         isRequired: isRequired || false,
         order: (maxOrder._max.order ?? -1) + 1,
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
     });
 
@@ -319,7 +350,7 @@ router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
 })), async (req, res, next) => {
   try {
     const existing = await prisma.customField.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!existing) {
       return res.status(404).json({ error: 'Custom field not found' });
@@ -357,7 +388,7 @@ router.put('/custom-fields-reorder', authorize('ADMIN'), validate(z.object({
     const { fieldIds } = req.validated;
     const updates = fieldIds.map((id, index) =>
       prisma.customField.updateMany({
-        where: { id, organizationId: req.orgId },
+        where: { id, organizationId: { in: req.orgIds } },
         data: { order: index },
       })
     );
@@ -372,7 +403,7 @@ router.put('/custom-fields-reorder', authorize('ADMIN'), validate(z.object({
 router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) => {
   try {
     const existing = await prisma.customField.findFirst({
-      where: { id: req.params.id, organizationId: req.orgId },
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
     if (!existing) {
       return res.status(404).json({ error: 'Custom field not found' });
@@ -382,7 +413,7 @@ router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) =
 
     // Clean up: remove this field's data from all leads' customData
     const leads = await prisma.lead.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: existing.organizationId },
       select: { id: true, customData: true },
     });
 
@@ -402,6 +433,285 @@ router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) =
     }
 
     res.json({ message: 'Custom field deleted' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Email Configuration ─────────────────────────────────────
+
+const { testConnection, sendTestEmail } = require('../services/emailService');
+
+// Get email config
+router.get('/email', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const emailConfig = settings.emailConfig || {};
+
+    // Never return the password in plain text
+    const sanitized = { ...emailConfig };
+    if (sanitized.smtpPass) {
+      sanitized.smtpPass = '••••••••';
+      sanitized.hasPassword = true;
+    }
+
+    res.json(sanitized);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Save email config
+router.put('/email', authorize('ADMIN'), validate(z.object({
+  smtpHost: z.string().min(1),
+  smtpPort: z.coerce.number().int().min(1).max(65535),
+  smtpUser: z.string().min(1),
+  smtpPass: z.string().optional(),
+  fromName: z.string().min(1).max(200),
+  fromEmail: z.string().email(),
+  replyTo: z.string().email().optional().nullable(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const existingConfig = settings.emailConfig || {};
+
+    // If password is masked or empty, keep the existing one
+    if (!data.smtpPass || data.smtpPass === '••••••••') {
+      data.smtpPass = existingConfig.smtpPass || '';
+    }
+
+    const emailConfig = {
+      smtpHost: data.smtpHost,
+      smtpPort: data.smtpPort,
+      smtpUser: data.smtpUser,
+      smtpPass: data.smtpPass,
+      fromName: data.fromName,
+      fromEmail: data.fromEmail,
+      replyTo: data.replyTo || null,
+    };
+
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: { ...settings, emailConfig } },
+    });
+
+    const sanitized = { ...emailConfig, smtpPass: '••••••••', hasPassword: true };
+    res.json(sanitized);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test SMTP connection
+router.post('/email/test-connection', authorize('ADMIN'), validate(z.object({
+  smtpHost: z.string().min(1),
+  smtpPort: z.coerce.number().int().min(1).max(65535),
+  smtpUser: z.string().min(1),
+  smtpPass: z.string().optional(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+
+    // If password is masked, use the stored one
+    if (!data.smtpPass || data.smtpPass === '••••••••') {
+      const org = await prisma.organization.findUnique({
+        where: { id: req.orgId },
+        select: { settings: true },
+      });
+      const settings = typeof org.settings === 'object' ? org.settings : {};
+      data.smtpPass = settings.emailConfig?.smtpPass || '';
+    }
+
+    const result = await testConnection(data);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Send test email
+router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
+  toEmail: z.string().email(),
+})), async (req, res, next) => {
+  try {
+    const { toEmail } = req.validated;
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const emailConfig = settings.emailConfig;
+
+    if (!emailConfig || !emailConfig.smtpHost) {
+      return res.status(400).json({ success: false, message: 'Email not configured. Please save your SMTP settings first.' });
+    }
+
+    const result = await sendTestEmail(emailConfig, toEmail);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Email Templates ────────────────────────────────────────
+
+const DEFAULT_TEMPLATES = [
+  {
+    name: 'welcome',
+    label: 'Welcome',
+    subject: 'Welcome to {{companyName}}!',
+    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #6366f1;">Welcome, {{firstName}}!</h2>
+  <p style="color: #374151; line-height: 1.6;">Thank you for your interest in {{companyName}}. We're excited to connect with you.</p>
+  <p style="color: #374151; line-height: 1.6;">A member of our team will be in touch shortly to discuss how we can help.</p>
+  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
+</div>`,
+    description: 'Sent to new leads when they first enter the system',
+    isDefault: true,
+  },
+  {
+    name: 'follow-up',
+    label: 'Follow Up',
+    subject: 'Following up — {{companyName}}',
+    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
+  <p style="color: #374151; line-height: 1.6;">I wanted to follow up on our recent conversation. Do you have any questions or would you like to schedule a call?</p>
+  <p style="color: #374151; line-height: 1.6;">I'm happy to help with anything you need.</p>
+  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
+</div>`,
+    description: 'Follow-up email for leads that have been contacted',
+    isDefault: true,
+  },
+  {
+    name: 'proposal',
+    label: 'Proposal',
+    subject: 'Proposal from {{companyName}}',
+    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
+  <p style="color: #374151; line-height: 1.6;">Please find our proposal details below. We've tailored this based on our discussion about your needs.</p>
+  <p style="color: #374151; line-height: 1.6;">Feel free to reach out if you have any questions or would like to discuss further.</p>
+  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
+</div>`,
+    description: 'Sent when sharing a proposal with a lead',
+    isDefault: true,
+  },
+  {
+    name: 'meeting-reminder',
+    label: 'Meeting Reminder',
+    subject: 'Reminder: Upcoming meeting — {{companyName}}',
+    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
+  <p style="color: #374151; line-height: 1.6;">This is a friendly reminder about our upcoming meeting.</p>
+  <p style="color: #374151; line-height: 1.6;">Looking forward to speaking with you!</p>
+  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
+</div>`,
+    description: 'Reminder email before a scheduled meeting',
+    isDefault: true,
+  },
+  {
+    name: 'thank-you',
+    label: 'Thank You',
+    subject: 'Thank you — {{companyName}}',
+    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #6366f1;">Thank you, {{firstName}}!</h2>
+  <p style="color: #374151; line-height: 1.6;">We truly appreciate your business and trust in {{companyName}}.</p>
+  <p style="color: #374151; line-height: 1.6;">If there's anything else we can help with, please don't hesitate to reach out.</p>
+  <p style="color: #374151; line-height: 1.6;">Warm regards,<br/>{{senderName}}</p>
+</div>`,
+    description: 'Thank you email after closing a deal',
+    isDefault: true,
+  },
+];
+
+// Get email templates
+router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const templates = settings.emailTemplates || DEFAULT_TEMPLATES;
+
+    res.json(templates);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Save a single email template (create or update by name)
+router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
+  label: z.string().min(1).max(100),
+  subject: z.string().min(1).max(500),
+  htmlBody: z.string().min(1),
+  description: z.string().max(500).optional(),
+})), async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const data = req.validated;
+
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    let templates = settings.emailTemplates || [...DEFAULT_TEMPLATES];
+
+    const existingIdx = templates.findIndex((t) => t.name === name);
+    const templateData = {
+      name,
+      label: data.label,
+      subject: data.subject,
+      htmlBody: data.htmlBody,
+      description: data.description || '',
+      isDefault: false,
+    };
+
+    if (existingIdx >= 0) {
+      templates[existingIdx] = { ...templates[existingIdx], ...templateData };
+    } else {
+      templates.push(templateData);
+    }
+
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: { ...settings, emailTemplates: templates } },
+    });
+
+    res.json(templateData);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Delete an email template
+router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    let templates = settings.emailTemplates || [...DEFAULT_TEMPLATES];
+
+    templates = templates.filter((t) => t.name !== name);
+
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: { ...settings, emailTemplates: templates } },
+    });
+
+    res.json({ message: 'Template deleted' });
   } catch (err) {
     next(err);
   }

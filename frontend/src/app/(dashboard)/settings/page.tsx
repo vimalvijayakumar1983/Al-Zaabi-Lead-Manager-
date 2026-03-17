@@ -3,23 +3,27 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import type { CustomField, FieldType, Organization } from '@/types';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
   FileText, Trash2, LogOut, Columns3, Plus, GripVertical,
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
-  AtSign, MessageCircle, KeyRound,
+  AtSign, Palette, ChevronDown, Image, Save, Sparkles,
+  Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
 } from 'lucide-react';
-import type { CustomField, FieldType } from '@/types';
 
-type Tab = 'profile' | 'security' | 'organization' | 'whatsapp' | 'customFields' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
 
-const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
+const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
   { key: 'security', label: 'Security', icon: Lock },
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
   { key: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, adminOnly: true },
+  { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
+  { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
+  { key: 'emailTemplates', label: 'Email Templates', icon: LayoutTemplate, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'audit', label: 'Audit Log', icon: Shield, adminOnly: true },
   { key: 'danger', label: 'Danger Zone', icon: AlertTriangle },
@@ -28,9 +32,15 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
 export default function SettingsPage() {
   const { user } = useAuthStore();
   const [activeTab, setActiveTab] = useState<Tab>('profile');
-  const isAdmin = user?.role === 'ADMIN';
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const isAdmin = user?.role === 'ADMIN' || isSuperAdmin;
 
-  const filteredTabs = tabs.filter(t => !t.adminOnly || isAdmin);
+  const filteredTabs = tabs.filter(t => {
+    // Show divisionBranding tab to SUPER_ADMIN and ADMIN
+    if (t.divisionAdmin) return isSuperAdmin || user?.role === 'ADMIN';
+    if (t.adminOnly) return isAdmin;
+    return true;
+  });
 
   return (
     <div className="animate-fade-in max-w-5xl mx-auto">
@@ -77,7 +87,12 @@ export default function SettingsPage() {
           {activeTab === 'security' && <SecuritySection />}
           {activeTab === 'organization' && isAdmin && <OrganizationSection />}
           {activeTab === 'whatsapp' && isAdmin && <WhatsAppSection />}
+          {activeTab === 'divisionBranding' && (isSuperAdmin || user?.role === 'ADMIN') && (
+            <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
+          )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
+          {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
+          {activeTab === 'emailTemplates' && isAdmin && <EmailTemplatesSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
           {activeTab === 'audit' && isAdmin && <AuditLogSection />}
           {activeTab === 'danger' && <DangerZoneSection />}
@@ -486,7 +501,7 @@ function OrganizationSection() {
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
             { label: 'Users', value: org._count?.users || 0 },
             { label: 'Leads', value: org._count?.leads || 0 },
@@ -547,88 +562,118 @@ function OrganizationSection() {
   );
 }
 
-/* ─── WhatsApp Section (admin only) ───────────────────────────────── */
-type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; token: string };
-
-function WhatsAppSection() {
-  const [org, setOrg] = useState<{ settings?: Record<string, unknown> } | null>(null);
-  const [numbers, setNumbers] = useState<WhatsAppNumberEntry[]>([]);
-  const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+/* ─── Division Branding Section (NEW - Multi-tenant) ─────────────── */
+function DivisionBrandingSection({ isSuperAdmin }: { isSuperAdmin: boolean }) {
+  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    name: '',
+    tradeName: '',
+    logo: '',
+    primaryColor: '#3B82F6',
+    secondaryColor: '#1E40AF',
+  });
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
 
+  // Load divisions
   useEffect(() => {
-    api.getOrganization().then((data) => {
-      setOrg(data);
-      const settings = (data.settings as Record<string, unknown>) || {};
-      setWebhookVerifyToken((settings.whatsappWebhookVerifyToken as string) || '');
-      const raw = settings.whatsappNumbers;
-      if (Array.isArray(raw) && raw.length > 0) {
-        setNumbers(
-          raw.map((n: Record<string, string>, i: number) => ({
-            id: (n as Record<string, string>).id || `n-${i}`,
-            label: (n as Record<string, string>).label || '',
-            phoneNumberId: (n as Record<string, string>).phoneNumberId || '',
-            token: (n as Record<string, string>).token || '',
-          }))
-        );
-      } else {
-        const singleId = (settings.whatsappPhoneNumberId as string) || '';
-        const singleToken = (settings.whatsappToken as string) || '';
-        if (singleId || singleToken) {
-          setNumbers([{ id: 'n-0', label: '', phoneNumberId: singleId, token: singleToken }]);
+    const loadDivisions = async () => {
+      try {
+        if (isSuperAdmin) {
+          const divs = await api.getDivisions();
+          setDivisions(divs || []);
+          if (divs && divs.length > 0) {
+            setSelectedDivisionId(divs[0].id);
+          }
         } else {
-          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
+          // ADMIN: load their own division
+          const org = await api.getOrganization();
+          if (org) {
+            setDivisions([org]);
+            setSelectedDivisionId(org.id);
+          }
         }
+      } catch {
+        /* ignore */
       }
-    });
-  }, []);
+      setLoading(false);
+    };
+    loadDivisions();
+  }, [isSuperAdmin]);
 
-  const addNumber = () => {
-    setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', token: '' }]);
-  };
-
-  const removeNumber = (id: string) => {
-    setNumbers((prev) => (prev.length <= 1 ? prev : prev.filter((n) => n.id !== id)));
-  };
-
-  const updateNumber = (id: string, field: keyof WhatsAppNumberEntry, value: string) => {
-    setNumbers((prev) => prev.map((n) => (n.id === id ? { ...n, [field]: value } : n)));
-  };
+  // Load the selected division's branding data
+  useEffect(() => {
+    if (!selectedDivisionId || divisions.length === 0) return;
+    const div = divisions.find(d => d.id === selectedDivisionId);
+    if (div) {
+      setForm({
+        name: div.name || '',
+        tradeName: (div as any).tradeName || '',
+        logo: (div as any).logo || '',
+        primaryColor: (div as any).primaryColor || '#3B82F6',
+        secondaryColor: (div as any).secondaryColor || '#1E40AF',
+      });
+    }
+  }, [selectedDivisionId, divisions]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     setSaving(true);
+    setError('');
     setSuccess(false);
     try {
-      const payload = numbers
-        .filter((n) => n.phoneNumberId.trim() || n.token.trim())
-        .map(({ label, phoneNumberId, token }) => ({ label: label.trim() || undefined, phoneNumberId: phoneNumberId.trim(), token: token.trim() }));
-      await api.updateOrganization({
-        settings: {
-          whatsappNumbers: payload.length > 0 ? payload : [],
-          whatsappWebhookVerifyToken: webhookVerifyToken.trim() || undefined,
-        },
+      const updated = await api.updateDivision(selectedDivisionId, {
+        name: form.name,
+        tradeName: form.tradeName || undefined,
+        logo: form.logo || undefined,
+        primaryColor: form.primaryColor,
+        secondaryColor: form.secondaryColor,
       });
+      // Update local state
+      setDivisions(prev =>
+        prev.map(d => d.id === selectedDivisionId ? { ...d, ...updated } : d)
+      );
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to save');
+    } catch (err: any) {
+      setError(err.message || 'Failed to save division settings');
     } finally {
       setSaving(false);
     }
   };
 
-  if (!org) {
+  if (loading) {
     return (
       <div className="space-y-6">
-        <SectionHeader title="WhatsApp" description="Connect your WhatsApp Business number" />
+        <SectionHeader
+          title="Division Branding"
+          description={isSuperAdmin ? 'Manage branding settings for each division' : 'Customize your division\'s branding'}
+        />
         <div className="card p-6 space-y-4">
-          {[1, 2, 3].map((i) => (
+          {[1, 2, 3, 4, 5].map((i) => (
             <div key={i}><div className="skeleton h-4 w-24 mb-2" /><div className="skeleton h-10 w-full rounded-lg" /></div>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (divisions.length === 0) {
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <SectionHeader
+          title="Division Branding"
+          description="No divisions available"
+        />
+        <div className="card p-8 text-center">
+          <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+            <Building2 className="h-6 w-6 text-gray-400" />
+          </div>
+          <p className="text-sm font-medium text-text-primary mb-1">No divisions found</p>
+          <p className="text-xs text-text-tertiary">Division branding will be available once divisions are configured.</p>
         </div>
       </div>
     );
@@ -637,88 +682,155 @@ function WhatsAppSection() {
   return (
     <div className="space-y-6 animate-fade-in">
       <SectionHeader
-        title="WhatsApp"
-        description="Add one or more WhatsApp Business numbers. Incoming messages to any of these numbers will create or update leads."
+        title="Division Branding"
+        description={isSuperAdmin ? 'Manage branding settings for each division in the group' : 'Customize your division\'s branding and appearance'}
       />
 
-      <form onSubmit={handleSave} className="space-y-4">
-        <div className="card p-5 space-y-4 border border-border-subtle">
-          <h3 className="text-sm font-semibold text-text-primary">Webhook verify token (Meta)</h3>
-          <p className="text-sm text-text-secondary">
-            Set this in Meta Developer Console → WhatsApp → Configuration → Webhook as the &quot;Verify token&quot;. It must match exactly when Meta verifies your webhook.
-          </p>
+      {/* Division Selector (SUPER_ADMIN only — they can switch between divisions) */}
+      {isSuperAdmin && divisions.length > 1 && (
+        <div className="card p-4">
+          <label className="label mb-2">Select Division</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+            <select
+              className="input pl-10 appearance-none cursor-pointer"
+              value={selectedDivisionId}
+              onChange={(e) => setSelectedDivisionId(e.target.value)}
+            >
+              {divisions.map((div) => (
+                <option key={div.id} value={div.id}>{div.name}</option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+          </div>
+        </div>
+      )}
+
+      {/* Branding Preview */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-text-primary mb-4">Preview</h3>
+        <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-secondary">
+          {form.logo ? (
+            <img
+              src={form.logo}
+              alt={form.name}
+              className="h-14 w-14 rounded-xl object-cover shadow-soft"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
+          ) : (
+            <div
+              className="h-14 w-14 rounded-xl flex items-center justify-center text-xl font-bold text-white shadow-soft"
+              style={{ background: `linear-gradient(135deg, ${form.primaryColor}, ${form.secondaryColor})` }}
+            >
+              {form.name?.[0] || 'D'}
+            </div>
+          )}
           <div>
-            <label className="label">Verify token</label>
+            <p className="text-lg font-semibold text-text-primary">{form.name || 'Division Name'}</p>
+            {form.tradeName && (
+              <p className="text-sm text-text-secondary">{form.tradeName}</p>
+            )}
+            <div className="flex items-center gap-2 mt-1.5">
+              <div
+                className="h-4 w-4 rounded-full border border-white shadow-sm"
+                style={{ backgroundColor: form.primaryColor }}
+                title="Primary Color"
+              />
+              <div
+                className="h-4 w-4 rounded-full border border-white shadow-sm"
+                style={{ backgroundColor: form.secondaryColor }}
+                title="Secondary Color"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Branding Form */}
+      <form onSubmit={handleSave} className="card p-6 space-y-5">
+        <div>
+          <label className="label">Division Name</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
             <input
-              type="text"
-              className="input font-mono text-sm"
-              value={webhookVerifyToken}
-              onChange={(e) => setWebhookVerifyToken(e.target.value)}
-              placeholder="e.g. my-secret-verify-token-123-asdgasjhdgajshgd"
+              className="input pl-10"
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Al Reem Real Estate"
             />
           </div>
         </div>
 
-        {numbers.map((entry) => (
-          <div key={entry.id} className="card p-5 space-y-4 border border-border-subtle">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-text-primary">
-                Number {numbers.indexOf(entry) + 1}
-                {entry.label ? ` · ${entry.label}` : ''}
-              </span>
-              {numbers.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => removeNumber(entry.id)}
-                  className="text-sm text-red-600 hover:text-red-700"
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-            <div>
-              <label className="label">Label (optional)</label>
+        <div>
+          <label className="label">Trade Name</label>
+          <div className="relative">
+            <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              className="input pl-10"
+              value={form.tradeName}
+              onChange={(e) => setForm({ ...form, tradeName: e.target.value })}
+              placeholder="e.g. Al Reem Properties LLC"
+            />
+          </div>
+          <p className="text-2xs text-text-tertiary mt-1">The official trade name of this division</p>
+        </div>
+
+        <div>
+          <label className="label">Logo URL</label>
+          <div className="relative">
+            <Image className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+            <input
+              className="input pl-10"
+              value={form.logo}
+              onChange={(e) => setForm({ ...form, logo: e.target.value })}
+              placeholder="https://example.com/logo.png"
+              type="url"
+            />
+          </div>
+          <p className="text-2xs text-text-tertiary mt-1">Recommended: square image, at least 200x200px</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Primary Color</label>
+            <div className="flex items-center gap-3">
               <input
-                type="text"
-                className="input"
-                value={entry.label}
-                onChange={(e) => updateNumber(entry.id, 'label', e.target.value)}
-                placeholder="e.g. Sales, Support"
+                type="color"
+                className="h-10 w-10 rounded-lg border border-border cursor-pointer p-0.5"
+                value={form.primaryColor}
+                onChange={(e) => setForm({ ...form, primaryColor: e.target.value })}
+              />
+              <input
+                className="input flex-1 font-mono text-sm"
+                value={form.primaryColor}
+                onChange={(e) => setForm({ ...form, primaryColor: e.target.value })}
+                placeholder="#3B82F6"
+                pattern="^#[0-9A-Fa-f]{6}$"
               />
             </div>
-            <div>
-              <label className="label">Phone Number ID</label>
-              <div className="relative">
-                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
-                <input
-                  type="text"
-                  className="input pl-10 font-mono text-sm"
-                  value={entry.phoneNumberId}
-                  onChange={(e) => updateNumber(entry.id, 'phoneNumberId', e.target.value)}
-                  placeholder="e.g. 1010197338847846"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="label">Access Token</label>
-              <div className="relative">
-                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
-                <input
-                  type="password"
-                  className="input pl-10 font-mono text-sm"
-                  value={entry.token}
-                  onChange={(e) => updateNumber(entry.id, 'token', e.target.value)}
-                  placeholder="Paste your WhatsApp access token"
-                />
-              </div>
-            </div>
+            <p className="text-2xs text-text-tertiary mt-1">Main brand color for this division</p>
           </div>
-        ))}
-
-        <button type="button" onClick={addNumber} className="btn-secondary w-full gap-2">
-          <MessageCircle className="h-4 w-4" />
-          Add another number
-        </button>
+          <div>
+            <label className="label">Secondary Color</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                className="h-10 w-10 rounded-lg border border-border cursor-pointer p-0.5"
+                value={form.secondaryColor}
+                onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })}
+              />
+              <input
+                className="input flex-1 font-mono text-sm"
+                value={form.secondaryColor}
+                onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })}
+                placeholder="#1E40AF"
+                pattern="^#[0-9A-Fa-f]{6}$"
+              />
+            </div>
+            <p className="text-2xs text-text-tertiary mt-1">Accent color used for gradients and highlights</p>
+          </div>
+        </div>
 
         {error && (
           <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
@@ -1291,7 +1403,7 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
           {/* Field Type */}
           <div>
             <label className="label">Field Type *</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {(Object.entries(FIELD_TYPE_CONFIG) as [FieldType, typeof FIELD_TYPE_CONFIG[FieldType]][]).map(([key, config]) => {
                 const Icon = config.icon;
                 return (
@@ -1384,6 +1496,430 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Email Settings Section ─────────────────────────────────────── */
+function EmailSettingsSection() {
+  const [form, setForm] = useState({
+    smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '',
+    fromName: '', fromEmail: '', replyTo: '',
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [testEmail, setTestEmail] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [hasPassword, setHasPassword] = useState(false);
+
+  useEffect(() => {
+    api.getEmailConfig().then((config) => {
+      if (config && config.smtpHost) {
+        setForm({
+          smtpHost: config.smtpHost || '',
+          smtpPort: String(config.smtpPort || 587),
+          smtpUser: config.smtpUser || '',
+          smtpPass: config.hasPassword ? '••••••••' : '',
+          fromName: config.fromName || '',
+          fromEmail: config.fromEmail || '',
+          replyTo: config.replyTo || '',
+        });
+        setHasPassword(!!config.hasPassword);
+      }
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.saveEmailConfig({
+        ...form,
+        smtpPort: parseInt(form.smtpPort, 10),
+      });
+      setHasPassword(true);
+      setStatus({ type: 'success', message: 'Email settings saved successfully' });
+      setTimeout(() => setStatus(null), 4000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to save' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setStatus(null);
+    try {
+      const result = await api.testEmailConnection({
+        smtpHost: form.smtpHost,
+        smtpPort: parseInt(form.smtpPort, 10),
+        smtpUser: form.smtpUser,
+        smtpPass: form.smtpPass,
+      });
+      setStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Connection test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSendTest = async () => {
+    if (!testEmail) return;
+    setSendingTest(true);
+    setStatus(null);
+    try {
+      const result = await api.sendTestEmail(testEmail);
+      setStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to send test email' });
+    } finally {
+      setSendingTest(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="Email Settings" description="Configure SMTP settings to send emails from your CRM" />
+
+      {status && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
+          status.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {status.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+          {status.message}
+        </div>
+      )}
+
+      <form onSubmit={handleSave} className="space-y-6">
+        {/* SMTP Server */}
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <Globe className="h-4 w-4 text-text-tertiary" />
+            SMTP Server
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">SMTP Host *</label>
+              <input className="input" required value={form.smtpHost} onChange={(e) => setForm({ ...form, smtpHost: e.target.value })} placeholder="smtp.gmail.com" />
+            </div>
+            <div>
+              <label className="label">SMTP Port *</label>
+              <input className="input" required value={form.smtpPort} onChange={(e) => setForm({ ...form, smtpPort: e.target.value })} placeholder="587" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Username *</label>
+              <input className="input" required value={form.smtpUser} onChange={(e) => setForm({ ...form, smtpUser: e.target.value })} placeholder="your@email.com" />
+            </div>
+            <div>
+              <label className="label">Password *</label>
+              <div className="relative">
+                <input
+                  className="input pr-10"
+                  type={showPassword ? 'text' : 'password'}
+                  required={!hasPassword}
+                  value={form.smtpPass}
+                  onChange={(e) => setForm({ ...form, smtpPass: e.target.value })}
+                  placeholder={hasPassword ? 'Leave blank to keep current' : 'App password'}
+                  onFocus={() => { if (form.smtpPass === '••••••••') setForm({ ...form, smtpPass: '' }); }}
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary">
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-2xs text-text-tertiary mt-1">For Gmail, use an App Password (not your account password)</p>
+            </div>
+          </div>
+
+          <button type="button" onClick={handleTestConnection} disabled={testing || !form.smtpHost || !form.smtpUser}
+            className="btn-secondary text-xs">
+            {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {testing ? 'Testing...' : 'Test Connection'}
+          </button>
+        </div>
+
+        {/* Sender Identity */}
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <User2 className="h-4 w-4 text-text-tertiary" />
+            Sender Identity
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">From Name *</label>
+              <input className="input" required value={form.fromName} onChange={(e) => setForm({ ...form, fromName: e.target.value })} placeholder="Al-Zaabi Group" />
+            </div>
+            <div>
+              <label className="label">From Email *</label>
+              <input className="input" type="email" required value={form.fromEmail} onChange={(e) => setForm({ ...form, fromEmail: e.target.value })} placeholder="noreply@alzaabi.ae" />
+            </div>
+          </div>
+          <div>
+            <label className="label">Reply-To Email (optional)</label>
+            <input className="input" type="email" value={form.replyTo} onChange={(e) => setForm({ ...form, replyTo: e.target.value })} placeholder="support@alzaabi.ae" />
+          </div>
+        </div>
+
+        {/* Save Button */}
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={saving} className="btn-primary">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? 'Saving...' : 'Save Settings'}
+          </button>
+        </div>
+      </form>
+
+      {/* Send Test Email */}
+      <div className="card p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+          <Mail className="h-4 w-4 text-text-tertiary" />
+          Send Test Email
+        </h3>
+        <p className="text-xs text-text-tertiary">Save your settings first, then send a test email to verify everything works.</p>
+        <div className="flex items-end gap-3">
+          <div className="flex-1">
+            <label className="label">Recipient Email</label>
+            <input className="input" type="email" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="your@email.com" />
+          </div>
+          <button type="button" onClick={handleSendTest} disabled={sendingTest || !testEmail}
+            className="btn-primary whitespace-nowrap">
+            {sendingTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {sendingTest ? 'Sending...' : 'Send Test'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Email Templates Section ───────────────────────────────────── */
+function EmailTemplatesSection() {
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingTemplate, setEditingTemplate] = useState<any | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newForm, setNewForm] = useState({ name: '', label: '', subject: '', htmlBody: '', description: '' });
+
+  const fetchTemplates = async () => {
+    try {
+      const data = await api.getEmailTemplates();
+      setTemplates(data);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchTemplates(); }, []);
+
+  const handleSaveTemplate = async (name: string, data: any) => {
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.saveEmailTemplate(name, data);
+      await fetchTemplates();
+      setEditingTemplate(null);
+      setShowNewForm(false);
+      setStatus({ type: 'success', message: 'Template saved successfully' });
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to save template' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    if (!confirm('Delete this template? This cannot be undone.')) return;
+    try {
+      await api.deleteEmailTemplate(name);
+      await fetchTemplates();
+      setStatus({ type: 'success', message: 'Template deleted' });
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to delete' });
+    }
+  };
+
+  const handleCreateNew = async () => {
+    if (!newForm.name || !newForm.label || !newForm.subject || !newForm.htmlBody) {
+      setStatus({ type: 'error', message: 'All fields are required' });
+      return;
+    }
+    const safeName = newForm.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+    await handleSaveTemplate(safeName, {
+      label: newForm.label,
+      subject: newForm.subject,
+      htmlBody: newForm.htmlBody,
+      description: newForm.description,
+    });
+    setNewForm({ name: '', label: '', subject: '', htmlBody: '', description: '' });
+  };
+
+  const VARIABLE_HINTS = [
+    { var: '{{firstName}}', desc: 'Lead first name' },
+    { var: '{{lastName}}', desc: 'Lead last name' },
+    { var: '{{email}}', desc: 'Lead email' },
+    { var: '{{company}}', desc: 'Lead company' },
+    { var: '{{companyName}}', desc: 'Your organization name' },
+    { var: '{{senderName}}', desc: 'Sender name' },
+  ];
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <SectionHeader title="Email Templates" description="Manage email templates used in automations and communications" />
+        <button onClick={() => { setShowNewForm(true); setEditingTemplate(null); }} className="btn-primary text-xs">
+          <Plus className="h-3.5 w-3.5" /> New Template
+        </button>
+      </div>
+
+      {status && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
+          status.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {status.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+          {status.message}
+        </div>
+      )}
+
+      {/* Variable reference */}
+      <div className="card p-4">
+        <h4 className="text-xs font-semibold text-text-tertiary uppercase tracking-wider flex items-center gap-1.5 mb-2">
+          <Code2 className="h-3.5 w-3.5" /> Available Variables
+        </h4>
+        <div className="flex flex-wrap gap-2">
+          {VARIABLE_HINTS.map((v) => (
+            <span key={v.var} className="inline-flex items-center gap-1 px-2 py-1 bg-surface-secondary rounded text-2xs">
+              <code className="text-brand-600 font-mono">{v.var}</code>
+              <span className="text-text-tertiary">— {v.desc}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* New template form */}
+      {showNewForm && (
+        <div className="card p-5 space-y-4 border-2 border-brand-200">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">New Template</h3>
+            <button onClick={() => setShowNewForm(false)} className="btn-icon h-7 w-7"><X className="h-4 w-4" /></button>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Template Name *</label>
+              <input className="input text-sm" value={newForm.name} onChange={(e) => setNewForm({ ...newForm, name: e.target.value })} placeholder="e.g. onboarding" />
+            </div>
+            <div>
+              <label className="label">Display Label *</label>
+              <input className="input text-sm" value={newForm.label} onChange={(e) => setNewForm({ ...newForm, label: e.target.value })} placeholder="e.g. Onboarding" />
+            </div>
+          </div>
+          <div>
+            <label className="label">Subject Line *</label>
+            <input className="input text-sm" value={newForm.subject} onChange={(e) => setNewForm({ ...newForm, subject: e.target.value })} placeholder="e.g. Welcome to {{companyName}}" />
+          </div>
+          <div>
+            <label className="label">Description</label>
+            <input className="input text-sm" value={newForm.description} onChange={(e) => setNewForm({ ...newForm, description: e.target.value })} placeholder="When is this template used?" />
+          </div>
+          <div>
+            <label className="label">HTML Body *</label>
+            <textarea className="input text-sm font-mono" rows={8} value={newForm.htmlBody} onChange={(e) => setNewForm({ ...newForm, htmlBody: e.target.value })}
+              placeholder="<div>Hi {{firstName}}, ...</div>" />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleCreateNew} disabled={saving} className="btn-primary text-xs">
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saving ? 'Saving...' : 'Create Template'}
+            </button>
+            <button onClick={() => setShowNewForm(false)} className="btn-secondary text-xs">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Template list */}
+      <div className="space-y-3">
+        {templates.map((tmpl) => (
+          <div key={tmpl.name} className="card p-4">
+            {editingTemplate?.name === tmpl.name ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Display Label</label>
+                    <input className="input text-sm" value={editingTemplate.label} onChange={(e) => setEditingTemplate({ ...editingTemplate, label: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="label">Description</label>
+                    <input className="input text-sm" value={editingTemplate.description || ''} onChange={(e) => setEditingTemplate({ ...editingTemplate, description: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Subject Line</label>
+                  <input className="input text-sm" value={editingTemplate.subject} onChange={(e) => setEditingTemplate({ ...editingTemplate, subject: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">HTML Body</label>
+                  <textarea className="input text-sm font-mono" rows={8} value={editingTemplate.htmlBody} onChange={(e) => setEditingTemplate({ ...editingTemplate, htmlBody: e.target.value })} />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => handleSaveTemplate(tmpl.name, editingTemplate)} disabled={saving} className="btn-primary text-xs">
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save
+                  </button>
+                  <button onClick={() => setEditingTemplate(null)} className="btn-secondary text-xs">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-semibold text-text-primary">{tmpl.label}</h4>
+                    <span className="text-2xs px-1.5 py-0.5 rounded bg-surface-secondary text-text-tertiary font-mono">{tmpl.name}</span>
+                    {tmpl.isDefault && <span className="text-2xs px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 font-medium">Default</span>}
+                  </div>
+                  {tmpl.description && <p className="text-xs text-text-tertiary mt-0.5">{tmpl.description}</p>}
+                  <p className="text-xs text-text-secondary mt-1 truncate">Subject: {tmpl.subject}</p>
+                </div>
+                <div className="flex items-center gap-1 ml-3">
+                  <button onClick={() => setEditingTemplate({ ...tmpl })} className="btn-icon h-7 w-7" title="Edit">
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => handleDelete(tmpl.name)} className="btn-icon h-7 w-7 text-red-500 hover:text-red-700" title="Delete">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {templates.length === 0 && (
+          <div className="card p-8 text-center">
+            <Mail className="h-8 w-8 text-text-tertiary mx-auto mb-2" />
+            <p className="text-sm text-text-secondary font-medium">No email templates</p>
+            <p className="text-xs text-text-tertiary mt-1">Create your first template to use in automations</p>
+          </div>
+        )}
       </div>
     </div>
   );

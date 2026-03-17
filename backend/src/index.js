@@ -15,6 +15,8 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
+const divisionRoutes = require('./routes/divisions');
+const allocationRoutes = require('./routes/allocation');
 const leadRoutes = require('./routes/leads');
 const pipelineRoutes = require('./routes/pipeline');
 const taskRoutes = require('./routes/tasks');
@@ -27,6 +29,13 @@ const webhookRoutes = require('./routes/webhooks');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
+const integrationsRoutes = require('./routes/integrations');
+const publicLeadsRoutes = require('./routes/public-leads');
+const notificationRoutes = require('./routes/notifications');
+const inboxRoutes = require('./routes/inbox');
+const channelWebhookRoutes = require('./routes/channel-webhooks');
+const contactRoutes = require('./routes/contacts');
+const callLogRoutes = require('./routes/call-logs');
 
 const app = express();
 const server = createServer(app);
@@ -57,6 +66,23 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ─── Static File Serving (uploads) ─────────────────────────────────
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Also serve under /api/uploads so the Next.js proxy can reach files
+app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// ─── Widget Script (public, CORS-enabled) ───────────────────────────
+const widgetStaticOpts = {
+  setHeaders: (res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Content-Type', 'application/javascript; charset=utf-8');
+  },
+};
+app.use('/api/widget', express.static(path.join(__dirname, '../public'), widgetStaticOpts));
+app.use('/widget', express.static(path.join(__dirname, '../public'), widgetStaticOpts));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // Rate limiting
@@ -68,26 +94,45 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', limiter);
+app.use(limiter);
 
 // ─── Health Check ────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
-// ─── API Routes ──────────────────────────────────────────────────
-app.use('/api/auth', authRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/pipeline', pipelineRoutes);
-app.use('/api/tasks', taskRoutes);
-app.use('/api/communications', communicationRoutes);
-app.use('/api/campaigns', campaignRoutes);
-app.use('/api/automations', automationRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/webhooks', webhookRoutes);
-app.use('/api/whatsapp/webhook', whatsappWebhookRoutes);
-app.use('/api/import', importRoutes);
-app.use('/api/settings', settingsRoutes);
+// ─── API Routes (mounted at both /api/* and /* for flexible deployment) ──
+const routeMounts = [
+  ['/auth', authRoutes],
+  ['/divisions', divisionRoutes],
+  ['/leads/allocation', allocationRoutes],
+  ['/leads', leadRoutes],
+  ['/pipeline', pipelineRoutes],
+  ['/tasks', taskRoutes],
+  ['/communications', communicationRoutes],
+  ['/campaigns', campaignRoutes],
+  ['/automations', automationRoutes],
+  ['/analytics', analyticsRoutes],
+  ['/users', userRoutes],
+  ['/webhooks', webhookRoutes],
+  ['/import', importRoutes],
+  ['/settings', settingsRoutes],
+  ['/integrations', integrationsRoutes],
+  ['/public', publicLeadsRoutes],
+  ['/notifications', notificationRoutes],
+  ['/inbox', inboxRoutes],
+  ['/channels', channelWebhookRoutes],
+  ['/contacts', contactRoutes],
+  ['/call-logs', callLogRoutes],
+];
+
+for (const [path, handler] of routeMounts) {
+  app.use(`/api${path}`, handler);
+  app.use(path, handler);
+}
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);

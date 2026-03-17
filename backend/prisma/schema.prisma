@@ -8,16 +8,32 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Organization Types ─────────────────────────────────────────
+
+enum OrgType {
+  GROUP
+  DIVISION
+}
+
 // ─── Multi-Tenant Organization ───────────────────────────────────
 
 model Organization {
-  id        String   @id @default(uuid())
-  name      String
-  domain    String?  @unique
-  plan      Plan     @default(FREE)
-  settings  Json     @default("{}")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(uuid())
+  name           String
+  tradeName      String?
+  domain         String?  @unique
+  logo           String?
+  primaryColor   String   @default("#6366f1")
+  secondaryColor String   @default("#1e293b")
+  type           OrgType  @default(DIVISION)
+  plan           Plan     @default(FREE)
+  settings       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  parentId       String?
+  parent         Organization?  @relation("OrgHierarchy", fields: [parentId], references: [id])
+  children       Organization[] @relation("OrgHierarchy")
 
   users             User[]
   leads             Lead[]
@@ -29,7 +45,13 @@ model Organization {
   webhooks          Webhook[]
   auditLogs         AuditLog[]
   importHistory     ImportHistory[]
+  notifications     Notification[]
+  integrations      Integration[]
+  apiKeys           ApiKey[]
+  contacts          Contact[]
+  deals             Deal[]
 
+  @@index([parentId])
   @@map("organizations")
 }
 
@@ -66,14 +88,25 @@ model User {
   tasks          Task[]          @relation("TaskAssignee")
   createdTasks   Task[]          @relation("TaskCreator")
   communications Communication[]
+  callLogs       CallLog[]
   auditLogs      AuditLog[]
   imports        ImportHistory[]
+  notifications         Notification[] @relation("NotificationRecipient")
+  actedNotifications    Notification[] @relation("NotificationActor")
+  notificationPreference NotificationPreference?
+  createdIntegrations   Integration[]  @relation("IntegrationCreator")
+  ownedContacts         Contact[]      @relation("ContactOwner")
+  createdContacts       Contact[]      @relation("ContactCreatedBy")
+  contactActivities     ContactActivity[]
+  contactNotes          ContactNote[]
+  ownedDeals            Deal[]         @relation("DealOwner")
 
   @@index([organizationId])
   @@map("users")
 }
 
 enum Role {
+  SUPER_ADMIN
   ADMIN
   MANAGER
   SALES_REP
@@ -126,8 +159,10 @@ model Lead {
   notes           LeadNote[]
   tasks           Task[]
   communications  Communication[]
+  callLogs        CallLog[]
   tags            LeadTag[]
   attachments     Attachment[]
+  convertedContact Contact? @relation("ConvertedContact")
 
   @@index([organizationId, status])
   @@index([organizationId, source])
@@ -140,10 +175,12 @@ model Lead {
 
 enum LeadSource {
   WEBSITE_FORM
+  LIVE_CHAT
   LANDING_PAGE
   WHATSAPP
   FACEBOOK_ADS
   GOOGLE_ADS
+  TIKTOK_ADS
   MANUAL
   CSV_IMPORT
   API
@@ -159,6 +196,165 @@ enum LeadStatus {
   QUALIFIED
   PROPOSAL_SENT
   NEGOTIATION
+  WON
+  LOST
+}
+
+// ─── Contacts ───────────────────────────────────────────────────
+
+model Contact {
+  id              String        @id @default(uuid())
+  firstName       String
+  lastName        String
+  email           String?
+  phone           String?
+  mobile          String?
+  company         String?
+  jobTitle        String?
+  department      String?
+  source          LeadSource    @default(MANUAL)
+  lifecycle       ContactLifecycle @default(SUBSCRIBER)
+  type            ContactType   @default(PROSPECT)
+  salutation      String?       // Mr., Mrs., Dr., etc.
+  dateOfBirth     DateTime?
+  website         String?
+  linkedin        String?
+  twitter         String?
+  address         String?
+  city            String?
+  state           String?
+  country         String?
+  postalCode      String?
+  description     String?
+  score           Int           @default(0)
+  lastContactedAt DateTime?
+  doNotEmail      Boolean       @default(false)
+  doNotCall       Boolean       @default(false)
+  hasOptedOutEmail Boolean      @default(false)
+  customData      Json          @default("{}")
+  isArchived      Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  ownerId         String?
+  owner           User?    @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  createdById     String?
+  createdBy       User?    @relation("ContactCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  convertedFromLeadId String? @unique
+  convertedFromLead   Lead?   @relation("ConvertedContact", fields: [convertedFromLeadId], references: [id], onDelete: SetNull)
+
+  activities      ContactActivity[]
+  notes           ContactNote[]
+  tasks           Task[]        @relation("ContactTasks")
+  tags            ContactTag[]
+  deals           Deal[]
+
+  @@index([organizationId, lifecycle])
+  @@index([organizationId, type])
+  @@index([organizationId, ownerId])
+  @@index([email])
+  @@index([phone])
+  @@map("contacts")
+}
+
+enum ContactLifecycle {
+  SUBSCRIBER
+  LEAD
+  MARKETING_QUALIFIED
+  SALES_QUALIFIED
+  OPPORTUNITY
+  CUSTOMER
+  EVANGELIST
+  OTHER
+}
+
+enum ContactType {
+  PROSPECT
+  CUSTOMER
+  PARTNER
+  VENDOR
+  INFLUENCER
+  OTHER
+}
+
+model ContactActivity {
+  id          String       @id @default(uuid())
+  type        ActivityType
+  description String
+  metadata    Json         @default("{}")
+  createdAt   DateTime     @default(now())
+
+  contactId   String
+  contact     Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  userId      String?
+  user        User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([contactId, createdAt])
+  @@map("contact_activities")
+}
+
+model ContactNote {
+  id        String   @id @default(uuid())
+  content   String
+  isPinned  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  userId    String
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@map("contact_notes")
+}
+
+model ContactTag {
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  tagId     String
+  tag       Tag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@map("contact_tags")
+}
+
+model Deal {
+  id          String     @id @default(uuid())
+  name        String
+  amount      Decimal?   @db.Decimal(12, 2)
+  stage       String     @default("QUALIFICATION")
+  probability Int        @default(0)
+  closeDate   DateTime?
+  description String?
+  status      DealStatus @default(OPEN)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  contactId      String
+  contact        Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  ownerId        String?
+  owner          User?   @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([contactId])
+  @@index([organizationId, status])
+  @@map("deals")
+}
+
+enum DealStatus {
+  OPEN
   WON
   LOST
 }
@@ -182,6 +378,51 @@ model PipelineStage {
 
   @@unique([organizationId, order])
   @@map("pipeline_stages")
+}
+
+// ─── Call Logs ──────────────────────────────────────────────────
+
+model CallLog {
+  id              String          @id @default(uuid())
+  disposition     CallDisposition
+  notes           String?
+  duration        Int?            // call duration in seconds
+  callbackDate    DateTime?       // when to call back (for CALLBACK disposition)
+  meetingDate     DateTime?       // scheduled meeting date (for MEETING_ARRANGED)
+  appointmentDate DateTime?       // booked appointment date (for APPOINTMENT_BOOKED)
+  metadata        Json            @default("{}")
+  createdAt       DateTime        @default(now())
+
+  leadId          String
+  lead            Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  userId          String?
+  user            User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Auto-created follow-up task (if any)
+  followUpTaskId  String?
+
+  @@index([leadId, createdAt])
+  @@index([disposition])
+  @@map("call_logs")
+}
+
+enum CallDisposition {
+  CALLBACK          // Customer asked to call back later
+  MEETING_ARRANGED  // Meeting has been scheduled
+  APPOINTMENT_BOOKED // Appointment confirmed
+  INTERESTED        // Customer showed interest, send info
+  NOT_INTERESTED    // Customer not interested
+  NO_ANSWER         // No one picked up
+  VOICEMAIL_LEFT    // Left voicemail
+  WRONG_NUMBER      // Wrong contact number
+  BUSY              // Line busy, try again
+  GATEKEEPER        // Reached gatekeeper, not decision maker
+  FOLLOW_UP_EMAIL   // Customer requested info via email
+  QUALIFIED         // Lead qualified during call
+  PROPOSAL_REQUESTED // Customer requested a proposal
+  DO_NOT_CALL       // Customer asked not to be called
+  OTHER             // Other outcome
 }
 
 // ─── Activities ──────────────────────────────────────────────────
@@ -261,6 +502,9 @@ model Task {
   leadId      String?
   lead        Lead? @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
+  contactId   String?
+  contact     Contact? @relation("ContactTasks", fields: [contactId], references: [id], onDelete: Cascade)
+
   assigneeId  String
   assignee    User @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: Cascade)
 
@@ -305,7 +549,10 @@ model Communication {
   subject     String?
   body        String
   metadata    Json              @default("{}")
+  isEdited    Boolean           @default(false)
+  isDeleted   Boolean           @default(false)
   createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   leadId      String
   lead        Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -338,6 +585,7 @@ model Campaign {
   type           CampaignType
   status         CampaignStatus @default(DRAFT)
   budget         Decimal?       @db.Decimal(12, 2)
+  description    String?
   startDate      DateTime?
   endDate        DateTime?
   metadata       Json           @default("{}")
@@ -346,6 +594,8 @@ model Campaign {
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrations   Integration[]
 
   @@index([organizationId])
   @@map("campaigns")
@@ -358,6 +608,8 @@ enum CampaignType {
   WHATSAPP
   LANDING_PAGE
   REFERRAL
+  TIKTOK_ADS
+  WEBSITE_FORM
   OTHER
 }
 
@@ -379,6 +631,7 @@ model Tag {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   leads          LeadTag[]
+  contacts       ContactTag[]
 
   @@unique([organizationId, name])
   @@map("tags")
@@ -403,6 +656,7 @@ model Attachment {
   mimeType  String
   size      Int
   url       String
+  data      String?  @db.Text
   createdAt DateTime @default(now())
 
   leadId    String
@@ -458,9 +712,30 @@ model AutomationRule {
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  logs           AutomationLog[]
 
   @@index([organizationId, isActive])
   @@map("automation_rules")
+}
+
+model AutomationLog {
+  id               String   @id @default(uuid())
+  status           String   @default("success") // success, failed, skipped
+  trigger          String
+  conditionsMet    Boolean  @default(true)
+  actionsExecuted  Json     @default("[]")
+  error            String?
+  executionTimeMs  Int      @default(0)
+  leadId           String?
+  leadName         String?
+  createdAt        DateTime @default(now())
+
+  ruleId           String
+  rule             AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId, createdAt])
+  @@index([createdAt])
+  @@map("automation_logs")
 }
 
 enum AutomationTrigger {
@@ -551,4 +826,106 @@ model AuditLog {
   @@index([organizationId, createdAt])
   @@index([entity, entityId])
   @@map("audit_logs")
+}
+
+// ─── Notifications ──────────────────────────────────────────────
+
+model Notification {
+  id             String   @id @default(uuid())
+  type           String
+  title          String
+  message        String
+  isRead         Boolean  @default(false)
+  isArchived     Boolean  @default(false)
+  readAt         DateTime?
+  entityType     String?
+  entityId       String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userId         String
+  user           User     @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+
+  actorId        String?
+  actor          User?    @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, isArchived])
+  @@index([organizationId, createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id          String   @id @default(uuid())
+  preferences Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+// ─── Integrations ───────────────────────────────────────────────
+
+model Integration {
+  id             String   @id @default(uuid())
+  platform       String
+  status         String   @default("disconnected")
+  credentials    Json     @default("{}")
+  config         Json     @default("{}")
+  lastSyncAt     DateTime? @map("last_sync_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  campaignId     String?  @map("campaign_id")
+  campaign       Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  createdById    String?  @map("created_by")
+  createdBy      User?    @relation("IntegrationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  logs           IntegrationLog[]
+
+  @@index([organizationId, platform])
+  @@map("integrations")
+}
+
+model IntegrationLog {
+  id             String   @id @default(uuid())
+  action         String
+  payload        Json     @default("{}")
+  status         String   @default("success")
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  integrationId  String   @map("integration_id")
+  integration    Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  leadId         String?  @map("lead_id")
+
+  @@index([integrationId, createdAt])
+  @@map("integration_logs")
+}
+
+// ─── API Keys ───────────────────────────────────────────────────
+
+model ApiKey {
+  id             String   @id @default(uuid())
+  key            String   @unique
+  name           String
+  isActive       Boolean  @default(true) @map("is_active")
+  lastUsedAt     DateTime? @map("last_used_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([key, isActive])
+  @@map("api_keys")
 }

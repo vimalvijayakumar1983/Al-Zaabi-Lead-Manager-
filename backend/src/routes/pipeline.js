@@ -3,6 +3,8 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { executeAutomations } = require('../services/automationEngine');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -10,13 +12,21 @@ router.use(authenticate, orgScope);
 // ─── Get Pipeline Stages ─────────────────────────────────────────
 router.get('/stages', async (req, res, next) => {
   try {
+    const leadFilter = { isArchived: false };
+    if (req.isRestrictedRole) leadFilter.assignedToId = req.user.id;
+
+    // Allow filtering to a single division via ?organizationId=
+    const orgFilter = req.query.organizationId && req.orgIds.includes(req.query.organizationId)
+      ? req.query.organizationId
+      : undefined;
+
     const stages = await prisma.pipelineStage.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: orgFilter ? orgFilter : { in: req.orgIds } },
       orderBy: { order: 'asc' },
       include: {
-        _count: { select: { leads: true } },
+        _count: { select: { leads: { where: leadFilter } } },
         leads: {
-          where: { isArchived: false },
+          where: leadFilter,
           orderBy: { stageOrder: 'asc' },
           include: {
             assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
@@ -37,18 +47,22 @@ router.post('/stages', authorize('ADMIN', 'MANAGER'), validate(z.object({
   color: z.string().optional(),
   isWonStage: z.boolean().optional(),
   isLostStage: z.boolean().optional(),
+  divisionId: z.string().uuid().optional(),
 })), async (req, res, next) => {
   try {
+    const { divisionId, ...stageData } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     const maxOrder = await prisma.pipelineStage.aggregate({
-      where: { organizationId: req.orgId },
+      where: { organizationId: targetOrgId },
       _max: { order: true },
     });
 
     const stage = await prisma.pipelineStage.create({
       data: {
-        ...req.validated,
+        ...stageData,
         order: (maxOrder._max.order ?? -1) + 1,
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
     });
     res.status(201).json(stage);
@@ -64,6 +78,12 @@ router.put('/stages/:id', authorize('ADMIN', 'MANAGER'), validate(z.object({
   order: z.number().int().optional(),
 })), async (req, res, next) => {
   try {
+    // Verify stage belongs to one of the user's orgs
+    const existing = await prisma.pipelineStage.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Stage not found' });
+
     const stage = await prisma.pipelineStage.update({
       where: { id: req.params.id },
       data: req.validated,
@@ -84,12 +104,12 @@ router.post('/move', validate(z.object({
     const { leadId, stageId, order } = req.validated;
 
     const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: req.orgId },
+      where: { id: leadId, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const stage = await prisma.pipelineStage.findFirst({
-      where: { id: stageId, organizationId: req.orgId },
+      where: { id: stageId, organizationId: { in: req.orgIds } },
     });
     if (!stage) return res.status(404).json({ error: 'Stage not found' });
 
@@ -125,6 +145,29 @@ router.post('/move', validate(z.object({
     });
 
     res.json(updated);
+
+    // ── Fire-and-forget notification — notify lead owner ──
+    if (stageId !== lead.stageId && lead.assignedToId && lead.assignedToId !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.PIPELINE_STAGE_CHANGED,
+        title: 'Lead Moved',
+        message: `${lead.firstName} ${lead.lastName} moved to ${stage.name}`,
+        userId: lead.assignedToId,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: leadId,
+        organizationId: lead.organizationId,
+      }).catch(() => {});
+    }
+
+    // Fire automation rules for stage change
+    if (stageId !== lead.stageId) {
+      executeAutomations('LEAD_STAGE_CHANGED', {
+        organizationId: lead.organizationId,
+        lead: updated,
+        previousData: lead,
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }

@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
 import { ColumnManager, loadColumns, saveColumns, type ColumnDef } from './components/column-config';
@@ -9,6 +11,11 @@ import { ViewSidebar, SYSTEM_VIEWS, loadCustomViews, saveCustomViews, type Saved
 import { KanbanView } from './components/kanban-view';
 import { InlineEdit } from './components/inline-edit';
 import { AdvancedFilters, FilterBadges, emptyFilters, type FilterState } from './components/advanced-filters';
+import { AssigneeDropdown } from './components/AssigneeDropdown';
+import { BulkReassignModal } from './components/BulkReassignModal';
+import { AllocationSettings } from './components/AllocationSettings';
+import { WorkloadDashboard } from './components/WorkloadDashboard';
+import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -23,20 +30,43 @@ const statusColors: Record<string, string> = {
 };
 
 const sourceLabels: Record<string, string> = {
-  WEBSITE_FORM: 'Website Form', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
-  FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', MANUAL: 'Manual',
-  CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
+  WEBSITE_FORM: 'Website Form', LIVE_CHAT: 'Live Chat Widget', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
+  FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', TIKTOK_ADS: 'TikTok Ads',
+  MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',
 };
 
 type ViewMode = 'table' | 'cards' | 'kanban';
 
 export default function LeadsPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>}>
+      <LeadsContent />
+    </Suspense>
+  );
+}
+
+function LeadsContent() {
+  const searchParams = useSearchParams();
+
   // ─── State ──────────────────────────────────────────────────────
   const [leads, setLeads] = useState<Lead[]>([]);
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 1 });
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<FilterState>({ ...emptyFilters });
+  const [error, setError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<FilterState>(() => {
+    // Initialize filters from URL params (for drill-down from analytics)
+    const initial = { ...emptyFilters };
+    const paramKeys: (keyof FilterState)[] = [
+      'status', 'source', 'assignedToId', 'stageId', 'campaign',
+      'minScore', 'maxScore', 'search', 'company', 'location',
+    ];
+    for (const key of paramKeys) {
+      const val = searchParams.get(key);
+      if (val) initial[key] = val;
+    }
+    return initial;
+  });
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
@@ -58,6 +88,10 @@ export default function LeadsPage() {
 
   // Advanced filters
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [showBulkReassign, setShowBulkReassign] = useState(false);
+  const [showAllocationSettings, setShowAllocationSettings] = useState(false);
+  const [showWorkload, setShowWorkload] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [allTags, setAllTags] = useState<{id: string; name: string; color: string}[]>([]);
   const [stages, setStages] = useState<{id: string; name: string}[]>([]);
@@ -71,18 +105,24 @@ export default function LeadsPage() {
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const params: Record<string, string | number> = {
         page: pagination.page,
-        limit: 20,
+        limit: pagination.limit,
         sortBy,
         sortOrder,
       };
+      // Scope leads to the active division for super admin
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      if (activeDivisionId) params.divisionId = activeDivisionId;
       if (filters.search) params.search = filters.search;
       if (filters.status) params.status = filters.status;
       if (filters.source) params.source = filters.source;
       if (filters.assignedToId === '__unassigned__') {
         params.assignedToId = 'unassigned';
+      } else if (filters.assignedToId === '__current_user__' && currentUser) {
+        params.assignedToId = currentUser.id;
       } else if (filters.assignedToId && filters.assignedToId !== '__current_user__') {
         params.assignedToId = filters.assignedToId;
       }
@@ -106,14 +146,18 @@ export default function LeadsPage() {
       const res: PaginatedResponse<Lead> = await api.getLeads(params);
       setLeads(res.data);
       setPagination(res.pagination as any);
+    } catch (err: any) {
+      console.error('Failed to fetch leads:', err);
+      setError(err.message || 'Failed to load leads. Please check that the backend server is running.');
     } finally {
       setLoading(false);
     }
-  }, [pagination.page, filters, sortBy, sortOrder]);
+  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser]);
 
   const fetchStats = useCallback(async () => {
     try {
-      const data = await api.getDashboard();
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const data = await api.getDashboard(activeDivisionId || undefined);
       setStats(data);
     } catch { /* non-critical */ }
   }, []);
@@ -125,9 +169,18 @@ export default function LeadsPage() {
     } catch { /* non-critical */ }
   }, []);
 
+  const fetchCurrentUser = useCallback(async () => {
+    try {
+      const me = await api.getMe();
+      setCurrentUser(me);
+    } catch { /* non-critical */ }
+  }, []);
+
   const fetchCustomFields = useCallback(async () => {
     try {
-      const data = await api.getCustomFields();
+      // Scope custom fields to the active division (if super admin has one selected)
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const data = await api.getCustomFields(activeDivisionId || undefined);
       setCustomFields(data as CustomField[]);
       // Rebuild columns with custom fields
       setColumns(prev => {
@@ -143,8 +196,12 @@ export default function LeadsPage() {
     } catch { /* non-critical */ }
   }, []);
 
+  useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
+
+  // Auto-refresh when another user modifies lead data
+  useRealtimeSync(['lead'], () => { fetchLeads(); fetchStats(); });
   useEffect(() => {
     api.getLeadTags().then((data: any) => setAllTags(data || [])).catch(() => {});
     api.getPipelineStages().then((data: any) => setStages(data.stages || data || [])).catch(() => {});
@@ -205,6 +262,16 @@ export default function LeadsPage() {
       await api.bulkUpdateLeads(Array.from(selectedLeads), { status });
       setSelectedLeads(new Set());
       setShowBulkActions(false);
+      fetchLeads();
+      fetchStats();
+    } catch (err: any) { alert(err.message); }
+  };
+
+  const handleBulkReassign = async (assignedToId: string, _reason?: string) => {
+    try {
+      await api.bulkUpdateLeads(Array.from(selectedLeads), { assignedToId });
+      setShowBulkReassign(false);
+      setSelectedLeads(new Set());
       fetchLeads();
       fetchStats();
     } catch (err: any) { alert(err.message); }
@@ -311,8 +378,8 @@ export default function LeadsPage() {
           case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
           case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
-          case 'createdAt': return new Date(l.createdAt).toLocaleDateString();
-          case 'updatedAt': return new Date(l.updatedAt).toLocaleDateString();
+          case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           default:
             if (c.id.startsWith('cf_')) {
               const fn = c.id.slice(3);
@@ -472,9 +539,9 @@ export default function LeadsPage() {
           </div>
         ) : <span className="text-xs text-gray-400">-</span>;
       case 'createdAt':
-        return <span className="text-sm text-gray-500">{new Date(lead.createdAt).toLocaleDateString()}</span>;
+        return <span className="text-sm text-gray-500">{new Date(lead.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
       case 'updatedAt':
-        return <span className="text-sm text-gray-500">{new Date(lead.updatedAt).toLocaleDateString()}</span>;
+        return <span className="text-sm text-gray-500">{new Date(lead.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
       case 'actions':
         return (
           <div className="relative">
@@ -534,7 +601,7 @@ export default function LeadsPage() {
             case 'URL':
               return <a href={String(value)} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-600 hover:underline truncate block max-w-[180px]">{String(value)}</a>;
             case 'DATE':
-              return <span className="text-sm text-gray-700">{new Date(String(value)).toLocaleDateString()}</span>;
+              return <span className="text-sm text-gray-700">{new Date(String(value)).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
             case 'NUMBER':
               return (
                 <InlineEdit value={String(value)} onSave={async (v) => {
@@ -575,6 +642,7 @@ export default function LeadsPage() {
           <p className="text-text-secondary mt-0.5 text-sm">{pagination.total} leads total</p>
         </div>
         <div className="flex items-center gap-2">
+          <RefreshButton onRefresh={() => { fetchLeads(); fetchStats(); }} />
           <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
             Export
@@ -594,7 +662,17 @@ export default function LeadsPage() {
           <StatCard label="Qualified" value={stats.leadsByStatus?.find((s: any) => s.status === 'QUALIFIED')?._count?.status || 0} color="cyan" />
           <StatCard label="Won" value={stats.overview.wonLeads} color="green" />
           <StatCard label="Lost" value={stats.overview.lostLeads} color="red" />
-          <StatCard label="Pipeline" value={`$${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
+          <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
+          <div className="col-span-full flex gap-2 mt-1">
+            <button onClick={() => setShowWorkload(!showWorkload)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              Team Workload
+            </button>
+            <button onClick={() => setShowAllocationSettings(true)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              Allocation Rules
+            </button>
+          </div>
         </div>
       )}
 
@@ -693,7 +771,7 @@ export default function LeadsPage() {
           )}
 
           {/* Active Filter Badges */}
-          <FilterBadges filters={filters} onRemove={handleRemoveFilter} />
+          <FilterBadges filters={filters} onRemove={handleRemoveFilter} stages={stages} />
 
           {/* Bulk Actions Bar */}
           {selectedLeads.size > 0 && (
@@ -718,6 +796,10 @@ export default function LeadsPage() {
                     </div>
                   )}
                 </div>
+                <button onClick={() => setShowBulkReassign(true)} className="btn-secondary text-xs gap-1">
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                  Reassign
+                </button>
                 <button onClick={handleBulkDelete} className="btn-secondary text-xs text-red-600 hover:text-red-700 gap-1">
                   <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                   Archive
@@ -757,6 +839,17 @@ export default function LeadsPage() {
                           <span className="text-sm text-text-tertiary">Loading leads...</span>
                         </div>
                       </td></tr>
+                    ) : error ? (
+                      <tr><td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
+                        <div className="flex flex-col items-center gap-3 py-8">
+                          <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center">
+                            <svg className="h-6 w-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
+                          </div>
+                          <p className="text-sm font-medium text-red-800">Failed to load leads</p>
+                          <p className="text-xs text-red-600 max-w-md">{error}</p>
+                          <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-2">Retry</button>
+                        </div>
+                      </td></tr>
                     ) : leads.length === 0 ? (
                       <tr><td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
                         <div className="empty-state py-8">
@@ -789,6 +882,12 @@ export default function LeadsPage() {
             <div>
               {loading ? (
                 <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" /></div>
+              ) : error ? (
+                <div className="card p-12 text-center">
+                  <p className="text-sm font-medium text-red-800">Failed to load leads</p>
+                  <p className="text-xs text-red-600 mt-1">{error}</p>
+                  <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-3">Retry</button>
+                </div>
               ) : leads.length === 0 ? (
                 <div className="card p-12 text-center">
                   <p className="text-sm text-gray-500">No leads found</p>
@@ -843,19 +942,43 @@ export default function LeadsPage() {
 
           {/* ═══════════════════ KANBAN VIEW ═══════════════════ */}
           {viewMode === 'kanban' && (
-            <KanbanView
-              leads={leads}
-              customFields={customFields}
-              onStatusChange={async (leadId, status) => {
-                await handleQuickStatus(leadId, status);
-              }}
-            />
+            <div>
+              <KanbanView
+                leads={leads}
+                customFields={customFields}
+                onStatusChange={async (leadId, status) => {
+                  await handleQuickStatus(leadId, status);
+                }}
+              />
+              <div className="mt-4">
+                <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
+              </div>
+            </div>
           )}
         </div>
       </div>
 
+      {/* ─── Workload Dashboard ─────────────────────────────────── */}
+      <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+
       {/* ─── Modals ──────────────────────────────────────────────── */}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} />}
+      {showBulkReassign && (
+        <BulkReassignModal
+          leadCount={selectedLeads.size}
+          users={users}
+          currentUserId={currentUser?.id}
+          onConfirm={handleBulkReassign}
+          onClose={() => setShowBulkReassign(false)}
+        />
+      )}
+      {showAllocationSettings && (
+        <AllocationSettings
+          isOpen={showAllocationSettings}
+          onClose={() => { setShowAllocationSettings(false); fetchLeads(); }}
+          users={users}
+        />
+      )}
+      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} />}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
   );
@@ -881,191 +1004,532 @@ function StatCard({ label, value, color }: { label: string; value: string | numb
 }
 
 function Pagination({ pagination, setPagination, pageNumbers }: {
-  pagination: { total: number; page: number; totalPages: number };
+  pagination: { total: number; page: number; limit: number; totalPages: number };
   setPagination: (fn: (p: any) => any) => void;
   pageNumbers: () => (number | string)[];
 }) {
-  if (pagination.totalPages <= 1) return null;
+  const limit = pagination.limit || 20;
+  const start = ((pagination.page - 1) * limit) + 1;
+  const end = Math.min(pagination.page * limit, pagination.total);
   return (
     <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3">
-      <p className="text-sm text-gray-500">
-        Showing {((pagination.page - 1) * 20) + 1}-{Math.min(pagination.page * 20, pagination.total)} of {pagination.total}
-      </p>
-      <div className="flex items-center gap-1">
-        <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page <= 1}
-          onClick={() => setPagination((p: any) => ({ ...p, page: p.page - 1 }))}>
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-        </button>
-        {pageNumbers().map((p, i) => (
-          typeof p === 'number' ? (
-            <button key={i} onClick={() => setPagination((prev: any) => ({ ...prev, page: p }))}
-              className={`min-w-[32px] h-8 rounded text-sm font-medium ${p === pagination.page ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-              {p}
-            </button>
-          ) : <span key={i} className="px-1 text-gray-400">...</span>
-        ))}
-        <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page >= pagination.totalPages}
-          onClick={() => setPagination((p: any) => ({ ...p, page: p.page + 1 }))}>
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-        </button>
+      <div className="flex items-center gap-3">
+        <p className="text-sm text-gray-500">
+          {pagination.total > 0 ? `Showing ${start}-${end} of ${pagination.total}` : 'No leads'}
+        </p>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="page-size" className="text-xs text-gray-400">Per page</label>
+          <select
+            id="page-size"
+            value={limit}
+            onChange={(e) => setPagination((p: any) => ({ ...p, limit: Number(e.target.value), page: 1 }))}
+            className="text-xs border border-gray-200 rounded-md px-1.5 py-1 text-gray-600 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          >
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
       </div>
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center gap-1">
+          <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page <= 1}
+            onClick={() => setPagination((p: any) => ({ ...p, page: p.page - 1 }))}>
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          </button>
+          {pageNumbers().map((p, i) => (
+            typeof p === 'number' ? (
+              <button key={i} onClick={() => setPagination((prev: any) => ({ ...prev, page: p }))}
+                className={`min-w-[32px] h-8 rounded text-sm font-medium ${p === pagination.page ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                {p}
+              </button>
+            ) : <span key={i} className="px-1 text-gray-400">...</span>
+          ))}
+          <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page >= pagination.totalPages}
+            onClick={() => setPagination((p: any) => ({ ...p, page: p.page + 1 }))}>
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function CreateLeadModal({ onClose, onSubmit, customFields = [] }: { onClose: () => void; onSubmit: (data: any) => void; customFields?: CustomField[] }) {
-  const [form, setForm] = useState({
-    firstName: '', lastName: '', email: '', phone: '', company: '', jobTitle: '',
-    source: 'MANUAL', productInterest: '', location: '', budget: '', website: '', campaign: '',
+const LEAD_SOURCES = [
+  'WEBSITE_FORM', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT',
+  'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+] as const;
+
+interface CreateLeadModalProps {
+  onClose: () => void;
+  onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  customFields?: any[];
+  users?: User[];
+  currentUserId?: string;
+}
+
+function CreateLeadModal({
+  onClose,
+  onSubmit,
+  customFields = [],
+  users = [],
+  currentUserId,
+}: CreateLeadModalProps) {
+  const [formData, setFormData] = useState<Record<string, unknown>>({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    company: '',
+    jobTitle: '',
+    source: '',
+    budget: '',
+    productInterest: '',
+    location: '',
+    website: '',
+    campaign: '',
+    assignedToId: currentUserId || null,
   });
-  const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
-  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      // Build customData from custom field values
-      const customData: Record<string, unknown> = {};
-      for (const cf of customFields) {
-        const val = customValues[cf.name];
-        if (val !== undefined && val !== '' && val !== null) {
-          if (cf.type === 'NUMBER') customData[cf.name] = parseFloat(String(val)) || null;
-          else if (cf.type === 'BOOLEAN') customData[cf.name] = val === true || val === 'true';
-          else customData[cf.name] = val;
-        }
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const updateField = useCallback((field: string, value: unknown) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }, []);
+
+  const validate = useCallback((): boolean => {
+    const newErrors: Record<string, string> = {};
+
+    if (!formData.firstName || String(formData.firstName).trim() === '') {
+      newErrors.firstName = 'First name is required';
+    }
+    if (!formData.lastName || String(formData.lastName).trim() === '') {
+      newErrors.lastName = 'Last name is required';
+    }
+    if (formData.email && String(formData.email).trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(String(formData.email))) {
+        newErrors.email = 'Invalid email address';
       }
+    }
+    if (formData.website && String(formData.website).trim() !== '') {
+      try {
+        new URL(String(formData.website));
+      } catch {
+        newErrors.website = 'Invalid URL (include https://)';
+      }
+    }
+    if (formData.budget && isNaN(Number(formData.budget))) {
+      newErrors.budget = 'Budget must be a number';
+    }
 
-      await onSubmit({
-        firstName: form.firstName, lastName: form.lastName,
-        email: form.email || null, phone: form.phone || null,
-        company: form.company || null, jobTitle: form.jobTitle || null,
-        source: form.source || undefined, productInterest: form.productInterest || null,
-        location: form.location || null, budget: form.budget ? parseFloat(form.budget) : null,
-        website: form.website || null, campaign: form.campaign || null,
-        ...(Object.keys(customData).length > 0 ? { customData } : {}),
-      });
-    } finally { setSubmitting(false); }
-  };
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }, [formData]);
 
-  const sourceLabelsLocal: Record<string, string> = {
-    MANUAL: 'Manual', WEBSITE_FORM: 'Website Form', LANDING_PAGE: 'Landing Page',
-    WHATSAPP: 'WhatsApp', FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads',
-    REFERRAL: 'Referral', EMAIL: 'Email', PHONE: 'Phone', CSV_IMPORT: 'CSV Import',
-    API: 'API', OTHER: 'Other',
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!validate()) return;
+
+      setIsSubmitting(true);
+      try {
+        const submitData: Record<string, unknown> = { ...formData };
+
+        // Clean up budget — send as number
+        if (submitData.budget && String(submitData.budget).trim() !== '') {
+          submitData.budget = Number(submitData.budget);
+        } else {
+          delete submitData.budget;
+        }
+
+        // Clean up empty strings
+        Object.keys(submitData).forEach((key) => {
+          if (submitData[key] === '') {
+            delete submitData[key];
+          }
+        });
+
+        // Handle custom fields — store in customData keyed by cf.name
+        const customData: Record<string, unknown> = {};
+        customFields.forEach((cf) => {
+          const val = submitData[`custom_${cf.name}`];
+          if (val !== undefined && val !== '') {
+            customData[cf.name] = val;
+          }
+          delete submitData[`custom_${cf.name}`];
+        });
+        if (Object.keys(customData).length > 0) {
+          submitData.customData = customData;
+        }
+
+        await onSubmit(submitData);
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [formData, validate, onSubmit, customFields]
+  );
+
+  const renderInput = (
+    field: string,
+    label: string,
+    options?: {
+      type?: string;
+      placeholder?: string;
+      required?: boolean;
+      half?: boolean;
+    }
+  ) => {
+    const { type = 'text', placeholder = '', required = false } = options || {};
+    const error = errors[field];
+
+    return (
+      <div className={options?.half ? '' : ''}>
+        <label className="label">
+          {label}
+          {required && <span className="text-red-500 ml-0.5">*</span>}
+        </label>
+        <input
+          type={type}
+          value={String(formData[field] ?? '')}
+          onChange={(e) => updateField(field, e.target.value)}
+          placeholder={placeholder}
+          className={`input w-full ${error ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''}`}
+        />
+        {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      </div>
+    );
   };
 
   return (
-    <div className="modal">
-      <div className="overlay" onClick={onClose} />
-      <div className="modal-panel w-full max-w-lg max-h-[90vh] overflow-y-auto relative z-50 animate-fade-in-up">
-        <div className="flex items-center justify-between p-5 border-b border-border-subtle">
+    <div className="overlay" onClick={onClose}>
+      <div
+        className="modal-panel w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <div>
-            <h2 className="text-lg font-semibold text-text-primary">Create New Lead</h2>
-            <p className="text-sm text-text-secondary mt-0.5">Add a new lead to your pipeline</p>
+            <h2 className="text-lg font-semibold text-gray-900">Create New Lead</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Add a new lead to your pipeline</p>
           </div>
-          <button onClick={onClose} className="btn-icon">
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-icon text-gray-400 hover:text-gray-600"
+          >
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          <SectionHeader icon="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" title="Personal Information" />
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">First Name *</label><input className="input" required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} placeholder="John" /></div>
-            <div><label className="label">Last Name *</label><input className="input" required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} placeholder="Doe" /></div>
-          </div>
 
-          <SectionHeader icon="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" title="Contact Details" />
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Email</label><input type="email" className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="john@example.com" /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 (555) 000-0000" /></div>
-          </div>
-
-          <SectionHeader icon="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" title="Company Details" />
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Company</label><input className="input" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Acme Inc." /></div>
-            <div><label className="label">Job Title</label><input className="input" value={form.jobTitle} onChange={(e) => setForm({ ...form, jobTitle: e.target.value })} placeholder="Marketing Manager" /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Website</label><input className="input" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} placeholder="https://example.com" /></div>
-            <div><label className="label">Location</label><input className="input" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Dubai, UAE" /></div>
-          </div>
-
-          <SectionHeader icon="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" title="Lead Information" />
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Source</label>
-              <select className="input" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
-                {Object.entries(sourceLabelsLocal).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-              </select>
-            </div>
-            <div><label className="label">Budget</label><input type="number" className="input" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} placeholder="0.00" /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Product Interest</label><input className="input" value={form.productInterest} onChange={(e) => setForm({ ...form, productInterest: e.target.value })} placeholder="e.g. Enterprise Plan" /></div>
-            <div><label className="label">Campaign</label><input className="input" value={form.campaign} onChange={(e) => setForm({ ...form, campaign: e.target.value })} placeholder="e.g. Q1 Promo" /></div>
-          </div>
-
-          {/* Custom Fields */}
-          {customFields.length > 0 && (
-            <>
-              <SectionHeader icon="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2" title="Custom Fields" />
-              <div className="grid grid-cols-2 gap-3">
-                {customFields.map((cf) => (
-                  <div key={cf.id}>
-                    <label className="label">{cf.label}{cf.isRequired ? ' *' : ''}</label>
-                    {cf.type === 'TEXT' && <input className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
-                    {cf.type === 'NUMBER' && <input type="number" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
-                    {cf.type === 'DATE' && <input type="date" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
-                    {cf.type === 'EMAIL' && <input type="email" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} />}
-                    {cf.type === 'PHONE' && <input className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} placeholder="+1 (555) 000-0000" />}
-                    {cf.type === 'URL' && <input type="url" className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })} placeholder="https://" />}
-                    {cf.type === 'SELECT' && (
-                      <select className="input" required={cf.isRequired} value={String(customValues[cf.name] || '')} onChange={(e) => setCustomValues({ ...customValues, [cf.name]: e.target.value })}>
-                        <option value="">Select...</option>
-                        {(cf.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-                      </select>
-                    )}
-                    {cf.type === 'MULTI_SELECT' && (
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap gap-1">
-                          {((customValues[cf.name] as string[]) || []).map((v, i) => (
-                            <span key={i} className="inline-flex items-center gap-1 text-xs bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full">
-                              {v}
-                              <button type="button" onClick={() => setCustomValues({ ...customValues, [cf.name]: ((customValues[cf.name] as string[]) || []).filter((_, j) => j !== i) })} className="hover:text-red-600">&times;</button>
-                            </span>
-                          ))}
-                        </div>
-                        <select className="input" value="" onChange={(e) => {
-                          if (e.target.value) {
-                            const current = (customValues[cf.name] as string[]) || [];
-                            if (!current.includes(e.target.value)) {
-                              setCustomValues({ ...customValues, [cf.name]: [...current, e.target.value] });
-                            }
-                            e.target.value = '';
-                          }
-                        }}>
-                          <option value="">Add...</option>
-                          {(cf.options || []).filter(o => !((customValues[cf.name] as string[]) || []).includes(o)).map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      </div>
-                    )}
-                    {cf.type === 'BOOLEAN' && (
-                      <div className="flex items-center gap-4 mt-1">
-                        <label className="flex items-center gap-1.5 text-sm"><input type="radio" name={`cf_${cf.name}`} checked={customValues[cf.name] === true} onChange={() => setCustomValues({ ...customValues, [cf.name]: true })} /> Yes</label>
-                        <label className="flex items-center gap-1.5 text-sm"><input type="radio" name={`cf_${cf.name}`} checked={customValues[cf.name] === false} onChange={() => setCustomValues({ ...customValues, [cf.name]: false })} /> No</label>
-                      </div>
-                    )}
-                  </div>
-                ))}
+        {/* Body */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+          <div className="px-6 py-5 space-y-6">
+            {/* ===== Contact Information ===== */}
+            <section>
+              <div className="flex items-center gap-2 mb-4">
+                <svg className="h-5 w-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                  Contact Information
+                </h3>
               </div>
-            </>
-          )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {renderInput('firstName', 'First Name', { placeholder: 'John', required: true })}
+                {renderInput('lastName', 'Last Name', { placeholder: 'Doe', required: true })}
+                {renderInput('email', 'Email', { type: 'email', placeholder: 'john@example.com' })}
+                {renderInput('phone', 'Phone', { type: 'tel', placeholder: '+971 50 123 4567' })}
+              </div>
+            </section>
 
-          <div className="flex justify-end gap-2 pt-3 border-t">
-            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={submitting} className="btn-primary gap-1.5">
-              {submitting ? <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Creating...</> : <>
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>Create Lead</>}
+            {/* ===== Lead Information ===== */}
+            <section>
+              <div className="flex items-center gap-2 mb-4">
+                <svg className="h-5 w-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                  Lead Information
+                </h3>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {renderInput('company', 'Company', { placeholder: 'Acme Corp' })}
+                {renderInput('jobTitle', 'Job Title', { placeholder: 'Marketing Director' })}
+                <div>
+                  <label className="label">Source</label>
+                  <select
+                    value={String(formData.source ?? '')}
+                    onChange={(e) => updateField('source', e.target.value)}
+                    className="input w-full"
+                  >
+                    <option value="">Select source…</option>
+                    {LEAD_SOURCES.map((src) => (
+                      <option key={src} value={src}>
+                        {src}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">
+                    Budget <span className="text-gray-400 font-normal">(AED)</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                      AED
+                    </span>
+                    <input
+                      type="text"
+                      value={String(formData.budget ?? '')}
+                      onChange={(e) => updateField('budget', e.target.value)}
+                      placeholder="0.00"
+                      className={`input w-full pl-12 ${errors.budget ? 'border-red-300' : ''}`}
+                    />
+                  </div>
+                  {errors.budget && <p className="mt-1 text-xs text-red-600">{errors.budget}</p>}
+                </div>
+                {renderInput('productInterest', 'Product Interest', { placeholder: 'e.g. Enterprise Plan' })}
+                {renderInput('location', 'Location', { placeholder: 'Dubai, UAE' })}
+                {renderInput('website', 'Website', { type: 'url', placeholder: 'https://example.com' })}
+                {renderInput('campaign', 'Campaign', { placeholder: 'Q1 2026 Campaign' })}
+              </div>
+            </section>
+
+            {/* ===== Lead Assignment ===== */}
+            <section>
+              <div className="flex items-center gap-2 mb-4">
+                <svg className="h-5 w-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                  Lead Assignment
+                </h3>
+              </div>
+              <div>
+                <label className="label">Assigned To</label>
+                <AssigneeDropdown
+                  users={users}
+                  selectedId={formData.assignedToId as string | null}
+                  onChange={(userId) => updateField('assignedToId', userId)}
+                  currentUserId={currentUserId}
+                  showAutoAssign
+                  showUnassigned
+                  placeholder="Select team member…"
+                />
+                <p className="mt-1.5 text-xs text-gray-500">
+                  Choose a team member or let the system auto-assign via round robin.
+                </p>
+              </div>
+            </section>
+
+            {/* ===== Custom Fields ===== */}
+            {customFields.length > 0 && (
+              <section>
+                <div className="flex items-center gap-2 mb-4">
+                  <svg className="h-5 w-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                  </svg>
+                  <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                    Custom Fields
+                  </h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {customFields.map((cf) => {
+                    const fieldKey = `custom_${cf.name}`;
+
+                    if (cf.type === 'SELECT' && cf.options && cf.options.length > 0) {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <select
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          >
+                            <option value="">Select…</option>
+                            {cf.options.map((opt: string) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'MULTI_SELECT' && cf.options && cf.options.length > 0) {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <select
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          >
+                            <option value="">Select…</option>
+                            {cf.options.map((opt: string) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'TEXTAREA') {
+                      return (
+                        <div key={cf.id} className="sm:col-span-2">
+                          <label className="label">{cf.label}</label>
+                          <textarea
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            rows={3}
+                            className="input w-full resize-none"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'BOOLEAN' || cf.type === 'CHECKBOX') {
+                      return (
+                        <div key={cf.id} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id={fieldKey}
+                            checked={Boolean(formData[fieldKey])}
+                            onChange={(e) => updateField(fieldKey, e.target.checked)}
+                            className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                          />
+                          <label htmlFor={fieldKey} className="text-sm text-gray-700">
+                            {cf.label}
+                          </label>
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'NUMBER') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="number"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'DATE') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="date"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'URL') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="url"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                            placeholder="https://"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'EMAIL') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="email"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (cf.type === 'PHONE') {
+                      return (
+                        <div key={cf.id}>
+                          <label className="label">{cf.label}</label>
+                          <input
+                            type="tel"
+                            value={String(formData[fieldKey] ?? '')}
+                            onChange={(e) => updateField(fieldKey, e.target.value)}
+                            className="input w-full"
+                          />
+                        </div>
+                      );
+                    }
+
+                    // Default: TEXT
+                    return (
+                      <div key={cf.id}>
+                        <label className="label">{cf.label}</label>
+                        <input
+                          type="text"
+                          value={String(formData[fieldKey] ?? '')}
+                          onChange={(e) => updateField(fieldKey, e.target.value)}
+                          className="input w-full"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50">
+            <button type="button" onClick={onClose} className="btn-secondary" disabled={isSubmitting}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <span className="flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  Creating…
+                </span>
+              ) : (
+                'Create Lead'
+              )}
             </button>
           </div>
         </form>
@@ -1073,6 +1537,9 @@ function CreateLeadModal({ onClose, onSubmit, customFields = [] }: { onClose: ()
     </div>
   );
 }
+
+
+
 
 function SectionHeader({ icon, title }: { icon: string; title: string }) {
   return (

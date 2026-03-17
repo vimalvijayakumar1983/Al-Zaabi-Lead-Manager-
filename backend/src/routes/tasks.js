@@ -4,7 +4,8 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
-const { notifyUser } = require('../websocket/server');
+const { notifyUser, broadcastDataChange } = require('../websocket/server');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -35,15 +36,18 @@ router.get('/', validateQuery(paginationSchema.extend({
 
     const where = {};
 
-    // Scope to org via lead or assignee
+    // Scope to org via assignee's organization
     if (leadId) {
       where.leadId = leadId;
     }
-    if (assigneeId) {
+    if (req.isRestrictedRole) {
+      // SALES_REP / VIEWER only sees their own tasks
+      where.assigneeId = req.user.id;
+    } else if (assigneeId) {
       where.assigneeId = assigneeId;
     } else {
-      // Default: show tasks for current user
-      where.assignee = { organizationId: req.orgId };
+      // Default: show tasks for users in the accessible orgs
+      where.assignee = { organizationId: { in: req.orgIds } };
     }
     if (status) where.status = status;
     if (priority) where.priority = priority;
@@ -109,6 +113,22 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
     }
 
     res.status(201).json(task);
+
+    // ── Fire-and-forget notification ──
+    if (data.assigneeId && data.assigneeId !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.TASK_ASSIGNED,
+        title: 'New Task Assigned',
+        message: `${req.user.firstName} ${req.user.lastName} assigned you task: ${task.title}`,
+        userId: data.assigneeId,
+        actorId: req.user.id,
+        entityType: 'task',
+        entityId: task.id,
+        organizationId: req.user.organizationId,
+      }).catch(() => {});
+    }
+
+    broadcastDataChange(req.user.organizationId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -117,6 +137,12 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
 // ─── Update Task ─────────────────────────────────────────────────
 router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
   try {
+    // Verify task belongs to accessible orgs via assignee
+    const existing = await prisma.task.findFirst({
+      where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+
     const data = req.validated;
     if (data.dueAt) data.dueAt = new Date(data.dueAt);
     if (data.reminder) data.reminder = new Date(data.reminder);
@@ -130,6 +156,8 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
       },
     });
     res.json(task);
+
+    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -138,6 +166,12 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
 // ─── Complete Task ───────────────────────────────────────────────
 router.post('/:id/complete', async (req, res, next) => {
   try {
+    // Verify task belongs to accessible orgs
+    const existing = await prisma.task.findFirst({
+      where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+
     const task = await prisma.task.update({
       where: { id: req.params.id },
       data: { status: 'COMPLETED', completedAt: new Date() },
@@ -155,6 +189,22 @@ router.post('/:id/complete', async (req, res, next) => {
     }
 
     res.json(task);
+
+    // ── Fire-and-forget notification — notify task creator ──
+    if (task.createdById && task.createdById !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.TASK_COMPLETED,
+        title: 'Task Completed',
+        message: `${req.user.firstName} ${req.user.lastName} completed task: ${task.title}`,
+        userId: task.createdById,
+        actorId: req.user.id,
+        entityType: 'task',
+        entityId: task.id,
+        organizationId: req.user.organizationId,
+      }).catch(() => {});
+    }
+
+    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -163,8 +213,16 @@ router.post('/:id/complete', async (req, res, next) => {
 // ─── Delete Task ─────────────────────────────────────────────────
 router.delete('/:id', async (req, res, next) => {
   try {
+    // Verify task belongs to accessible orgs
+    const existing = await prisma.task.findFirst({
+      where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+
     await prisma.task.delete({ where: { id: req.params.id } });
     res.json({ message: 'Task deleted' });
+
+    broadcastDataChange(req.user.organizationId, 'task', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {
     next(err);
   }

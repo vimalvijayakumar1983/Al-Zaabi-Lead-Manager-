@@ -281,6 +281,49 @@
   animation: counter 0.6s ease-out;
 }
 
+/* ─── Responsive ──────────────────────────────────────────────── */
+
+/* Mobile-first: ensure page content doesn't go behind sidebar */
+@media (max-width: 1023px) {
+  :root {
+    --sidebar-width: 0px;
+  }
+}
+
+/* Improve touch targets on mobile */
+@media (max-width: 639px) {
+  .btn-icon {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  .table-cell {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .card {
+    border-radius: 0.75rem;
+  }
+
+  .modal-panel {
+    max-height: calc(100vh - 2rem);
+    max-height: calc(100dvh - 2rem);
+  }
+}
+
+/* Use dvh for mobile viewports to handle browser chrome */
+@supports (height: 100dvh) {
+  .min-h-screen {
+    min-height: 100dvh;
+  }
+}
+
+/* Prevent horizontal overflow on mobile */
+html, body {
+  overflow-x: hidden;
+}
+
 /* ─── Drag & drop ──────────────────────────────────────────────── */
 .dragging {
   @apply opacity-50 scale-[1.02] shadow-xl rotate-1;
