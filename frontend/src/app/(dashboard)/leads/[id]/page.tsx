@@ -87,35 +87,39 @@ export default function LeadDetailPage() {
     api.getCustomFields(divisionId || undefined).then(setCustomFields).catch(() => {});
   }, [lead?.organizationId]);
 
+  // Pipeline stages are now fetched alongside the lead in the initial load
+  // effect below to avoid a visible delay (waterfall). This effect only
+  // re-runs if the stage org changes after the initial load (e.g. after edit).
+  const stageOrgRef = useRef<string | null>(null);
   useEffect(() => {
-    // Use the stage's organizationId to determine which division's pipeline to show,
-    // falling back to the lead's organizationId
     const stageOrgId = lead?.stage?.organizationId || lead?.organizationId;
-    if (!stageOrgId) return;
-    api.getPipelineStages(stageOrgId)
-      .then((data: any) => {
-        const stages = data.stages || data || [];
-        if (stages.length > 0) {
-          setPipelineStages(stages);
-        } else {
-          // Lead may belong to a GROUP org (no stages). Fetch all stages
-          // across divisions so the stepper still renders.
-          api.getPipelineStages()
-            .then((fallback: any) => {
-              const allStages = fallback.stages || fallback || [];
-              // Deduplicate by picking stages from the first division found
-              if (allStages.length > 0) {
-                const firstOrgId = allStages[0].organizationId;
-                setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
-              } else {
-                setPipelineStages([]);
-              }
-            })
-            .catch(() => setPipelineStages([]));
+    if (!stageOrgId || stageOrgId === stageOrgRef.current) return;
+    stageOrgRef.current = stageOrgId;
+    // Skip if stages were already loaded by the initial fetch
+    if (pipelineStages.length > 0) return;
+    fetchStagesForOrg(stageOrgId);
+  }, [lead?.stage?.organizationId, lead?.organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchStagesForOrg = useCallback(async (orgId: string) => {
+    try {
+      const data: any = await api.getPipelineStages(orgId);
+      const stages = data.stages || data || [];
+      if (stages.length > 0) {
+        setPipelineStages(stages);
+      } else {
+        // Lead may belong to a GROUP org (no stages). Fetch all stages
+        // across divisions so the stepper still renders.
+        const fallback: any = await api.getPipelineStages();
+        const allStages = fallback.stages || fallback || [];
+        if (allStages.length > 0) {
+          const firstOrgId = allStages[0].organizationId;
+          setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
         }
-      })
-      .catch(() => setPipelineStages([]));
-  }, [lead?.stage?.organizationId, lead?.organizationId]);
+      }
+    } catch {
+      setPipelineStages([]);
+    }
+  }, []);
 
   // Fetch users for assignment panel
   useEffect(() => {
@@ -140,8 +144,32 @@ export default function LeadDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    api.getLead(id)
-      .then(setLead)
+    // Fetch lead + pipeline stages in parallel to avoid the stepper
+    // popping in after the rest of the page has rendered.
+    const loadLead = api.getLead(id);
+    const loadStages = api.getPipelineStages(); // all stages for user's orgs
+
+    Promise.all([loadLead, loadStages])
+      .then(([leadData, stagesData]: [any, any]) => {
+        setLead(leadData);
+
+        const allStages = stagesData?.stages || stagesData || [];
+        // Pick stages matching the lead's division
+        const stageOrgId = leadData?.stage?.organizationId || leadData?.organizationId;
+        const matchingStages = stageOrgId
+          ? allStages.filter((s: any) => s.organizationId === stageOrgId)
+          : [];
+
+        if (matchingStages.length > 0) {
+          setPipelineStages(matchingStages);
+          stageOrgRef.current = stageOrgId;
+        } else if (allStages.length > 0) {
+          // Fallback: use stages from the first division found
+          const firstOrgId = allStages[0].organizationId;
+          setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
+          stageOrgRef.current = firstOrgId;
+        }
+      })
       .catch((err) => console.error('Failed to load lead:', err))
       .finally(() => setLoading(false));
   }, [id]);
