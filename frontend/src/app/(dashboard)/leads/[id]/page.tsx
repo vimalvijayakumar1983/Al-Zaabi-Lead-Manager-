@@ -91,10 +91,28 @@ export default function LeadDetailPage() {
     // Use the stage's organizationId to determine which division's pipeline to show,
     // falling back to the lead's organizationId
     const stageOrgId = lead?.stage?.organizationId || lead?.organizationId;
-    api.getPipelineStages(stageOrgId || undefined)
+    if (!stageOrgId) return;
+    api.getPipelineStages(stageOrgId)
       .then((data: any) => {
         const stages = data.stages || data || [];
-        setPipelineStages(stages);
+        if (stages.length > 0) {
+          setPipelineStages(stages);
+        } else {
+          // Lead may belong to a GROUP org (no stages). Fetch all stages
+          // across divisions so the stepper still renders.
+          api.getPipelineStages()
+            .then((fallback: any) => {
+              const allStages = fallback.stages || fallback || [];
+              // Deduplicate by picking stages from the first division found
+              if (allStages.length > 0) {
+                const firstOrgId = allStages[0].organizationId;
+                setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
+              } else {
+                setPipelineStages([]);
+              }
+            })
+            .catch(() => setPipelineStages([]));
+        }
       })
       .catch(() => setPipelineStages([]));
   }, [lead?.stage?.organizationId, lead?.organizationId]);
