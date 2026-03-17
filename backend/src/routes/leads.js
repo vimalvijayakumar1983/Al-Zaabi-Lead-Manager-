@@ -375,8 +375,23 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
   try {
     const data = req.validated;
 
-    // Determine target org: SUPER_ADMIN can target a division
-    const targetOrgId = (req.isSuperAdmin && data.divisionId) ? data.divisionId : req.orgId;
+    // Determine target org: SUPER_ADMIN can target a division.
+    // If SUPER_ADMIN doesn't specify a division, fall back to the first child
+    // division instead of the GROUP org (which has no pipeline stages).
+    let targetOrgId = req.orgId;
+    if (req.isSuperAdmin) {
+      if (data.divisionId) {
+        targetOrgId = data.divisionId;
+      } else {
+        // Find the first child division under the group
+        const firstDivision = await prisma.organization.findFirst({
+          where: { parentId: req.user.organizationId, type: 'DIVISION' },
+          select: { id: true },
+          orderBy: { name: 'asc' },
+        });
+        if (firstDivision) targetOrgId = firstDivision.id;
+      }
+    }
     delete data.divisionId;
 
 

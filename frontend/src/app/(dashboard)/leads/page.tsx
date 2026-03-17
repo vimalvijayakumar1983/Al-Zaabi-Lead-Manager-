@@ -143,9 +143,18 @@ function LeadsContent() {
       if (filters.conversionMin) params.conversionMin = filters.conversionMin;
       if (filters.conversionMax) params.conversionMax = filters.conversionMax;
       if (filters.stageId) params.stageId = filters.stageId;
-      const res: PaginatedResponse<Lead> = await api.getLeads(params);
-      setLeads(res.data);
-      setPagination(res.pagination as any);
+      const res = await api.getLeads(params) as any;
+      const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setLeads(leadsData);
+      if (res?.pagination) {
+        setPagination(prev => ({
+          ...prev,
+          total: res.pagination.total ?? prev.total,
+          page: res.pagination.page ?? prev.page,
+          limit: res.pagination.limit ?? prev.limit,
+          totalPages: res.pagination.totalPages ?? prev.totalPages,
+        }));
+      }
     } catch (err: any) {
       console.error('Failed to fetch leads:', err);
       setError(err.message || 'Failed to load leads. Please check that the backend server is running.');
@@ -222,6 +231,12 @@ function LeadsContent() {
 
   const handleCreateLead = async (data: any) => {
     try {
+      // For SUPER_ADMIN: attach the active division so the lead goes into a
+      // division (which has pipeline stages) instead of the GROUP org.
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      if (activeDivisionId && !data.divisionId) {
+        data.divisionId = activeDivisionId;
+      }
       await api.createLead(data);
       setShowForm(false);
       fetchLeads();
@@ -446,7 +461,7 @@ function LeadsContent() {
         return (
           <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
             <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
-              {lead.firstName[0]}{lead.lastName[0]}
+              {(lead.firstName || '?')[0]}{(lead.lastName || '?')[0]}
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{lead.firstName} {lead.lastName}</p>
@@ -900,7 +915,7 @@ function LeadsContent() {
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
-                              {lead.firstName[0]}{lead.lastName[0]}
+                              {(lead.firstName || '?')[0]}{(lead.lastName || '?')[0]}
                             </div>
                             <div>
                               <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{lead.firstName} {lead.lastName}</p>
@@ -978,7 +993,7 @@ function LeadsContent() {
           users={users}
         />
       )}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} />}
+      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} />}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
   );
@@ -1057,7 +1072,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
 }
 
 const LEAD_SOURCES = [
-  'WEBSITE_FORM', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
   'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT',
   'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
 ] as const;
@@ -1068,6 +1083,7 @@ interface CreateLeadModalProps {
   customFields?: any[];
   users?: User[];
   currentUserId?: string;
+  userRole?: string;
 }
 
 function CreateLeadModal({
@@ -1076,21 +1092,26 @@ function CreateLeadModal({
   customFields = [],
   users = [],
   currentUserId,
+  userRole,
 }: CreateLeadModalProps) {
-  const [formData, setFormData] = useState<Record<string, unknown>>({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    company: '',
-    jobTitle: '',
-    source: '',
-    budget: '',
-    productInterest: '',
-    location: '',
-    website: '',
-    campaign: '',
-    assignedToId: currentUserId || null,
+  const [formData, setFormData] = useState<Record<string, unknown>>(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    return {
+      firstName: '',
+      lastName: '',
+      email: '',
+      phone: '',
+      company: '',
+      jobTitle: '',
+      source: '',
+      budget: '',
+      productInterest: '',
+      location: '',
+      website: '',
+      campaign: '',
+      assignedToId: currentUserId || null,
+      ...(userRole === 'SUPER_ADMIN' && activeDivisionId ? { divisionId: activeDivisionId } : {}),
+    };
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -1236,6 +1257,35 @@ function CreateLeadModal({
         {/* Body */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
           <div className="px-6 py-5 space-y-6">
+            {/* ===== Division Selector (SUPER_ADMIN only) ===== */}
+            {userRole === 'SUPER_ADMIN' && (() => {
+              let divisions: any[] = [];
+              try { divisions = JSON.parse(localStorage.getItem('divisions') || '[]'); } catch {}
+              if (divisions.length === 0) return null;
+              const activeDivId = localStorage.getItem('activeDivisionId') || '';
+              return (
+                <section>
+                  <div className="flex items-center gap-2 mb-4">
+                    <svg className="h-5 w-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Division</h3>
+                  </div>
+                  <select
+                    value={String(formData.divisionId ?? activeDivId)}
+                    onChange={(e) => updateField('divisionId', e.target.value || null)}
+                    className="input w-full"
+                  >
+                    <option value="">Select division…</option>
+                    {divisions.map((d: any) => (
+                      <option key={d.id} value={d.id}>{d.tradeName || d.name}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-xs text-gray-500">Choose which division this lead belongs to.</p>
+                </section>
+              );
+            })()}
+
             {/* ===== Contact Information ===== */}
             <section>
               <div className="flex items-center gap-2 mb-4">
