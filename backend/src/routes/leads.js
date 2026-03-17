@@ -212,12 +212,13 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       prisma.lead.count({ where }),
     ]);
 
-    // Fetch per-channel communication counts and last message info for the current page of leads
+    // Fetch per-channel communication counts, first message (where lead came from), and last inbound for the current page of leads
     const leadIds = leads.map(l => l.id);
     let channelCountsMap = {};
     let lastMessageMap = {};
+    let firstMessageMap = {};
     if (leadIds.length > 0) {
-      const [channelCounts, lastMessages] = await Promise.all([
+      const [channelCounts, lastMessages, firstMessages] = await Promise.all([
         prisma.communication.groupBy({
           by: ['leadId', 'channel'],
           where: { leadId: { in: leadIds } },
@@ -229,6 +230,12 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           distinct: ['leadId'],
           select: { leadId: true, channel: true, body: true, createdAt: true },
         }),
+        prisma.communication.findMany({
+          where: { leadId: { in: leadIds } },
+          orderBy: { createdAt: 'asc' },
+          distinct: ['leadId'],
+          select: { leadId: true, channel: true, body: true, createdAt: true },
+        }),
       ]);
 
       // Build channel counts map: { leadId: { WHATSAPP: 3, EMAIL: 5, ... } }
@@ -237,7 +244,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         channelCountsMap[row.leadId][row.channel] = row._count.id;
       }
 
-      // Build last message map: { leadId: { channel, body, createdAt } }
+      // Build last inbound message map: { leadId: { channel, body, createdAt } }
       for (const msg of lastMessages) {
         lastMessageMap[msg.leadId] = {
           channel: msg.channel,
@@ -245,12 +252,22 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           createdAt: msg.createdAt,
         };
       }
+
+      // Build first message map (channel lead came from + first message text)
+      for (const msg of firstMessages) {
+        firstMessageMap[msg.leadId] = {
+          channel: msg.channel,
+          body: msg.body?.substring(0, 200) || '',
+          createdAt: msg.createdAt,
+        };
+      }
     }
 
-    // Enrich leads with channel counts and last message
+    // Enrich leads with channel counts, first message, and last inbound message
     const enrichedLeads = leads.map(lead => ({
       ...lead,
       channelCounts: channelCountsMap[lead.id] || {},
+      firstMessage: firstMessageMap[lead.id] || null,
       lastInboundMessage: lastMessageMap[lead.id] || null,
     }));
 
