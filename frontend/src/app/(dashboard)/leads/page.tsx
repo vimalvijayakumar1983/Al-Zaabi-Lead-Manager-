@@ -393,6 +393,10 @@ function LeadsContent() {
           case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
           case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
+          case 'channels': {
+            const cc = l.channelCounts || {};
+            return Object.entries(cc).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
+          }
           case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           default:
@@ -553,6 +557,34 @@ function LeadsContent() {
             {lead.tags.length > 3 && <span className="text-[10px] text-gray-400">+{lead.tags.length - 3}</span>}
           </div>
         ) : <span className="text-xs text-gray-400">-</span>;
+      case 'channels': {
+        const cc = lead.channelCounts || {};
+        const hasChannels = Object.keys(cc).length > 0;
+        if (!hasChannels) return <span className="text-xs text-gray-400">-</span>;
+        const channelConfig: Record<string, { icon: string; color: string; bg: string; label: string }> = {
+          WHATSAPP: { icon: 'M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z', color: '#25D366', bg: 'bg-green-50', label: 'WhatsApp' },
+          EMAIL: { icon: 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', color: '#6366F1', bg: 'bg-indigo-50', label: 'Email' },
+          SMS: { icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', color: '#8B5CF6', bg: 'bg-purple-50', label: 'SMS' },
+          PHONE: { icon: 'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z', color: '#F59E0B', bg: 'bg-amber-50', label: 'Phone' },
+          CHAT: { icon: 'M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z', color: '#3B82F6', bg: 'bg-blue-50', label: 'Chat' },
+        };
+        return (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {Object.entries(cc).map(([channel, count]) => {
+              const cfg = channelConfig[channel] || { icon: '', color: '#6B7280', bg: 'bg-gray-50', label: channel };
+              return (
+                <span key={channel} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cfg.bg}`}
+                  style={{ color: cfg.color }} title={`${cfg.label}: ${count} message${count !== 1 ? 's' : ''}`}>
+                  <svg className="h-3 w-3" fill={channel === 'WHATSAPP' ? 'currentColor' : 'none'} stroke={channel === 'WHATSAPP' ? 'none' : 'currentColor'} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={cfg.icon} />
+                  </svg>
+                  {count}
+                </span>
+              );
+            })}
+          </div>
+        );
+      }
       case 'createdAt':
         return <span className="text-sm text-gray-500">{new Date(lead.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
       case 'updatedAt':
@@ -937,6 +969,37 @@ function LeadsContent() {
                           </div>
                           <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}</span>
                         </div>
+                        {/* Channel Indicators */}
+                        {lead.channelCounts && Object.keys(lead.channelCounts).length > 0 && (
+                          <div className="flex items-center gap-1.5 mt-2">
+                            {Object.entries(lead.channelCounts).map(([channel, count]) => {
+                              const cfgMap: Record<string, { color: string; bg: string; label: string }> = {
+                                WHATSAPP: { color: '#25D366', bg: 'bg-green-50', label: 'WhatsApp' },
+                                EMAIL: { color: '#6366F1', bg: 'bg-indigo-50', label: 'Email' },
+                                SMS: { color: '#8B5CF6', bg: 'bg-purple-50', label: 'SMS' },
+                                PHONE: { color: '#F59E0B', bg: 'bg-amber-50', label: 'Phone' },
+                                CHAT: { color: '#3B82F6', bg: 'bg-blue-50', label: 'Chat' },
+                              };
+                              const cfg = cfgMap[channel] || { color: '#6B7280', bg: 'bg-gray-50', label: channel };
+                              return (
+                                <span key={channel} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cfg.bg}`}
+                                  style={{ color: cfg.color }} title={`${cfg.label}: ${count} message${count !== 1 ? 's' : ''}`}>
+                                  {channel === 'WHATSAPP' && <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" /></svg>}
+                                  {channel === 'EMAIL' && <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8" /></svg>}
+                                  {channel === 'SMS' && <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>}
+                                  {channel === 'PHONE' && <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>}
+                                  {channel === 'CHAT' && <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" /></svg>}
+                                  {count}
+                                </span>
+                              );
+                            })}
+                            {lead.lastInboundMessage && (
+                              <span className="text-[10px] text-gray-400 truncate max-w-[120px]" title={`Last: ${lead.lastInboundMessage.body}`}>
+                                {lead.lastInboundMessage.body.substring(0, 30)}{lead.lastInboundMessage.body.length > 30 ? '...' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {lead.tags && lead.tags.length > 0 && (
                           <div className="flex gap-1 mt-2">
                             {lead.tags.slice(0, 4).map((t) => (
