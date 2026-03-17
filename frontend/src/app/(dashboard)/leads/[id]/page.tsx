@@ -1529,17 +1529,17 @@ function formatTimeAgo(dateStr: string) {
 // ─── Create Task Modal ───────────────────────────────────────────
 
 function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
-  const tomorrow = new Date(Date.now() + 86400000);
-  const defaultDate = tomorrow.toISOString().split('T')[0];
-  const defaultTime = '09:00';
-
   const [form, setForm] = useState({
     title: '',
     description: '',
     type: 'FOLLOW_UP_CALL',
     priority: 'MEDIUM',
-    dueDate: defaultDate,
-    dueTime: defaultTime,
+    dueAt: (() => {
+      const d = new Date(Date.now() + 86400000);
+      d.setSeconds(0, 0);
+      const tzOffsetMs = d.getTimezoneOffset() * 60000;
+      return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+    })(),
     assigneeId: '',
     reminderDate: '',
     reminderTime: '',
@@ -1573,7 +1573,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
         type: form.type,
         priority: form.priority,
         assigneeId: form.assigneeId,
-        dueAt: new Date(`${form.dueDate}T${form.dueTime}:00`).toISOString(),
+        dueAt: new Date(form.dueAt).toISOString(),
       };
       if (form.reminderDate && form.reminderTime) {
         payload.reminder = new Date(`${form.reminderDate}T${form.reminderTime}:00`).toISOString();
@@ -1639,10 +1639,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
           </div>
           <div>
             <label className="label">Due Date & Time *</label>
-            <div className="grid grid-cols-2 gap-2">
-              <input type="date" className="input" required value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} />
-              <input type="time" className="input" required value={form.dueTime} onChange={(e) => setForm({ ...form, dueTime: e.target.value })} />
-            </div>
+            <input type="datetime-local" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
           </div>
           <div>
             <label className="label">Reminder</label>

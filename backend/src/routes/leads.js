@@ -107,8 +107,10 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
     if (assignedToId && !req.isRestrictedRole) {
-      if (assignedToId === 'unassigned') {
+      if (assignedToId === 'unassigned' || assignedToId === '__unassigned__') {
         where.assignedToId = null;
+      } else if (assignedToId === '__current_user__') {
+        where.assignedToId = req.user.id;
       } else {
         where.assignedToId = assignedToId;
       }

@@ -58,7 +58,7 @@ const predictConversion = (score, status) => {
   };
 
   const base = score / 100;
-  const multiplier = statusMultiplier[status] || 0.3;
+  const multiplier = statusMultiplier[status] ?? 0.3;
   return Math.round(base * multiplier * 100) / 100;
 };
 
