@@ -79,6 +79,7 @@ export default function LeadDetailPage() {
   const [editingBody, setEditingBody] = useState('');
   const editInputRef = useRef<HTMLTextAreaElement>(null);
 
+  const [unreadCommsCount, setUnreadCommsCount] = useState(0);
   const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
 
   useEffect(() => {
@@ -141,6 +142,7 @@ export default function LeadDetailPage() {
   const refreshLead = useCallback(async () => {
     const data = await api.getLead(id);
     setLead(data);
+    setUnreadCommsCount(data.unreadCommunications || 0);
   }, [id]);
 
   useEffect(() => {
@@ -152,6 +154,7 @@ export default function LeadDetailPage() {
     Promise.all([loadLead, loadStages])
       .then(([leadData, stagesData]: [any, any]) => {
         setLead(leadData);
+        setUnreadCommsCount(leadData?.unreadCommunications || 0);
 
         const allStages = stagesData?.stages || stagesData || [];
         // Pick stages matching the lead's division
@@ -369,11 +372,17 @@ export default function LeadDetailPage() {
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
       loadChatMessages();
+      // Mark communications as read when viewing the tab
+      if (unreadCommsCount > 0) {
+        api.markConversationRead(lead.id).then(() => {
+          setUnreadCommsCount(0);
+        }).catch(() => {});
+      }
     }
     if (activeTab === 'call_logs' && lead?.id) {
       loadCallLogs();
     }
-  }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
+  }, [activeTab, lead?.id, loadChatMessages, loadCallLogs, unreadCommsCount]);
 
   // Real-time sync: refresh lead data when lead or note changes
   useRealtimeSync(['lead', 'note'], useCallback((event) => {
@@ -867,7 +876,7 @@ export default function LeadDetailPage() {
               { key: 'notes', label: 'Notes', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z', count: lead.notes?.length },
               { key: 'tasks', label: 'Tasks', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2', count: lead.tasks?.length },
               { key: 'call_logs', label: 'Call Logs', icon: 'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z', count: callLogs.length || undefined },
-              { key: 'communications', label: 'Communications', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', count: lead.communications?.length },
+              { key: 'communications', label: 'Communications', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', count: unreadCommsCount || undefined },
             ] as const).map((tab) => (
               <button
                 key={tab.key}

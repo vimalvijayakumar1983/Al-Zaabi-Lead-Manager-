@@ -214,15 +214,21 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       prisma.lead.count({ where }),
     ]);
 
-    // Fetch per-channel communication counts and last message info for the current page of leads
+    // Fetch per-channel communication counts, unread counts, and last message info for the current page of leads
     const leadIds = leads.map(l => l.id);
     let channelCountsMap = {};
+    let unreadChannelCountsMap = {};
     let lastMessageMap = {};
     if (leadIds.length > 0) {
-      const [channelCounts, lastMessages] = await Promise.all([
+      const [channelCounts, unreadChannelCounts, lastMessages] = await Promise.all([
         prisma.communication.groupBy({
           by: ['leadId', 'channel'],
           where: { leadId: { in: leadIds } },
+          _count: { id: true },
+        }),
+        prisma.communication.groupBy({
+          by: ['leadId', 'channel'],
+          where: { leadId: { in: leadIds }, isRead: false, direction: 'INBOUND' },
           _count: { id: true },
         }),
         prisma.communication.findMany({
@@ -239,6 +245,12 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         channelCountsMap[row.leadId][row.channel] = row._count.id;
       }
 
+      // Build unread channel counts map: { leadId: { WHATSAPP: 1, ... } }
+      for (const row of unreadChannelCounts) {
+        if (!unreadChannelCountsMap[row.leadId]) unreadChannelCountsMap[row.leadId] = {};
+        unreadChannelCountsMap[row.leadId][row.channel] = row._count.id;
+      }
+
       // Build last message map: { leadId: { channel, body, createdAt } }
       for (const msg of lastMessages) {
         lastMessageMap[msg.leadId] = {
@@ -249,10 +261,11 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
 
-    // Enrich leads with channel counts and last message
+    // Enrich leads with channel counts, unread counts, and last message
     const enrichedLeads = leads.map(lead => ({
       ...lead,
       channelCounts: channelCountsMap[lead.id] || {},
+      unreadChannelCounts: unreadChannelCountsMap[lead.id] || {},
       lastInboundMessage: lastMessageMap[lead.id] || null,
     }));
 
@@ -408,7 +421,13 @@ router.get('/:id', async (req, res, next) => {
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
     }
-    res.json(lead);
+
+    // Count unread inbound communications
+    const unreadCount = await prisma.communication.count({
+      where: { leadId: lead.id, isRead: false, direction: 'INBOUND' },
+    });
+
+    res.json({ ...lead, unreadCommunications: unreadCount });
   } catch (err) {
     next(err);
   }

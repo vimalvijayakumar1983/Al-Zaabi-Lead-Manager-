@@ -325,7 +325,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
     const msgMetadata = { ...metadata };
     if (platform) msgMetadata.platform = platform.toLowerCase();
 
-    // Create communication record
+    // Create communication record (outbound messages are always read)
     const communication = await prisma.communication.create({
       data: {
         leadId,
@@ -335,6 +335,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
         subject,
         metadata: msgMetadata,
         userId: req.user.id,
+        isRead: true,
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -436,7 +437,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       }));
     }
 
-    // Create communication record
+    // Create communication record (outbound messages are always read)
     const communication = await prisma.communication.create({
       data: {
         leadId,
@@ -446,6 +447,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
         subject: subject || null,
         metadata: msgMetadata,
         userId: req.user.id,
+        isRead: true,
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -548,6 +550,29 @@ router.get('/conversations/:leadId/attachments', async (req, res, next) => {
     }));
 
     res.json(mapped);
+  } catch (err) { next(err); }
+});
+
+// ─── Mark Conversation as Read ──────────────────────────────────────
+
+router.post('/conversations/:leadId/read', async (req, res, next) => {
+  try {
+    const { leadId } = req.params;
+
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // Mark all unread inbound messages for this lead as read
+    const result = await prisma.communication.updateMany({
+      where: { leadId, isRead: false, direction: 'INBOUND' },
+      data: { isRead: true, readAt: new Date() },
+    });
+
+    res.json({ success: true, markedCount: result.count });
+
+    broadcastDataChange(lead.organizationId, 'communication', 'updated', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
 });
 

@@ -559,6 +559,7 @@ function LeadsContent() {
         ) : <span className="text-xs text-gray-400">-</span>;
       case 'channels': {
         const cc = lead.channelCounts || {};
+        const ucc = lead.unreadChannelCounts || {};
         const hasChannels = Object.keys(cc).length > 0;
         if (!hasChannels) return <span className="text-xs text-gray-400">-</span>;
         const channelConfig: Record<string, { icon: string; color: string; bg: string; label: string }> = {
@@ -572,13 +573,14 @@ function LeadsContent() {
           <div className="flex items-center gap-1.5 flex-wrap">
             {Object.entries(cc).map(([channel, count]) => {
               const cfg = channelConfig[channel] || { icon: '', color: '#6B7280', bg: 'bg-gray-50', label: channel };
+              const unread = ucc[channel] || 0;
               return (
-                <span key={channel} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${cfg.bg}`}
-                  style={{ color: cfg.color }} title={`${cfg.label}: ${count} message${count !== 1 ? 's' : ''}`}>
+                <span key={channel} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${unread > 0 ? 'bg-brand-50 ring-1 ring-brand-200' : cfg.bg}`}
+                  style={{ color: unread > 0 ? undefined : cfg.color }} title={`${cfg.label}: ${count} message${count !== 1 ? 's' : ''}${unread > 0 ? ` (${unread} unread)` : ''}`}>
                   <svg className="h-3 w-3" fill={channel === 'WHATSAPP' ? 'currentColor' : 'none'} stroke={channel === 'WHATSAPP' ? 'none' : 'currentColor'} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={cfg.icon} />
                   </svg>
-                  {count}
+                  {unread > 0 ? unread : count}
                 </span>
               );
             })}

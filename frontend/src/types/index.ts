@@ -110,6 +110,8 @@ export interface Lead {
   attachments?: Attachment[];
   _count?: { activities: number; tasks: number; communications: number };
   channelCounts?: Record<string, number>;
+  unreadChannelCounts?: Record<string, number>;
+  unreadCommunications?: number;
   lastInboundMessage?: { channel: string; body: string; createdAt: string } | null;
   organizationId?: string;
   createdAt: string;
