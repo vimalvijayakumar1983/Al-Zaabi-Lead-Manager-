@@ -123,6 +123,7 @@ export interface PipelineStage {
   isDefault: boolean;
   isWonStage: boolean;
   isLostStage: boolean;
+  organizationId?: string;
   leads?: Lead[];
   _count?: { leads: number };
 }
