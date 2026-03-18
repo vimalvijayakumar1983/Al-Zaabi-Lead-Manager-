@@ -477,6 +477,234 @@ router.get('/score-distribution', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Consolidated Dashboard (world-class) ────────────────────────
+router.get('/dashboard-full', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const orgFilter = getOrgFilter(req, divisionId);
+    const { start, prevStart, prevEnd, days } = getPeriodDates(period);
+    const now = new Date();
+
+    const lw = getLeadWhere(req, divisionId);
+    const actWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
+    const tw = getTaskWhere(req, divisionId);
+
+    // ── Parallel fetch everything ──
+    const [
+      // KPI counts
+      totalLeads, curNew, prevNew, curWon, prevWon, curLost, prevLost,
+      curPipeAgg, prevPipeAgg, wonRevenueAgg,
+      // Breakdowns
+      leadsByStatus, leadsBySource,
+      // Recent + tasks
+      recentLeads, upcomingTasks, overdueTasks,
+      // Trends
+      trendLeads,
+      // Activities
+      curActivities, prevActivities,
+      recentActivities,
+      // Pipeline stages
+      stages,
+      // Score distribution
+      scoreLeads,
+      // SLA stats
+      slaAtRisk, slaBreached,
+      // Team (only for non-restricted roles)
+      ...teamResults
+    ] = await Promise.all([
+      prisma.lead.count({ where: lw }),
+      prisma.lead.count({ where: { ...lw, createdAt: { gte: start } } }),
+      prisma.lead.count({ where: { ...lw, createdAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.count({ where: { ...lw, status: 'WON', updatedAt: { gte: start } } }),
+      prisma.lead.count({ where: { ...lw, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.count({ where: { ...lw, status: 'LOST', updatedAt: { gte: start } } }),
+      prisma.lead.count({ where: { ...lw, status: 'LOST', updatedAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null } }, _sum: { budget: true } }),
+      prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null }, createdAt: { gte: prevStart, lt: prevEnd } }, _sum: { budget: true } }),
+      prisma.lead.aggregate({ where: { ...lw, status: 'WON', budget: { not: null } }, _sum: { budget: true }, _avg: { budget: true }, _count: true }),
+
+      prisma.lead.groupBy({ by: ['status'], where: lw, _count: true }),
+      prisma.lead.groupBy({ by: ['source'], where: lw, _count: true }),
+
+      prisma.lead.findMany({
+        where: lw, orderBy: { createdAt: 'desc' }, take: 8,
+        select: { id: true, firstName: true, lastName: true, email: true, company: true, source: true, status: true, score: true, budget: true, createdAt: true, assignedTo: { select: { firstName: true, lastName: true, avatar: true } } },
+      }),
+      prisma.task.findMany({
+        where: { ...getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { gte: now } }) },
+        orderBy: { dueAt: 'asc' }, take: 6,
+        select: { id: true, title: true, type: true, priority: true, status: true, dueAt: true, lead: { select: { id: true, firstName: true, lastName: true } } },
+      }),
+      prisma.task.count({ where: getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } }) }),
+
+      prisma.lead.findMany({
+        where: { ...lw, createdAt: { gte: start } },
+        select: { createdAt: true, status: true, budget: true },
+      }),
+
+      prisma.leadActivity.count({ where: { ...actWhere, createdAt: { gte: start } } }),
+      prisma.leadActivity.count({ where: { ...actWhere, createdAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.leadActivity.findMany({
+        where: { ...actWhere, createdAt: { gte: start } },
+        orderBy: { createdAt: 'desc' }, take: 10,
+        select: { id: true, type: true, description: true, createdAt: true, user: { select: { firstName: true, lastName: true } }, lead: { select: { id: true, firstName: true, lastName: true } } },
+      }),
+
+      prisma.pipelineStage.findMany({
+        where: { organizationId: orgFilter },
+        orderBy: { order: 'asc' },
+        include: {
+          _count: { select: { leads: { where: { isArchived: false } } } },
+          leads: { select: { budget: true }, where: { isArchived: false, budget: { not: null } } },
+        },
+      }),
+
+      prisma.lead.findMany({
+        where: { ...lw, score: { not: null } },
+        select: { score: true, status: true },
+      }),
+
+      prisma.lead.count({ where: { ...lw, slaStatus: 'AT_RISK' } }),
+      prisma.lead.count({ where: { ...lw, slaStatus: 'BREACHED' } }),
+
+      // Team performance (top 5)
+      ...(req.isRestrictedRole ? [] : [
+        prisma.user.findMany({
+          where: { organizationId: orgFilter, isActive: true },
+          select: { id: true, firstName: true, lastName: true, avatar: true, role: true, _count: { select: { assignedLeads: true } } },
+        }),
+      ]),
+    ]);
+
+    // ── Process KPIs ──
+    const curPipe = Number(curPipeAgg._sum.budget || 0);
+    const prevPipe = Number(prevPipeAgg._sum.budget || 0);
+    const wonRevenue = Number(wonRevenueAgg._sum.budget || 0);
+    const avgDealSize = wonRevenueAgg._count > 0 ? Math.round(wonRevenue / wonRevenueAgg._count) : 0;
+    const convRate = totalLeads > 0 ? Math.round(((curWon + (await prisma.lead.count({ where: { ...lw, status: 'WON' } }))) / totalLeads) * 10000) / 100 : 0;
+
+    // ── Process trends ──
+    const trendMap = {};
+    for (const lead of trendLeads) {
+      const date = lead.createdAt.toISOString().split('T')[0];
+      if (!trendMap[date]) trendMap[date] = { date, total: 0, won: 0, lost: 0, value: 0 };
+      trendMap[date].total++;
+      if (lead.status === 'WON') { trendMap[date].won++; trendMap[date].value += Number(lead.budget || 0); }
+      if (lead.status === 'LOST') trendMap[date].lost++;
+    }
+    const trends = Object.values(trendMap).sort((a, b) => a.date.localeCompare(b.date));
+
+    // ── Process funnel ──
+    const funnelMap = new Map();
+    for (const s of stages) {
+      const key = `${s.order}-${s.name}`;
+      if (funnelMap.has(key)) {
+        const existing = funnelMap.get(key);
+        existing.count += s._count.leads;
+        existing.value += s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0);
+      } else {
+        funnelMap.set(key, {
+          name: s.name, color: s.color, order: s.order,
+          count: s._count.leads,
+          value: s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0),
+          isWonStage: s.isWonStage, isLostStage: s.isLostStage,
+        });
+      }
+    }
+    const funnel = Array.from(funnelMap.values()).sort((a, b) => a.order - b.order);
+    for (let i = 1; i < funnel.length; i++) {
+      funnel[i].conversionFromPrev = funnel[i - 1].count > 0 ? Math.round((funnel[i].count / funnel[i - 1].count) * 100) : 0;
+    }
+    if (funnel.length > 0) funnel[0].conversionFromPrev = 100;
+
+    // ── Process score distribution ──
+    const scoreBuckets = [
+      { label: '0-20', min: 0, max: 20, total: 0, won: 0 },
+      { label: '21-40', min: 21, max: 40, total: 0, won: 0 },
+      { label: '41-60', min: 41, max: 60, total: 0, won: 0 },
+      { label: '61-80', min: 61, max: 80, total: 0, won: 0 },
+      { label: '81-100', min: 81, max: 100, total: 0, won: 0 },
+    ];
+    for (const l of scoreLeads) {
+      const b = scoreBuckets.find(b => l.score >= b.min && l.score <= b.max);
+      if (b) { b.total++; if (l.status === 'WON') b.won++; }
+    }
+
+    // ── Process team leaderboard ──
+    let teamLeaderboard = [];
+    if (!req.isRestrictedRole && teamResults.length > 0) {
+      const users = teamResults[0];
+      const enriched = await Promise.all(users.slice(0, 10).map(async u => {
+        const [won, revenue] = await Promise.all([
+          prisma.lead.count({ where: { assignedToId: u.id, status: 'WON' } }),
+          prisma.lead.aggregate({ where: { assignedToId: u.id, status: 'WON', budget: { not: null } }, _sum: { budget: true } }),
+        ]);
+        return {
+          id: u.id, name: `${u.firstName} ${u.lastName}`, avatar: u.avatar, role: u.role,
+          totalLeads: u._count.assignedLeads, wonLeads: won,
+          wonRevenue: Number(revenue._sum.budget || 0),
+          conversionRate: u._count.assignedLeads > 0 ? Math.round((won / u._count.assignedLeads) * 10000) / 100 : 0,
+        };
+      }));
+      teamLeaderboard = enriched.sort((a, b) => b.wonRevenue - a.wonRevenue || b.conversionRate - a.conversionRate).slice(0, 5);
+    }
+
+    // ── Division breakdown for SUPER_ADMIN ──
+    let divisionBreakdown = [];
+    if (req.isSuperAdmin && !divisionId) {
+      const orgIds = req.orgIds;
+      if (orgIds && orgIds.length > 0) {
+        const divisions = await prisma.organization.findMany({
+          where: { id: { in: orgIds } },
+          select: { id: true, name: true, tradeName: true },
+        });
+        divisionBreakdown = await Promise.all(divisions.map(async d => {
+          const [total, newL, won, pipeAgg] = await Promise.all([
+            prisma.lead.count({ where: { organizationId: d.id, isArchived: false } }),
+            prisma.lead.count({ where: { organizationId: d.id, isArchived: false, status: 'NEW' } }),
+            prisma.lead.count({ where: { organizationId: d.id, status: 'WON' } }),
+            prisma.lead.aggregate({ where: { organizationId: d.id, status: { notIn: ['LOST'] }, budget: { not: null } }, _sum: { budget: true } }),
+          ]);
+          return {
+            divisionId: d.id, divisionName: d.tradeName || d.name,
+            totalLeads: total, newLeads: newL, wonLeads: won,
+            conversionRate: total > 0 ? Math.round((won / total) * 10000) / 100 : 0,
+            pipelineValue: Number(pipeAgg._sum.budget || 0),
+          };
+        }));
+      }
+    }
+
+    const totalWon = await prisma.lead.count({ where: { ...lw, status: 'WON' } });
+
+    res.json({
+      kpis: {
+        totalLeads, newLeads: curNew, newLeadsChange: pctChange(curNew, prevNew),
+        wonLeads: curWon, wonLeadsChange: pctChange(curWon, prevWon),
+        lostLeads: curLost, lostLeadsChange: pctChange(curLost, prevLost),
+        pipelineValue: curPipe, pipelineValueChange: pctChange(curPipe, prevPipe),
+        conversionRate: totalLeads > 0 ? Math.round((totalWon / totalLeads) * 10000) / 100 : 0,
+        conversionRateChange: pctChange(curWon, prevWon),
+        wonRevenue, avgDealSize, totalWon,
+        activities: curActivities, activitiesChange: pctChange(curActivities, prevActivities),
+        overdueTasks,
+        slaAtRisk: slaAtRisk || 0,
+        slaBreached: slaBreached || 0,
+      },
+      leadsByStatus: leadsByStatus.map(s => ({ status: s.status, count: s._count })),
+      leadsBySource: leadsBySource.map(s => ({ source: s.source, count: s._count })).sort((a, b) => b.count - a.count),
+      recentLeads,
+      upcomingTasks,
+      trends,
+      funnel,
+      scoreDistribution: scoreBuckets.map(b => ({ label: b.label, total: b.total, won: b.won, conversionRate: b.total > 0 ? Math.round((b.won / b.total) * 100) : 0 })),
+      teamLeaderboard,
+      recentActivities,
+      divisionBreakdown,
+    });
+  } catch (err) { next(err); }
+});
+
 // ─── Division Comparison (SUPER_ADMIN) ────────────────────────────
 router.get('/division-comparison', async (req, res, next) => {
   try {

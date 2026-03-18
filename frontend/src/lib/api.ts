@@ -192,6 +192,11 @@ class ApiClient {
     return this.request<any>(`/analytics/dashboard${q}`);
   }
 
+  async getDashboardFull(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/dashboard-full?${q}`);
+  }
+
   async getAnalyticsOverview(period = '30d', divisionId?: string) {
     const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/analytics/overview?${q}`);
