@@ -33,8 +33,9 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
   { id: 'assignedTo', label: 'Assigned To', visible: true, sortable: false },
   { id: 'tags', label: 'Tags', visible: false, sortable: false },
   { id: 'channels', label: 'Channels', visible: true, sortable: false },
+  { id: 'sla', label: 'SLA', visible: true, sortable: true, sortField: 'slaStatus' },
   { id: 'createdAt', label: 'Created', visible: true, sortable: true, sortField: 'createdAt' },
-  { id: 'updatedAt', label: 'Updated', visible: false, sortable: true, sortField: 'updatedAt' },
+  { id: 'updatedAt', label: 'Updated', visible: true, sortable: true, sortField: 'updatedAt' },
   { id: 'actions', label: '', visible: true, sortable: false, width: 'w-10', locked: true },
 ];
 

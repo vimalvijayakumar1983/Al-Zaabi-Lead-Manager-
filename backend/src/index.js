@@ -9,6 +9,7 @@ const { logger } = require('./config/logger');
 const { prisma } = require('./config/database');
 const { setupWebSocket } = require('./websocket/server');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const { startSLAMonitor, stopSLAMonitor } = require('./services/slaMonitor');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -136,11 +137,15 @@ const PORT = config.port || 4000;
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
+
+  // Start the SLA monitoring service
+  startSLAMonitor();
 });
 
 // Graceful shutdown
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+  stopSLAMonitor();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

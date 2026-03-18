@@ -142,6 +142,14 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       });
     }
 
+    // Mark first response — logging a call counts as attending to the lead
+    if (!lead.firstRespondedAt) {
+      await prisma.lead.update({
+        where: { id: data.leadId },
+        data: { firstRespondedAt: new Date(), slaStatus: 'RESPONDED' },
+      });
+    }
+
     // Update lead status to CONTACTED if still NEW
     if (lead.status === 'NEW') {
       await prisma.lead.update({

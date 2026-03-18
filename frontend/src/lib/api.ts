@@ -701,6 +701,19 @@ class ApiClient {
     return this.request<any>('/settings/account', { method: 'DELETE', body: JSON.stringify({ password }) });
   }
 
+  // SLA Configuration
+  async getSLAConfig() {
+    return this.request<any>('/settings/sla');
+  }
+
+  async updateSLAConfig(data: any) {
+    return this.request<any>('/settings/sla', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getSLADashboard() {
+    return this.request<any>('/settings/sla/dashboard');
+  }
+
   // Custom Fields
   async getCustomFields(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';

@@ -11,6 +11,7 @@ const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { autoAssign, getNextAssignee } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
+const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -261,12 +262,23 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
 
-    // Enrich leads with channel counts, unread counts, and last message
+    // Get org settings for SLA info
+    let orgSettings = null;
+    try {
+      const org = await prisma.organization.findFirst({
+        where: { id: { in: req.orgIds } },
+        select: { settings: true },
+      });
+      orgSettings = org?.settings;
+    } catch { /* non-critical */ }
+
+    // Enrich leads with channel counts, unread counts, last message, and SLA info
     const enrichedLeads = leads.map(lead => ({
       ...lead,
       channelCounts: channelCountsMap[lead.id] || {},
       unreadChannelCounts: unreadChannelCountsMap[lead.id] || {},
       lastInboundMessage: lastMessageMap[lead.id] || null,
+      slaInfo: getLeadSLAInfo(lead, orgSettings),
     }));
 
     res.json(paginatedResponse(enrichedLeads, total, page, limit));
@@ -422,12 +434,22 @@ router.get('/:id', async (req, res, next) => {
       return res.status(404).json({ error: 'Lead not found' });
     }
 
-    // Count unread inbound communications
-    const unreadCount = await prisma.communication.count({
-      where: { leadId: lead.id, isRead: false, direction: 'INBOUND' },
-    });
+    // Count unread inbound communications and fetch org settings for SLA
+    const [unreadCount, orgForSLA] = await Promise.all([
+      prisma.communication.count({
+        where: { leadId: lead.id, isRead: false, direction: 'INBOUND' },
+      }),
+      prisma.organization.findUnique({
+        where: { id: lead.organizationId },
+        select: { settings: true },
+      }),
+    ]);
 
-    res.json({ ...lead, unreadCommunications: unreadCount });
+    res.json({
+      ...lead,
+      unreadCommunications: unreadCount,
+      slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
+    });
   } catch (err) {
     next(err);
   }
@@ -627,6 +649,12 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     }
     if (updateData.status === 'LOST' && existing.status !== 'LOST') {
       updateData.lostAt = new Date();
+    }
+
+    // Mark first response — any status change from NEW counts as "responded"
+    if (!existing.firstRespondedAt && updateData.status && updateData.status !== 'NEW') {
+      updateData.firstRespondedAt = new Date();
+      updateData.slaStatus = 'RESPONDED';
     }
 
     const lead = await prisma.$transaction(async (tx) => {
@@ -872,6 +900,14 @@ router.post('/:id/notes', validate(z.object({
         description: 'Note added',
       },
     });
+
+    // Mark first response — adding a note counts as attending to the lead
+    if (!lead.firstRespondedAt) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { firstRespondedAt: new Date(), slaStatus: 'RESPONDED' },
+      });
+    }
 
     res.status(201).json(note);
 

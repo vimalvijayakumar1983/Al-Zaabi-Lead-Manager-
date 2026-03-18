@@ -70,6 +70,14 @@ router.post('/', validate(communicationSchema), async (req, res, next) => {
       },
     });
 
+    // Mark first response — any outbound communication counts as attending to the lead
+    if (data.direction === 'OUTBOUND' && !lead.firstRespondedAt) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { firstRespondedAt: new Date(), slaStatus: 'RESPONDED' },
+      });
+    }
+
     res.status(201).json(communication);
   } catch (err) {
     next(err);

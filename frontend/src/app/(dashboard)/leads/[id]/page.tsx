@@ -31,6 +31,10 @@ const activityIcons: Record<string, { icon: string; color: string }> = {
   MEETING_SCHEDULED: { icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', color: 'text-emerald-500 bg-emerald-100' },
   ASSIGNMENT_CHANGED: { icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z', color: 'text-orange-500 bg-orange-100' },
   LEAD_CREATED: { icon: 'M12 6v6m0 0v6m0-6h6m-6 0H6', color: 'text-green-500 bg-green-100' },
+  SLA_REMINDER_SENT: { icon: 'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9', color: 'text-amber-600 bg-amber-100' },
+  SLA_ESCALATED: { icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', color: 'text-red-600 bg-red-100' },
+  SLA_REASSIGNED: { icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15', color: 'text-red-700 bg-red-100' },
+  SLA_BREACHED: { icon: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-red-600 bg-red-100' },
 };
 
 const priorityColors: Record<string, string> = {
@@ -867,10 +871,23 @@ export default function LeadDetailPage() {
               <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               Timestamps
             </h3>
-            <InfoRow label="Created" value={lead.createdAt ? new Date(lead.createdAt).toLocaleString() : '-'} />
-            <InfoRow label="Updated" value={lead.updatedAt ? new Date(lead.updatedAt).toLocaleString() : '-'} />
-
+            <InfoRow label="Created" value={lead.createdAt ? `${new Date(lead.createdAt).toLocaleString()} (${formatTimeAgo(lead.createdAt)})` : '-'} />
+            <InfoRow label="Updated" value={lead.updatedAt ? `${new Date(lead.updatedAt).toLocaleString()} (${formatTimeAgo(lead.updatedAt)})` : '-'} />
+            {(lead as any).firstRespondedAt && (
+              <InfoRow label="First Response" value={`${new Date((lead as any).firstRespondedAt).toLocaleString()} (${formatTimeAgo((lead as any).firstRespondedAt)})`} />
+            )}
           </div>
+
+          {/* SLA Status */}
+          {(lead as any).slaInfo?.enabled && (
+            <div className="card p-4">
+              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                SLA Status
+              </h3>
+              <SLADetailCard slaInfo={(lead as any).slaInfo} />
+            </div>
+          )}
         </div>
 
         {/* Right: Activity Feed */}
@@ -1459,6 +1476,112 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between py-1">
       <span className="text-sm text-gray-500">{label}</span>
       <span className="text-sm font-medium text-gray-900 text-right max-w-[60%] truncate">{value}</span>
+    </div>
+  );
+}
+
+function SLADetailCard({ slaInfo }: { slaInfo: any }) {
+  if (!slaInfo || !slaInfo.enabled) return null;
+
+  const formatDuration = (minutes: number) => {
+    if (minutes < 60) return `${Math.round(minutes)} min`;
+    const h = Math.floor(minutes / 60);
+    const m = Math.round(minutes % 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  };
+
+  const statusConfig: Record<string, { label: string; color: string; bg: string; desc: string }> = {
+    ON_TIME: { label: 'On Time', color: 'text-green-700', bg: 'bg-green-50 ring-green-200', desc: 'Lead is within SLA response window' },
+    AT_RISK: { label: 'At Risk', color: 'text-amber-700', bg: 'bg-amber-50 ring-amber-200', desc: 'Approaching SLA breach threshold' },
+    BREACHED: { label: 'SLA Breached', color: 'text-red-700', bg: 'bg-red-50 ring-red-300', desc: 'Response time has exceeded SLA threshold' },
+    ESCALATED: { label: 'Escalated', color: 'text-red-800', bg: 'bg-red-100 ring-red-400', desc: 'Lead has been escalated due to SLA breach' },
+    RESPONDED: { label: 'Responded', color: 'text-green-700', bg: 'bg-green-50 ring-green-200', desc: 'Lead has been attended to' },
+  };
+
+  const cfg = statusConfig[slaInfo.status] || statusConfig.ON_TIME;
+
+  return (
+    <div className="space-y-3">
+      {/* Status Badge */}
+      <div className="flex items-center justify-between">
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ring-1 ${cfg.bg} ${cfg.color}`}>
+          {(slaInfo.status === 'BREACHED' || slaInfo.status === 'ESCALATED' || slaInfo.status === 'AT_RISK') && (
+            <span className="relative flex h-2 w-2">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${slaInfo.status === 'AT_RISK' ? 'bg-amber-500' : 'bg-red-500'}`} />
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${slaInfo.status === 'AT_RISK' ? 'bg-amber-500' : 'bg-red-600'}`} />
+            </span>
+          )}
+          {slaInfo.status === 'ON_TIME' && <span className="h-2 w-2 rounded-full bg-green-500" />}
+          {slaInfo.status === 'RESPONDED' && <span className="h-2 w-2 rounded-full bg-green-500" />}
+          {cfg.label}
+        </span>
+        {slaInfo.escalationLevel > 0 && (
+          <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full ring-1 ring-red-200">
+            Level {slaInfo.escalationLevel}
+          </span>
+        )}
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-gray-500">{cfg.desc}</p>
+
+      {/* Progress Bar (for non-responded) */}
+      {slaInfo.status !== 'RESPONDED' && slaInfo.percentUsed !== undefined && (
+        <div>
+          <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+            <span>{formatDuration(slaInfo.elapsedMinutes || 0)} elapsed</span>
+            <span>{slaInfo.timeRemainingMinutes > 0 ? `${formatDuration(slaInfo.timeRemainingMinutes)} remaining` : 'Overdue'}</span>
+          </div>
+          <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500" style={{
+              width: `${Math.min(slaInfo.percentUsed, 100)}%`,
+              backgroundColor: slaInfo.percentUsed >= 100 ? '#dc2626' : slaInfo.percentUsed >= 75 ? '#f59e0b' : '#22c55e',
+            }} />
+          </div>
+        </div>
+      )}
+
+      {/* Response Time (for responded leads) */}
+      {slaInfo.status === 'RESPONDED' && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Response time:</span>
+          <span className={`text-sm font-semibold ${slaInfo.withinSLA ? 'text-green-700' : 'text-amber-700'}`}>
+            {formatDuration(slaInfo.respondedInMinutes || 0)}
+          </span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${slaInfo.withinSLA ? 'bg-green-50 text-green-700 ring-1 ring-green-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'}`}>
+            {slaInfo.withinSLA ? 'Within SLA' : 'SLA Exceeded'}
+          </span>
+        </div>
+      )}
+
+      {/* Thresholds */}
+      {slaInfo.thresholds && (
+        <div className="border-t border-gray-100 pt-2 mt-2">
+          <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1.5">SLA Thresholds</p>
+          <div className="grid grid-cols-2 gap-1 text-xs">
+            <span className="text-gray-500">Warning:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.warningMinutes)}</span>
+            <span className="text-gray-500">Breach:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.breachMinutes)}</span>
+            <span className="text-gray-500">Escalation:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.escalationMinutes)}</span>
+            <span className="text-gray-500">Reassign:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.reassignMinutes)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Breach/Escalation timestamps */}
+      {slaInfo.slaBreachedAt && (
+        <div className="text-xs text-red-600">
+          Breached at: {new Date(slaInfo.slaBreachedAt).toLocaleString()}
+        </div>
+      )}
+      {slaInfo.lastEscalatedAt && (
+        <div className="text-xs text-red-600">
+          Last escalated: {new Date(slaInfo.lastEscalatedAt).toLocaleString()}
+        </div>
+      )}
     </div>
   );
 }

@@ -38,6 +38,98 @@ const sourceLabels: Record<string, string> = {
 
 type ViewMode = 'table' | 'cards' | 'kanban';
 
+// ─── Time Formatting ─────────────────────────────────────────────
+
+function formatTimeAgo(dateStr: string): string {
+  const now = new Date();
+  const date = new Date(dateStr);
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHr / 24);
+
+  if (diffSec < 60) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr < 24) return `${diffHr}h ${diffMin % 60}m ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return `${Math.floor(diffDay / 7)}w ago`;
+}
+
+// ─── SLA Badge Component ─────────────────────────────────────────
+
+interface SLAInfo {
+  enabled: boolean;
+  status: string;
+  elapsedMinutes?: number;
+  percentUsed?: number;
+  timeRemainingMinutes?: number;
+  respondedInMinutes?: number;
+  withinSLA?: boolean;
+  escalationLevel?: number;
+  thresholds?: { breachMinutes: number; warningMinutes: number; escalationMinutes: number; reassignMinutes: number };
+}
+
+function SLABadge({ slaInfo }: { slaInfo: SLAInfo }) {
+  if (!slaInfo.enabled) return null;
+
+  const formatDuration = (minutes: number) => {
+    if (minutes < 60) return `${Math.round(minutes)}m`;
+    const h = Math.floor(minutes / 60);
+    const m = Math.round(minutes % 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  };
+
+  if (slaInfo.status === 'RESPONDED') {
+    const mins = slaInfo.respondedInMinutes || 0;
+    return (
+      <div className="flex items-center gap-1.5" title={`Responded in ${formatDuration(mins)}${slaInfo.withinSLA ? ' (within SLA)' : ' (SLA breached)'}`}>
+        <div className={`h-2 w-2 rounded-full ${slaInfo.withinSLA ? 'bg-green-500' : 'bg-amber-500'}`} />
+        <span className={`text-xs font-medium ${slaInfo.withinSLA ? 'text-green-700' : 'text-amber-700'}`}>
+          {formatDuration(mins)}
+        </span>
+      </div>
+    );
+  }
+
+  const configs: Record<string, { color: string; bg: string; ring: string; icon: string; label: string; pulse?: boolean }> = {
+    ON_TIME: { color: 'text-green-700', bg: 'bg-green-50', ring: 'ring-green-200', icon: '●', label: 'On Time' },
+    AT_RISK: { color: 'text-amber-700', bg: 'bg-amber-50', ring: 'ring-amber-200', icon: '◐', label: 'At Risk', pulse: true },
+    BREACHED: { color: 'text-red-700', bg: 'bg-red-50', ring: 'ring-red-300', icon: '!', label: 'Breached', pulse: true },
+    ESCALATED: { color: 'text-red-800', bg: 'bg-red-100', ring: 'ring-red-400', icon: '!!', label: 'Escalated', pulse: true },
+  };
+
+  const cfg = configs[slaInfo.status] || configs.ON_TIME;
+  const elapsed = slaInfo.elapsedMinutes || 0;
+  const percent = Math.min(slaInfo.percentUsed || 0, 100);
+
+  return (
+    <div className="flex flex-col gap-1" title={`${cfg.label} — ${formatDuration(elapsed)} elapsed (${percent}% of SLA used)`}>
+      <div className="flex items-center gap-1.5">
+        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${cfg.bg} ${cfg.color} ring-1 ${cfg.ring}`}>
+          {cfg.pulse && <span className="relative flex h-2 w-2">
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${slaInfo.status === 'BREACHED' || slaInfo.status === 'ESCALATED' ? 'bg-red-500' : 'bg-amber-500'}`} />
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${slaInfo.status === 'BREACHED' || slaInfo.status === 'ESCALATED' ? 'bg-red-600' : 'bg-amber-500'}`} />
+          </span>}
+          {!cfg.pulse && <span className={`h-2 w-2 rounded-full ${slaInfo.status === 'ON_TIME' ? 'bg-green-500' : 'bg-gray-400'}`} />}
+          {formatDuration(elapsed)}
+        </span>
+        {slaInfo.escalationLevel !== undefined && slaInfo.escalationLevel > 0 && (
+          <span className="text-[9px] font-bold text-red-600" title={`Escalation level ${slaInfo.escalationLevel}`}>
+            L{slaInfo.escalationLevel}
+          </span>
+        )}
+      </div>
+      <div className="w-full h-1 bg-gray-200 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-500" style={{
+          width: `${percent}%`,
+          backgroundColor: percent >= 100 ? '#dc2626' : percent >= 75 ? '#f59e0b' : '#22c55e',
+        }} />
+      </div>
+    </div>
+  );
+}
+
 export default function LeadsPage() {
   return (
     <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>}>
@@ -397,6 +489,12 @@ function LeadsContent() {
             const ucc = l.unreadChannelCounts || {};
             return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
           }
+          case 'sla': {
+            const sla = (l as any).slaInfo;
+            if (!sla || !sla.enabled) return '';
+            if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
+            return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
+          }
           case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           default:
@@ -586,9 +684,24 @@ function LeadsContent() {
         );
       }
       case 'createdAt':
-        return <span className="text-sm text-gray-500">{new Date(lead.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
+        return (
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">{new Date(lead.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+            <span className="text-[10px] text-gray-400">{formatTimeAgo(lead.createdAt)}</span>
+          </div>
+        );
       case 'updatedAt':
-        return <span className="text-sm text-gray-500">{new Date(lead.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>;
+        return (
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">{new Date(lead.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+            <span className="text-[10px] text-gray-400">{formatTimeAgo(lead.updatedAt)}</span>
+          </div>
+        );
+      case 'sla': {
+        const sla = (lead as any).slaInfo;
+        if (!sla || !sla.enabled) return <span className="text-xs text-gray-400">-</span>;
+        return <SLABadge slaInfo={sla} />;
+      }
       case 'actions':
         return (
           <div className="relative">

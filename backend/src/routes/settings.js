@@ -438,6 +438,148 @@ router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) =
   }
 });
 
+// ─── SLA Configuration ──────────────────────────────────────
+
+const { getSLAConfig, DEFAULT_SLA_CONFIG, getLeadSLAInfo } = require('../services/slaMonitor');
+
+// Get SLA settings
+router.get('/sla', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const slaConfig = getSLAConfig(settings);
+    res.json(slaConfig);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update SLA settings
+router.put('/sla', authorize('ADMIN'), validate(z.object({
+  enabled: z.boolean(),
+  thresholds: z.object({
+    warningMinutes: z.coerce.number().int().min(1).max(10080),
+    breachMinutes: z.coerce.number().int().min(1).max(10080),
+    escalationMinutes: z.coerce.number().int().min(1).max(10080),
+    reassignMinutes: z.coerce.number().int().min(1).max(10080),
+  }).optional(),
+  actions: z.object({
+    onWarning: z.enum(['notify', 'none']).optional(),
+    onBreach: z.enum(['remind', 'notify', 'none']).optional(),
+    onEscalation: z.enum(['notify_manager', 'reassign', 'notify', 'none']).optional(),
+    onReassign: z.enum(['reassign', 'notify', 'none']).optional(),
+  }).optional(),
+  escalationContactId: z.string().uuid().optional().nullable(),
+  workingHoursOnly: z.boolean().optional(),
+  excludeStatuses: z.array(z.string()).optional(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const currentSla = settings.sla || {};
+
+    const updatedSla = {
+      ...DEFAULT_SLA_CONFIG,
+      ...currentSla,
+      ...data,
+      thresholds: { ...DEFAULT_SLA_CONFIG.thresholds, ...(currentSla.thresholds || {}), ...(data.thresholds || {}) },
+      actions: { ...DEFAULT_SLA_CONFIG.actions, ...(currentSla.actions || {}), ...(data.actions || {}) },
+    };
+
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: { ...settings, sla: updatedSla } },
+    });
+
+    res.json(updatedSla);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get SLA dashboard stats
+router.get('/sla/dashboard', async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const config = getSLAConfig(settings);
+
+    if (!config.enabled) {
+      return res.json({ enabled: false });
+    }
+
+    // Get SLA status counts
+    const [onTime, atRisk, breached, escalated, responded] = await Promise.all([
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'ON_TIME', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'AT_RISK', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'BREACHED', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'ESCALATED', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'RESPONDED', status: { notIn: config.excludeStatuses } } }),
+    ]);
+
+    // Get average response time for responded leads
+    const respondedLeads = await prisma.lead.findMany({
+      where: {
+        organizationId: { in: req.orgIds },
+        isArchived: false,
+        firstRespondedAt: { not: null },
+      },
+      select: { createdAt: true, firstRespondedAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    let avgResponseMinutes = 0;
+    if (respondedLeads.length > 0) {
+      const totalMinutes = respondedLeads.reduce((sum, l) => {
+        const diff = new Date(l.firstRespondedAt).getTime() - new Date(l.createdAt).getTime();
+        return sum + diff / 60000;
+      }, 0);
+      avgResponseMinutes = Math.round(totalMinutes / respondedLeads.length);
+    }
+
+    // Get breached leads needing attention
+    const breachedLeads = await prisma.lead.findMany({
+      where: {
+        organizationId: { in: req.orgIds },
+        isArchived: false,
+        slaStatus: { in: ['BREACHED', 'ESCALATED', 'AT_RISK'] },
+        status: { notIn: config.excludeStatuses },
+      },
+      include: {
+        assignedTo: { select: { id: true, firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+
+    const enrichedBreachedLeads = breachedLeads.map(lead => ({
+      ...lead,
+      slaInfo: getLeadSLAInfo(lead, settings),
+    }));
+
+    res.json({
+      enabled: true,
+      thresholds: config.thresholds,
+      counts: { onTime, atRisk, breached, escalated, responded },
+      avgResponseMinutes,
+      breachedLeads: enrichedBreachedLeads,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Email Configuration ─────────────────────────────────────
 
 const { testConnection, sendTestEmail } = require('../services/emailService');

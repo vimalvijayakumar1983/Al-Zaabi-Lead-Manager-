@@ -138,6 +138,14 @@ model Lead {
   wonAt           DateTime?
   lostAt          DateTime?
   lostReason      String?
+
+  // ── SLA Tracking ──
+  firstRespondedAt  DateTime?            // When the assigned user first interacted with this lead
+  slaStatus         LeadSLAStatus @default(ON_TIME)
+  escalationLevel   Int           @default(0)  // 0=normal, 1=reminded, 2=escalated, 3=reassigned
+  lastEscalatedAt   DateTime?            // Last time an SLA escalation action was taken
+  slaBreachedAt     DateTime?            // When the SLA was first breached
+
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
@@ -170,6 +178,7 @@ model Lead {
   @@index([organizationId, stageId])
   @@index([email])
   @@index([phone])
+  @@index([organizationId, slaStatus])
   @@map("leads")
 }
 
@@ -198,6 +207,14 @@ enum LeadStatus {
   NEGOTIATION
   WON
   LOST
+}
+
+enum LeadSLAStatus {
+  ON_TIME        // Within SLA thresholds
+  AT_RISK        // Approaching SLA breach (e.g. 75% of threshold elapsed)
+  BREACHED       // SLA threshold exceeded, action pending
+  ESCALATED      // Escalation action taken (reminded/reassigned)
+  RESPONDED      // User responded within SLA
 }
 
 // ─── Contacts ───────────────────────────────────────────────────
@@ -460,6 +477,10 @@ enum ActivityType {
   ASSIGNMENT_CHANGED
   SCORE_UPDATED
   ATTACHMENT_ADDED
+  SLA_REMINDER_SENT
+  SLA_ESCALATED
+  SLA_REASSIGNED
+  SLA_BREACHED
   CUSTOM
 }
 
@@ -750,6 +771,9 @@ enum AutomationTrigger {
   LEAD_ASSIGNED
   LEAD_SCORE_CHANGED
   LEAD_INACTIVE
+  LEAD_SLA_WARNING
+  LEAD_SLA_BREACHED
+  LEAD_SLA_ESCALATED
   TASK_DUE
   TASK_OVERDUE
 }
