@@ -928,31 +928,41 @@ class ApiClient {
     });
   }
 
-  async getAllocationStats() {
-    return this.request<any>('/leads/allocation/stats');
+  async getAllocationStats(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/leads/allocation/stats${q}`);
   }
 
-  async autoAllocateLeads() {
+  async autoAllocateLeads(divisionId?: string) {
     return this.request<any>('/leads/allocation/auto-allocate', {
       method: 'POST',
+      body: JSON.stringify(divisionId ? { divisionId } : {}),
     });
   }
 
-  async getAllocationRules() {
-    return this.request<any>('/leads/allocation/rules');
+  async getAllocationRules(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/leads/allocation/rules${q}`);
   }
 
-  async updateAllocationRules(rules: any) {
+  async updateAllocationRules(rules: any, divisionId?: string) {
+    const payload = divisionId ? { ...rules, divisionId } : rules;
     return this.request<any>('/leads/allocation/rules', {
       method: 'PUT',
-      body: JSON.stringify(rules),
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async resetDivisionAllocationRules(divisionId: string) {
+    return this.request<any>('/leads/allocation/rules', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, resetToGlobal: true }),
     });
   }
 
   async getAssignmentHistory(leadId: string) {
     return this.request<any[]>(`/leads/${leadId}/assignment-history`);
   }
-
   // ─── Inbox / Omnichannel ──────────────────────────────────────────
 
   async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {

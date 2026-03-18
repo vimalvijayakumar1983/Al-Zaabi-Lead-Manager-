@@ -637,6 +637,9 @@ export interface AllocationRules {
   maxLeadsPerUser: number;
   sourceRules: SourceAllocationRule[];
   eligibleUserIds: string[];
+  divisionId?: string;                  // Which division these rules apply to (undefined = global)
+  inherited?: boolean;                  // true if division inherits from global
+  scope?: 'global' | 'division';       // Indicates rule scope
 }
 
 export interface WorkloadUser {

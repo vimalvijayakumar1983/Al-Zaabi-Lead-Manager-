@@ -1,6 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Settings,
+  Users,
+  RefreshCw,
+  Save,
+  X,
+  ChevronDown,
+  Check,
+  AlertCircle,
+  Info,
+  Loader2,
+  Globe,
+  Building2,
+  RotateCcw,
+  Zap,
+  BarChart3,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   AllocationMethod,
@@ -9,57 +26,10 @@ import type {
   AutoAllocateResult,
   SourceAllocationRule,
   User,
+  Organization,
 } from '@/types';
 
-/* ------------------------------------------------------------------ */
-/*  Constants                                                         */
-/* ------------------------------------------------------------------ */
-
-const LEAD_SOURCES = [
-  'WEBSITE_FORM',
-  'LIVE_CHAT',
-  'LANDING_PAGE',
-  'WHATSAPP',
-  'FACEBOOK_ADS',
-  'GOOGLE_ADS',
-  'TIKTOK_ADS',
-  'MANUAL',
-  'CSV_IMPORT',
-  'API',
-  'REFERRAL',
-  'EMAIL',
-  'PHONE',
-  'OTHER',
-] as const;
-
-const SOURCE_LABELS: Record<string, string> = {
-  WEBSITE_FORM: 'Website Form',
-  LIVE_CHAT: 'Live Chat Widget',
-  LANDING_PAGE: 'Landing Page',
-  WHATSAPP: 'WhatsApp',
-  FACEBOOK_ADS: 'Facebook Ads',
-  GOOGLE_ADS: 'Google Ads',
-  TIKTOK_ADS: 'TikTok Ads',
-  MANUAL: 'Manual',
-  CSV_IMPORT: 'CSV Import',
-  API: 'API',
-  REFERRAL: 'Referral',
-  EMAIL: 'Email',
-  PHONE: 'Phone',
-  OTHER: 'Other',
-};
-
-interface MethodOption {
-  value: AllocationMethod;
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  badge?: string;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Props                                                             */
-/* ------------------------------------------------------------------ */
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 interface AllocationSettingsProps {
   isOpen: boolean;
@@ -67,679 +37,961 @@ interface AllocationSettingsProps {
   users: User[];
 }
 
-/* ------------------------------------------------------------------ */
-/*  Icons (inline SVGs)                                               */
-/* ------------------------------------------------------------------ */
-
-function IconRoundRobin() {
-  return (
-    <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-    </svg>
-  );
+interface RulesResponse {
+  rules: AllocationRules;
+  inherited?: boolean;
+  divisionId?: string;
+  scope?: 'global' | 'division';
 }
 
-function IconWorkload() {
-  return (
-    <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-    </svg>
-  );
-}
-
-function IconManual() {
-  return (
-    <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-    </svg>
-  );
-}
-
-function IconClose() {
-  return (
-    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
-function IconPlus() {
-  return (
-    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-    </svg>
-  );
-}
-
-function IconTrash() {
-  return (
-    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-    </svg>
-  );
-}
-
-function IconCheck() {
-  return (
-    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-function IconSpinner() {
-  return (
-    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-    </svg>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Sub-components                                                    */
-/* ------------------------------------------------------------------ */
-
-function MethodCard({
-  option,
-  selected,
-  onSelect,
-}: {
-  option: MethodOption;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`relative flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all duration-200 w-full ${
-        selected
-          ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/20'
-          : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-      }`}
-    >
-      {/* Radio indicator */}
-      <span
-        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-          selected ? 'border-brand-500 bg-brand-500' : 'border-gray-300 bg-white'
-        }`}
-      >
-        {selected && <span className="h-2 w-2 rounded-full bg-white" />}
-      </span>
-
-      {/* Icon */}
-      <span
-        className={`shrink-0 ${selected ? 'text-brand-600' : 'text-gray-400'}`}
-      >
-        {option.icon}
-      </span>
-
-      {/* Text */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-semibold ${selected ? 'text-brand-700' : 'text-gray-900'}`}>
-            {option.title}
-          </span>
-          {option.badge && (
-            <span className="inline-flex items-center rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700">
-              {option.badge}
-            </span>
-          )}
-        </div>
-        <p className="mt-0.5 text-xs text-gray-500 leading-relaxed">{option.description}</p>
-      </div>
-    </button>
-  );
-}
-
-function SourceRuleRow({
-  rule,
-  users,
-  usedSources,
-  onUpdate,
-  onRemove,
-}: {
-  rule: SourceAllocationRule;
-  users: User[];
-  usedSources: Set<string>;
-  onUpdate: (updated: SourceAllocationRule) => void;
-  onRemove: () => void;
-}) {
-  const activeUsers = users.filter((u) => u.isActive);
-
-  return (
-    <div className="flex items-center gap-2">
-      {/* Source select */}
-      <select
-        value={rule.source}
-        onChange={(e) => onUpdate({ ...rule, source: e.target.value })}
-        className="input flex-1 text-sm"
-      >
-        <option value="">Select source…</option>
-        {LEAD_SOURCES.map((src) => (
-          <option key={src} value={src} disabled={usedSources.has(src) && rule.source !== src}>
-            {SOURCE_LABELS[src] ?? src}
-          </option>
-        ))}
-      </select>
-
-      {/* Arrow */}
-      <svg className="h-4 w-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-      </svg>
-
-      {/* Assignee select */}
-      <select
-        value={rule.assignToId}
-        onChange={(e) => {
-          const user = activeUsers.find((u) => u.id === e.target.value);
-          onUpdate({
-            ...rule,
-            assignToId: e.target.value,
-            assignToName: user ? `${user.firstName} ${user.lastName}` : undefined,
-          });
-        }}
-        className="input flex-1 text-sm"
-      >
-        <option value="">Select assignee…</option>
-        {activeUsers.map((u) => (
-          <option key={u.id} value={u.id}>
-            {u.firstName} {u.lastName} ({u.role.replace('_', ' ')})
-          </option>
-        ))}
-      </select>
-
-      {/* Delete */}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="btn-icon shrink-0 text-gray-400 hover:text-red-500 transition-colors"
-        aria-label="Remove rule"
-      >
-        <IconTrash />
-      </button>
-    </div>
-  );
-}
-
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-6 p-6 animate-pulse">
-      <div className="space-y-3">
-        <div className="h-5 w-48 rounded bg-gray-200" />
-        <div className="h-20 rounded-xl bg-gray-100" />
-        <div className="h-20 rounded-xl bg-gray-100" />
-        <div className="h-20 rounded-xl bg-gray-100" />
-      </div>
-      <div className="space-y-3">
-        <div className="h-5 w-56 rounded bg-gray-200" />
-        <div className="h-10 rounded bg-gray-100" />
-      </div>
-      <div className="space-y-3">
-        <div className="h-5 w-36 rounded bg-gray-200" />
-        <div className="h-12 rounded-xl bg-gray-100" />
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Main Component                                                    */
-/* ------------------------------------------------------------------ */
-
-const METHODS: MethodOption[] = [
+const METHOD_OPTIONS: {
+  value: AllocationMethod;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+}[] = [
   {
     value: 'round_robin',
-    icon: <IconRoundRobin />,
-    title: 'Round Robin',
-    description: 'Leads are assigned equally among all available team members in rotation.',
+    label: 'Round Robin',
+    description: 'Leads are distributed evenly across eligible users in order',
+    icon: <RefreshCw className="w-5 h-5" />,
   },
   {
     value: 'workload_based',
-    icon: <IconWorkload />,
-    title: 'Workload Based',
-    description: 'Leads go to whoever has the fewest active leads, ensuring balanced workloads.',
-    badge: 'Recommended',
+    label: 'Workload Based',
+    description: 'Leads are assigned to users with the least active leads',
+    icon: <BarChart3 className="w-5 h-5" />,
   },
   {
     value: 'manual',
-    icon: <IconManual />,
-    title: 'Manual Only',
-    description: 'Leads remain unassigned until a manager manually assigns them to a team member.',
+    label: 'Manual',
+    description: 'Leads must be manually assigned by admins or team members',
+    icon: <Users className="w-5 h-5" />,
   },
 ];
 
-export function AllocationSettings({ isOpen, onClose, users }: AllocationSettingsProps) {
-  /* ---- state ---- */
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+// ─── Component ──────────────────────────────────────────────────────────────
 
-  const [method, setMethod] = useState<AllocationMethod>('workload_based');
-  const [autoAssign, setAutoAssign] = useState(true);
-  const [maxLeads, setMaxLeads] = useState(25);
+export default function AllocationSettings({
+  isOpen,
+  onClose,
+  users,
+}: AllocationSettingsProps) {
+  // ── Division scope state ────────────────────────────────────────────────
+  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
+  const [isInherited, setIsInherited] = useState<boolean>(false);
+  const [divisionDropdownOpen, setDivisionDropdownOpen] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const divisionDropdownRef = useRef<HTMLDivElement>(null);
+
+  // ── Core rules state ────────────────────────────────────────────────────
+  const [method, setMethod] = useState<AllocationMethod>('manual');
+  const [autoAssignOnCreate, setAutoAssignOnCreate] = useState(false);
+  const [maxLeadsPerUser, setMaxLeadsPerUser] = useState(100);
   const [sourceRules, setSourceRules] = useState<SourceAllocationRule[]>([]);
   const [eligibleUserIds, setEligibleUserIds] = useState<string[]>([]);
 
+  // ── UI state ────────────────────────────────────────────────────────────
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [stats, setStats] = useState<AllocationStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [autoAllocating, setAutoAllocating] = useState(false);
-  const [allocateResult, setAllocateResult] = useState<AutoAllocateResult | null>(null);
+  const [autoAllocateResult, setAutoAllocateResult] = useState<AutoAllocateResult | null>(null);
+  const [hasChanges, setHasChanges] = useState(false);
+  const [divisionUsers, setDivisionUsers] = useState<User[]>([]);
 
-  /* ---- data loading ---- */
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // ── Original rules ref (for change detection) ───────────────────────────
+  const originalRulesRef = useRef<AllocationRules | null>(null);
+
+  // ── Determine user role on mount ────────────────────────────────────────
+  useEffect(() => {
+    api
+      .getMe()
+      .then((res: any) => {
+        const role = res?.data?.role || res?.role || null;
+        setUserRole(role);
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Load divisions on mount ─────────────────────────────────────────────
+  useEffect(() => {
+    api
+      .getDivisions()
+      .then((res: any) => {
+        const divs = res?.data || res || [];
+        setDivisions(Array.isArray(divs) ? divs : []);
+      })
+      .catch(() => {
+        setDivisions([]);
+      });
+  }, []);
+
+  // ── Close dropdown on outside click ─────────────────────────────────────
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        divisionDropdownRef.current &&
+        !divisionDropdownRef.current.contains(event.target as Node)
+      ) {
+        setDivisionDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // ── Apply rules to state ────────────────────────────────────────────────
+  const applyRules = useCallback((rules: AllocationRules) => {
+    setMethod(rules.method || 'manual');
+    setAutoAssignOnCreate(rules.autoAssignOnCreate ?? false);
+    setMaxLeadsPerUser(rules.maxLeadsPerUser ?? 100);
+    setSourceRules(rules.sourceRules || []);
+    setEligibleUserIds(rules.eligibleUserIds || []);
+    originalRulesRef.current = { ...rules };
+    setHasChanges(false);
+  }, []);
+
+  // ── Load rules + stats ─────────────────────────────────────────────────
+  const loadData = useCallback(
+    async (divisionId: string | null) => {
+      setLoading(true);
+      setError(null);
+      setSuccess(null);
+      setAutoAllocateResult(null);
+
+      try {
+        const [rulesRes, statsRes] = await Promise.all([
+          api.getAllocationRules(divisionId || undefined),
+          api.getAllocationStats(divisionId || undefined),
+        ]);
+
+        const rulesData: RulesResponse = rulesRes?.data || rulesRes;
+        const statsData = statsRes?.data || statsRes;
+
+        const rules = rulesData.rules || rulesData;
+        applyRules(rules as AllocationRules);
+        setIsInherited(rulesData.inherited ?? false);
+        setStats(statsData);
+
+        // Extract division-scoped users from stats if available
+        if (divisionId && statsData?.users) {
+          setDivisionUsers(statsData.users);
+        } else {
+          setDivisionUsers([]);
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Failed to load allocation settings');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyRules]
+  );
+
+  // ── Load stats separately ──────────────────────────────────────────────
+  const loadStats = useCallback(async (divisionId: string | null) => {
+    setStatsLoading(true);
     try {
-      const [rules, allocationStats] = await Promise.all([
-        api.getAllocationRules(),
-        api.getAllocationStats(),
-      ]);
-      setMethod(rules.method);
-      setAutoAssign(rules.autoAssignOnCreate);
-      setMaxLeads(rules.maxLeadsPerUser);
-      setSourceRules(rules.sourceRules);
-      setEligibleUserIds(rules.eligibleUserIds || []);
-      setStats(allocationStats);
-    } catch (err) {
-      setError('Failed to load allocation settings. Please try again.');
-      console.error('AllocationSettings load error:', err);
+      const statsRes = await api.getAllocationStats(divisionId || undefined);
+      const statsData = statsRes?.data || statsRes;
+      setStats(statsData);
+
+      if (divisionId && statsData?.users) {
+        setDivisionUsers(statsData.users);
+      } else {
+        setDivisionUsers([]);
+      }
+    } catch {
+      // Stats load failure is non-critical
     } finally {
-      setLoading(false);
+      setStatsLoading(false);
     }
   }, []);
 
+  // ── Initial load & reload when division changes ─────────────────────────
   useEffect(() => {
     if (isOpen) {
-      loadData();
-      setAllocateResult(null);
-      setSuccessMsg(null);
+      loadData(selectedDivisionId);
     }
-  }, [isOpen, loadData]);
+  }, [isOpen, selectedDivisionId, loadData]);
 
-  /* ---- handlers ---- */
+  // ── Change detection ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!originalRulesRef.current) return;
+    const orig = originalRulesRef.current;
+    const changed =
+      method !== orig.method ||
+      autoAssignOnCreate !== orig.autoAssignOnCreate ||
+      maxLeadsPerUser !== orig.maxLeadsPerUser ||
+      JSON.stringify(sourceRules) !== JSON.stringify(orig.sourceRules || []) ||
+      JSON.stringify(eligibleUserIds) !== JSON.stringify(orig.eligibleUserIds || []);
+    setHasChanges(changed);
+  }, [method, autoAssignOnCreate, maxLeadsPerUser, sourceRules, eligibleUserIds]);
+
+  // ── Clear success/error after timeout ───────────────────────────────────
+  useEffect(() => {
+    if (success) {
+      const t = setTimeout(() => setSuccess(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [success]);
+
+  useEffect(() => {
+    if (error) {
+      const t = setTimeout(() => setError(null), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [error]);
+
+  // ── Compute effective users list ────────────────────────────────────────
+  const effectiveUsers: User[] =
+    selectedDivisionId && divisionUsers.length > 0 ? divisionUsers : users;
+
+  // ── Save handler ────────────────────────────────────────────────────────
   const handleSave = async () => {
     setSaving(true);
     setError(null);
-    setSuccessMsg(null);
+    setSuccess(null);
+
     try {
       const payload: AllocationRules = {
         method,
-        autoAssignOnCreate: autoAssign,
-        maxLeadsPerUser: maxLeads,
-        sourceRules: sourceRules.filter((r) => r.source && r.assignToId),
+        autoAssignOnCreate,
+        maxLeadsPerUser,
+        sourceRules,
         eligibleUserIds,
       };
-      await api.updateAllocationRules(payload);
-      setSuccessMsg('Allocation settings saved successfully.');
-      setTimeout(() => {
-        onClose();
-      }, 800);
-    } catch (err) {
-      setError('Failed to save settings. Please try again.');
-      console.error('AllocationSettings save error:', err);
+
+      await api.updateAllocationRules(payload, selectedDivisionId || undefined);
+      originalRulesRef.current = { ...payload };
+      setHasChanges(false);
+      setIsInherited(false);
+      setSuccess(
+        selectedDivisionId
+          ? 'Division allocation rules saved successfully'
+          : 'Global allocation rules saved successfully'
+      );
+
+      // Reload stats after save
+      await loadStats(selectedDivisionId);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save allocation rules');
     } finally {
       setSaving(false);
     }
   };
 
+  // ── Reset to global handler ─────────────────────────────────────────────
+  const handleResetToGlobal = async () => {
+    if (!selectedDivisionId) return;
+
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await api.resetDivisionAllocationRules(selectedDivisionId);
+      setSuccess('Division rules reset to global');
+      // Reload to get the inherited global rules
+      await loadData(selectedDivisionId);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to reset division rules');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ── Auto-allocate handler ──────────────────────────────────────────────
   const handleAutoAllocate = async () => {
     setAutoAllocating(true);
+    setAutoAllocateResult(null);
     setError(null);
-    setAllocateResult(null);
+
     try {
-      const result = await api.autoAllocateLeads();
-      setAllocateResult(result);
-      // Refresh stats after allocation
-      const freshStats = await api.getAllocationStats();
-      setStats(freshStats);
-    } catch (err) {
-      setError('Auto-allocation failed. Please try again.');
-      console.error('Auto-allocate error:', err);
+      const res = await api.autoAllocateLeads(selectedDivisionId || undefined);
+      const result = res?.data || res;
+      setAutoAllocateResult(result);
+      setSuccess(
+        `Auto-allocation complete: ${result.allocated || 0} leads assigned`
+      );
+
+      // Reload stats after allocation
+      await loadStats(selectedDivisionId);
+    } catch (err: any) {
+      setError(err?.message || 'Auto-allocation failed');
     } finally {
       setAutoAllocating(false);
     }
   };
 
+  // ── Add source rule ────────────────────────────────────────────────────
   const addSourceRule = () => {
-    setSourceRules((prev) => [...prev, { source: '', assignToId: '' }]);
+    setSourceRules([...sourceRules, { source: '', assignToId: '' }]);
   };
 
-  const updateSourceRule = (index: number, updated: SourceAllocationRule) => {
-    setSourceRules((prev) => prev.map((r, i) => (i === index ? updated : r)));
+  const updateSourceRule = (
+    index: number,
+    field: keyof SourceAllocationRule,
+    value: string
+  ) => {
+    const updated = [...sourceRules];
+    updated[index] = { ...updated[index], [field]: value };
+    setSourceRules(updated);
   };
 
   const removeSourceRule = (index: number) => {
-    setSourceRules((prev) => prev.filter((_, i) => i !== index));
+    setSourceRules(sourceRules.filter((_, i) => i !== index));
   };
 
-  const usedSources = new Set(sourceRules.map((r) => r.source).filter(Boolean));
+  // ── Toggle eligible user ───────────────────────────────────────────────
+  const toggleEligibleUser = (userId: string) => {
+    setEligibleUserIds((prev) =>
+      prev.includes(userId)
+        ? prev.filter((id) => id !== userId)
+        : [...prev, userId]
+    );
+  };
 
-  /* ---- early return if closed ---- */
+  const selectAllUsers = () => {
+    setEligibleUserIds(effectiveUsers.map((u) => u.id));
+  };
+
+  const clearAllUsers = () => {
+    setEligibleUserIds([]);
+  };
+
+  // ── Get selected division name ─────────────────────────────────────────
+  const selectedDivisionName = selectedDivisionId
+    ? divisions.find((d) => d.id === selectedDivisionId)?.name || 'Division'
+    : null;
+
+  // ── Don't render if not open ───────────────────────────────────────────
   if (!isOpen) return null;
 
-  /* ---- render ---- */
+  const isSuperAdmin = userRole === 'SUPER_ADMIN';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto">
-      {/* Overlay */}
+    <div className="fixed inset-0 z-50 flex items-start justify-end">
+      {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
+        className="absolute inset-0 bg-black/30 transition-opacity"
         onClick={onClose}
       />
 
-      {/* Modal panel */}
-      <div className="relative z-10 my-8 w-full max-w-2xl animate-[slideUp_0.25s_ease-out] rounded-2xl bg-white shadow-2xl">
+      {/* Panel */}
+      <div className="relative h-full w-full max-w-2xl bg-white shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-300">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Allocation Settings</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Configure how leads are assigned to your team</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-icon rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-            aria-label="Close"
-          >
-            <IconClose />
-          </button>
-        </div>
-
-        {/* Content */}
-        {loading ? (
-          <LoadingSkeleton />
-        ) : (
-          <div className="max-h-[calc(100vh-12rem)] overflow-y-auto">
-            <div className="space-y-6 p-6">
-              {/* ──────── Section 1: Assignment Method ──────── */}
-              <section>
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="text-base">⚙️</span>
-                  <h3 className="text-sm font-semibold text-gray-900">Lead Assignment Method</h3>
-                </div>
-
-                <div className="space-y-2">
-                  {METHODS.map((opt) => (
-                    <MethodCard
-                      key={opt.value}
-                      option={opt}
-                      selected={method === opt.value}
-                      onSelect={() => setMethod(opt.value)}
-                    />
-                  ))}
-                </div>
-
-                {/* Options below radio cards */}
-                <div className="mt-4 space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  {/* Auto-assign checkbox */}
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={autoAssign}
-                      onChange={(e) => setAutoAssign(e.target.checked)}
-                      className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
-                    />
-                    <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors">
-                      Auto-assign leads on creation
-                    </span>
-                  </label>
-
-                  {/* Max leads */}
-                  <div className="flex items-center gap-3">
-                    <label htmlFor="max-leads" className="label text-sm text-gray-700 whitespace-nowrap">
-                      Max leads per user:
-                    </label>
-                    <input
-                      id="max-leads"
-                      type="number"
-                      min={1}
-                      max={999}
-                      value={maxLeads}
-                      onChange={(e) => setMaxLeads(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      className="input w-24 text-sm"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              {/* ──────── Section 2: Eligible Team Members ──────── */}
-              {method !== 'manual' && (
-                <section>
-                  <div className="mb-1 flex items-center gap-2">
-                    <span className="text-base">👥</span>
-                    <h3 className="text-sm font-semibold text-gray-900">Eligible Team Members</h3>
-                  </div>
-                  <p className="mb-3 text-xs text-gray-500">
-                    Select which team members participate in auto-assignment. If none selected, all active team members are eligible.
-                  </p>
-
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 max-h-64 overflow-y-auto space-y-1">
-                    {users.filter((u) => u.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u.role)).map((u) => {
-                      const isChecked = eligibleUserIds.includes(u.id);
-                      return (
-                        <label key={u.id} className="flex items-center gap-3 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-white transition-colors">
-                          <input
-                            type="checkbox"
-                            checked={eligibleUserIds.length === 0 || isChecked}
-                            onChange={(e) => {
-                              if (eligibleUserIds.length === 0) {
-                                // Switching from "all" to specific: select all except this one
-                                const allIds = users
-                                  .filter((u2) => u2.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u2.role))
-                                  .map((u2) => u2.id);
-                                setEligibleUserIds(allIds.filter((id) => id !== u.id));
-                              } else if (e.target.checked) {
-                                setEligibleUserIds((prev) => [...prev, u.id]);
-                              } else {
-                                const next = eligibleUserIds.filter((id) => id !== u.id);
-                                // If unchecking would leave 0 selected, keep at least this user
-                                setEligibleUserIds(next.length > 0 ? next : []);
-                              }
-                            }}
-                            className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
-                          />
-                          <span className="text-sm text-gray-700">
-                            {u.firstName} {u.lastName}
-                          </span>
-                          <span className="text-xs text-gray-400 ml-auto">
-                            {u.role.replace('_', ' ')}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-
-                  {eligibleUserIds.length === 0 && (
-                    <p className="mt-2 text-xs text-brand-600 font-medium">
-                      All active team members are currently eligible for assignment.
-                    </p>
-                  )}
-                  {eligibleUserIds.length > 0 && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <p className="text-xs text-gray-500">
-                        {eligibleUserIds.length} member{eligibleUserIds.length !== 1 ? 's' : ''} selected
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setEligibleUserIds([])}
-                        className="text-xs text-brand-600 hover:text-brand-700 font-medium"
-                      >
-                        Reset to all
-                      </button>
-                    </div>
-                  )}
-                </section>
-              )}
-
-              {/* ──────── Section 3: Source-Based Rules ──────── */}
-              <section>
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="text-base">🎯</span>
-                  <h3 className="text-sm font-semibold text-gray-900">Source-Based Assignment Rules</h3>
-                </div>
-                <p className="mb-3 text-xs text-gray-500">
-                  Override default assignment: leads from specific sources get routed to designated team members.
+        <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <Settings className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Allocation Settings
+                </h2>
+                <p className="text-sm text-gray-500">
+                  Configure how leads are distributed
                 </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
 
-                <div className="space-y-2">
-                  {sourceRules.map((rule, idx) => (
-                    <SourceRuleRow
-                      key={idx}
-                      rule={rule}
-                      users={users}
-                      usedSources={usedSources}
-                      onUpdate={(updated) => updateSourceRule(idx, updated)}
-                      onRemove={() => removeSourceRule(idx)}
-                    />
-                  ))}
-                </div>
-
+          {/* ── Division Scope Selector ─────────────────────────────────── */}
+          {isSuperAdmin && divisions.length > 0 && (
+            <div className="mt-4" ref={divisionDropdownRef}>
+              <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                Scope
+              </label>
+              <div className="relative">
                 <button
                   type="button"
-                  onClick={addSourceRule}
-                  disabled={sourceRules.length >= LEAD_SOURCES.length}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 hover:border-brand-400 hover:text-brand-600 hover:bg-brand-50 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={() => setDivisionDropdownOpen(!divisionDropdownOpen)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
                 >
-                  <IconPlus />
-                  Add Source Rule
-                </button>
-              </section>
-
-              {/* ──────── Section 3: Quick Actions ──────── */}
-              <section>
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="text-base">⚡</span>
-                  <h3 className="text-sm font-semibold text-gray-900">Quick Actions</h3>
-                </div>
-
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  {stats && (
-                    <p className="mb-3 text-sm text-gray-700">
-                      <span className="inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 font-bold text-xs h-6 min-w-[1.5rem] px-1.5">
-                        {stats.summary.totalUnassigned}
-                      </span>
-                      <span className="ml-1.5">unassigned lead{stats.summary.totalUnassigned !== 1 ? 's' : ''} in your organization</span>
-                    </p>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={handleAutoAllocate}
-                    disabled={autoAllocating || (stats?.summary.totalUnassigned ?? 0) === 0}
-                    className="btn-primary w-full justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {autoAllocating ? (
+                  <span className="flex items-center gap-2">
+                    {selectedDivisionId ? (
                       <>
-                        <IconSpinner />
-                        Assigning leads…
+                        <Building2 className="w-4 h-4 text-blue-600" />
+                        <span>{selectedDivisionName}</span>
                       </>
                     ) : (
                       <>
-                        <span>🤖</span>
-                        Auto-Assign All Unassigned Leads
+                        <Globe className="w-4 h-4 text-green-600" />
+                        <span>🌐 Global (All Divisions)</span>
                       </>
                     )}
-                  </button>
+                  </span>
+                  <ChevronDown
+                    className={`w-4 h-4 text-gray-400 transition-transform ${
+                      divisionDropdownOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
 
-                  {/* Result feedback */}
-                  {allocateResult && (
-                    <div className="mt-3 flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 p-3">
-                      <span className="shrink-0 text-green-600 mt-0.5">
-                        <IconCheck />
+                {divisionDropdownOpen && (
+                  <div className="absolute left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 max-h-64 overflow-y-auto">
+                    {/* Global option */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDivisionId(null);
+                        setDivisionDropdownOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-gray-50 transition-colors ${
+                        !selectedDivisionId
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'text-gray-700'
+                      }`}
+                    >
+                      <Globe className="w-4 h-4 text-green-600" />
+                      <span className="flex-1 text-left">
+                        🌐 Global (All Divisions)
                       </span>
-                      <div className="text-sm text-green-800">
-                        <p className="font-medium">
-                          Assigned {allocateResult.allocated} lead{allocateResult.allocated !== 1 ? 's' : ''}{' '}
-                          to{' '}
-                          {new Set(allocateResult.details.map((d) => d.assignedToId)).size} team member
-                          {new Set(allocateResult.details.map((d) => d.assignedToId)).size !== 1 ? 's' : ''}
-                        </p>
-                        {allocateResult.details.length > 0 && allocateResult.details.length <= 8 && (
-                          <ul className="mt-1 space-y-0.5 text-xs text-green-700">
-                            {allocateResult.details.map((d) => (
-                              <li key={d.leadId}>
-                                → {d.assignedToName}
-                              </li>
-                            ))}
-                          </ul>
+                      {!selectedDivisionId && (
+                        <Check className="w-4 h-4 text-blue-600" />
+                      )}
+                    </button>
+
+                    <div className="border-t border-gray-100" />
+
+                    {/* Division options */}
+                    {divisions.map((div) => (
+                      <button
+                        key={div.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedDivisionId(div.id);
+                          setDivisionDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-gray-50 transition-colors ${
+                          selectedDivisionId === div.id
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'text-gray-700'
+                        }`}
+                      >
+                        {div.logo ? (
+                          <img
+                            src={div.logo}
+                            alt=""
+                            className="w-5 h-5 rounded-full object-cover"
+                          />
+                        ) : (
+                          <Building2
+                            className="w-4 h-4"
+                            style={{ color: div.color || '#6B7280' }}
+                          />
                         )}
+                        <span className="flex-1 text-left">{div.name}</span>
+                        {selectedDivisionId === div.id && (
+                          <Check className="w-4 h-4 text-blue-600" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-6 space-y-6">
+          {/* ── Inherited rules banner ──────────────────────────────────── */}
+          {selectedDivisionId && isInherited && (
+            <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-800">
+                  Inherited Global Rules
+                </p>
+                <p className="text-sm text-blue-600 mt-0.5">
+                  This division inherits global allocation rules. Customize to
+                  override for this division.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {selectedDivisionId && !isInherited && !loading && (
+            <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800">
+                    Custom Rules Active
+                  </p>
+                  <p className="text-sm text-amber-600 mt-0.5">
+                    Custom allocation rules are active for{' '}
+                    <strong>{selectedDivisionName}</strong>.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleResetToGlobal}
+                disabled={saving}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors disabled:opacity-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset to Global
+              </button>
+            </div>
+          )}
+
+          {/* ── Status messages ─────────────────────────────────────────── */}
+          {error && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg animate-in fade-in duration-200">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              {error}
+            </div>
+          )}
+
+          {success && (
+            <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg animate-in fade-in duration-200">
+              <Check className="w-4 h-4 flex-shrink-0" />
+              {success}
+            </div>
+          )}
+
+          {/* ── Loading skeleton ────────────────────────────────────────── */}
+          {loading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <div
+                  key={i}
+                  className="h-24 bg-gray-100 rounded-lg animate-pulse"
+                />
+              ))}
+            </div>
+          ) : (
+            <>
+              {/* ── Allocation Method ───────────────────────────────────── */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                  Allocation Method
+                </h3>
+                <div className="space-y-2">
+                  {METHOD_OPTIONS.map((option) => (
+                    <label
+                      key={option.value}
+                      className={`flex items-start gap-4 p-4 border rounded-lg cursor-pointer transition-all ${
+                        method === option.value
+                          ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="allocation-method"
+                        value={option.value}
+                        checked={method === option.value}
+                        onChange={() => setMethod(option.value)}
+                        className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`${
+                              method === option.value
+                                ? 'text-blue-600'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {option.icon}
+                          </span>
+                          <span className="font-medium text-gray-900">
+                            {option.label}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {option.description}
+                        </p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Auto-assign on create ───────────────────────────────── */}
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Auto-assign on Create
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    Automatically assign new leads when they are created
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoAssignOnCreate}
+                  onClick={() => setAutoAssignOnCreate(!autoAssignOnCreate)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                    autoAssignOnCreate ? 'bg-blue-600' : 'bg-gray-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      autoAssignOnCreate ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* ── Max leads per user ──────────────────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Max Leads per User
+                  </h3>
+                  <span className="text-sm font-mono text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                    {maxLeadsPerUser}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={500}
+                  value={maxLeadsPerUser}
+                  onChange={(e) =>
+                    setMaxLeadsPerUser(parseInt(e.target.value, 10))
+                  }
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                  <span>1</span>
+                  <span>250</span>
+                  <span>500</span>
+                </div>
+              </div>
+
+              {/* ── Source-based Rules ──────────────────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Source-based Rules
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={addSourceRule}
+                    className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    + Add Rule
+                  </button>
+                </div>
+
+                {sourceRules.length === 0 ? (
+                  <p className="text-sm text-gray-400 italic p-3 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                    No source rules configured. Leads from all sources will use
+                    the selected method.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {sourceRules.map((rule, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200"
+                      >
+                        <input
+                          type="text"
+                          value={rule.source}
+                          onChange={(e) =>
+                            updateSourceRule(index, 'source', e.target.value)
+                          }
+                          placeholder="Lead source..."
+                          className="flex-1 text-sm px-3 py-1.5 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <select
+                          value={rule.assignToId}
+                          onChange={(e) =>
+                            updateSourceRule(
+                              index,
+                              'assignToId',
+                              e.target.value
+                            )
+                          }
+                          className="flex-1 text-sm px-3 py-1.5 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                        >
+                          <option value="">Select assignee...</option>
+                          {effectiveUsers.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.name || user.email}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => removeSourceRule(index)}
+                          className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Eligible Users ─────────────────────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Eligible Users
+                    {selectedDivisionId && divisionUsers.length > 0 && (
+                      <span className="ml-2 text-xs text-gray-400 font-normal">
+                        (showing {selectedDivisionName} members)
+                      </span>
+                    )}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={selectAllUsers}
+                      className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button
+                      type="button"
+                      onClick={clearAllUsers}
+                      className="text-xs text-gray-500 hover:text-gray-700 font-medium"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {effectiveUsers.length === 0 ? (
+                    <p className="text-sm text-gray-400 italic p-3">
+                      No users available
+                      {selectedDivisionId ? ' in this division' : ''}
+                    </p>
+                  ) : (
+                    effectiveUsers.map((user) => (
+                      <label
+                        key={user.id}
+                        className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={eligibleUserIds.includes(user.id)}
+                          onChange={() => toggleEligibleUser(user.id)}
+                          className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500 border-gray-300"
+                        />
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-medium text-blue-700 flex-shrink-0">
+                            {(user.name || user.email || '?')
+                              .charAt(0)
+                              .toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {user.name || 'Unnamed'}
+                            </p>
+                            <p className="text-xs text-gray-500 truncate">
+                              {user.email}
+                            </p>
+                          </div>
+                        </div>
+                      </label>
+                    ))
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  {eligibleUserIds.length} of {effectiveUsers.length} users
+                  selected
+                </p>
+              </div>
+
+              {/* ── Workload Statistics ─────────────────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Workload Statistics
+                    {selectedDivisionId && (
+                      <span className="ml-2 text-xs text-gray-400 font-normal">
+                        — {selectedDivisionName}
+                      </span>
+                    )}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => loadStats(selectedDivisionId)}
+                    disabled={statsLoading}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${statsLoading ? 'animate-spin' : ''}`}
+                    />
+                    Refresh
+                  </button>
+                </div>
+
+                {stats && stats.users && stats.users.length > 0 ? (
+                  <div className="space-y-2">
+                    {stats.users.map((userStat: any) => {
+                      const utilization = maxLeadsPerUser
+                        ? Math.min(
+                            100,
+                            Math.round(
+                              ((userStat.activeLeads || 0) / maxLeadsPerUser) *
+                                100
+                            )
+                          )
+                        : 0;
+                      return (
+                        <div
+                          key={userStat.id || userStat.userId}
+                          className="p-3 bg-gray-50 rounded-lg border border-gray-200"
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-sm font-medium text-gray-900">
+                              {userStat.name || userStat.email || 'User'}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {userStat.activeLeads || 0} / {maxLeadsPerUser}
+                            </span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div
+                              className={`h-2 rounded-full transition-all duration-500 ${
+                                utilization >= 90
+                                  ? 'bg-red-500'
+                                  : utilization >= 70
+                                    ? 'bg-amber-500'
+                                    : 'bg-blue-500'
+                              }`}
+                              style={{ width: `${utilization}%` }}
+                            />
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {utilization}% utilization
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic p-3 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                    {statsLoading
+                      ? 'Loading statistics...'
+                      : 'No workload data available'}
+                  </p>
+                )}
+              </div>
+
+              {/* ── Auto-Allocate Button ───────────────────────────────── */}
+              <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">
+                      {selectedDivisionId
+                        ? `Auto-Allocate ${selectedDivisionName} Leads`
+                        : 'Auto-Allocate Leads'}
+                    </h3>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      Distribute all unassigned leads
+                      {selectedDivisionId ? ' in this division' : ''} using
+                      current rules
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAutoAllocate}
+                    disabled={autoAllocating || method === 'manual'}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {autoAllocating ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Zap className="w-4 h-4" />
+                    )}
+                    {autoAllocating ? 'Allocating...' : 'Auto-Allocate'}
+                  </button>
+                </div>
+
+                {autoAllocateResult && (
+                  <div className="mt-3 p-3 bg-white rounded-lg border border-gray-200 text-sm">
+                    <div className="grid grid-cols-3 gap-3 text-center">
+                      <div>
+                        <p className="text-lg font-semibold text-green-600">
+                          {autoAllocateResult.allocated || 0}
+                        </p>
+                        <p className="text-xs text-gray-500">Allocated</p>
+                      </div>
+                      <div>
+                        <p className="text-lg font-semibold text-red-600">
+                          {autoAllocateResult.failed || 0}
+                        </p>
+                        <p className="text-xs text-gray-500">Failed</p>
+                      </div>
+                      <div>
+                        <p className="text-lg font-semibold text-gray-600">
+                          {autoAllocateResult.total || 0}
+                        </p>
+                        <p className="text-xs text-gray-500">Total</p>
                       </div>
                     </div>
-                  )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
 
-                  {(stats?.summary.totalUnassigned ?? 0) === 0 && !allocateResult && (
-                    <p className="mt-2 text-xs text-gray-500 text-center">
-                      All leads are currently assigned. 🎉
-                    </p>
+        {/* ── Footer: Save / Cancel ────────────────────────────────────── */}
+        {!loading && (
+          <div className="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-500">
+                {hasChanges && (
+                  <span className="flex items-center gap-1 text-amber-600">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    Unsaved changes
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving || !hasChanges}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {saving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
                   )}
-                </div>
-              </section>
-
-              {/* ──────── Feedback messages ──────── */}
-              {error && (
-                <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-                  <svg className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  {error}
-                </div>
-              )}
-              {successMsg && (
-                <div className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700">
-                  <IconCheck />
-                  {successMsg}
-                </div>
-              )}
+                  {saving ? 'Saving...' : 'Save Rules'}
+                </button>
+              </div>
             </div>
           </div>
         )}
-
-        {/* Footer */}
-        {!loading && (
-          <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-6 py-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn-secondary text-sm"
-              disabled={saving}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="btn-primary text-sm gap-2"
-            >
-              {saving ? (
-                <>
-                  <IconSpinner />
-                  Saving…
-                </>
-              ) : (
-                'Save Settings'
-              )}
-            </button>
-          </div>
-        )}
       </div>
-
-      {/* Keyframe for modal entrance */}
-      <style jsx global>{`
-        @keyframes slideUp {
-          from {
-            opacity: 0;
-            transform: translateY(16px) scale(0.98);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-      `}</style>
     </div>
   );
 }
-
-export default AllocationSettings;
