@@ -27,18 +27,20 @@ const getIncomingEmailConfig = async (organizationId) => {
  * Test IMAP connection with given config.
  */
 const testImapConnection = async (config) => {
+  const security = config.imapSecurity || 'ssl';
   const client = new ImapFlow({
     host: config.imapHost,
     port: parseInt(config.imapPort, 10) || 993,
-    secure: config.imapSecurity !== 'none',
+    secure: security === 'ssl',
     auth: {
       user: config.imapUser,
       pass: config.imapPass,
     },
     logger: false,
-    tls: config.imapSecurity === 'starttls'
-      ? { rejectUnauthorized: false }
-      : undefined,
+    tls: {
+      rejectUnauthorized: false,
+      ...(security === 'starttls' ? { servername: config.imapHost } : {}),
+    },
   });
 
   try {
@@ -56,7 +58,17 @@ const testImapConnection = async (config) => {
     return { success: true, message: 'IMAP connection successful', mailboxes };
   } catch (err) {
     try { await client.logout(); } catch (_) { /* ignore */ }
-    return { success: false, message: err.message };
+    let message = err.message || 'Unknown IMAP error';
+    if (message.includes('self signed') || message.includes('certificate')) {
+      message = 'TLS certificate error – the server may use a self-signed certificate. ' + message;
+    } else if (message.includes('AUTHENTICATIONFAILED') || message.includes('Invalid credentials')) {
+      message = 'Authentication failed – please check your username and password.';
+    } else if (message.includes('ECONNREFUSED')) {
+      message = `Connection refused – unable to reach ${config.imapHost}:${config.imapPort}. Check the host and port.`;
+    } else if (message.includes('ETIMEDOUT') || message.includes('ENOTFOUND')) {
+      message = `Cannot reach ${config.imapHost} – check the hostname and your network connection.`;
+    }
+    return { success: false, message };
   }
 };
 
@@ -101,18 +113,20 @@ const fetchImapEmails = async (config, options = {}) => {
     markAsRead = false,
   } = options;
 
+  const security = config.imapSecurity || 'ssl';
   const client = new ImapFlow({
     host: config.imapHost,
     port: parseInt(config.imapPort, 10) || 993,
-    secure: config.imapSecurity !== 'none',
+    secure: security === 'ssl',
     auth: {
       user: config.imapUser,
       pass: config.imapPass,
     },
     logger: false,
-    tls: config.imapSecurity === 'starttls'
-      ? { rejectUnauthorized: false }
-      : undefined,
+    tls: {
+      rejectUnauthorized: false,
+      ...(security === 'starttls' ? { servername: config.imapHost } : {}),
+    },
   });
 
   const emails = [];
