@@ -345,10 +345,7 @@ router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
     // Delete related records in order (handle foreign key constraints)
     await prisma.$transaction(async (tx) => {
       // Delete division memberships
-      await tx.$executeRawUnsafe(
-        `DELETE FROM division_memberships WHERE user_id = $1`,
-        req.params.id
-      );
+      await tx.divisionMembership.deleteMany({ where: { userId: req.params.id } });
 
       // Delete notifications
       await tx.notification.deleteMany({ where: { userId: req.params.id } });
