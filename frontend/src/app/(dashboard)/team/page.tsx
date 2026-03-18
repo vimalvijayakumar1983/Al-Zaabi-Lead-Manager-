@@ -440,6 +440,33 @@ export default function TeamPage() {
     }
   };
 
+  // ─── Delete User State & Handler ──────────────────────────────
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null);
+  const [deleteReassignTo, setDeleteReassignTo] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const handleDeleteUser = async () => {
+    if (!deleteConfirmUser) return;
+    setDeleteLoading(true);
+    try {
+      await api.deleteUserPermanently(deleteConfirmUser.id, deleteReassignTo || undefined);
+      toast.success(`${deleteConfirmUser.firstName} ${deleteConfirmUser.lastName} permanently deleted`);
+      setDeleteConfirmUser(null);
+      setDeleteReassignTo('');
+      fetchUsers();
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Failed to delete user';
+      const leadsCount = err?.response?.data?.leadsCount;
+      if (leadsCount) {
+        toast.error(`User has ${leadsCount} assigned leads. Select someone to reassign them to.`);
+      } else {
+        toast.error(msg);
+      }
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handleBulkDeactivate = async () => {
     if (!confirm(`Deactivate ${selectedIds.size} selected users?`)) return;
     try {
@@ -1234,6 +1261,18 @@ export default function TeamPage() {
                                     Reactivate
                                   </button>
                                 )}
+                                {isAdmin && (
+                                  <>
+                                    <div className="my-1 h-px bg-border-subtle" />
+                                    <button
+                                      onClick={() => { setDeleteConfirmUser(user); setActiveMenu(null); }}
+                                      className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      Delete Permanently
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1349,6 +1388,95 @@ export default function TeamPage() {
           onClose={() => setShowMembershipModal(null)}
           onSaved={fetchUsers}
         />
+      )}
+
+      {/* ─── Delete User Confirmation Modal ──────────────────────── */}
+      {deleteConfirmUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { setDeleteConfirmUser(null); setDeleteReassignTo(''); }} />
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            {/* Header */}
+            <div className="bg-red-50 border-b border-red-100 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <Trash2 className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-red-900">Delete User Permanently</h2>
+                  <p className="text-sm text-red-700">This action cannot be undone</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-6 py-4 space-y-4">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm font-medium text-gray-900">
+                  {deleteConfirmUser.firstName} {deleteConfirmUser.lastName}
+                </p>
+                <p className="text-xs text-gray-500">{deleteConfirmUser.email}</p>
+                <p className="text-xs text-gray-500 mt-1">Role: {deleteConfirmUser.role}</p>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-sm text-amber-800">
+                  <strong>Warning:</strong> This will permanently remove this user, their notifications, activity history, and division memberships.
+                </p>
+              </div>
+
+              {/* Reassign leads dropdown */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Reassign leads & tasks to:
+                </label>
+                <select
+                  value={deleteReassignTo}
+                  onChange={(e) => setDeleteReassignTo(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">No reassignment (delete if no leads)</option>
+                  {users
+                    .filter((u) => u.id !== deleteConfirmUser.id && u.isActive)
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.firstName} {u.lastName} ({u.role})
+                      </option>
+                    ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  If the user has assigned leads, you must select someone to reassign them to.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+              <button
+                onClick={() => { setDeleteConfirmUser(null); setDeleteReassignTo(''); }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteUser}
+                disabled={deleteLoading}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+              >
+                {deleteLoading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Delete Permanently
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

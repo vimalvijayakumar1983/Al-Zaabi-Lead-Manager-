@@ -266,6 +266,13 @@ class ApiClient {
     return this.request<any>(`/users/${id}/reactivate`, { method: 'POST' });
   }
 
+  async deleteUserPermanently(id: string, reassignTo?: string) {
+    return this.request<any>(`/users/${id}/permanent`, {
+      method: 'DELETE',
+      body: JSON.stringify(reassignTo ? { reassignTo } : {}),
+    });
+  }
+
   async getPermissions() {
     return this.request<{ rolePermissions: Record<string, Record<string, boolean>>; userOverrides: Record<string, Record<string, boolean>>; defaults: Record<string, Record<string, boolean>> }>('/users/permissions');
   }

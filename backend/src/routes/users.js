@@ -294,6 +294,103 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
 
 
 
+
+// ─── Permanent Delete ────────────────────────────────────────────
+// DELETE /users/:id/permanent - Permanently delete a user and all associated data
+router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ error: 'Cannot delete yourself' });
+    }
+
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      include: {
+        _count: { select: { assignedLeads: true, tasks: true } },
+      },
+    });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
+    const { reassignTo } = req.body || {};
+
+    // If user has leads, they must be reassigned
+    if (existing._count.assignedLeads > 0 && !reassignTo) {
+      return res.status(400).json({
+        error: 'User has assigned leads. Provide reassignTo userId or reassign leads first.',
+        leadsCount: existing._count.assignedLeads,
+        tasksCount: existing._count.tasks,
+      });
+    }
+
+    // Reassign leads and tasks if specified
+    if (reassignTo) {
+      const reassignUser = await prisma.user.findFirst({
+        where: { id: reassignTo, organizationId: { in: req.orgIds }, isActive: true },
+      });
+      if (!reassignUser) {
+        return res.status(400).json({ error: 'Reassign target user not found or inactive' });
+      }
+
+      await prisma.lead.updateMany({
+        where: { assignedToId: req.params.id },
+        data: { assignedToId: reassignTo },
+      });
+
+      await prisma.task.updateMany({
+        where: { assignedToId: req.params.id },
+        data: { assignedToId: reassignTo },
+      });
+    }
+
+    // Delete related records in order (handle foreign key constraints)
+    await prisma.$transaction(async (tx) => {
+      // Delete division memberships
+      await tx.$executeRawUnsafe(
+        `DELETE FROM division_memberships WHERE user_id = $1`,
+        req.params.id
+      );
+
+      // Delete notifications
+      await tx.notification.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete notification preferences
+      await tx.notificationPreference.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete lead activities by user
+      await tx.leadActivity.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete the user
+      await tx.user.delete({ where: { id: req.params.id } });
+    });
+
+    res.json({
+      message: `User ${existing.firstName} ${existing.lastName} permanently deleted`,
+      reassignedLeads: existing._count.assignedLeads,
+      reassignedTasks: existing._count.tasks,
+    });
+
+    // Fire-and-forget notification
+    notifyOrgAdmins(existing.organizationId, {
+      type: NOTIFICATION_TYPES.TEAM_MEMBER_DEACTIVATED || 'TEAM_MEMBER_DEACTIVATED',
+      title: 'Team Member Deleted',
+      message: `${req.user.firstName} ${req.user.lastName} permanently deleted ${existing.firstName} ${existing.lastName}`,
+      entityType: 'user',
+      entityId: existing.id,
+    }, req.user.id).catch(() => {});
+
+    broadcastDataChange(existing.organizationId, 'user', 'deleted', req.user.id, { entityId: existing.id }).catch(() => {});
+  } catch (err) {
+    // Handle foreign key constraint errors gracefully
+    if (err.code === 'P2003') {
+      return res.status(400).json({
+        error: 'Cannot delete user: they have associated records. Try deactivating instead, or reassign all their data first.',
+      });
+    }
+    next(err);
+  }
+});
+
+
 // ─── Division Memberships ─────────────────────────────────────
 
 // GET /users/:userId/divisions - Get user's division memberships
