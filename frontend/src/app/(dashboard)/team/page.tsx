@@ -991,7 +991,7 @@ export default function TeamPage() {
       )}
 
       {/* Team Table */}
-      <div className="card overflow-hidden">
+      <div className="card">
         <table className="w-full">
           <thead>
             <tr className="table-header">
@@ -1202,17 +1202,20 @@ export default function TeamPage() {
                             {activeMenu === user.id && (
                               <div
                                 ref={(el) => {
-                                  if (el) {
-                                    const rect = el.getBoundingClientRect();
-                                    if (rect.bottom > window.innerHeight - 8) {
-                                      el.style.top = 'auto';
-                                      el.style.bottom = '100%';
-                                      el.style.marginBottom = '4px';
-                                      el.style.marginTop = '0';
+                                  if (el && el.parentElement) {
+                                    const btnRect = el.parentElement.querySelector('button')?.getBoundingClientRect();
+                                    if (!btnRect) return;
+                                    const menuHeight = el.offsetHeight;
+                                    const spaceBelow = window.innerHeight - btnRect.bottom;
+                                    if (spaceBelow < menuHeight + 8) {
+                                      el.style.top = `${btnRect.top - menuHeight - 4}px`;
+                                    } else {
+                                      el.style.top = `${btnRect.bottom + 4}px`;
                                     }
+                                    el.style.left = `${Math.max(8, btnRect.right - el.offsetWidth)}px`;
                                   }
                                 }}
-                                className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-50"
+                                className="fixed w-52 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-[9999]"
                               >
                                 <button
                                   onClick={() => { setEditingUser(user); setActiveMenu(null); }}
