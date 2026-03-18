@@ -23,6 +23,9 @@ const triggerLabels: Record<string, { label: string; description: string; icon: 
   LEAD_ASSIGNED: { label: 'Lead Assigned', description: 'When a lead is assigned to someone', icon: UserPlus, color: 'text-amber-600 bg-amber-50' },
   LEAD_SCORE_CHANGED: { label: 'Score Changed', description: 'When lead score is updated', icon: TrendingUp, color: 'text-rose-600 bg-rose-50' },
   LEAD_INACTIVE: { label: 'Lead Inactive', description: 'When a lead becomes inactive', icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' },
+  LEAD_SLA_WARNING: { label: 'SLA Warning', description: 'When a lead is approaching SLA breach', icon: Shield, color: 'text-amber-600 bg-amber-50' },
+  LEAD_SLA_BREACHED: { label: 'SLA Breached', description: 'When a lead has breached SLA response time', icon: Shield, color: 'text-red-600 bg-red-50' },
+  LEAD_SLA_ESCALATED: { label: 'SLA Escalated', description: 'When a lead SLA breach is escalated', icon: Shield, color: 'text-rose-700 bg-rose-50' },
   TASK_DUE: { label: 'Task Due', description: 'When a task reaches its due date', icon: Clock, color: 'text-sky-600 bg-sky-50' },
   TASK_OVERDUE: { label: 'Task Overdue', description: 'When a task passes its due date', icon: XCircle, color: 'text-red-600 bg-red-50' },
 };
@@ -37,6 +40,8 @@ const actionLabels: Record<string, { label: string; icon: any; color: string }> 
   create_task: { label: 'Create Task', icon: ListTodo, color: 'text-cyan-600 bg-cyan-50' },
   notify_user: { label: 'Notify User', icon: Bell, color: 'text-yellow-600 bg-yellow-50' },
   webhook: { label: 'Fire Webhook', icon: Globe, color: 'text-gray-600 bg-gray-50' },
+  reassign_lead_round_robin: { label: 'Reassign Lead (Round Robin)', icon: UserPlus, color: 'text-rose-600 bg-rose-50' },
+  update_sla_status: { label: 'Update SLA Status', icon: Shield, color: 'text-orange-600 bg-orange-50' },
 };
 
 const operatorLabels: Record<string, string> = {
@@ -199,6 +204,7 @@ const fieldTypeBadge: Record<string, { label: string; color: string }> = {
 
 const templateCategories = [
   { id: 'all', label: 'All Templates' },
+  { id: 'sla', label: 'SLA Response Time' },
   { id: 'assignment', label: 'Assignment' },
   { id: 'communication', label: 'Communication' },
   { id: 'notification', label: 'Notification' },
@@ -1773,6 +1779,36 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                               <option value="workload_based">Workload Based</option>
                             </select>
                           </div>
+                        )}
+                        {action.type === 'reassign_lead_round_robin' && (
+                          <div className="bg-rose-50 border border-rose-200 rounded-lg p-3">
+                            <p className="text-xs text-rose-700">This action automatically reassigns the lead to the next available team member using round-robin. The previous assignee and new assignee will both be notified.</p>
+                          </div>
+                        )}
+                        {action.type === 'update_sla_status' && (
+                          <>
+                            <div>
+                              <label className="label">SLA Status</label>
+                              <select className="input text-sm" value={action.config.slaStatus || ''} onChange={(e) => updateActionConfig(i, 'slaStatus', e.target.value)}>
+                                <option value="">Select status...</option>
+                                <option value="ON_TIME">On Time</option>
+                                <option value="AT_RISK">At Risk</option>
+                                <option value="BREACHED">Breached</option>
+                                <option value="ESCALATED">Escalated</option>
+                                <option value="RESPONDED">Responded</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label">Escalation Level</label>
+                              <select className="input text-sm" value={action.config.escalationLevel ?? ''} onChange={(e) => updateActionConfig(i, 'escalationLevel', e.target.value ? Number(e.target.value) : undefined)}>
+                                <option value="">No change</option>
+                                <option value="0">Level 0 — Normal</option>
+                                <option value="1">Level 1 — Reminded</option>
+                                <option value="2">Level 2 — Escalated</option>
+                                <option value="3">Level 3 — Reassigned</option>
+                              </select>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>

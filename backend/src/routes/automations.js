@@ -13,6 +13,7 @@ const automationSchema = z.object({
   trigger: z.enum([
     'LEAD_CREATED', 'LEAD_STATUS_CHANGED', 'LEAD_STAGE_CHANGED',
     'LEAD_ASSIGNED', 'LEAD_SCORE_CHANGED', 'LEAD_INACTIVE',
+    'LEAD_SLA_WARNING', 'LEAD_SLA_BREACHED', 'LEAD_SLA_ESCALATED',
     'TASK_DUE', 'TASK_OVERDUE',
   ]),
   conditions: z.array(z.object({
@@ -24,6 +25,7 @@ const automationSchema = z.object({
     type: z.enum([
       'send_email', 'send_whatsapp', 'assign_lead', 'change_status',
       'change_stage', 'add_tag', 'create_task', 'notify_user', 'webhook',
+      'reassign_lead_round_robin', 'update_sla_status',
     ]),
     config: z.record(z.unknown()),
   })),
@@ -343,6 +345,125 @@ const AUTOMATION_TEMPLATES = [
     trigger: 'LEAD_STATUS_CHANGED',
     conditions: [],
     actions: [{ type: 'add_tag', config: { tagName: 'Status Updated' } }],
+  },
+
+  // ── SLA Automation Templates ─────────────────────────────────
+  {
+    id: 'sla-warning-notify',
+    name: 'SLA Warning — Notify Assigned Rep',
+    description: 'Send an in-app notification to the assigned rep when a lead is approaching SLA breach',
+    category: 'sla',
+    tags: ['sla', 'warning', 'at-risk', 'notification', 'response time'],
+    trigger: 'LEAD_SLA_WARNING',
+    conditions: [],
+    actions: [
+      { type: 'notify_user', config: { message: 'SLA Warning: {{firstName}} {{lastName}} has been waiting and is approaching SLA breach. Please respond urgently.' } },
+    ],
+  },
+  {
+    id: 'sla-warning-email',
+    name: 'SLA Warning — Email Rep',
+    description: 'Email the assigned rep when a lead is approaching SLA breach',
+    category: 'sla',
+    tags: ['sla', 'warning', 'email', 'at-risk'],
+    trigger: 'LEAD_SLA_WARNING',
+    conditions: [],
+    actions: [
+      { type: 'send_email', config: { recipientType: 'assigned_user', subject: 'SLA Warning: {{firstName}} {{lastName}} needs attention', body: 'Lead {{firstName}} {{lastName}} from {{company}} is approaching SLA breach. Please respond as soon as possible to avoid escalation.' } },
+    ],
+  },
+  {
+    id: 'sla-breach-remind',
+    name: 'SLA Breach — Remind & Create Task',
+    description: 'When SLA is breached, notify the rep and create an urgent follow-up task',
+    category: 'sla',
+    tags: ['sla', 'breach', 'reminder', 'task', 'urgent'],
+    trigger: 'LEAD_SLA_BREACHED',
+    conditions: [],
+    actions: [
+      { type: 'notify_user', config: { message: 'URGENT: SLA breached for {{firstName}} {{lastName}}. Immediate response required!' } },
+      { type: 'create_task', config: { title: 'URGENT: Respond to {{firstName}} {{lastName}} — SLA breached', taskType: 'FOLLOW_UP_CALL', dueInHours: 1, priority: 'URGENT' } },
+    ],
+  },
+  {
+    id: 'sla-breach-email-rep',
+    name: 'SLA Breach — Email Assigned Rep',
+    description: 'Send an email reminder to the assigned rep when a lead breaches SLA',
+    category: 'sla',
+    tags: ['sla', 'breach', 'email', 'reminder'],
+    trigger: 'LEAD_SLA_BREACHED',
+    conditions: [],
+    actions: [
+      { type: 'send_email', config: { recipientType: 'assigned_user', subject: 'SLA Breached: {{firstName}} {{lastName}}', body: 'Lead {{firstName}} {{lastName}} from {{company}} has breached SLA. This lead has been unattended beyond the allowed response time. Please respond immediately to prevent further escalation.' } },
+    ],
+  },
+  {
+    id: 'sla-breach-tag',
+    name: 'SLA Breach — Tag Lead',
+    description: 'Tag leads that breach SLA for tracking and reporting',
+    category: 'sla',
+    tags: ['sla', 'breach', 'tag', 'tracking'],
+    trigger: 'LEAD_SLA_BREACHED',
+    conditions: [],
+    actions: [
+      { type: 'add_tag', config: { tagName: 'SLA Breached' } },
+    ],
+  },
+  {
+    id: 'sla-escalation-notify-manager',
+    name: 'SLA Escalation — Notify Manager',
+    description: 'Notify managers and the assigned rep when a lead is escalated due to extended SLA breach',
+    category: 'sla',
+    tags: ['sla', 'escalation', 'manager', 'notification'],
+    trigger: 'LEAD_SLA_ESCALATED',
+    conditions: [],
+    actions: [
+      { type: 'notify_user', config: { message: 'ESCALATION: {{firstName}} {{lastName}} has been unattended for an extended period. Manager review required immediately.' } },
+      { type: 'send_email', config: { recipientType: 'assigned_user', subject: 'ESCALATION: {{firstName}} {{lastName}} — Manager Notified', body: 'This lead has been escalated to management due to extended SLA breach. Please respond immediately.' } },
+    ],
+  },
+  {
+    id: 'sla-escalation-reassign',
+    name: 'SLA Escalation — Auto-Reassign Lead',
+    description: 'Automatically reassign the lead to another available rep when SLA escalation is triggered',
+    category: 'sla',
+    tags: ['sla', 'escalation', 'reassign', 'round-robin', 'auto'],
+    trigger: 'LEAD_SLA_ESCALATED',
+    conditions: [],
+    actions: [
+      { type: 'reassign_lead_round_robin', config: {} },
+      { type: 'notify_user', config: { message: 'Lead {{firstName}} {{lastName}} was auto-reassigned due to SLA escalation.' } },
+    ],
+  },
+  {
+    id: 'sla-full-workflow',
+    name: 'Complete SLA Escalation Workflow',
+    description: 'Full SLA escalation: notify rep, email manager, create urgent task, tag lead, and fire webhook',
+    category: 'sla',
+    tags: ['sla', 'complete', 'workflow', 'multi-action', 'escalation'],
+    trigger: 'LEAD_SLA_BREACHED',
+    conditions: [],
+    actions: [
+      { type: 'notify_user', config: { message: 'SLA BREACH: {{firstName}} {{lastName}} requires immediate attention!' } },
+      { type: 'create_task', config: { title: 'SLA Breach: Call {{firstName}} {{lastName}} NOW', taskType: 'FOLLOW_UP_CALL', dueInHours: 1, priority: 'URGENT' } },
+      { type: 'add_tag', config: { tagName: 'SLA Breached' } },
+      { type: 'send_email', config: { recipientType: 'assigned_user', subject: 'Action Required: SLA Breach for {{firstName}} {{lastName}}', body: 'Lead {{firstName}} {{lastName}} from {{company}} has breached SLA. An urgent follow-up task has been created. Please respond immediately.' } },
+    ],
+  },
+  {
+    id: 'sla-escalation-reassign-notify',
+    name: 'SLA Final Escalation — Reassign & Notify All',
+    description: 'Last resort: reassign lead to next available rep and notify everyone involved',
+    category: 'sla',
+    tags: ['sla', 'final', 'reassign', 'notify', 'last-resort'],
+    trigger: 'LEAD_SLA_ESCALATED',
+    conditions: [],
+    actions: [
+      { type: 'reassign_lead_round_robin', config: {} },
+      { type: 'add_tag', config: { tagName: 'SLA Auto-Reassigned' } },
+      { type: 'create_task', config: { title: 'Priority: Respond to reassigned lead {{firstName}}', taskType: 'FOLLOW_UP_CALL', dueInHours: 1, priority: 'URGENT' } },
+      { type: 'notify_user', config: { message: 'Lead {{firstName}} {{lastName}} has been auto-reassigned to you due to SLA escalation. Please respond immediately.' } },
+    ],
   },
 
   // ── Integration Templates ─────────────────────────────────────

@@ -1,7 +1,9 @@
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
-const { notifyUser } = require('../websocket/server');
+const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { sendEmail, sendTemplateEmail } = require('./emailService');
+const { getNextAssignee } = require('./leadAssignment');
+const { createNotification, notifyOrgAdmins, NOTIFICATION_TYPES } = require('./notificationService');
 
 /**
  * Evaluate and execute automation rules for a given trigger event.
@@ -478,6 +480,117 @@ const executeSingleAction = async (action, context) => {
       } catch (whErr) {
         logger.error(`[Automation] Webhook failed: ${whErr.message}`);
         throw whErr;
+      }
+      break;
+    }
+
+    case 'reassign_lead_round_robin': {
+      // Auto-reassign lead to next available rep via round-robin
+      const previousAssigneeId = context.lead.assignedToId;
+      const newAssigneeId = await getNextAssignee(context.organizationId, context.lead);
+
+      if (!newAssigneeId || newAssigneeId === previousAssigneeId) {
+        // Cannot reassign — notify admins
+        await notifyOrgAdmins(context.organizationId, {
+          type: 'SLA_REASSIGN_FAILED',
+          title: 'SLA Auto-Reassign Failed',
+          message: `Could not find an available team member to reassign ${context.lead.firstName} ${context.lead.lastName}`,
+          entityType: 'lead',
+          entityId: context.lead.id,
+        });
+        logger.warn(`[Automation] No eligible user to reassign lead ${context.lead.id}`);
+        break;
+      }
+
+      // Get names for logging
+      const [newAssignee, previousAssignee] = await Promise.all([
+        prisma.user.findUnique({ where: { id: newAssigneeId }, select: { firstName: true, lastName: true } }),
+        previousAssigneeId
+          ? prisma.user.findUnique({ where: { id: previousAssigneeId }, select: { firstName: true, lastName: true } })
+          : null,
+      ]);
+      const newName = newAssignee ? `${newAssignee.firstName} ${newAssignee.lastName}`.trim() : 'Unknown';
+      const prevName = previousAssignee ? `${previousAssignee.firstName} ${previousAssignee.lastName}`.trim() : 'Unassigned';
+      const leadName = `${context.lead.firstName} ${context.lead.lastName}`.trim();
+      const minutes = context.lead.slaElapsedMinutes || 0;
+
+      // Perform reassignment
+      await prisma.$transaction(async (tx) => {
+        await tx.lead.update({
+          where: { id: context.lead.id },
+          data: {
+            assignedToId: newAssigneeId,
+            slaStatus: 'ESCALATED',
+            escalationLevel: 3,
+            lastEscalatedAt: new Date(),
+          },
+        });
+        await tx.leadActivity.create({
+          data: {
+            leadId: context.lead.id,
+            type: 'SLA_REASSIGNED',
+            description: `Auto-reassigned from ${prevName} to ${newName} via automation (${minutes} min unattended)`,
+            metadata: {
+              elapsedMinutes: minutes,
+              escalationLevel: 3,
+              previousAssigneeId,
+              newAssigneeId,
+              reason: 'automation_sla_reassign',
+            },
+          },
+        });
+      });
+
+      // Notify new assignee
+      await createNotification({
+        type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+        title: 'Lead Auto-Assigned (SLA)',
+        message: `${leadName} has been automatically assigned to you via SLA automation`,
+        userId: newAssigneeId,
+        entityType: 'lead',
+        entityId: context.lead.id,
+        organizationId: context.organizationId,
+        metadata: { slaElapsedMinutes: minutes, autoReassigned: true },
+      });
+      notifyUser(newAssigneeId, {
+        type: 'sla_reassignment',
+        severity: 'info',
+        lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
+        message: `${leadName} auto-assigned to you (SLA automation)`,
+      });
+
+      // Notify previous assignee
+      if (previousAssigneeId) {
+        notifyUser(previousAssigneeId, {
+          type: 'sla_reassignment',
+          severity: 'warning',
+          lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
+          message: `${leadName} was reassigned to ${newName} — SLA automation`,
+        });
+      }
+
+      // Broadcast for real-time UI
+      broadcastDataChange(context.organizationId, 'lead', 'updated', null, { entityId: context.lead.id }).catch(() => {});
+
+      logger.info(`[Automation] Lead ${context.lead.id} reassigned: ${prevName} → ${newName}`);
+      break;
+    }
+
+    case 'update_sla_status': {
+      // Manually update a lead's SLA status via automation
+      const newSlaStatus = action.config.slaStatus;
+      const newEscalationLevel = action.config.escalationLevel;
+      const updateFields = {};
+
+      if (newSlaStatus) updateFields.slaStatus = newSlaStatus;
+      if (newEscalationLevel !== undefined) updateFields.escalationLevel = Number(newEscalationLevel);
+
+      if (Object.keys(updateFields).length > 0) {
+        await prisma.lead.update({
+          where: { id: context.lead.id },
+          data: updateFields,
+        });
+        logger.info(`[Automation] Updated SLA status for lead ${context.lead.id}: ${JSON.stringify(updateFields)}`);
       }
       break;
     }
