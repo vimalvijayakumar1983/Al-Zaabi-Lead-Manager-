@@ -450,18 +450,12 @@ export default function TeamPage() {
     setDeleteLoading(true);
     try {
       await api.deleteUserPermanently(deleteConfirmUser.id, deleteReassignTo || undefined);
-      toast.success(`${deleteConfirmUser.firstName} ${deleteConfirmUser.lastName} permanently deleted`);
+      alert(`${deleteConfirmUser.firstName} ${deleteConfirmUser.lastName} permanently deleted`);
       setDeleteConfirmUser(null);
       setDeleteReassignTo('');
       fetchUsers();
     } catch (err: any) {
-      const msg = err?.response?.data?.error || 'Failed to delete user';
-      const leadsCount = err?.response?.data?.leadsCount;
-      if (leadsCount) {
-        toast.error(`User has ${leadsCount} assigned leads. Select someone to reassign them to.`);
-      } else {
-        toast.error(msg);
-      }
+      alert(err?.message || 'Failed to delete user');
     } finally {
       setDeleteLoading(false);
     }
