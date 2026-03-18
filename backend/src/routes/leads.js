@@ -71,12 +71,13 @@ const leadFilterSchema = paginationSchema.extend({
   conversionMax: z.coerce.number().optional(),
   customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
   divisionId: z.string().optional(),
+  callOutcome: z.string().optional(), // comma-separated CallDisposition values
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome } = req.validatedQuery;
 
     const where = {
       organizationId: { in: req.orgIds },
@@ -182,6 +183,13 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       where.conversionProb = {};
       if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
       if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
+    }
+    // Call outcome filtering (filter leads by their last/any call disposition)
+    if (callOutcome) {
+      const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
+      if (outcomes.length > 0) {
+        where.callLogs = { some: { disposition: outcomes.length === 1 ? outcomes[0] : { in: outcomes } } };
+      }
     }
     // Custom field filtering (JSON encoded)
     if (customField) {

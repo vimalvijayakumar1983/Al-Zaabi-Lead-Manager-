@@ -26,6 +26,7 @@ export interface FilterState {
   conversionMin: string;
   conversionMax: string;
   stageId: string;
+  callOutcome: string;      // comma-separated CallDisposition values
 }
 
 export const emptyFilters: FilterState = {
@@ -50,6 +51,7 @@ export const emptyFilters: FilterState = {
   conversionMin: '',
   conversionMax: '',
   stageId: '',
+  callOutcome: '',
 };
 
 const statusOptions = [
@@ -76,6 +78,24 @@ const sourceOptions = [
   { value: 'EMAIL', label: 'Email' },
   { value: 'PHONE', label: 'Phone' },
   { value: 'OTHER', label: 'Other' },
+];
+
+const callOutcomeOptions = [
+  { value: 'CALLBACK', label: 'Call Back Requested', icon: '🔄', group: 'Follow-up' },
+  { value: 'MEETING_ARRANGED', label: 'Meeting Arranged', icon: '📅', group: 'Positive' },
+  { value: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', icon: '✅', group: 'Positive' },
+  { value: 'INTERESTED', label: 'Interested - Send Info', icon: '👍', group: 'Positive' },
+  { value: 'QUALIFIED', label: 'Lead Qualified', icon: '⭐', group: 'Positive' },
+  { value: 'PROPOSAL_REQUESTED', label: 'Proposal Requested', icon: '📋', group: 'Positive' },
+  { value: 'FOLLOW_UP_EMAIL', label: 'Follow-up Email Requested', icon: '📧', group: 'Follow-up' },
+  { value: 'NO_ANSWER', label: 'No Answer', icon: '📵', group: 'Retry' },
+  { value: 'VOICEMAIL_LEFT', label: 'Voicemail Left', icon: '📨', group: 'Retry' },
+  { value: 'BUSY', label: 'Line Busy', icon: '📞', group: 'Retry' },
+  { value: 'GATEKEEPER', label: 'Reached Gatekeeper', icon: '🚧', group: 'Retry' },
+  { value: 'NOT_INTERESTED', label: 'Not Interested', icon: '👎', group: 'Closed' },
+  { value: 'WRONG_NUMBER', label: 'Wrong Number', icon: '❌', group: 'Closed' },
+  { value: 'DO_NOT_CALL', label: 'Do Not Call', icon: '🚫', group: 'Closed' },
+  { value: 'OTHER', label: 'Other', icon: '📝', group: 'Other' },
 ];
 
 const boolOptions = [
@@ -186,6 +206,9 @@ function TagIcon() {
 function CalendarIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
 }
+function PhoneOutcomeIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>;
+}
 function BoltIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>;
 }
@@ -237,6 +260,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   // Section open/closed state
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     statusPipeline: true,
+    callOutcome: false,
     assignmentContact: false,
     scoreBudget: false,
     textSearch: false,
@@ -277,6 +301,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   // Count active filters per section
   const sectionCounts = {
     statusPipeline: [local.status, local.stageId, local.source].filter(Boolean).length,
+    callOutcome: local.callOutcome ? parseMulti(local.callOutcome).length : 0,
     assignmentContact: [local.assignedToId, local.hasEmail, local.hasPhone].filter(Boolean).length,
     scoreBudget: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
     textSearch: [local.company, local.jobTitle, local.location, local.campaign, local.productInterest].filter(Boolean).length,
@@ -360,6 +385,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   // Multi-select helpers for status and source
   const selectedStatuses = parseMulti(local.status);
   const selectedSources = parseMulti(local.source);
+  const selectedCallOutcomes = parseMulti(local.callOutcome);
 
   return (
     <div className="card p-5 border-brand-200 bg-white shadow-lg space-y-4">
@@ -585,6 +611,50 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
                 </div>
               </div>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Section: Call Outcome */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader title="Call Outcome" icon={<PhoneOutcomeIcon />} count={sectionCounts.callOutcome} open={openSections.callOutcome} onToggle={() => toggleSection('callOutcome')} />
+        {openSections.callOutcome && (
+          <div className="p-4">
+            <label className="label mb-1.5">Last Call Outcome <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+            <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-0.5">
+              {['Positive', 'Follow-up', 'Retry', 'Closed', 'Other'].map((group) => {
+                const groupOptions = callOutcomeOptions.filter(o => o.group === group);
+                if (groupOptions.length === 0) return null;
+                return (
+                  <div key={group}>
+                    <div className="text-2xs font-semibold text-gray-400 uppercase tracking-wide px-1 pt-1.5 pb-0.5">{group}</div>
+                    {groupOptions.map((o) => {
+                      const isSelected = selectedCallOutcomes.includes(o.value);
+                      return (
+                        <label key={o.value} className="flex items-center gap-2 cursor-pointer px-1 py-1 rounded hover:bg-gray-50">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => setLocal({ ...local, callOutcome: toggleMulti(local.callOutcome, o.value) })}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                          />
+                          <span className="text-sm">{o.icon}</span>
+                          <span className={`text-sm ${isSelected ? 'text-brand-700 font-medium' : 'text-gray-600'}`}>{o.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+            {selectedCallOutcomes.length > 0 && (
+              <button
+                onClick={() => setLocal({ ...local, callOutcome: '' })}
+                className="text-xs text-gray-500 hover:text-gray-700 mt-2"
+              >
+                Clear selection ({selectedCallOutcomes.length})
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -827,6 +897,11 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
   if (filters.hasPhone) badges.push({ key: 'hasPhone', label: `Has Phone: ${filters.hasPhone === 'true' ? 'Yes' : 'No'}` });
   if (filters.conversionMin) badges.push({ key: 'conversionMin', label: `Conv >= ${filters.conversionMin}%` });
   if (filters.conversionMax) badges.push({ key: 'conversionMax', label: `Conv <= ${filters.conversionMax}%` });
+  if (filters.callOutcome) {
+    const outcomes = parseMulti(filters.callOutcome);
+    const outcomeLabels = outcomes.map(v => callOutcomeOptions.find(o => o.value === v)?.label || v);
+    badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
+  }
 
   if (badges.length === 0) return null;
 

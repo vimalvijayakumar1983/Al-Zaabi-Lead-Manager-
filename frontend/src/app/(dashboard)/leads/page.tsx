@@ -235,6 +235,7 @@ function LeadsContent() {
       if (filters.conversionMin) params.conversionMin = filters.conversionMin;
       if (filters.conversionMax) params.conversionMax = filters.conversionMax;
       if (filters.stageId) params.stageId = filters.stageId;
+      if (filters.callOutcome) params.callOutcome = filters.callOutcome;
       const res = await api.getLeads(params) as any;
       const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
       setLeads(leadsData);
