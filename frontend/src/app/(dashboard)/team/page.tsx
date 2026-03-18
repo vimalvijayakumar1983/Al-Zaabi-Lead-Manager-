@@ -2448,15 +2448,15 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
         <div className="flex items-center justify-between p-6 border-t border-border-primary bg-surface-secondary/50 rounded-b-2xl flex-shrink-0">
           <div className="text-sm text-text-tertiary">
             {hasChanges ? (
-              <span className="text-amber-600 font-medium">{changeCount} unsaved change{changeCount !== 1 ? 's' : ''}</span>
+              <span className="text-amber-600 dark:text-amber-400 font-medium">{changeCount} unsaved change{changeCount !== 1 ? 's' : ''}</span>
             ) : (
-              <span>No unsaved changes</span>
+              <span className="text-gray-500">No unsaved changes</span>
             )}
           </div>
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="px-5 py-2.5 text-sm font-medium text-text-primary bg-white border border-border-primary hover:bg-surface-tertiary rounded-xl transition-colors"
+              className="px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-xl transition-colors"
             >
               {hasChanges ? 'Discard & Close' : 'Close'}
             </button>
@@ -2465,8 +2465,8 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
               disabled={!hasChanges || saving}
               className={`px-6 py-2.5 text-sm font-semibold rounded-xl transition-all duration-200 flex items-center gap-2 ${
                 hasChanges 
-                  ? 'text-white bg-gradient-to-r from-brand-primary to-blue-600 hover:from-brand-hover hover:to-blue-700 shadow-lg shadow-brand-primary/25' 
-                  : 'text-text-tertiary bg-surface-tertiary cursor-not-allowed'
+                  ? 'text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg shadow-blue-500/25' 
+                  : 'text-gray-400 bg-gray-100 cursor-not-allowed'
               }`}
             >
               {saving ? (
