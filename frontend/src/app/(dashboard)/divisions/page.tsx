@@ -391,11 +391,26 @@ function UserActionMenu({
   onTransfer: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+
+  const handleOpen = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      const menuHeight = 200; // approximate menu height
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const top = spaceBelow < menuHeight ? rect.top - menuHeight : rect.bottom + 4;
+      const left = Math.max(8, rect.right - 208); // 208 = w-52 (13rem)
+      setMenuPos({ top, left });
+    }
+    setOpen(!open);
+  };
 
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        ref={btnRef}
+        onClick={handleOpen}
         className="btn-icon h-8 w-8"
         title="Actions"
       >
@@ -403,8 +418,11 @@ function UserActionMenu({
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-52 bg-white rounded-xl shadow-lg border border-border-subtle py-1">
+          <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[9999] w-52 bg-white rounded-xl shadow-lg border border-border-subtle py-1"
+            style={{ top: menuPos.top, left: menuPos.left }}
+          >
             <button
               onClick={() => { setOpen(false); onEditRole(); }}
               className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-primary hover:bg-surface-secondary transition-colors"
@@ -1403,10 +1421,10 @@ export default function DivisionsPage() {
             return (
               <div
                 key={division.id}
-                className="bg-white rounded-2xl border border-border-subtle overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                className="bg-white rounded-2xl border border-border-subtle shadow-sm hover:shadow-md transition-shadow"
               >
                 {/* ── Division Color Bar ──────────────────────────────── */}
-                <div className="h-1.5" style={{ backgroundColor: division.primaryColor || '#6366f1' }} />
+                <div className="h-1.5 rounded-t-2xl" style={{ backgroundColor: division.primaryColor || '#6366f1' }} />
 
                 {/* ── Division Header ────────────────────────────────── */}
                 <div className="px-6 py-5">
