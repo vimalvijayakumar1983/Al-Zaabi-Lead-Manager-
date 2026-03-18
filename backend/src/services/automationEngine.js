@@ -97,10 +97,11 @@ const executeAutomations = async (trigger, context) => {
 
 /**
  * Resolve a field value from lead data.
- * Supports standard fields (e.g. "status") and custom fields (e.g. "custom.propertyType").
- * Custom field values are stored in lead.customData JSON object.
+ * Supports standard fields (e.g. "status"), relational fields (e.g. "assignedTo", "tags"),
+ * and custom fields (e.g. "custom.propertyType" stored in lead.customData).
  */
 const resolveFieldValue = (field, lead, previousData) => {
+  // Custom fields from customData JSON
   if (field && field.startsWith('custom.')) {
     const customKey = field.slice(7); // strip "custom."
     const customData = typeof lead.customData === 'string'
@@ -113,7 +114,19 @@ const resolveFieldValue = (field, lead, previousData) => {
       : {};
     return customData[customKey] ?? prevCustomData[customKey];
   }
-  return lead[field] ?? previousData?.[field];
+
+  // Relational / computed fields
+  switch (field) {
+    case 'assignedTo':
+      return lead.assignedToId ?? previousData?.assignedToId;
+    case 'tags': {
+      // Return comma-separated tag names for contains/equals matching
+      const tags = lead.tags || previousData?.tags || [];
+      return tags.map((t) => (t.tag ? t.tag.name : t.name || t)).join(', ');
+    }
+    default:
+      return lead[field] ?? previousData?.[field];
+  }
 };
 
 /**
@@ -125,6 +138,22 @@ const evaluateConditions = (conditions, lead, previousData) => {
 
   return conditions.every((cond) => {
     const value = resolveFieldValue(cond.field, lead, previousData);
+    // Detect date fields for proper comparison
+    const isDateField = ['createdAt', 'updatedAt', 'wonAt', 'lostAt'].includes(cond.field)
+      || (cond.field?.startsWith('custom.') && cond.value && /^\d{4}-\d{2}-\d{2}/.test(String(cond.value)));
+
+    if (isDateField && value) {
+      const dateVal = new Date(value).getTime();
+      const condDate = new Date(cond.value).getTime();
+      if (isNaN(dateVal) || isNaN(condDate)) return false;
+      switch (cond.operator) {
+        case 'equals': return new Date(value).toDateString() === new Date(cond.value).toDateString();
+        case 'gt': return dateVal > condDate;
+        case 'lt': return dateVal < condDate;
+        default: return false;
+      }
+    }
+
     switch (cond.operator) {
       case 'equals': return String(value) === String(cond.value);
       case 'not_equals': return String(value) !== String(cond.value);

@@ -92,11 +92,13 @@ const taskTypeOptions = [
   { value: 'OTHER', label: 'Other' },
 ];
 
-const standardConditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean'> = {
+// Static value options for standard fields (assignedTo populated dynamically)
+const standardConditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean' | 'user'> = {
   status: statusOptions,
   source: sourceOptions,
   score: 'number',
   budget: 'number',
+  conversionProb: 'number',
   productInterest: 'text',
   location: 'text',
   company: 'text',
@@ -107,23 +109,41 @@ const standardConditionFieldValueOptions: Record<string, { value: string; label:
   website: 'text',
   firstName: 'text',
   lastName: 'text',
+  assignedTo: 'user', // dynamically populated with team members
+  tags: 'text',       // match by tag name
+  createdAt: 'date',
+  updatedAt: 'date',
+  isArchived: 'boolean',
 };
 
+// All standard fields matching the Manage Columns list + extra lead fields
 const standardConditionFields: { value: string; label: string; category: 'standard'; fieldType: string }[] = [
-  { value: 'status', label: 'Status', category: 'standard', fieldType: 'SELECT' },
-  { value: 'source', label: 'Source', category: 'standard', fieldType: 'SELECT' },
-  { value: 'score', label: 'Score', category: 'standard', fieldType: 'NUMBER' },
-  { value: 'budget', label: 'Budget', category: 'standard', fieldType: 'NUMBER' },
+  // Core identification
   { value: 'firstName', label: 'First Name', category: 'standard', fieldType: 'TEXT' },
   { value: 'lastName', label: 'Last Name', category: 'standard', fieldType: 'TEXT' },
   { value: 'email', label: 'Email', category: 'standard', fieldType: 'TEXT' },
   { value: 'phone', label: 'Phone', category: 'standard', fieldType: 'TEXT' },
   { value: 'company', label: 'Company', category: 'standard', fieldType: 'TEXT' },
   { value: 'jobTitle', label: 'Job Title', category: 'standard', fieldType: 'TEXT' },
-  { value: 'productInterest', label: 'Product Interest', category: 'standard', fieldType: 'TEXT' },
+  // Status & classification
+  { value: 'status', label: 'Status', category: 'standard', fieldType: 'SELECT' },
+  { value: 'source', label: 'Source', category: 'standard', fieldType: 'SELECT' },
+  { value: 'score', label: 'Score', category: 'standard', fieldType: 'NUMBER' },
+  { value: 'budget', label: 'Budget', category: 'standard', fieldType: 'NUMBER' },
+  { value: 'conversionProb', label: 'Conversion %', category: 'standard', fieldType: 'NUMBER' },
+  // Details
   { value: 'location', label: 'Location', category: 'standard', fieldType: 'TEXT' },
+  { value: 'productInterest', label: 'Product Interest', category: 'standard', fieldType: 'TEXT' },
   { value: 'campaign', label: 'Campaign', category: 'standard', fieldType: 'TEXT' },
   { value: 'website', label: 'Website', category: 'standard', fieldType: 'TEXT' },
+  // Relationships
+  { value: 'assignedTo', label: 'Assigned To', category: 'standard', fieldType: 'USER' },
+  { value: 'tags', label: 'Tags', category: 'standard', fieldType: 'TEXT' },
+  // Timestamps
+  { value: 'createdAt', label: 'Created', category: 'standard', fieldType: 'DATE' },
+  { value: 'updatedAt', label: 'Updated', category: 'standard', fieldType: 'DATE' },
+  // State
+  { value: 'isArchived', label: 'Archived', category: 'standard', fieldType: 'BOOLEAN' },
 ];
 
 // Returns which operators make sense for a field type
@@ -131,6 +151,7 @@ const getOperatorsForFieldType = (fieldType: string): { value: string; label: st
   switch (fieldType) {
     case 'SELECT':
     case 'MULTI_SELECT':
+    case 'USER':
       return [
         { value: 'equals', label: 'equals' },
         { value: 'not_equals', label: 'does not equal' },
@@ -166,6 +187,7 @@ const getOperatorsForFieldType = (fieldType: string): { value: string; label: st
 const fieldTypeBadge: Record<string, { label: string; color: string }> = {
   SELECT: { label: 'Select', color: 'bg-violet-100 text-violet-700' },
   MULTI_SELECT: { label: 'Multi', color: 'bg-purple-100 text-purple-700' },
+  USER: { label: 'User', color: 'bg-indigo-100 text-indigo-700' },
   TEXT: { label: 'Text', color: 'bg-sky-100 text-sky-700' },
   NUMBER: { label: 'Number', color: 'bg-amber-100 text-amber-700' },
   DATE: { label: 'Date', color: 'bg-emerald-100 text-emerald-700' },
@@ -1272,24 +1294,31 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
   });
   const [step, setStep] = useState(1); // 1=basics, 2=conditions, 3=actions, 4=review
 
-  // Custom fields state
+  // Custom fields + users state
   const [customFieldsRaw, setCustomFieldsRaw] = useState<any[]>([]);
+  const [teamUsers, setTeamUsers] = useState<any[]>([]);
   const [loadingFields, setLoadingFields] = useState(true);
 
-  // Fetch custom fields for the current division on mount
+  // Fetch custom fields and team members on mount
   useEffect(() => {
     let cancelled = false;
-    const fetchCustomFields = async () => {
+    const fetchData = async () => {
       try {
-        const fields = await api.getCustomFields();
-        if (!cancelled) setCustomFieldsRaw(fields || []);
+        const [fields, users] = await Promise.all([
+          api.getCustomFields().catch(() => []),
+          api.getUsers().catch(() => []),
+        ]);
+        if (!cancelled) {
+          setCustomFieldsRaw(fields || []);
+          setTeamUsers(users || []);
+        }
       } catch (err) {
-        console.error('Failed to fetch custom fields:', err);
+        console.error('Failed to fetch condition data:', err);
       } finally {
         if (!cancelled) setLoadingFields(false);
       }
     };
-    fetchCustomFields();
+    fetchData();
     return () => { cancelled = true; };
   }, []);
 
@@ -1304,11 +1333,28 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
     return [...standardConditionFields, ...customMapped];
   }, [customFieldsRaw]);
 
-  // Build merged value options: standard + custom
+  // Build user options for "Assigned To"
+  const userOptions = React.useMemo(() => {
+    return teamUsers
+      .filter((u: any) => u.isActive !== false)
+      .map((u: any) => ({
+        value: u.id,
+        label: `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email,
+      }));
+  }, [teamUsers]);
+
+  // Build merged value options: standard + custom + dynamic users
   const allConditionFieldValueOptions = React.useMemo(() => {
-    const merged: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean'> = {
-      ...standardConditionFieldValueOptions,
-    };
+    const merged: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean'> = {};
+    // Copy standard options, resolving 'user' type to actual user list
+    for (const [key, val] of Object.entries(standardConditionFieldValueOptions)) {
+      if (val === 'user') {
+        merged[key] = userOptions;
+      } else {
+        merged[key] = val as any;
+      }
+    }
+    // Add custom field options
     for (const cf of customFieldsRaw) {
       const key = `custom.${cf.name}`;
       switch (cf.type) {
@@ -1332,7 +1378,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
       }
     }
     return merged;
-  }, [customFieldsRaw]);
+  }, [customFieldsRaw, userOptions]);
 
   // Helper: get field type for a given field value
   const getFieldType = (fieldValue: string): string => {
