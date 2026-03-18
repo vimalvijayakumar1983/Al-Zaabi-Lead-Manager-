@@ -231,7 +231,7 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       select: {
         id: true, firstName: true, lastName: true, email: true, phone: true,
         company: true, status: true, score: true, source: true, jobTitle: true,
-        createdAt: true, budget: true,
+        createdAt: true, budget: true, organizationId: true,
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
         stage: { select: { id: true, name: true, color: true } },
       },
@@ -297,6 +297,16 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       messages: enriched,
       pagination: { total, page: parseInt(page), limit: take, totalPages: Math.ceil(total / take) },
     });
+
+    // Auto-mark unread inbound messages as read when viewed
+    prisma.communication.updateMany({
+      where: { leadId, isRead: false, direction: 'INBOUND' },
+      data: { isRead: true, readAt: new Date() },
+    }).then((result) => {
+      if (result.count > 0) {
+        broadcastDataChange(lead.organizationId, 'communication', 'updated', null, { entityId: leadId }).catch(() => {});
+      }
+    }).catch(() => {});
   } catch (err) { next(err); }
 });
 

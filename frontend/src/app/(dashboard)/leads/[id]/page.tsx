@@ -352,12 +352,15 @@ export default function LeadDetailPage() {
   };
 
   // Load chat messages when Communications tab is active
+  // The backend auto-marks unread messages as read when fetched
   const loadChatMessages = useCallback(async () => {
     if (!id) return;
     setChatLoading(true);
     try {
       const data = await api.getInboxMessages(id, { limit: 100 });
       setChatMessages(data.messages || []);
+      // Backend marks messages as read on fetch; reset local unread count
+      setUnreadCommsCount(0);
     } catch {
       // Fallback to lead's communications if inbox API fails
       if (lead?.communications) {
@@ -374,19 +377,18 @@ export default function LeadDetailPage() {
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
       loadChatMessages();
-      // Mark communications as read when viewing the tab
-      if (unreadCommsCount > 0) {
-        api.markConversationRead(lead.id).then(() => {
-          setUnreadCommsCount(0);
-          // Notify any mounted list pages to refresh (e.g. lead list channel counts)
-          dispatchDataChange({ entity: 'communication', action: 'updated', entityId: lead.id });
-        }).catch((err) => console.error('Failed to mark conversation read:', err));
-      }
+      // Also explicitly mark as read and notify other components
+      api.markConversationRead(lead.id).then(() => {
+        setUnreadCommsCount(0);
+        // Notify any mounted list pages to refresh (e.g. lead list channel counts)
+        dispatchDataChange({ entity: 'communication', action: 'updated', entityId: lead.id });
+      }).catch((err) => console.error('Failed to mark conversation read:', err));
     }
     if (activeTab === 'call_logs' && lead?.id) {
       loadCallLogs();
     }
-  }, [activeTab, lead?.id, loadChatMessages, loadCallLogs, unreadCommsCount]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
 
   // Real-time sync: refresh lead data when lead or note changes
   useRealtimeSync(['lead', 'note'], useCallback((event) => {
