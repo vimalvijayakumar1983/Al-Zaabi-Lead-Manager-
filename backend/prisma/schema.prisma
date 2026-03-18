@@ -51,6 +51,7 @@ model Organization {
   contacts          Contact[]
   deals             Deal[]
   divisionMemberships DivisionMembership[] @relation("DivisionMembers")
+  customRoles         CustomRole[]
 
   @@index([parentId])
   @@map("organizations")
@@ -104,6 +105,9 @@ model User {
   contactActivities     ContactActivity[]
   contactNotes          ContactNote[]
   ownedDeals            Deal[]         @relation("DealOwner")
+
+  customRoleId         String?
+  customRole           CustomRole?    @relation("UserCustomRole", fields: [customRoleId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@map("users")
@@ -986,6 +990,33 @@ model DivisionMembership {
   @@map("division_memberships")
 }
 
+
+// ─── Custom Roles ────────────────────────────────────────────────
+
+model CustomRole {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  color          String   @default("#6366f1")
+  icon           String   @default("shield")
+  permissions    Json     @default("{}")
+  isSystem       Boolean  @default(false)
+  baseRole       Role     @default(SALES_REP)
+  level          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdById    String?
+
+  users          User[]   @relation("UserCustomRole")
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("custom_roles")
+}
 
 model EmailSettings {
   id             String   @id @default(cuid())

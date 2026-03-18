@@ -28,6 +28,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
   '/import': { title: 'Import Center', description: 'Import data from files' },
   '/divisions': { title: 'Divisions', description: 'Manage organization divisions' },
+  '/roles': { title: 'Roles & Permissions', description: 'Manage roles and access control' },
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

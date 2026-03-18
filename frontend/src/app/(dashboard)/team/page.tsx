@@ -537,7 +537,7 @@ export default function TeamPage() {
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton onRefresh={fetchUsers} />
-          <button onClick={() => setShowRoles(true)} className="btn-secondary">
+          <button onClick={() => window.location.href = '/roles'} className="btn-secondary">
             <Shield className="h-4 w-4" />
             Roles &amp; Access
           </button>

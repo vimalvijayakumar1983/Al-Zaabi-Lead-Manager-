@@ -24,6 +24,10 @@ const authenticate = async (req, res, next) => {
         role: true,
         organizationId: true,
         isActive: true,
+        customRoleId: true,
+        customRole: {
+          select: { id: true, name: true, permissions: true, level: true, color: true, icon: true },
+        },
         organization: {
           select: { type: true, parentId: true },
         },
@@ -64,14 +68,21 @@ const authorize = (...roles) => {
  * For SUPER_ADMIN users, resolves all child division IDs for cross-org queries.
  */
 const orgScope = async (req, _res, next) => {
-  if (req.user.role === 'SUPER_ADMIN') {
-    // Super admin can see all divisions under their group org
+  // Check if user has custom role with viewAll permissions (e.g., Group Manager)
+  const hasViewAll = req.user.customRole?.permissions?.dashboard?.viewAllDivisions === true
+    || req.user.customRole?.permissions?.leads?.viewAll === true;
+
+  if (req.user.role === 'SUPER_ADMIN' || hasViewAll) {
+    // Super admin or custom roles with viewAll can see all divisions
+    const orgId = req.user.organizationId;
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { type: true, parentId: true } });
+    const groupId = org?.type === 'GROUP' ? orgId : (org?.parentId || orgId);
     const children = await prisma.organization.findMany({
-      where: { parentId: req.user.organizationId },
+      where: { parentId: groupId },
       select: { id: true },
     });
-    req.orgIds = [req.user.organizationId, ...children.map(c => c.id)];
-    req.isSuperAdmin = true;
+    req.orgIds = [groupId, ...children.map(c => c.id)];
+    req.isSuperAdmin = req.user.role === 'SUPER_ADMIN';
   } else {
     req.orgIds = [req.user.organizationId];
     req.isSuperAdmin = false;
