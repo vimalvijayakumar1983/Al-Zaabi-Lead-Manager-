@@ -56,7 +56,7 @@ router.get('/', async (req, res, next) => {
         },
         include: {
           _count: {
-            select: { users: true, leads: true },
+            select: { users: true, leads: { where: { isArchived: false } } },
           },
         },
         orderBy: { name: 'asc' },
@@ -70,7 +70,7 @@ router.get('/', async (req, res, next) => {
       where: { id: req.user.organizationId },
       include: {
         _count: {
-          select: { users: true, leads: true },
+          select: { users: true, leads: { where: { isArchived: false } } },
         },
       },
     });
@@ -164,7 +164,7 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
       where: { id: result.id },
       include: {
         _count: {
-          select: { users: true, leads: true },
+          select: { users: true, leads: { where: { isArchived: false } } },
         },
       },
     });
@@ -201,7 +201,7 @@ router.get('/:id', async (req, res, next) => {
         },
         include: {
           _count: {
-            select: { users: true, leads: true, pipelineStages: true },
+            select: { users: true, leads: { where: { isArchived: false } }, pipelineStages: true },
           },
         },
       });
@@ -222,7 +222,7 @@ router.get('/:id', async (req, res, next) => {
       where: { id },
       include: {
         _count: {
-          select: { users: true, leads: true, pipelineStages: true },
+          select: { users: true, leads: { where: { isArchived: false } }, pipelineStages: true },
         },
       },
     });
@@ -278,7 +278,7 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
       data: updateData,
       include: {
         _count: {
-          select: { users: true, leads: true },
+          select: { users: true, leads: { where: { isArchived: false } } },
         },
       },
     });
@@ -604,10 +604,11 @@ router.get('/:id/stats', async (req, res, next) => {
     const [totalUsers, activeUsers, totalLeads, newLeadsThisMonth, pipelineCount, taskCount] = await Promise.all([
       prisma.user.count({ where: { organizationId: divisionId } }),
       prisma.user.count({ where: { organizationId: divisionId, isActive: true } }),
-      prisma.lead.count({ where: { organizationId: divisionId } }),
+      prisma.lead.count({ where: { organizationId: divisionId, isArchived: false } }),
       prisma.lead.count({
         where: {
           organizationId: divisionId,
+          isArchived: false,
           createdAt: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
         },
       }),
