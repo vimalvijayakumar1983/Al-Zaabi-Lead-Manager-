@@ -92,6 +92,8 @@ interface NotificationStore {
   // Real-time data sync
   subscribeDataChange: (handler: DataChangeHandler) => void;
   unsubscribeDataChange: (handler: DataChangeHandler) => void;
+  /** Dispatch a data-change event locally (bypass WebSocket) */
+  dispatchDataChange: (event: { entity: string; action: string; entityId?: string }) => void;
 }
 
 // ─── Internal references (outside Zustand for WebSocket lifecycle) ─
@@ -366,6 +368,16 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
   unsubscribeDataChange: (handler) => {
     dataChangeListeners.delete(handler);
+  },
+
+  dispatchDataChange: (event) => {
+    dataChangeListeners.forEach((handler) => {
+      try {
+        handler(event);
+      } catch {
+        // Prevent one broken handler from affecting others
+      }
+    });
   },
 
   // ── Preferences ──────────────────────────────────────────────

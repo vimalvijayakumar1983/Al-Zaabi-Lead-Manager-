@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { useNotificationStore } from '@/store/notificationStore';
 
 const statusColors: Record<string, string> = {
   NEW: 'bg-indigo-100 text-indigo-800 border-indigo-200',
@@ -42,6 +43,7 @@ const priorityColors: Record<string, string> = {
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const dispatchDataChange = useNotificationStore((s) => s.dispatchDataChange);
   const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
@@ -376,6 +378,8 @@ export default function LeadDetailPage() {
       if (unreadCommsCount > 0) {
         api.markConversationRead(lead.id).then(() => {
           setUnreadCommsCount(0);
+          // Notify any mounted list pages to refresh (e.g. lead list channel counts)
+          dispatchDataChange({ entity: 'communication', action: 'updated', entityId: lead.id });
         }).catch((err) => console.error('Failed to mark conversation read:', err));
       }
     }
