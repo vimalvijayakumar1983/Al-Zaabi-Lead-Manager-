@@ -19,5 +19,9 @@ ALTER TABLE "leads" ADD COLUMN "escalationLevel" INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE "leads" ADD COLUMN "lastEscalatedAt" TIMESTAMP(3);
 ALTER TABLE "leads" ADD COLUMN "slaBreachedAt" TIMESTAMP(3);
 
+-- AlterTable: Add isTemplate to automation_rules
+ALTER TABLE "automation_rules" ADD COLUMN "isTemplate" BOOLEAN NOT NULL DEFAULT false;
+
 -- CreateIndex
 CREATE INDEX "leads_organizationId_slaStatus_idx" ON "leads"("organizationId", "slaStatus");
+CREATE INDEX "automation_rules_organizationId_isTemplate_idx" ON "automation_rules"("organizationId", "isTemplate");
