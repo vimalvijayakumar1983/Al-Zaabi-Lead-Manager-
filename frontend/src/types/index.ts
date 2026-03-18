@@ -1,4 +1,24 @@
 // ─── Organization ────────────────────────────────────────────────
+
+// ─── Division Memberships ──────────────────────────────────────
+export interface DivisionMembership {
+  id: string;
+  userId: string;
+  divisionId: string;
+  role: string;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+  division?: {
+    id: string;
+    name: string;
+    tradeName?: string;
+    logo?: string;
+    primaryColor: string;
+    type: string;
+  };
+}
+
 export interface Organization {
   id: string;
   name: string;

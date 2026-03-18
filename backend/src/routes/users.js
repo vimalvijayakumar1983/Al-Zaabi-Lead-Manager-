@@ -283,4 +283,153 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
   }
 });
 
+
+
+// ─── Division Memberships ─────────────────────────────────────
+
+// GET /users/:userId/divisions - Get user's division memberships
+router.get('/:userId/divisions', async (req, res) => {
+  try {
+    const memberships = await prisma.divisionMembership.findMany({
+      where: { userId: req.params.userId },
+      include: {
+        division: {
+          select: { id: true, name: true, tradeName: true, logo: true, primaryColor: true, type: true }
+        }
+      },
+      orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }]
+    });
+    res.json({ memberships });
+  } catch (error) {
+    console.error('Get user divisions error:', error);
+    res.status(500).json({ error: 'Failed to fetch division memberships' });
+  }
+});
+
+// POST /users/:userId/divisions - Add user to a division with role
+router.post('/:userId/divisions', async (req, res) => {
+  try {
+    const { divisionId, role } = req.body;
+    if (!divisionId) return res.status(400).json({ error: 'divisionId is required' });
+
+    // Check if membership already exists
+    const existing = await prisma.divisionMembership.findUnique({
+      where: { userId_divisionId: { userId: req.params.userId, divisionId } }
+    });
+    if (existing) return res.status(409).json({ error: 'User already belongs to this division' });
+
+    // Check if user has any memberships (first one becomes primary)
+    const count = await prisma.divisionMembership.count({
+      where: { userId: req.params.userId }
+    });
+
+    const membership = await prisma.divisionMembership.create({
+      data: {
+        userId: req.params.userId,
+        divisionId,
+        role: role || 'SALES_REP',
+        isPrimary: count === 0
+      },
+      include: {
+        division: {
+          select: { id: true, name: true, tradeName: true, logo: true, primaryColor: true, type: true }
+        }
+      }
+    });
+
+    res.status(201).json({ membership });
+  } catch (error) {
+    console.error('Add division membership error:', error);
+    res.status(500).json({ error: 'Failed to add division membership' });
+  }
+});
+
+// PUT /users/:userId/divisions/:divisionId - Update role in division
+router.put('/:userId/divisions/:divisionId', async (req, res) => {
+  try {
+    const { role, isPrimary } = req.body;
+
+    const updateData = {};
+    if (role) updateData.role = role;
+    if (typeof isPrimary === 'boolean') {
+      updateData.isPrimary = isPrimary;
+      // If setting as primary, unset other primaries
+      if (isPrimary) {
+        await prisma.divisionMembership.updateMany({
+          where: { userId: req.params.userId, NOT: { divisionId: req.params.divisionId } },
+          data: { isPrimary: false }
+        });
+      }
+    }
+
+    const membership = await prisma.divisionMembership.update({
+      where: {
+        userId_divisionId: {
+          userId: req.params.userId,
+          divisionId: req.params.divisionId
+        }
+      },
+      data: { ...updateData, updatedAt: new Date() },
+      include: {
+        division: {
+          select: { id: true, name: true, tradeName: true, logo: true, primaryColor: true, type: true }
+        }
+      }
+    });
+
+    res.json({ membership });
+  } catch (error) {
+    console.error('Update division membership error:', error);
+    res.status(500).json({ error: 'Failed to update division membership' });
+  }
+});
+
+// DELETE /users/:userId/divisions/:divisionId - Remove from division
+router.delete('/:userId/divisions/:divisionId', async (req, res) => {
+  try {
+    // Don't allow removing the primary division (or the last one)
+    const memberships = await prisma.divisionMembership.findMany({
+      where: { userId: req.params.userId }
+    });
+
+    if (memberships.length <= 1) {
+      return res.status(400).json({ error: 'Cannot remove user from their only division' });
+    }
+
+    const target = memberships.find(m => m.divisionId === req.params.divisionId);
+    if (!target) return res.status(404).json({ error: 'Membership not found' });
+
+    await prisma.divisionMembership.delete({
+      where: {
+        userId_divisionId: {
+          userId: req.params.userId,
+          divisionId: req.params.divisionId
+        }
+      }
+    });
+
+    // If we deleted the primary, make the first remaining one primary
+    if (target.isPrimary) {
+      const remaining = memberships.filter(m => m.divisionId !== req.params.divisionId);
+      if (remaining.length > 0) {
+        await prisma.divisionMembership.update({
+          where: {
+            userId_divisionId: {
+              userId: req.params.userId,
+              divisionId: remaining[0].divisionId
+            }
+          },
+          data: { isPrimary: true }
+        });
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete division membership error:', error);
+    res.status(500).json({ error: 'Failed to remove division membership' });
+  }
+});
+
+
 module.exports = router;

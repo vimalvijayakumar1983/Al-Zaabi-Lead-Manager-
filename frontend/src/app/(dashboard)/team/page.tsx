@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore, FEATURES } from '@/lib/permissions';
-import type { User, Organization } from '@/types';
+import type { User, Organization, DivisionMembership } from '@/types';
 import {
   UserPlus, X, Shield, Users as UsersIcon, Crown, Eye,
   MoreHorizontal, Pencil, Key, UserX, UserCheck, Search,
@@ -88,6 +88,9 @@ export default function TeamPage() {
   const [resetPasswordUser, setResetPasswordUser] = useState<User | null>(null);
   const [showRoles, setShowRoles] = useState(false);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
+
+
+  // Division Memberships
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -274,6 +277,14 @@ export default function TeamPage() {
     return result;
   }, [users, searchQuery, roleFilters, statusFilter, divisionFilter, dateJoinedPreset, customDateFrom, customDateTo, performanceFilter, tasksFilter, sortField, sortDirection]);
 
+
+  // Division Memberships
+  const [userMemberships, setUserMemberships] = useState<Record<string, DivisionMembership[]>>({});
+  const [showMembershipModal, setShowMembershipModal] = useState<User | null>(null);
+  const [membershipLoading, setMembershipLoading] = useState<string | null>(null);
+  const [addDivisionRole, setAddDivisionRole] = useState<string>('SALES_REP');
+  const [addDivisionId, setAddDivisionId] = useState<string>('');
+
   // Pagination calculations
   const totalPages = Math.max(1, Math.ceil(filteredAndSortedUsers.length / pageSize));
   const paginatedUsers = useMemo(() => {
@@ -299,6 +310,78 @@ export default function TeamPage() {
     if (tasksFilter !== 'all') count++;
     return count;
   }, [searchQuery, roleFilters, statusFilter, divisionFilter, dateJoinedPreset, performanceFilter, tasksFilter]);
+
+
+  // Load division memberships for all users
+  const loadAllMemberships = useCallback(async (userList: User[]) => {
+    try {
+      const results: Record<string, DivisionMembership[]> = {};
+      await Promise.all(
+        userList.map(async (u) => {
+          try {
+            const memberships = await api.getUserDivisions(u.id);
+            results[u.id] = memberships;
+          } catch { results[u.id] = []; }
+        })
+      );
+      setUserMemberships(results);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (users.length > 0) loadAllMemberships(users);
+  }, [users, loadAllMemberships]);
+
+  const handleAddToDivision = async (userId: string) => {
+    if (!addDivisionId) return;
+    setMembershipLoading(userId);
+    try {
+      await api.addUserToDivision(userId, { divisionId: addDivisionId, role: addDivisionRole });
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      setAddDivisionId('');
+      setAddDivisionRole('SALES_REP');
+    } catch (err: any) {
+      alert(err?.message || 'Failed to add division');
+    }
+    setMembershipLoading(null);
+  };
+
+  const handleRemoveFromDivision = async (userId: string, divisionId: string) => {
+    setMembershipLoading(userId);
+    try {
+      await api.removeUserFromDivision(userId, divisionId);
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to remove from division');
+    }
+    setMembershipLoading(null);
+  };
+
+  const handleUpdateMembershipRole = async (userId: string, divisionId: string, role: string) => {
+    setMembershipLoading(userId);
+    try {
+      await api.updateUserDivisionRole(userId, divisionId, { role });
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to update role');
+    }
+    setMembershipLoading(null);
+  };
+
+  const handleSetPrimaryDivision = async (userId: string, divisionId: string) => {
+    setMembershipLoading(userId);
+    try {
+      await api.updateUserDivisionRole(userId, divisionId, { isPrimary: true });
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+    } catch (err: any) {
+      alert(err?.message || 'Failed to set primary division');
+    }
+    setMembershipLoading(null);
+  };
 
   const clearAllFilters = () => {
     setSearchQuery('');
@@ -903,7 +986,7 @@ export default function TeamPage() {
               )}
               <th className="table-cell text-left">Member</th>
               <th className="table-cell text-left">Role</th>
-              {isSuperAdmin && <th className="table-cell text-left hidden md:table-cell">Division</th>}
+              {isSuperAdmin && <th className="table-cell text-left hidden md:table-cell">Divisions</th>}
               <th className="table-cell text-left hidden md:table-cell">Contact</th>
               <th className="table-cell text-center hidden lg:table-cell">Leads</th>
               <th className="table-cell text-center hidden lg:table-cell">Tasks</th>
@@ -995,10 +1078,36 @@ export default function TeamPage() {
                     {/* Division (SUPER_ADMIN only) */}
                     {isSuperAdmin && (
                       <td className="table-cell hidden md:table-cell">
-                        <span className={`badge ${divColor.bg} ${divColor.text} ring-1 ${divColor.ring}`}>
-                          <Building2 className="h-3 w-3" />
-                          {divName}
-                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setShowMembershipModal(user); }}
+                          className="flex flex-wrap gap-1 max-w-[260px] group/div cursor-pointer"
+                          title="Click to manage divisions"
+                        >
+                          {(userMemberships[user.id] || []).length > 0 ? (
+                            <>
+                              {(userMemberships[user.id] || []).slice(0, 3).map((m: any) => (
+                                <span key={m.id} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-2xs font-medium border" style={{
+                                  backgroundColor: (m.division?.primaryColor || '#6366f1') + '15',
+                                  borderColor: (m.division?.primaryColor || '#6366f1') + '30',
+                                  color: m.division?.primaryColor || '#6366f1'
+                                }}>
+                                  <span className="h-1.5 w-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: m.division?.primaryColor || '#6366f1' }} />
+                                  {(m.division?.name || '?').replace('Al-Zaabi ', '')}
+                                  {m.isPrimary && <span className="ml-0.5">★</span>}
+                                </span>
+                              ))}
+                              {(userMemberships[user.id] || []).length > 3 && (
+                                <span className="text-2xs text-text-tertiary">+{(userMemberships[user.id] || []).length - 3}</span>
+                              )}
+                            </>
+                          ) : (
+                            <span className={`badge ${divColor.bg} ${divColor.text} ring-1 ${divColor.ring}`}>
+                              <Building2 className="h-3 w-3" />
+                              {divName}
+                            </span>
+                          )}
+                          <span className="text-2xs text-brand-500 opacity-0 group-hover/div:opacity-100 ml-0.5">✎</span>
+                        </button>
                       </td>
                     )}
 
@@ -1090,6 +1199,13 @@ export default function TeamPage() {
                                 >
                                   <Pencil className="h-3.5 w-3.5 text-text-tertiary" />
                                   Edit Member
+                                </button>
+                                <button
+                                  onClick={() => { setShowMembershipModal(user); setActiveMenu(null); }}
+                                  className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-tertiary transition-colors"
+                                >
+                                  <Building2 className="h-3.5 w-3.5 text-text-tertiary" />
+                                  Manage Divisions
                                 </button>
                                 {isAdmin && (
                                   <button

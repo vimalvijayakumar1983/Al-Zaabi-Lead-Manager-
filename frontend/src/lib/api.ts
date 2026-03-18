@@ -869,6 +869,25 @@ class ApiClient {
 
 
 
+
+  // ─── Division Memberships ──────────────────────────────────────
+  async getUserDivisions(userId: string): Promise<any[]> {
+    const res = await this.request<{ memberships: any[] }>(\`/users/\${userId}/divisions\`);
+    return (res as any).memberships || res || [];
+  }
+
+  async addUserToDivision(userId: string, data: { divisionId: string; role?: string }): Promise<any> {
+    return this.request<any>(\`/users/\${userId}/divisions\`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateUserDivisionRole(userId: string, divisionId: string, data: { role?: string; isPrimary?: boolean }): Promise<any> {
+    return this.request<any>(\`/users/\${userId}/divisions/\${divisionId}\`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async removeUserFromDivision(userId: string, divisionId: string): Promise<any> {
+    return this.request<any>(\`/users/\${userId}/divisions/\${divisionId}\`, { method: 'DELETE' });
+  }
+
   // ─── Notifications ───────────────────────────────────────────────
 
   async getNotifications(params?: Record<string, string | number>) {
