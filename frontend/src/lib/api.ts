@@ -715,53 +715,65 @@ class ApiClient {
   }
 
   // ─── Email Settings ──────────────────────────────────────────────
-  async getEmailConfig() {
-    return this.request<any>('/settings/email');
+  async getEmailConfig(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email${qs}`);
   }
 
-  async saveEmailConfig(data: any) {
-    return this.request<any>('/settings/email', { method: 'PUT', body: JSON.stringify(data) });
+  async saveEmailConfig(data: any, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  async testEmailConnection(data: { smtpHost: string; smtpPort: number; smtpUser: string; smtpPass?: string }) {
-    return this.request<{ success: boolean; message: string }>('/settings/email/test-connection', { method: 'POST', body: JSON.stringify(data) });
+  async testEmailConnection(data: { smtpHost: string; smtpPort: number; smtpUser: string; smtpPass?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string }>(`/settings/email/test-connection${qs}`, { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async sendTestEmail(toEmail: string) {
-    return this.request<{ success: boolean; message: string }>('/settings/email/send-test', { method: 'POST', body: JSON.stringify({ toEmail }) });
+  async sendTestEmail(toEmail: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string }>(`/settings/email/send-test${qs}`, { method: 'POST', body: JSON.stringify({ toEmail }) });
   }
 
-  async getEmailTemplates() {
-    return this.request<any[]>('/settings/email/templates');
+  async getEmailTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/settings/email/templates${qs}`);
   }
 
-  async saveEmailTemplate(name: string, data: { label: string; subject: string; htmlBody: string; description?: string }) {
-    return this.request<any>(`/settings/email/templates/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+  async saveEmailTemplate(name: string, data: { label: string; subject: string; htmlBody: string; description?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/templates/${name}${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  async deleteEmailTemplate(name: string) {
-    return this.request<any>(`/settings/email/templates/${name}`, { method: 'DELETE' });
+  async deleteEmailTemplate(name: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/templates/${name}${qs}`, { method: 'DELETE' });
   }
 
   // ─── Incoming Email (IMAP / POP3) Settings ──────────────────────
-  async getIncomingEmailConfig() {
-    return this.request<any>('/settings/email/incoming');
+  async getIncomingEmailConfig(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/incoming${qs}`);
   }
 
-  async saveIncomingEmailConfig(data: any) {
-    return this.request<any>('/settings/email/incoming', { method: 'PUT', body: JSON.stringify(data) });
+  async saveIncomingEmailConfig(data: any, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/incoming${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  async testImapConnection(data: { imapHost: string; imapPort: number; imapUser: string; imapPass?: string; imapSecurity?: string }) {
-    return this.request<{ success: boolean; message: string; mailboxes?: string[] }>('/settings/email/incoming/test-imap', { method: 'POST', body: JSON.stringify(data) });
+  async testImapConnection(data: { imapHost: string; imapPort: number; imapUser: string; imapPass?: string; imapSecurity?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string; mailboxes?: string[] }>(`/settings/email/incoming/test-imap${qs}`, { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async testPop3Connection(data: { popHost: string; popPort: number; popUser: string; popPass?: string; popSecurity?: string }) {
-    return this.request<{ success: boolean; message: string }>('/settings/email/incoming/test-pop3', { method: 'POST', body: JSON.stringify(data) });
+  async testPop3Connection(data: { popHost: string; popPort: number; popUser: string; popPass?: string; popSecurity?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string }>(`/settings/email/incoming/test-pop3${qs}`, { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async fetchIncomingEmails() {
-    return this.request<{ success: boolean; emails?: any[]; count?: number; error?: string }>('/settings/email/incoming/fetch', { method: 'POST' });
+  async fetchIncomingEmails(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; emails?: any[]; count?: number; error?: string }>(`/settings/email/incoming/fetch${qs}`, { method: 'POST' });
   }
 
   // ─── Division Management ─────────────────────────────────────────

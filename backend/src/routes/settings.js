@@ -442,11 +442,36 @@ router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) =
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
 
+// Helper: resolve the target division ID for email settings
+// SUPER_ADMIN must specify ?divisionId=<id>; ADMIN uses their own org
+async function resolveEmailOrgId(req, res) {
+  const { divisionId } = req.query;
+
+  if (req.isSuperAdmin) {
+    if (!divisionId) {
+      res.status(400).json({ error: 'Please select a division to configure email settings' });
+      return null;
+    }
+    // Verify divisionId is a valid child division
+    if (!req.orgIds.includes(divisionId)) {
+      res.status(403).json({ error: 'Division not found or access denied' });
+      return null;
+    }
+    return divisionId;
+  }
+
+  // ADMIN uses their own orgId (which is already a division)
+  return req.orgId;
+}
+
 // Get email config
 router.get('/email', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -476,9 +501,12 @@ router.put('/email', authorize('ADMIN'), validate(z.object({
   replyTo: z.string().email().optional().nullable(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -500,7 +528,7 @@ router.put('/email', authorize('ADMIN'), validate(z.object({
     };
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, emailConfig } },
     });
 
@@ -519,12 +547,15 @@ router.post('/email/test-connection', authorize('ADMIN'), validate(z.object({
   smtpPass: z.string().optional(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
 
     // If password is masked, use the stored one
     if (!data.smtpPass || data.smtpPass === '••••••••') {
       const org = await prisma.organization.findUnique({
-        where: { id: req.orgId },
+        where: { id: targetOrgId },
         select: { settings: true },
       });
       const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -543,9 +574,12 @@ router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
   toEmail: z.string().email(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const { toEmail } = req.validated;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -569,8 +603,11 @@ const { testImapConnection, testPop3Connection, fetchEmails } = require('../serv
 // Get incoming email config
 router.get('/email/incoming', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -615,9 +652,12 @@ router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
   autoFetch: z.boolean().optional(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -653,7 +693,7 @@ router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
     };
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, incomingEmailConfig } },
     });
 
@@ -677,12 +717,15 @@ router.post('/email/incoming/test-imap', authorize('ADMIN'), validate(z.object({
   imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
 
     // If password is masked, use the stored one
     if (!data.imapPass || data.imapPass === '••••••••') {
       const org = await prisma.organization.findUnique({
-        where: { id: req.orgId },
+        where: { id: targetOrgId },
         select: { settings: true },
       });
       const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -705,12 +748,15 @@ router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
   popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
 
     // If password is masked, use the stored one
     if (!data.popPass || data.popPass === '••••••••') {
       const org = await prisma.organization.findUnique({
-        where: { id: req.orgId },
+        where: { id: targetOrgId },
         select: { settings: true },
       });
       const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -727,7 +773,10 @@ router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
 // Fetch emails from configured incoming server
 router.post('/email/incoming/fetch', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const result = await fetchEmails(req.orgId, {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const result = await fetchEmails(targetOrgId, {
       limit: 20,
       markAsRead: false,
     });
@@ -810,8 +859,11 @@ const DEFAULT_TEMPLATES = [
 // Get email templates
 router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -831,11 +883,14 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
   description: z.string().max(500).optional(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const { name } = req.params;
     const data = req.validated;
 
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -858,7 +913,7 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
     }
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, emailTemplates: templates } },
     });
 
@@ -871,9 +926,12 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
 // Delete an email template
 router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const { name } = req.params;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -882,7 +940,7 @@ router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, nex
     templates = templates.filter((t) => t.name !== name);
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, emailTemplates: templates } },
     });
 

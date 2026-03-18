@@ -1488,47 +1488,111 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
   );
 }
 
+/* ─── Division Selector for Email Settings ───────────────────────── */
+function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivisionId: string; onSelect: (id: string) => void }) {
+  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getDivisions().then((divs) => {
+      setDivisions(divs.map((d: any) => ({ id: d.id, name: d.name })));
+      if (divs.length > 0 && !selectedDivisionId) {
+        onSelect(divs[0].id);
+      }
+    }).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return <div className="flex items-center gap-2 text-sm text-text-tertiary"><Loader2 className="h-4 w-4 animate-spin" /> Loading divisions...</div>;
+  }
+
+  if (divisions.length === 0) {
+    return <p className="text-sm text-text-tertiary">No divisions found. Create a division first.</p>;
+  }
+
+  return (
+    <div className="card p-4 bg-surface-secondary border-2 border-brand-200">
+      <div className="flex items-center gap-3">
+        <Building2 className="h-5 w-5 text-brand-primary" />
+        <div className="flex-1">
+          <label className="label mb-1">Select Division</label>
+          <select
+            className="input"
+            value={selectedDivisionId}
+            onChange={(e) => onSelect(e.target.value)}
+          >
+            <option value="">-- Select a division --</option>
+            {divisions.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <p className="text-2xs text-text-tertiary mt-2">Email settings are configured per division. Select the division you want to configure.</p>
+    </div>
+  );
+}
+
 /* ─── Email Settings Section ─────────────────────────────────────── */
 function EmailSettingsSection() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
   const [emailTab, setEmailTab] = useState<'outgoing' | 'incoming'>('outgoing');
+  const [selectedDivisionId, setSelectedDivisionId] = useState('');
 
   return (
     <div className="space-y-6">
       <SectionHeader title="Email Settings" description="Configure outgoing (SMTP) and incoming (IMAP/POP3) email servers" />
 
-      {/* Outgoing / Incoming tabs */}
-      <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
-        <button
-          onClick={() => setEmailTab('outgoing')}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            emailTab === 'outgoing'
-              ? 'bg-bg-primary text-text-primary shadow-sm'
-              : 'text-text-tertiary hover:text-text-secondary'
-          }`}
-        >
-          <Send className="h-4 w-4" />
-          Outgoing (SMTP)
-        </button>
-        <button
-          onClick={() => setEmailTab('incoming')}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            emailTab === 'incoming'
-              ? 'bg-bg-primary text-text-primary shadow-sm'
-              : 'text-text-tertiary hover:text-text-secondary'
-          }`}
-        >
-          <Inbox className="h-4 w-4" />
-          Incoming (IMAP / POP3)
-        </button>
-      </div>
+      {/* Division selector for SUPER_ADMIN */}
+      {isSuperAdmin && (
+        <DivisionEmailSelector
+          selectedDivisionId={selectedDivisionId}
+          onSelect={(id) => { setSelectedDivisionId(id); }}
+        />
+      )}
 
-      {emailTab === 'outgoing' ? <OutgoingEmailSettings /> : <IncomingEmailSettings />}
+      {/* Show email config only when a division is selected (or user is not super admin) */}
+      {(!isSuperAdmin || selectedDivisionId) && (
+        <>
+          {/* Outgoing / Incoming tabs */}
+          <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
+            <button
+              onClick={() => setEmailTab('outgoing')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                emailTab === 'outgoing'
+                  ? 'bg-bg-primary text-text-primary shadow-sm'
+                  : 'text-text-tertiary hover:text-text-secondary'
+              }`}
+            >
+              <Send className="h-4 w-4" />
+              Outgoing (SMTP)
+            </button>
+            <button
+              onClick={() => setEmailTab('incoming')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                emailTab === 'incoming'
+                  ? 'bg-bg-primary text-text-primary shadow-sm'
+                  : 'text-text-tertiary hover:text-text-secondary'
+              }`}
+            >
+              <Inbox className="h-4 w-4" />
+              Incoming (IMAP / POP3)
+            </button>
+          </div>
+
+          {emailTab === 'outgoing'
+            ? <OutgoingEmailSettings key={selectedDivisionId} divisionId={isSuperAdmin ? selectedDivisionId : undefined} />
+            : <IncomingEmailSettings key={selectedDivisionId} divisionId={isSuperAdmin ? selectedDivisionId : undefined} />
+          }
+        </>
+      )}
     </div>
   );
 }
 
 /* ─── Outgoing Email (SMTP) Settings ──────────────────────────────── */
-function OutgoingEmailSettings() {
+function OutgoingEmailSettings({ divisionId }: { divisionId?: string }) {
   const [form, setForm] = useState({
     smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '',
     fromName: '', fromEmail: '', replyTo: '',
@@ -1543,7 +1607,8 @@ function OutgoingEmailSettings() {
   const [hasPassword, setHasPassword] = useState(false);
 
   useEffect(() => {
-    api.getEmailConfig().then((config) => {
+    setLoading(true);
+    api.getEmailConfig(divisionId).then((config) => {
       if (config && config.smtpHost) {
         setForm({
           smtpHost: config.smtpHost || '',
@@ -1555,9 +1620,12 @@ function OutgoingEmailSettings() {
           replyTo: config.replyTo || '',
         });
         setHasPassword(!!config.hasPassword);
+      } else {
+        setForm({ smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '', fromName: '', fromEmail: '', replyTo: '' });
+        setHasPassword(false);
       }
     }).finally(() => setLoading(false));
-  }, []);
+  }, [divisionId]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1567,7 +1635,7 @@ function OutgoingEmailSettings() {
       await api.saveEmailConfig({
         ...form,
         smtpPort: parseInt(form.smtpPort, 10),
-      });
+      }, divisionId);
       setHasPassword(true);
       setStatus({ type: 'success', message: 'SMTP settings saved successfully' });
       setTimeout(() => setStatus(null), 4000);
@@ -1587,7 +1655,7 @@ function OutgoingEmailSettings() {
         smtpPort: parseInt(form.smtpPort, 10),
         smtpUser: form.smtpUser,
         smtpPass: form.smtpPass,
-      });
+      }, divisionId);
       setStatus({ type: result.success ? 'success' : 'error', message: result.message });
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'Connection test failed' });
@@ -1601,7 +1669,7 @@ function OutgoingEmailSettings() {
     setSendingTest(true);
     setStatus(null);
     try {
-      const result = await api.sendTestEmail(testEmail);
+      const result = await api.sendTestEmail(testEmail, divisionId);
       setStatus({ type: result.success ? 'success' : 'error', message: result.message });
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'Failed to send test email' });
@@ -1729,7 +1797,7 @@ function OutgoingEmailSettings() {
 }
 
 /* ─── Incoming Email (IMAP / POP3) Settings ───────────────────────── */
-function IncomingEmailSettings() {
+function IncomingEmailSettings({ divisionId }: { divisionId?: string }) {
   const [protocol, setProtocol] = useState<'imap' | 'pop3'>('imap');
   const [imapForm, setImapForm] = useState({
     imapHost: '', imapPort: '993', imapUser: '', imapPass: '',
@@ -1754,7 +1822,8 @@ function IncomingEmailSettings() {
   const [fetchedEmails, setFetchedEmails] = useState<any[] | null>(null);
 
   useEffect(() => {
-    api.getIncomingEmailConfig().then((config) => {
+    setLoading(true);
+    api.getIncomingEmailConfig(divisionId).then((config) => {
       if (config) {
         if (config.protocol) setProtocol(config.protocol);
         setImapForm({
@@ -1777,9 +1846,17 @@ function IncomingEmailSettings() {
         setAutoFetch(config.autoFetch || false);
         setHasImapPassword(!!config.hasImapPassword);
         setHasPopPassword(!!config.hasPopPassword);
+      } else {
+        setProtocol('imap');
+        setImapForm({ imapHost: '', imapPort: '993', imapUser: '', imapPass: '', imapSecurity: 'ssl', imapFolder: 'INBOX' });
+        setPopForm({ popHost: '', popPort: '995', popUser: '', popPass: '', popSecurity: 'ssl', popDeleteAfterFetch: false });
+        setFetchInterval('5');
+        setAutoFetch(false);
+        setHasImapPassword(false);
+        setHasPopPassword(false);
       }
     }).finally(() => setLoading(false));
-  }, []);
+  }, [divisionId]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1794,7 +1871,7 @@ function IncomingEmailSettings() {
         popPort: parseInt(popForm.popPort, 10),
         fetchInterval: parseInt(fetchInterval, 10),
         autoFetch,
-      });
+      }, divisionId);
       setHasImapPassword(true);
       setHasPopPassword(true);
       setStatus({ type: 'success', message: 'Incoming email settings saved successfully' });
@@ -1816,7 +1893,7 @@ function IncomingEmailSettings() {
         imapUser: imapForm.imapUser,
         imapPass: imapForm.imapPass,
         imapSecurity: imapForm.imapSecurity,
-      });
+      }, divisionId);
       setStatus({ type: result.success ? 'success' : 'error', message: result.message });
       if (result.mailboxes) setMailboxes(result.mailboxes);
     } catch (err: any) {
@@ -1836,7 +1913,7 @@ function IncomingEmailSettings() {
         popUser: popForm.popUser,
         popPass: popForm.popPass,
         popSecurity: popForm.popSecurity,
-      });
+      }, divisionId);
       setStatus({ type: result.success ? 'success' : 'error', message: result.message });
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'POP3 connection test failed' });
@@ -1849,7 +1926,7 @@ function IncomingEmailSettings() {
     setFetching(true);
     setStatus(null);
     try {
-      const result = await api.fetchIncomingEmails();
+      const result = await api.fetchIncomingEmails(divisionId);
       if (result.success) {
         setFetchedEmails(result.emails || []);
         setStatus({ type: 'success', message: `Fetched ${result.count || 0} email(s) from server` });
@@ -2180,6 +2257,9 @@ function IncomingEmailSettings() {
 
 /* ─── Email Templates Section ───────────────────────────────────── */
 function EmailTemplatesSection() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const [selectedDivisionId, setSelectedDivisionId] = useState('');
   const [templates, setTemplates] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingTemplate, setEditingTemplate] = useState<any | null>(null);
@@ -2188,9 +2268,15 @@ function EmailTemplatesSection() {
   const [showNewForm, setShowNewForm] = useState(false);
   const [newForm, setNewForm] = useState({ name: '', label: '', subject: '', htmlBody: '', description: '' });
 
+  const divisionId = isSuperAdmin ? selectedDivisionId : undefined;
+
   const fetchTemplates = async () => {
+    if (isSuperAdmin && !selectedDivisionId) {
+      setLoading(false);
+      return;
+    }
     try {
-      const data = await api.getEmailTemplates();
+      const data = await api.getEmailTemplates(divisionId);
       setTemplates(data);
     } catch {
       // ignore
@@ -2199,13 +2285,13 @@ function EmailTemplatesSection() {
     }
   };
 
-  useEffect(() => { fetchTemplates(); }, []);
+  useEffect(() => { setLoading(true); fetchTemplates(); }, [selectedDivisionId]);
 
   const handleSaveTemplate = async (name: string, data: any) => {
     setSaving(true);
     setStatus(null);
     try {
-      await api.saveEmailTemplate(name, data);
+      await api.saveEmailTemplate(name, data, divisionId);
       await fetchTemplates();
       setEditingTemplate(null);
       setShowNewForm(false);
@@ -2221,7 +2307,7 @@ function EmailTemplatesSection() {
   const handleDelete = async (name: string) => {
     if (!confirm('Delete this template? This cannot be undone.')) return;
     try {
-      await api.deleteEmailTemplate(name);
+      await api.deleteEmailTemplate(name, divisionId);
       await fetchTemplates();
       setStatus({ type: 'success', message: 'Template deleted' });
       setTimeout(() => setStatus(null), 3000);
@@ -2262,10 +2348,23 @@ function EmailTemplatesSection() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <SectionHeader title="Email Templates" description="Manage email templates used in automations and communications" />
-        <button onClick={() => { setShowNewForm(true); setEditingTemplate(null); }} className="btn-primary text-xs">
-          <Plus className="h-3.5 w-3.5" /> New Template
-        </button>
+        {(!isSuperAdmin || selectedDivisionId) && (
+          <button onClick={() => { setShowNewForm(true); setEditingTemplate(null); }} className="btn-primary text-xs">
+            <Plus className="h-3.5 w-3.5" /> New Template
+          </button>
+        )}
       </div>
+
+      {/* Division selector for SUPER_ADMIN */}
+      {isSuperAdmin && (
+        <DivisionEmailSelector
+          selectedDivisionId={selectedDivisionId}
+          onSelect={(id) => { setSelectedDivisionId(id); setEditingTemplate(null); setShowNewForm(false); }}
+        />
+      )}
+
+      {/* Only show templates when division is selected (or non-super-admin) */}
+      {isSuperAdmin && !selectedDivisionId ? null : <>
 
       {status && (
         <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
@@ -2395,6 +2494,7 @@ function EmailTemplatesSection() {
           </div>
         )}
       </div>
+      </>}
     </div>
   );
 }
