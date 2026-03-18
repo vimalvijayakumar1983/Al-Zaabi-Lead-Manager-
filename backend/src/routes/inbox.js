@@ -572,7 +572,9 @@ router.post('/conversations/:leadId/read', async (req, res, next) => {
 
     res.json({ success: true, markedCount: result.count });
 
-    broadcastDataChange(lead.organizationId, 'communication', 'updated', req.user.id, { entityId: leadId }).catch(() => {});
+    // Pass null as actorId so the current user also receives the update
+    // (their lead list needs to refresh channel unread counts)
+    broadcastDataChange(lead.organizationId, 'communication', 'updated', null, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
 });
 
