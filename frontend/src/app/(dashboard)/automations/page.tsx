@@ -28,6 +28,8 @@ const triggerLabels: Record<string, { label: string; description: string; icon: 
   LEAD_SLA_ESCALATED: { label: 'SLA Escalated', description: 'When a lead SLA breach is escalated', icon: Shield, color: 'text-rose-700 bg-rose-50' },
   TASK_DUE: { label: 'Task Due', description: 'When a task reaches its due date', icon: Clock, color: 'text-sky-600 bg-sky-50' },
   TASK_OVERDUE: { label: 'Task Overdue', description: 'When a task passes its due date', icon: XCircle, color: 'text-red-600 bg-red-50' },
+  LEAD_CREATED_TIME_ELAPSED: { label: 'Time After Creation', description: 'Trigger X time after lead is created', icon: Clock, color: 'text-teal-600 bg-teal-50' },
+  LEAD_UPDATED_TIME_ELAPSED: { label: 'Time After Last Update', description: 'Trigger X time after lead is last updated', icon: Clock, color: 'text-cyan-600 bg-cyan-50' },
 };
 
 const actionLabels: Record<string, { label: string; icon: any; color: string }> = {
@@ -211,6 +213,7 @@ const templateCategories = [
   { id: 'task', label: 'Tasks' },
   { id: 'organization', label: 'Organization' },
   { id: 'integration', label: 'Integration' },
+  { id: 'time-based', label: 'Time-Based' },
   { id: 'workflow', label: 'Multi-Action Workflows' },
   { id: 'custom', label: 'My Templates' },
 ];
@@ -1291,13 +1294,31 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
   onSubmit: (data: any) => void;
 }) {
   const isEditing = rule && rule.id;
+
+  // Extract delay from existing conditions for time-based triggers
+  const existingDelay = rule?.conditions?.find((c: any) => c.field === '__delay__');
+  const existingDelayMinutes = existingDelay ? Number(existingDelay.value) : 0;
+  const existingNonDelayConditions = rule?.conditions?.filter((c: any) => c.field !== '__delay__') || [];
+
   const [form, setForm] = useState({
     name: rule?.name || '',
     description: rule?.description || '',
     trigger: rule?.trigger || 'LEAD_CREATED',
-    conditions: rule?.conditions || [] as any[],
+    conditions: existingNonDelayConditions as any[],
     actions: rule?.actions?.length ? rule.actions : [{ type: 'notify_user', config: { message: '' } }],
   });
+  // Time delay state for time-based triggers
+  const [delayAmount, setDelayAmount] = useState(() => {
+    if (existingDelayMinutes >= 1440) return String(existingDelayMinutes / 1440);
+    if (existingDelayMinutes >= 60) return String(existingDelayMinutes / 60);
+    return String(existingDelayMinutes || 1);
+  });
+  const [delayUnit, setDelayUnit] = useState<'minutes' | 'hours' | 'days'>(() => {
+    if (existingDelayMinutes >= 1440 && existingDelayMinutes % 1440 === 0) return 'days';
+    if (existingDelayMinutes >= 60 && existingDelayMinutes % 60 === 0) return 'hours';
+    return 'minutes';
+  });
+  const isTimeBased = form.trigger === 'LEAD_CREATED_TIME_ELAPSED' || form.trigger === 'LEAD_UPDATED_TIME_ELAPSED';
   const [step, setStep] = useState(1); // 1=basics, 2=conditions, 3=actions, 4=review
 
   // Custom fields + users state
@@ -1431,7 +1452,17 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
   const handleSubmit = () => {
     if (!form.name.trim()) return alert('Name is required');
     if (form.actions.length === 0) return alert('At least one action is required');
-    onSubmit(form);
+    if (isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) return alert('Please set a valid time delay');
+
+    // Build final conditions: inject __delay__ for time-based triggers
+    const finalConditions = [...form.conditions];
+    if (isTimeBased) {
+      const multiplier = delayUnit === 'days' ? 1440 : delayUnit === 'hours' ? 60 : 1;
+      const totalMinutes = Math.round(Number(delayAmount) * multiplier);
+      finalConditions.unshift({ field: '__delay__', operator: 'equals', value: totalMinutes });
+    }
+
+    onSubmit({ ...form, conditions: finalConditions });
   };
 
   const trigger = triggerLabels[form.trigger];
@@ -1504,6 +1535,44 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                   ))}
                 </div>
               </div>
+
+              {/* Time delay config for time-based triggers */}
+              {isTimeBased && (
+                <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-teal-600" />
+                    <h4 className="text-sm font-semibold text-teal-800">Time Delay</h4>
+                  </div>
+                  <p className="text-xs text-teal-700">
+                    {form.trigger === 'LEAD_CREATED_TIME_ELAPSED'
+                      ? 'Trigger this automation after the specified time has passed since the lead was created.'
+                      : 'Trigger this automation after the specified time has passed since the lead was last updated.'}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-teal-800 whitespace-nowrap">Wait for</span>
+                    <input
+                      type="number"
+                      min="1"
+                      className="input text-sm w-24"
+                      value={delayAmount}
+                      onChange={(e) => setDelayAmount(e.target.value)}
+                      placeholder="1"
+                    />
+                    <select
+                      className="input text-sm w-28"
+                      value={delayUnit}
+                      onChange={(e) => setDelayUnit(e.target.value as 'minutes' | 'hours' | 'days')}
+                    >
+                      <option value="minutes">Minutes</option>
+                      <option value="hours">Hours</option>
+                      <option value="days">Days</option>
+                    </select>
+                    <span className="text-xs text-teal-700">
+                      after {form.trigger === 'LEAD_CREATED_TIME_ELAPSED' ? 'creation' : 'last update'}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1840,6 +1909,16 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                     {trigger?.label || form.trigger}
                   </span>
 
+                  {isTimeBased && (
+                    <>
+                      <ArrowRight className="h-4 w-4 text-text-tertiary" />
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-teal-50 text-teal-700">
+                        <Clock className="h-3.5 w-3.5" />
+                        Wait {delayAmount} {delayUnit}
+                      </span>
+                    </>
+                  )}
+
                   {form.conditions.length > 0 && (
                     <>
                       <ArrowRight className="h-4 w-4 text-text-tertiary" />
@@ -1931,6 +2010,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 type="button"
                 onClick={() => {
                   if (step === 1 && !form.name.trim()) return alert('Name is required');
+                  if (step === 1 && isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) return alert('Please set a valid time delay');
                   setStep(step + 1);
                 }}
                 className="btn-primary text-sm"

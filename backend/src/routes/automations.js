@@ -15,6 +15,7 @@ const automationSchema = z.object({
     'LEAD_ASSIGNED', 'LEAD_SCORE_CHANGED', 'LEAD_INACTIVE',
     'LEAD_SLA_WARNING', 'LEAD_SLA_BREACHED', 'LEAD_SLA_ESCALATED',
     'TASK_DUE', 'TASK_OVERDUE',
+    'LEAD_CREATED_TIME_ELAPSED', 'LEAD_UPDATED_TIME_ELAPSED',
   ]),
   conditions: z.array(z.object({
     field: z.string(),
@@ -463,6 +464,85 @@ const AUTOMATION_TEMPLATES = [
       { type: 'add_tag', config: { tagName: 'SLA Auto-Reassigned' } },
       { type: 'create_task', config: { title: 'Priority: Respond to reassigned lead {{firstName}}', taskType: 'FOLLOW_UP_CALL', dueInHours: 1, priority: 'URGENT' } },
       { type: 'notify_user', config: { message: 'Lead {{firstName}} {{lastName}} has been auto-reassigned to you due to SLA escalation. Please respond immediately.' } },
+    ],
+  },
+
+  // ── Time-Based Automation Templates ────────────────────────────
+  {
+    id: 'follow-up-24h',
+    name: 'Follow Up 24 Hours After Creation',
+    description: 'Send a follow-up email 24 hours after a lead is created',
+    category: 'time-based',
+    tags: ['time-based', 'follow-up', '24 hours', 'email', 'created'],
+    trigger: 'LEAD_CREATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 1440 }],
+    actions: [
+      { type: 'send_email', config: { subject: 'Following up — {{firstName}}', body: 'Hi {{firstName}}, we wanted to follow up and see if you have any questions. We are here to help!' } },
+    ],
+  },
+  {
+    id: 'notify-no-update-48h',
+    name: 'Alert If No Update in 48 Hours',
+    description: 'Notify the assigned rep if a lead has not been updated in 48 hours',
+    category: 'time-based',
+    tags: ['time-based', 'stale', '48 hours', 'notification', 'updated'],
+    trigger: 'LEAD_UPDATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 2880 }],
+    actions: [
+      { type: 'notify_user', config: { message: 'Lead {{firstName}} {{lastName}} has not been updated in 48 hours. Please follow up.' } },
+    ],
+  },
+  {
+    id: 'tag-stale-7d',
+    name: 'Tag Stale Leads After 7 Days',
+    description: 'Automatically tag leads as stale if not updated within 7 days',
+    category: 'time-based',
+    tags: ['time-based', 'stale', '7 days', 'tag', 'updated'],
+    trigger: 'LEAD_UPDATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 10080 }],
+    actions: [
+      { type: 'add_tag', config: { tagName: 'Stale Lead' } },
+      { type: 'notify_user', config: { message: 'Lead {{firstName}} {{lastName}} has been tagged as stale — no updates in 7 days.' } },
+    ],
+  },
+  {
+    id: 'welcome-call-2h',
+    name: 'Create Call Task 2 Hours After Creation',
+    description: 'Create an urgent call task 2 hours after a new lead is created if still in NEW status',
+    category: 'time-based',
+    tags: ['time-based', 'call', '2 hours', 'task', 'created', 'speed-to-lead'],
+    trigger: 'LEAD_CREATED_TIME_ELAPSED',
+    conditions: [
+      { field: '__delay__', operator: 'equals', value: 120 },
+      { field: 'status', operator: 'equals', value: 'NEW' },
+    ],
+    actions: [
+      { type: 'create_task', config: { title: 'Urgent: Call new lead {{firstName}} {{lastName}}', taskType: 'FOLLOW_UP_CALL', dueInHours: 1, priority: 'URGENT' } },
+    ],
+  },
+  {
+    id: 'nurture-email-3d',
+    name: 'Nurture Email 3 Days After Creation',
+    description: 'Send a nurture email to leads 3 days after they were created',
+    category: 'time-based',
+    tags: ['time-based', 'nurture', '3 days', 'email', 'created'],
+    trigger: 'LEAD_CREATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 4320 }],
+    actions: [
+      { type: 'send_email', config: { subject: 'We thought you might like to know...', body: 'Dear {{firstName}}, it has been a few days since we connected. Here are some resources that may help you make your decision.' } },
+    ],
+  },
+  {
+    id: 'reassign-no-update-5d',
+    name: 'Reassign If No Update in 5 Days',
+    description: 'Automatically reassign the lead if no updates have been made in 5 days',
+    category: 'time-based',
+    tags: ['time-based', 'reassign', '5 days', 'updated', 'round-robin'],
+    trigger: 'LEAD_UPDATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 7200 }],
+    actions: [
+      { type: 'reassign_lead_round_robin', config: {} },
+      { type: 'notify_user', config: { message: 'Lead {{firstName}} {{lastName}} was auto-reassigned — no updates in 5 days.' } },
     ],
   },
 
