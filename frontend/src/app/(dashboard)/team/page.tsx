@@ -9,7 +9,7 @@ import type { User, Organization, DivisionMembership } from '@/types';
 import {
   UserPlus, X, Shield, Users as UsersIcon, Crown, Eye,
   MoreHorizontal, Pencil, Key, UserX, UserCheck, Search,
-  Mail, Phone, Calendar, BarChart3, CheckCircle2, XCircle,
+  Mail, Phone, Calendar, BarChart3, Check, CheckCircle2, XCircle,
   AlertTriangle, ChevronDown, ChevronUp, Filter, RotateCcw, Save,
   Building2, Sparkles, ArrowUpDown, ArrowUp, ArrowDown,
   Clock, TrendingUp, ListChecks, Hash, SlidersHorizontal,
@@ -2048,11 +2048,18 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const [memberships, setMemberships] = useState<any[]>([]);
+  const [originalMemberships, setOriginalMemberships] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [addingDivision, setAddingDivision] = useState(false);
   const [selectedNewDivision, setSelectedNewDivision] = useState('');
   const [selectedNewRole, setSelectedNewRole] = useState('SALES_REP');
+  const [pendingAdds, setPendingAdds] = useState<any[]>([]);
+  const [pendingRemoves, setPendingRemoves] = useState<string[]>([]);
+  const [pendingRoleChanges, setPendingRoleChanges] = useState<Record<string, string>>({});
+  const [pendingPrimary, setPendingPrimary] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     loadMemberships();
@@ -2062,105 +2069,124 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
     try {
       setLoading(true);
       const data = await api.getUserDivisions(user.id);
-      setMemberships(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setMemberships(list);
+      setOriginalMemberships(JSON.parse(JSON.stringify(list)));
     } catch (err) {
       console.error('Failed to load memberships:', err);
-      // Fallback: create a membership from user's current division
       if (user.organizationId) {
-        setMemberships([{
+        const fallback = [{
           id: 'current',
           divisionId: user.organizationId,
           role: user.role,
           isPrimary: true,
           division: divisions.find(d => d.id === user.organizationId) || { name: 'Current Division' }
-        }]);
+        }];
+        setMemberships(fallback);
+        setOriginalMemberships(JSON.parse(JSON.stringify(fallback)));
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleRoleChange = async (membership: any, newRole: string) => {
-    try {
-      setSaving(true);
-      await api.updateUserDivisionRole(user.id, membership.divisionId, { role: newRole });
-      setMemberships(prev => prev.map(m => 
-        m.divisionId === membership.divisionId ? { ...m, role: newRole } : m
-      ));
-    } catch (err) {
-      console.error('Failed to update role:', err);
-      alert('Failed to update role');
-    } finally {
-      setSaving(false);
-    }
+  // Local state changes (no API calls until Save)
+  const handleRoleChange = (divisionId: string, newRole: string) => {
+    setPendingRoleChanges(prev => ({ ...prev, [divisionId]: newRole }));
+    setMemberships(prev => prev.map(m => 
+      m.divisionId === divisionId ? { ...m, role: newRole } : m
+    ));
   };
 
-  const handleSetPrimary = async (membership: any) => {
-    try {
-      setSaving(true);
-      await api.updateUserDivisionRole(user.id, membership.divisionId, { isPrimary: true });
-      setMemberships(prev => prev.map(m => ({
-        ...m,
-        isPrimary: m.divisionId === membership.divisionId
-      })));
-    } catch (err) {
-      console.error('Failed to set primary:', err);
-      alert('Failed to set primary division');
-    } finally {
-      setSaving(false);
-    }
+  const handleSetPrimary = (divisionId: string) => {
+    setPendingPrimary(divisionId);
+    setMemberships(prev => prev.map(m => ({
+      ...m,
+      isPrimary: m.divisionId === divisionId
+    })));
   };
 
-  const handleRemove = async (membership: any) => {
-    if (memberships.length <= 1) {
+  const handleRemove = (membership: any) => {
+    const activeMemberships = memberships.filter(m => !pendingRemoves.includes(m.divisionId));
+    if (activeMemberships.length <= 1) {
       alert('User must belong to at least one division');
       return;
     }
-    if (!confirm(`Remove ${user.firstName || user.email} from ${membership.division?.name || 'this division'}?`)) return;
-    try {
-      setSaving(true);
-      await api.removeUserFromDivision(user.id, membership.divisionId);
-      setMemberships(prev => prev.filter(m => m.divisionId !== membership.divisionId));
-      onSaved();
-    } catch (err) {
-      console.error('Failed to remove:', err);
-      alert('Failed to remove from division');
-    } finally {
-      setSaving(false);
-    }
+    setPendingRemoves(prev => [...prev, membership.divisionId]);
   };
 
-  const handleAdd = async () => {
+  const undoRemove = (divisionId: string) => {
+    setPendingRemoves(prev => prev.filter(id => id !== divisionId));
+  };
+
+  const handleAddToPending = () => {
     if (!selectedNewDivision) return;
+    const div = divisions.find(d => d.id === selectedNewDivision);
+    setPendingAdds(prev => [...prev, {
+      divisionId: selectedNewDivision,
+      role: selectedNewRole,
+      division: div || { name: 'Division' }
+    }]);
+    setSelectedNewDivision('');
+    setSelectedNewRole('SALES_REP');
+    setAddingDivision(false);
+  };
+
+  const removePendingAdd = (divisionId: string) => {
+    setPendingAdds(prev => prev.filter(a => a.divisionId !== divisionId));
+  };
+
+  const hasChanges = pendingAdds.length > 0 || pendingRemoves.length > 0 || 
+    Object.keys(pendingRoleChanges).length > 0 || pendingPrimary !== null;
+
+  const handleSaveAll = async () => {
+    setSaving(true);
+    setError('');
     try {
-      setSaving(true);
-      const result = await api.addUserToDivision(user.id, { 
-        divisionId: selectedNewDivision, 
-        role: selectedNewRole 
-      });
-      const div = divisions.find(d => d.id === selectedNewDivision);
-      setMemberships(prev => [...prev, {
-        id: result?.id || Date.now().toString(),
-        divisionId: selectedNewDivision,
-        role: selectedNewRole,
-        isPrimary: prev.length === 0,
-        division: div || { name: 'Division' }
-      }]);
-      setAddingDivision(false);
-      setSelectedNewDivision('');
-      setSelectedNewRole('SALES_REP');
+      // Process removes
+      for (const divId of pendingRemoves) {
+        await api.removeUserFromDivision(user.id, divId);
+      }
+      // Process role changes
+      for (const [divId, role] of Object.entries(pendingRoleChanges)) {
+        if (!pendingRemoves.includes(divId)) {
+          await api.updateUserDivisionRole(user.id, divId, { role });
+        }
+      }
+      // Process primary change
+      if (pendingPrimary && !pendingRemoves.includes(pendingPrimary)) {
+        await api.updateUserDivisionRole(user.id, pendingPrimary, { isPrimary: true });
+      }
+      // Process adds
+      for (const add of pendingAdds) {
+        await api.addUserToDivision(user.id, { divisionId: add.divisionId, role: add.role });
+      }
+      
+      // Success!
+      setSaveSuccess(true);
+      setPendingAdds([]);
+      setPendingRemoves([]);
+      setPendingRoleChanges({});
+      setPendingPrimary(null);
       onSaved();
+      
+      // Reload fresh data
+      await loadMemberships();
+      
+      setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err: any) {
-      console.error('Failed to add:', err);
-      alert(err?.message || 'Failed to add to division');
+      console.error('Failed to save:', err);
+      setError(err?.message || 'Failed to save changes. Please check your connection and try again.');
     } finally {
       setSaving(false);
     }
   };
 
   const availableDivisions = divisions.filter(
-    d => !memberships.some(m => m.divisionId === d.id)
-  );
+    d => !memberships.some(m => m.divisionId === d.id) && 
+         !pendingAdds.some(a => a.divisionId === d.id) &&
+         !pendingRemoves.includes(d.id) === false // show removed ones as available
+  ).filter(d => !pendingAdds.some(a => a.divisionId === d.id));
 
   const roleOptions = [
     { value: 'SUPER_ADMIN', label: 'Super Admin', color: 'text-purple-600' },
@@ -2169,6 +2195,9 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
     { value: 'SALES_REP', label: 'Sales Rep', color: 'text-orange-600' },
     { value: 'VIEWER', label: 'Viewer', color: 'text-gray-600' },
   ];
+
+  const changeCount = pendingAdds.length + pendingRemoves.length + 
+    Object.keys(pendingRoleChanges).length + (pendingPrimary ? 1 : 0);
 
   return (
     <div className="modal">
@@ -2203,71 +2232,137 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-text-primary uppercase tracking-wider">
-                    Current Divisions ({memberships.length})
+                    Current Divisions ({memberships.filter(m => !pendingRemoves.includes(m.divisionId)).length})
                   </h3>
                 </div>
                 
-                {memberships.length === 0 ? (
+                {memberships.length === 0 && pendingAdds.length === 0 ? (
                   <div className="text-center py-8 text-text-secondary">
                     <Building2 className="h-8 w-8 mx-auto mb-2 opacity-40" />
                     <p>No division memberships found</p>
                   </div>
                 ) : (
-                  memberships.map((membership) => (
-                    <div key={membership.divisionId || membership.id} 
-                      className="flex items-center justify-between p-4 rounded-xl border border-border-primary bg-surface-secondary hover:bg-surface-tertiary transition-colors">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
-                          style={{ backgroundColor: membership.division?.primaryColor || '#6366f1' }}>
-                          {(membership.division?.name?.[0] || 'D').toUpperCase()}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-text-primary">{membership.division?.name || 'Unknown Division'}</span>
-                            {membership.isPrimary && (
-                              <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 rounded">Primary</span>
-                            )}
+                  memberships.map((membership) => {
+                    const isRemoved = pendingRemoves.includes(membership.divisionId);
+                    const isRoleChanged = pendingRoleChanges[membership.divisionId];
+                    const isPrimaryChanged = pendingPrimary === membership.divisionId;
+                    return (
+                      <div key={membership.divisionId || membership.id} 
+                        className={`flex items-center justify-between p-4 rounded-xl border transition-all duration-200 ${
+                          isRemoved 
+                            ? 'border-red-200 bg-red-50/50 opacity-60' 
+                            : (isRoleChanged || isPrimaryChanged)
+                              ? 'border-amber-300 bg-amber-50/50'
+                              : 'border-border-primary bg-surface-secondary hover:bg-surface-tertiary'
+                        }`}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                            style={{ backgroundColor: membership.division?.primaryColor || '#6366f1' }}>
+                            {(membership.division?.name?.[0] || 'D').toUpperCase()}
                           </div>
-                          <span className="text-xs text-text-tertiary">{membership.division?.tradeName || ''}</span>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className={`font-medium ${isRemoved ? 'line-through text-red-400' : 'text-text-primary'}`}>
+                                {membership.division?.name || 'Unknown Division'}
+                              </span>
+                              {(pendingPrimary ? pendingPrimary === membership.divisionId : membership.isPrimary) && !isRemoved && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 rounded">Primary</span>
+                              )}
+                              {isRemoved && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-red-100 text-red-600 rounded">Will be removed</span>
+                              )}
+                              {isRoleChanged && !isRemoved && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 rounded">Modified</span>
+                              )}
+                            </div>
+                            <span className="text-xs text-text-tertiary">{membership.division?.tradeName || ''}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isRemoved ? (
+                            <button
+                              onClick={() => undoRemove(membership.divisionId)}
+                              className="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                            >
+                              Undo
+                            </button>
+                          ) : (
+                            <>
+                              <select
+                                value={membership.role}
+                                onChange={(e) => handleRoleChange(membership.divisionId, e.target.value)}
+                                className="text-sm border border-border-primary rounded-lg px-2 py-1.5 bg-surface-primary text-text-primary focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
+                              >
+                                {roleOptions.map(r => (
+                                  <option key={r.value} value={r.value}>{r.label}</option>
+                                ))}
+                              </select>
+                              {!(pendingPrimary ? pendingPrimary === membership.divisionId : membership.isPrimary) && (
+                                <button
+                                  onClick={() => handleSetPrimary(membership.divisionId)}
+                                  className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                                  title="Set as primary division"
+                                >
+                                  <Star className="h-4 w-4" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleRemove(membership)}
+                                disabled={memberships.filter(m => !pendingRemoves.includes(m.divisionId)).length <= 1}
+                                className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30"
+                                title="Remove from division"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={membership.role}
-                          onChange={(e) => handleRoleChange(membership, e.target.value)}
-                          disabled={saving}
-                          className="text-sm border border-border-primary rounded-lg px-2 py-1.5 bg-surface-primary text-text-primary focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
-                        >
-                          {roleOptions.map(r => (
-                            <option key={r.value} value={r.value}>{r.label}</option>
-                          ))}
-                        </select>
-                        {!membership.isPrimary && (
-                          <button
-                            onClick={() => handleSetPrimary(membership)}
-                            disabled={saving}
-                            className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                            title="Set as primary division"
-                          >
-                            <Star className="h-4 w-4" />
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleRemove(membership)}
-                          disabled={saving || memberships.length <= 1}
-                          className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30"
-                          title="Remove from division"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
-              {/* Add New Division */}
-              {availableDivisions.length > 0 && (
+              {/* Pending Adds */}
+              {pendingAdds.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-emerald-700 uppercase tracking-wider flex items-center gap-2">
+                    <Plus className="h-3.5 w-3.5" />
+                    New Divisions to Add ({pendingAdds.length})
+                  </h3>
+                  {pendingAdds.map((add) => (
+                    <div key={add.divisionId}
+                      className="flex items-center justify-between p-4 rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50/50">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                          style={{ backgroundColor: add.division?.primaryColor || '#10b981' }}>
+                          {(add.division?.name?.[0] || 'D').toUpperCase()}
+                        </div>
+                        <div>
+                          <span className="font-medium text-text-primary">{add.division?.name}</span>
+                          <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 rounded">New</span>
+                          <div className="text-xs text-text-tertiary">
+                            Role: {roleOptions.find(r => r.value === add.role)?.label || add.role}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removePendingAdd(add.divisionId)}
+                        className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Remove"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add New Division Form */}
+              {(divisions.filter(d => 
+                !memberships.some(m => m.divisionId === d.id && !pendingRemoves.includes(m.divisionId)) && 
+                !pendingAdds.some(a => a.divisionId === d.id)
+              ).length > 0) && (
                 <div className="pt-2">
                   {!addingDivision ? (
                     <button
@@ -2279,7 +2374,7 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
                     </button>
                   ) : (
                     <div className="p-4 rounded-xl border-2 border-brand-primary bg-brand-primary/5 space-y-3">
-                      <h4 className="text-sm font-semibold text-text-primary">Add to Division</h4>
+                      <h4 className="text-sm font-semibold text-text-primary">Select Division & Role</h4>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-medium text-text-secondary mb-1">Division</label>
@@ -2289,7 +2384,10 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
                             className="w-full border border-border-primary rounded-lg px-3 py-2 text-sm bg-surface-primary text-text-primary"
                           >
                             <option value="">Select division...</option>
-                            {availableDivisions.map(d => (
+                            {divisions.filter(d => 
+                              !memberships.some(m => m.divisionId === d.id && !pendingRemoves.includes(m.divisionId)) && 
+                              !pendingAdds.some(a => a.divisionId === d.id)
+                            ).map(d => (
                               <option key={d.id} value={d.id}>{d.name}</option>
                             ))}
                           </select>
@@ -2315,11 +2413,11 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
                           Cancel
                         </button>
                         <button
-                          onClick={handleAdd}
-                          disabled={!selectedNewDivision || saving}
-                          className="px-4 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-lg transition-colors disabled:opacity-50"
+                          onClick={handleAddToPending}
+                          disabled={!selectedNewDivision}
+                          className="px-4 py-1.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50"
                         >
-                          {saving ? 'Adding...' : 'Add to Division'}
+                          + Add Division
                         </button>
                       </div>
                     </div>
@@ -2330,17 +2428,62 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-3 p-6 border-t border-border-primary">
-          <button
-            onClick={onClose}
-            className="px-5 py-2.5 text-sm font-medium text-text-primary bg-surface-tertiary hover:bg-surface-secondary rounded-xl transition-colors"
-          >
-            Done
-          </button>
+        {/* Error */}
+        {error && (
+          <div className="mx-6 mb-2 flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {/* Success */}
+        {saveSuccess && (
+          <div className="mx-6 mb-2 flex items-center gap-2 p-3 rounded-lg bg-emerald-50 text-sm text-emerald-700 ring-1 ring-emerald-200">
+            <Check className="h-4 w-4 flex-shrink-0" />
+            All changes saved successfully!
+          </div>
+        )}
+
+        {/* Footer with prominent Save button */}
+        <div className="flex items-center justify-between p-6 border-t border-border-primary bg-surface-secondary/50 rounded-b-2xl">
+          <div className="text-sm text-text-tertiary">
+            {hasChanges ? (
+              <span className="text-amber-600 font-medium">{changeCount} unsaved change{changeCount !== 1 ? 's' : ''}</span>
+            ) : (
+              <span>No unsaved changes</span>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="px-5 py-2.5 text-sm font-medium text-text-primary bg-white border border-border-primary hover:bg-surface-tertiary rounded-xl transition-colors"
+            >
+              {hasChanges ? 'Discard & Close' : 'Close'}
+            </button>
+            <button
+              onClick={handleSaveAll}
+              disabled={!hasChanges || saving}
+              className={`px-6 py-2.5 text-sm font-semibold rounded-xl transition-all duration-200 flex items-center gap-2 ${
+                hasChanges 
+                  ? 'text-white bg-gradient-to-r from-brand-primary to-blue-600 hover:from-brand-hover hover:to-blue-700 shadow-lg shadow-brand-primary/25' 
+                  : 'text-text-tertiary bg-surface-tertiary cursor-not-allowed'
+              }`}
+            >
+              {saving ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="h-4 w-4" />
+                  Save Changes
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
