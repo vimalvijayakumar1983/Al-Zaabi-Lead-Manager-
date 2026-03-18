@@ -2052,7 +2052,7 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [addingDivision, setAddingDivision] = useState(false);
   const [selectedNewDivision, setSelectedNewDivision] = useState('');
-  const [selectedNewRole, setSelectedNewRole] = useState('AGENT');
+  const [selectedNewRole, setSelectedNewRole] = useState('SALES_REP');
 
   useEffect(() => {
     loadMemberships();
@@ -2148,7 +2148,7 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
       }]);
       setAddingDivision(false);
       setSelectedNewDivision('');
-      setSelectedNewRole('AGENT');
+      setSelectedNewRole('SALES_REP');
       onSaved();
     } catch (err: any) {
       console.error('Failed to add:', err);
@@ -2164,9 +2164,10 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
 
   const roleOptions = [
     { value: 'SUPER_ADMIN', label: 'Super Admin', color: 'text-purple-600' },
-    { value: 'DIVISION_ADMIN', label: 'Division Admin', color: 'text-blue-600' },
-    { value: 'TEAM_LEAD', label: 'Team Lead', color: 'text-emerald-600' },
-    { value: 'AGENT', label: 'Agent', color: 'text-gray-600' },
+    { value: 'ADMIN', label: 'Division Admin', color: 'text-blue-600' },
+    { value: 'MANAGER', label: 'Manager / Team Lead', color: 'text-emerald-600' },
+    { value: 'SALES_REP', label: 'Sales Rep', color: 'text-orange-600' },
+    { value: 'VIEWER', label: 'Viewer', color: 'text-gray-600' },
   ];
 
   return (
