@@ -9,7 +9,7 @@ import {
   AlertTriangle, CheckCircle2, XCircle, Download, Clock,
   RotateCcw, ChevronDown, Eye, Trash2, FileText, Table2,
   Zap, Shield, Users, Megaphone, MapPin, Link2, Search,
-  BarChart3, Info,
+  BarChart3, Info, Contact,
 } from 'lucide-react';
 
 type WizardStep = 'upload' | 'mapping' | 'options' | 'review' | 'result';
@@ -72,7 +72,8 @@ interface ImportHistoryItem {
 }
 
 const MODULES = [
-  { key: 'leads', label: 'Leads', icon: Users, description: 'Import contacts and prospects', color: 'brand' },
+  { key: 'leads', label: 'Leads', icon: Users, description: 'Import sales leads and prospects', color: 'brand' },
+  { key: 'contacts', label: 'Contacts', icon: Contact, description: 'Import contacts and relationships', color: 'emerald' },
   { key: 'campaigns', label: 'Campaigns', icon: Megaphone, description: 'Import marketing campaigns', color: 'purple' },
 ];
 
@@ -545,6 +546,7 @@ function ImportWizard() {
                   <option value="">Don&apos;t check for duplicates</option>
                   <option value="email">Email</option>
                   <option value="phone">Phone</option>
+                  {selectedModule === 'contacts' && <option value="mobile">Mobile</option>}
                 </select>
               </div>
 
@@ -574,7 +576,7 @@ function ImportWizard() {
             </div>
           </div>
 
-          {/* Default Values */}
+          {/* Default Values — Leads */}
           {selectedModule === 'leads' && (
             <div className="card p-6">
               <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
@@ -604,6 +606,52 @@ function ImportWizard() {
                     <option value="">CSV Import (default)</option>
                     <option value="WEBSITE_FORM">Website Form</option>
                     <option value="LIVE_CHAT">Live Chat Widget</option>
+                    <option value="FACEBOOK_ADS">Facebook Ads</option>
+                    <option value="GOOGLE_ADS">Google Ads</option>
+                    <option value="REFERRAL">Referral</option>
+                    <option value="EMAIL">Email</option>
+                    <option value="PHONE">Phone</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Default Values — Contacts */}
+          {selectedModule === 'contacts' && (
+            <div className="card p-6">
+              <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
+              <p className="text-2xs text-text-tertiary mb-4">Set defaults for fields not present in your file</p>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="label">Owner</label>
+                  <select value={assignToId} onChange={(e) => setAssignToId(e.target.value)} className="input">
+                    <option value="">No owner</option>
+                    {users.map((u: any) => (
+                      <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Default Lifecycle</label>
+                  <select value={defaultStatus} onChange={(e) => setDefaultStatus(e.target.value)} className="input">
+                    <option value="">Subscriber (default)</option>
+                    <option value="LEAD">Lead</option>
+                    <option value="MARKETING_QUALIFIED">Marketing Qualified</option>
+                    <option value="SALES_QUALIFIED">Sales Qualified</option>
+                    <option value="OPPORTUNITY">Opportunity</option>
+                    <option value="CUSTOMER">Customer</option>
+                    <option value="EVANGELIST">Evangelist</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Default Source</label>
+                  <select value={defaultSource} onChange={(e) => setDefaultSource(e.target.value)} className="input">
+                    <option value="">CSV Import (default)</option>
+                    <option value="WEBSITE_FORM">Website Form</option>
                     <option value="FACEBOOK_ADS">Facebook Ads</option>
                     <option value="GOOGLE_ADS">Google Ads</option>
                     <option value="REFERRAL">Referral</option>
@@ -820,7 +868,7 @@ function ImportWizard() {
               Import More Data
             </button>
             <button onClick={() => router.push(`/${selectedModule}`)} className="btn-secondary">
-              View {selectedModule === 'leads' ? 'Leads' : 'Campaigns'}
+              View {selectedModule === 'leads' ? 'Leads' : selectedModule === 'contacts' ? 'Contacts' : 'Campaigns'}
             </button>
           </div>
         </div>
@@ -878,7 +926,7 @@ function ExportTab() {
         </div>
       </div>
 
-      {/* Filters (Leads only) */}
+      {/* Filters (Leads) */}
       {exportModule === 'leads' && (
         <div className="card p-6">
           <h3 className="text-sm font-semibold text-text-primary mb-1">Filter Data (Optional)</h3>
@@ -947,6 +995,75 @@ function ExportTab() {
         </div>
       )}
 
+      {/* Filters (Contacts) */}
+      {exportModule === 'contacts' && (
+        <div className="card p-6">
+          <h3 className="text-sm font-semibold text-text-primary mb-1">Filter Data (Optional)</h3>
+          <p className="text-2xs text-text-tertiary mb-4">Leave blank to export all contacts</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Lifecycle Stage</label>
+              <select
+                value={filters.status || ''}
+                onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                className="input"
+              >
+                <option value="">All Stages</option>
+                <option value="SUBSCRIBER">Subscriber</option>
+                <option value="LEAD">Lead</option>
+                <option value="MARKETING_QUALIFIED">Marketing Qualified</option>
+                <option value="SALES_QUALIFIED">Sales Qualified</option>
+                <option value="OPPORTUNITY">Opportunity</option>
+                <option value="CUSTOMER">Customer</option>
+                <option value="EVANGELIST">Evangelist</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Source</label>
+              <select
+                value={filters.source || ''}
+                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
+                className="input"
+              >
+                <option value="">All Sources</option>
+                <option value="WEBSITE_FORM">Website Form</option>
+                <option value="FACEBOOK_ADS">Facebook Ads</option>
+                <option value="GOOGLE_ADS">Google Ads</option>
+                <option value="CSV_IMPORT">CSV Import</option>
+                <option value="REFERRAL">Referral</option>
+                <option value="EMAIL">Email</option>
+                <option value="PHONE">Phone</option>
+                <option value="MANUAL">Manual</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Owner</label>
+              <select
+                value={filters.assignedToId || ''}
+                onChange={(e) => setFilters({ ...filters, assignedToId: e.target.value })}
+                className="input"
+              >
+                <option value="">All Users</option>
+                {users.map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className="label">Search</label>
+            <input
+              className="input max-w-sm"
+              placeholder="Search by name, email, or company..."
+              value={filters.search || ''}
+              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Export Action */}
       <div className="card p-6 text-center">
         <div className="h-14 w-14 rounded-2xl bg-brand-50 flex items-center justify-center mx-auto mb-4">
@@ -958,7 +1075,7 @@ function ExportTab() {
         </p>
         <button onClick={handleExport} disabled={exporting} className="btn-primary">
           <Download className="h-4 w-4" />
-          {exporting ? 'Exporting...' : `Export ${exportModule === 'leads' ? 'Leads' : 'Campaigns'}`}
+          {exporting ? 'Exporting...' : `Export ${exportModule === 'leads' ? 'Leads' : exportModule === 'contacts' ? 'Contacts' : 'Campaigns'}`}
         </button>
       </div>
     </div>

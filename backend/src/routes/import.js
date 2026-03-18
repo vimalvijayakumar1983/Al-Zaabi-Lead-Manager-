@@ -31,6 +31,32 @@ const LEAD_FIELDS = [
   { key: 'tags', label: 'Tags (comma separated)', required: false, type: 'tags' },
 ];
 
+const CONTACT_FIELDS = [
+  { key: 'firstName', label: 'First Name', required: true, type: 'string' },
+  { key: 'lastName', label: 'Last Name', required: true, type: 'string' },
+  { key: 'email', label: 'Email', required: false, type: 'email' },
+  { key: 'phone', label: 'Phone', required: false, type: 'string' },
+  { key: 'mobile', label: 'Mobile', required: false, type: 'string' },
+  { key: 'company', label: 'Company', required: false, type: 'string' },
+  { key: 'jobTitle', label: 'Job Title', required: false, type: 'string' },
+  { key: 'department', label: 'Department', required: false, type: 'string' },
+  { key: 'source', label: 'Source', required: false, type: 'enum', options: ['WEBSITE_FORM','LANDING_PAGE','WHATSAPP','FACEBOOK_ADS','GOOGLE_ADS','TIKTOK_ADS','MANUAL','CSV_IMPORT','API','REFERRAL','EMAIL','PHONE','OTHER'] },
+  { key: 'lifecycle', label: 'Lifecycle Stage', required: false, type: 'enum', options: ['SUBSCRIBER','LEAD','MARKETING_QUALIFIED','SALES_QUALIFIED','OPPORTUNITY','CUSTOMER','EVANGELIST','OTHER'] },
+  { key: 'type', label: 'Contact Type', required: false, type: 'enum', options: ['PROSPECT','CUSTOMER','PARTNER','VENDOR','INFLUENCER','OTHER'] },
+  { key: 'salutation', label: 'Salutation', required: false, type: 'string' },
+  { key: 'dateOfBirth', label: 'Date of Birth', required: false, type: 'date' },
+  { key: 'website', label: 'Website', required: false, type: 'string' },
+  { key: 'linkedin', label: 'LinkedIn', required: false, type: 'string' },
+  { key: 'twitter', label: 'Twitter', required: false, type: 'string' },
+  { key: 'address', label: 'Address', required: false, type: 'string' },
+  { key: 'city', label: 'City', required: false, type: 'string' },
+  { key: 'state', label: 'State', required: false, type: 'string' },
+  { key: 'country', label: 'Country', required: false, type: 'string' },
+  { key: 'postalCode', label: 'Postal Code', required: false, type: 'string' },
+  { key: 'description', label: 'Description', required: false, type: 'string' },
+  { key: 'tags', label: 'Tags (comma separated)', required: false, type: 'tags' },
+];
+
 const CAMPAIGN_FIELDS = [
   { key: 'name', label: 'Campaign Name', required: true, type: 'string' },
   { key: 'type', label: 'Type', required: true, type: 'enum', options: ['FACEBOOK_ADS','GOOGLE_ADS','TIKTOK_ADS','EMAIL','WHATSAPP','LANDING_PAGE','REFERRAL','WEBSITE_FORM','OTHER'] },
@@ -42,6 +68,7 @@ const CAMPAIGN_FIELDS = [
 
 const MODULE_FIELDS = {
   leads: LEAD_FIELDS,
+  contacts: CONTACT_FIELDS,
   campaigns: CAMPAIGN_FIELDS,
 };
 
@@ -91,8 +118,21 @@ function autoDetectMapping(csvColumns, moduleFields) {
     campaign: ['campaign', 'campaign name', 'campaignname', 'utm_campaign'],
     website: ['website', 'url', 'web', 'site', 'homepage'],
     tags: ['tags', 'tag', 'labels', 'label', 'categories', 'category'],
+    mobile: ['mobile', 'mobile phone', 'mobile number', 'cell phone', 'cellphone'],
+    department: ['department', 'dept', 'division'],
+    lifecycle: ['lifecycle', 'lifecycle stage', 'lifecyclestage', 'stage', 'contact stage'],
+    salutation: ['salutation', 'title', 'prefix', 'honorific', 'mr', 'mrs', 'dr'],
+    dateOfBirth: ['date of birth', 'dateofbirth', 'dob', 'birthday', 'birth date', 'birthdate'],
+    linkedin: ['linkedin', 'linkedin url', 'linkedin profile', 'linkedinurl'],
+    twitter: ['twitter', 'twitter handle', 'twitter url', 'twitterurl', 'x handle'],
+    address: ['address', 'street', 'street address', 'mailing address'],
+    city: ['city', 'town'],
+    state: ['state', 'province', 'region'],
+    country: ['country', 'nation'],
+    postalCode: ['postal code', 'postalcode', 'zip', 'zip code', 'zipcode', 'postcode'],
+    description: ['description', 'notes', 'comments', 'bio', 'about'],
     name: ['name', 'campaign name', 'campaignname'],
-    type: ['type', 'campaign type', 'campaigntype'],
+    type: ['type', 'campaign type', 'campaigntype', 'contact type', 'contacttype'],
     startDate: ['start date', 'startdate', 'start', 'begin date'],
     endDate: ['end date', 'enddate', 'end', 'finish date'],
   };
@@ -119,9 +159,9 @@ router.get('/fields/:module', async (req, res, next) => {
       return res.status(400).json({ error: `Unknown module: ${req.params.module}. Supported: ${Object.keys(MODULE_FIELDS).join(', ')}` });
     }
 
-    // For leads, append custom fields from all accessible orgs
+    // For leads & contacts, append custom fields from all accessible orgs
     let allFields = [...fields];
-    if (req.params.module === 'leads') {
+    if (req.params.module === 'leads' || req.params.module === 'contacts') {
       const customFields = await prisma.customField.findMany({
         where: { organizationId: { in: req.orgIds } },
         orderBy: { order: 'asc' },
@@ -154,9 +194,9 @@ router.post('/preview', upload.single('file'), async (req, res, next) => {
       return res.status(400).json({ error: `Unknown module: ${module}` });
     }
 
-    // Include custom fields for leads
+    // Include custom fields for leads & contacts
     let allFields = [...fields];
-    if (module === 'leads') {
+    if (module === 'leads' || module === 'contacts') {
       const customFields = await prisma.customField.findMany({
         where: { organizationId: { in: req.orgIds } },
         orderBy: { order: 'asc' },
@@ -373,6 +413,160 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
               }
               await prisma.leadTag.create({
                 data: { leadId: lead.id, tagId: tag.id },
+              }).catch(() => {}); // ignore duplicate
+            }
+          }
+
+          imported++;
+        } catch (err) {
+          errors.push({ row: i + 2, error: err.message, data: row });
+          skipped++;
+        }
+      }
+    } else if (module === 'contacts') {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          // Apply field mapping
+          const mapped = {};
+          const customData = {};
+          for (const [csvCol, crmField] of Object.entries(fieldMapping)) {
+            if (crmField && row[csvCol] !== undefined && row[csvCol] !== '') {
+              if (crmField.startsWith('custom_')) {
+                customData[crmField.replace('custom_', '')] = row[csvCol];
+              } else {
+                mapped[crmField] = row[csvCol];
+              }
+            }
+          }
+
+          // Validation: required fields
+          if (!mapped.firstName || !mapped.lastName) {
+            errors.push({ row: i + 2, error: 'Missing required field: firstName or lastName', data: row });
+            skipped++;
+            continue;
+          }
+
+          // Enum validation & coercion
+          const lifecycleOptions = CONTACT_FIELDS.find(f => f.key === 'lifecycle').options;
+          if (mapped.lifecycle && !lifecycleOptions.includes(mapped.lifecycle.toUpperCase())) {
+            mapped.lifecycle = defaultStatus || 'SUBSCRIBER';
+          } else if (mapped.lifecycle) {
+            mapped.lifecycle = mapped.lifecycle.toUpperCase();
+          }
+
+          const typeOptions = CONTACT_FIELDS.find(f => f.key === 'type').options;
+          if (mapped.type && !typeOptions.includes(mapped.type.toUpperCase())) {
+            delete mapped.type;
+          } else if (mapped.type) {
+            mapped.type = mapped.type.toUpperCase();
+          }
+
+          if (mapped.source && !CONTACT_FIELDS.find(f => f.key === 'source').options.includes(mapped.source.toUpperCase())) {
+            mapped.source = defaultSource || 'CSV_IMPORT';
+          } else if (mapped.source) {
+            mapped.source = mapped.source.toUpperCase();
+          }
+
+          // Date coercion
+          if (mapped.dateOfBirth) {
+            const parsed = new Date(mapped.dateOfBirth);
+            mapped.dateOfBirth = isNaN(parsed.getTime()) ? null : parsed;
+          }
+
+          // Email validation
+          if (mapped.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mapped.email)) {
+            errors.push({ row: i + 2, error: `Invalid email: ${mapped.email}`, data: row });
+            skipped++;
+            continue;
+          }
+
+          // Handle tags
+          let tagNames = [];
+          if (mapped.tags) {
+            tagNames = mapped.tags.split(',').map(t => t.trim()).filter(Boolean);
+            delete mapped.tags;
+          }
+
+          // Duplicate detection
+          let existingContact = null;
+          if (duplicateField && mapped[duplicateField]) {
+            existingContact = await prisma.contact.findFirst({
+              where: {
+                organizationId: targetOrgId,
+                [duplicateField]: mapped[duplicateField],
+                isArchived: false,
+              },
+            });
+          }
+
+          if (existingContact) {
+            duplicates++;
+            if (duplicateAction === 'skip') {
+              skipped++;
+              continue;
+            } else if (duplicateAction === 'overwrite') {
+              const existingCustom = typeof existingContact.customData === 'object' && existingContact.customData ? existingContact.customData : {};
+              const mergedCustom = Object.keys(customData).length > 0 ? { ...existingCustom, ...customData } : existingCustom;
+              const updateData = { ...mapped, customData: mergedCustom, updatedAt: new Date() };
+              delete updateData.firstName; delete updateData.lastName; // keep original names unless explicitly overwritten
+              await prisma.contact.update({
+                where: { id: existingContact.id },
+                data: { firstName: mapped.firstName, lastName: mapped.lastName, ...updateData },
+              });
+              importedIds.push(existingContact.id);
+              updated++;
+              continue;
+            }
+            // duplicateAction === 'clone': fall through to create new
+          }
+
+          // Build contact data
+          const contactData = {
+            firstName: mapped.firstName,
+            lastName: mapped.lastName,
+            email: mapped.email || null,
+            phone: mapped.phone || null,
+            mobile: mapped.mobile || null,
+            company: mapped.company || null,
+            jobTitle: mapped.jobTitle || null,
+            department: mapped.department || null,
+            source: mapped.source || defaultSource || 'CSV_IMPORT',
+            lifecycle: mapped.lifecycle || defaultStatus || 'SUBSCRIBER',
+            type: mapped.type || 'PROSPECT',
+            salutation: mapped.salutation || null,
+            dateOfBirth: mapped.dateOfBirth || null,
+            website: mapped.website || null,
+            linkedin: mapped.linkedin || null,
+            twitter: mapped.twitter || null,
+            address: mapped.address || null,
+            city: mapped.city || null,
+            state: mapped.state || null,
+            country: mapped.country || null,
+            postalCode: mapped.postalCode || null,
+            description: mapped.description || null,
+            customData: Object.keys(customData).length > 0 ? customData : undefined,
+            organizationId: targetOrgId,
+            createdById: req.user.id,
+            ownerId: assignToId || null,
+          };
+
+          const contact = await prisma.contact.create({ data: contactData });
+          importedIds.push(contact.id);
+
+          // Handle tags
+          if (tagNames.length > 0) {
+            for (const tagName of tagNames) {
+              let tag = await prisma.tag.findFirst({
+                where: { organizationId: targetOrgId, name: tagName },
+              });
+              if (!tag) {
+                tag = await prisma.tag.create({
+                  data: { name: tagName, organizationId: targetOrgId },
+                });
+              }
+              await prisma.contactTag.create({
+                data: { contactId: contact.id, tagId: tag.id },
               }).catch(() => {}); // ignore duplicate
             }
           }
@@ -602,6 +796,16 @@ router.post('/undo/:id', authorize('ADMIN'), async (req, res, next) => {
         data: { isArchived: true },
       });
       deleted = result.count;
+    } else if (record.module === 'contacts') {
+      // Soft delete (archive) imported contacts — scope to accessible orgs
+      const result = await prisma.contact.updateMany({
+        where: {
+          id: { in: ids },
+          organizationId: { in: req.orgIds },
+        },
+        data: { isArchived: true },
+      });
+      deleted = result.count;
     } else if (record.module === 'campaigns') {
       const result = await prisma.campaign.deleteMany({
         where: {
@@ -650,6 +854,19 @@ router.get('/template/:module', async (req, res, next) => {
       if (f.key === 'campaign') return 'Q1 Campaign';
       if (f.key === 'website') return 'https://example.com';
       if (f.key === 'tags') return 'hot-lead, enterprise';
+      if (f.key === 'mobile') return '+971551234567';
+      if (f.key === 'department') return 'Sales';
+      if (f.key === 'lifecycle') return 'SUBSCRIBER';
+      if (f.key === 'salutation') return 'Mr.';
+      if (f.key === 'dateOfBirth') return '1990-05-15';
+      if (f.key === 'linkedin') return 'https://linkedin.com/in/johndoe';
+      if (f.key === 'twitter') return '@johndoe';
+      if (f.key === 'address') return '123 Business Bay';
+      if (f.key === 'city') return 'Dubai';
+      if (f.key === 'state') return 'Dubai';
+      if (f.key === 'country') return 'UAE';
+      if (f.key === 'postalCode') return '00000';
+      if (f.key === 'description') return 'Key decision maker';
       if (f.key === 'name') return 'Summer Campaign 2025';
       if (f.key === 'type') return 'EMAIL';
       if (f.key === 'startDate') return '2025-06-01';
@@ -657,8 +874,8 @@ router.get('/template/:module', async (req, res, next) => {
       return '';
     });
 
-    // Append custom fields for leads module
-    if (req.params.module === 'leads') {
+    // Append custom fields for leads & contacts module
+    if (req.params.module === 'leads' || req.params.module === 'contacts') {
       const customFields = await prisma.customField.findMany({
         where: { organizationId: { in: req.orgIds } },
         orderBy: { order: 'asc' },
@@ -730,7 +947,8 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
 
       // Check for duplicates in DB
       if (duplicateField && mapped[duplicateField]) {
-        const existing = await prisma.lead.findFirst({
+        const model = module === 'contacts' ? prisma.contact : prisma.lead;
+        const existing = await model.findFirst({
           where: { organizationId: { in: req.orgIds }, [duplicateField]: mapped[duplicateField], isArchived: false },
         });
         if (existing) {
@@ -840,6 +1058,78 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename=leads-export-${timestamp}.csv`);
       res.send('\uFEFF' + csv); // BOM for Excel compatibility
+    } else if (module === 'contacts') {
+      const where = { organizationId: orgFilter, isArchived: false };
+      if (status) where.lifecycle = status;
+      if (source) where.source = source;
+      if (assignedToId) where.ownerId = assignedToId;
+      if (search) {
+        where.OR = [
+          { firstName: { contains: search, mode: 'insensitive' } },
+          { lastName: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+          { company: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      const customFields = await prisma.customField.findMany({
+        where: { organizationId: orgFilter },
+        orderBy: { order: 'asc' },
+      });
+
+      const contacts = await prisma.contact.findMany({
+        where,
+        include: {
+          owner: { select: { firstName: true, lastName: true, email: true } },
+          tags: { include: { tag: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50000,
+      });
+
+      const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Mobile', 'Company', 'Job Title',
+        'Department', 'Source', 'Lifecycle', 'Type', 'Salutation', 'Date of Birth',
+        'Website', 'LinkedIn', 'Twitter', 'Address', 'City', 'State', 'Country', 'Postal Code',
+        'Description', 'Score', 'Owner', 'Tags', 'Created At',
+        ...customFields.map(cf => cf.label)];
+
+      const escapeCSV = (val) => {
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
+      const rows = contacts.map(c => {
+        const cd = typeof c.customData === 'object' && c.customData ? c.customData : {};
+        return [
+          c.firstName, c.lastName, c.email || '', c.phone || '', c.mobile || '',
+          c.company || '', c.jobTitle || '', c.department || '', c.source, c.lifecycle, c.type,
+          c.salutation || '',
+          c.dateOfBirth ? new Date(c.dateOfBirth).toISOString().split('T')[0] : '',
+          c.website || '', c.linkedin || '', c.twitter || '',
+          c.address || '', c.city || '', c.state || '', c.country || '', c.postalCode || '',
+          c.description || '', c.score,
+          c.owner ? `${c.owner.firstName} ${c.owner.lastName}` : '',
+          (c.tags || []).map(t => t.tag.name).join(', '),
+          new Date(c.createdAt).toISOString().split('T')[0],
+          ...customFields.map(cf => {
+            const val = cd[cf.name];
+            if (val === null || val === undefined) return '';
+            if (Array.isArray(val)) return val.join(', ');
+            return String(val);
+          }),
+        ].map(escapeCSV);
+      });
+
+      const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const timestamp = new Date().toISOString().split('T')[0];
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename=contacts-export-${timestamp}.csv`);
+      res.send('\uFEFF' + csv);
     } else if (module === 'campaigns') {
       const campaigns = await prisma.campaign.findMany({
         where: { organizationId: orgFilter },
