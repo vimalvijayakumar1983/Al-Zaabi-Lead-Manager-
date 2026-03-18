@@ -743,6 +743,27 @@ class ApiClient {
     return this.request<any>(`/settings/email/templates/${name}`, { method: 'DELETE' });
   }
 
+  // ─── Incoming Email (IMAP / POP3) Settings ──────────────────────
+  async getIncomingEmailConfig() {
+    return this.request<any>('/settings/email/incoming');
+  }
+
+  async saveIncomingEmailConfig(data: any) {
+    return this.request<any>('/settings/email/incoming', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async testImapConnection(data: { imapHost: string; imapPort: number; imapUser: string; imapPass?: string; imapSecurity?: string }) {
+    return this.request<{ success: boolean; message: string; mailboxes?: string[] }>('/settings/email/incoming/test-imap', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async testPop3Connection(data: { popHost: string; popPort: number; popUser: string; popPass?: string; popSecurity?: string }) {
+    return this.request<{ success: boolean; message: string }>('/settings/email/incoming/test-pop3', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async fetchIncomingEmails() {
+    return this.request<{ success: boolean; emails?: any[]; count?: number; error?: string }>('/settings/email/incoming/fetch', { method: 'POST' });
+  }
+
   // ─── Division Management ─────────────────────────────────────────
   async getDivisions(): Promise<Organization[]> {
     return this.request<Organization[]>('/divisions');

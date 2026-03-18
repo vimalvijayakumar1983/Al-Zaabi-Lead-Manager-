@@ -11,6 +11,7 @@ import {
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
   AtSign, Palette, ChevronDown, Image, Save, Sparkles,
   Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
+  Download, RefreshCw, Inbox, Server,
 } from 'lucide-react';
 
 type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
@@ -1489,6 +1490,45 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
 
 /* ─── Email Settings Section ─────────────────────────────────────── */
 function EmailSettingsSection() {
+  const [emailTab, setEmailTab] = useState<'outgoing' | 'incoming'>('outgoing');
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="Email Settings" description="Configure outgoing (SMTP) and incoming (IMAP/POP3) email servers" />
+
+      {/* Outgoing / Incoming tabs */}
+      <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
+        <button
+          onClick={() => setEmailTab('outgoing')}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            emailTab === 'outgoing'
+              ? 'bg-bg-primary text-text-primary shadow-sm'
+              : 'text-text-tertiary hover:text-text-secondary'
+          }`}
+        >
+          <Send className="h-4 w-4" />
+          Outgoing (SMTP)
+        </button>
+        <button
+          onClick={() => setEmailTab('incoming')}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            emailTab === 'incoming'
+              ? 'bg-bg-primary text-text-primary shadow-sm'
+              : 'text-text-tertiary hover:text-text-secondary'
+          }`}
+        >
+          <Inbox className="h-4 w-4" />
+          Incoming (IMAP / POP3)
+        </button>
+      </div>
+
+      {emailTab === 'outgoing' ? <OutgoingEmailSettings /> : <IncomingEmailSettings />}
+    </div>
+  );
+}
+
+/* ─── Outgoing Email (SMTP) Settings ──────────────────────────────── */
+function OutgoingEmailSettings() {
   const [form, setForm] = useState({
     smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '',
     fromName: '', fromEmail: '', replyTo: '',
@@ -1529,7 +1569,7 @@ function EmailSettingsSection() {
         smtpPort: parseInt(form.smtpPort, 10),
       });
       setHasPassword(true);
-      setStatus({ type: 'success', message: 'Email settings saved successfully' });
+      setStatus({ type: 'success', message: 'SMTP settings saved successfully' });
       setTimeout(() => setStatus(null), 4000);
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'Failed to save' });
@@ -1576,8 +1616,6 @@ function EmailSettingsSection() {
 
   return (
     <div className="space-y-6">
-      <SectionHeader title="Email Settings" description="Configure SMTP settings to send emails from your CRM" />
-
       {status && (
         <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
           status.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
@@ -1684,6 +1722,455 @@ function EmailSettingsSection() {
             {sendingTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             {sendingTest ? 'Sending...' : 'Send Test'}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Incoming Email (IMAP / POP3) Settings ───────────────────────── */
+function IncomingEmailSettings() {
+  const [protocol, setProtocol] = useState<'imap' | 'pop3'>('imap');
+  const [imapForm, setImapForm] = useState({
+    imapHost: '', imapPort: '993', imapUser: '', imapPass: '',
+    imapSecurity: 'ssl', imapFolder: 'INBOX',
+  });
+  const [popForm, setPopForm] = useState({
+    popHost: '', popPort: '995', popUser: '', popPass: '',
+    popSecurity: 'ssl', popDeleteAfterFetch: false,
+  });
+  const [fetchInterval, setFetchInterval] = useState('5');
+  const [autoFetch, setAutoFetch] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [showImapPass, setShowImapPass] = useState(false);
+  const [showPopPass, setShowPopPass] = useState(false);
+  const [hasImapPassword, setHasImapPassword] = useState(false);
+  const [hasPopPassword, setHasPopPassword] = useState(false);
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [mailboxes, setMailboxes] = useState<string[]>([]);
+  const [fetchedEmails, setFetchedEmails] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    api.getIncomingEmailConfig().then((config) => {
+      if (config) {
+        if (config.protocol) setProtocol(config.protocol);
+        setImapForm({
+          imapHost: config.imapHost || '',
+          imapPort: String(config.imapPort || 993),
+          imapUser: config.imapUser || '',
+          imapPass: config.hasImapPassword ? '••••••••' : '',
+          imapSecurity: config.imapSecurity || 'ssl',
+          imapFolder: config.imapFolder || 'INBOX',
+        });
+        setPopForm({
+          popHost: config.popHost || '',
+          popPort: String(config.popPort || 995),
+          popUser: config.popUser || '',
+          popPass: config.hasPopPassword ? '••••••••' : '',
+          popSecurity: config.popSecurity || 'ssl',
+          popDeleteAfterFetch: config.popDeleteAfterFetch || false,
+        });
+        setFetchInterval(String(config.fetchInterval || 5));
+        setAutoFetch(config.autoFetch || false);
+        setHasImapPassword(!!config.hasImapPassword);
+        setHasPopPassword(!!config.hasPopPassword);
+      }
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setStatus(null);
+    try {
+      await api.saveIncomingEmailConfig({
+        protocol,
+        ...imapForm,
+        imapPort: parseInt(imapForm.imapPort, 10),
+        ...popForm,
+        popPort: parseInt(popForm.popPort, 10),
+        fetchInterval: parseInt(fetchInterval, 10),
+        autoFetch,
+      });
+      setHasImapPassword(true);
+      setHasPopPassword(true);
+      setStatus({ type: 'success', message: 'Incoming email settings saved successfully' });
+      setTimeout(() => setStatus(null), 4000);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to save' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTestImap = async () => {
+    setTesting(true);
+    setStatus(null);
+    try {
+      const result = await api.testImapConnection({
+        imapHost: imapForm.imapHost,
+        imapPort: parseInt(imapForm.imapPort, 10),
+        imapUser: imapForm.imapUser,
+        imapPass: imapForm.imapPass,
+        imapSecurity: imapForm.imapSecurity,
+      });
+      setStatus({ type: result.success ? 'success' : 'error', message: result.message });
+      if (result.mailboxes) setMailboxes(result.mailboxes);
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'IMAP connection test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleTestPop3 = async () => {
+    setTesting(true);
+    setStatus(null);
+    try {
+      const result = await api.testPop3Connection({
+        popHost: popForm.popHost,
+        popPort: parseInt(popForm.popPort, 10),
+        popUser: popForm.popUser,
+        popPass: popForm.popPass,
+        popSecurity: popForm.popSecurity,
+      });
+      setStatus({ type: result.success ? 'success' : 'error', message: result.message });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'POP3 connection test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleFetchEmails = async () => {
+    setFetching(true);
+    setStatus(null);
+    try {
+      const result = await api.fetchIncomingEmails();
+      if (result.success) {
+        setFetchedEmails(result.emails || []);
+        setStatus({ type: 'success', message: `Fetched ${result.count || 0} email(s) from server` });
+      } else {
+        setStatus({ type: 'error', message: result.error || 'Failed to fetch emails' });
+      }
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Failed to fetch emails' });
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-text-tertiary" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {status && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium ${
+          status.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {status.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+          {status.message}
+        </div>
+      )}
+
+      <form onSubmit={handleSave} className="space-y-6">
+        {/* Protocol Selector */}
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <Server className="h-4 w-4 text-text-tertiary" />
+            Protocol
+          </h3>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio" name="protocol" value="imap"
+                checked={protocol === 'imap'}
+                onChange={() => setProtocol('imap')}
+                className="w-4 h-4 text-brand-primary"
+              />
+              <span className="text-sm font-medium text-text-primary">IMAP</span>
+              <span className="text-2xs text-text-tertiary">(Recommended — syncs across devices)</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio" name="protocol" value="pop3"
+                checked={protocol === 'pop3'}
+                onChange={() => setProtocol('pop3')}
+                className="w-4 h-4 text-brand-primary"
+              />
+              <span className="text-sm font-medium text-text-primary">POP3</span>
+              <span className="text-2xs text-text-tertiary">(Downloads and optionally deletes from server)</span>
+            </label>
+          </div>
+        </div>
+
+        {/* IMAP Settings */}
+        {protocol === 'imap' && (
+          <div className="card p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+              <Download className="h-4 w-4 text-text-tertiary" />
+              IMAP Server
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">IMAP Host *</label>
+                <input className="input" required value={imapForm.imapHost} onChange={(e) => setImapForm({ ...imapForm, imapHost: e.target.value })} placeholder="imap.gmail.com" />
+              </div>
+              <div>
+                <label className="label">IMAP Port *</label>
+                <input className="input" required value={imapForm.imapPort} onChange={(e) => setImapForm({ ...imapForm, imapPort: e.target.value })} placeholder="993" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Username *</label>
+                <input className="input" required value={imapForm.imapUser} onChange={(e) => setImapForm({ ...imapForm, imapUser: e.target.value })} placeholder="your@email.com" />
+              </div>
+              <div>
+                <label className="label">Password *</label>
+                <div className="relative">
+                  <input
+                    className="input pr-10"
+                    type={showImapPass ? 'text' : 'password'}
+                    required={!hasImapPassword}
+                    value={imapForm.imapPass}
+                    onChange={(e) => setImapForm({ ...imapForm, imapPass: e.target.value })}
+                    placeholder={hasImapPassword ? 'Leave blank to keep current' : 'App password'}
+                    onFocus={() => { if (imapForm.imapPass === '••••••••') setImapForm({ ...imapForm, imapPass: '' }); }}
+                  />
+                  <button type="button" onClick={() => setShowImapPass(!showImapPass)} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary">
+                    {showImapPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Security</label>
+                <select className="input" value={imapForm.imapSecurity} onChange={(e) => setImapForm({ ...imapForm, imapSecurity: e.target.value })}>
+                  <option value="ssl">SSL/TLS (Port 993)</option>
+                  <option value="starttls">STARTTLS (Port 143)</option>
+                  <option value="none">None (Not recommended)</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Mailbox Folder</label>
+                {mailboxes.length > 0 ? (
+                  <select className="input" value={imapForm.imapFolder} onChange={(e) => setImapForm({ ...imapForm, imapFolder: e.target.value })}>
+                    {mailboxes.map((mb) => (
+                      <option key={mb} value={mb}>{mb}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="input" value={imapForm.imapFolder} onChange={(e) => setImapForm({ ...imapForm, imapFolder: e.target.value })} placeholder="INBOX" />
+                )}
+              </div>
+            </div>
+
+            <button type="button" onClick={handleTestImap} disabled={testing || !imapForm.imapHost || !imapForm.imapUser}
+              className="btn-secondary text-xs">
+              {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              {testing ? 'Testing...' : 'Test IMAP Connection'}
+            </button>
+          </div>
+        )}
+
+        {/* POP3 Settings */}
+        {protocol === 'pop3' && (
+          <div className="card p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+              <Download className="h-4 w-4 text-text-tertiary" />
+              POP3 Server
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">POP3 Host *</label>
+                <input className="input" required value={popForm.popHost} onChange={(e) => setPopForm({ ...popForm, popHost: e.target.value })} placeholder="pop.gmail.com" />
+              </div>
+              <div>
+                <label className="label">POP3 Port *</label>
+                <input className="input" required value={popForm.popPort} onChange={(e) => setPopForm({ ...popForm, popPort: e.target.value })} placeholder="995" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Username *</label>
+                <input className="input" required value={popForm.popUser} onChange={(e) => setPopForm({ ...popForm, popUser: e.target.value })} placeholder="your@email.com" />
+              </div>
+              <div>
+                <label className="label">Password *</label>
+                <div className="relative">
+                  <input
+                    className="input pr-10"
+                    type={showPopPass ? 'text' : 'password'}
+                    required={!hasPopPassword}
+                    value={popForm.popPass}
+                    onChange={(e) => setPopForm({ ...popForm, popPass: e.target.value })}
+                    placeholder={hasPopPassword ? 'Leave blank to keep current' : 'App password'}
+                    onFocus={() => { if (popForm.popPass === '••••••••') setPopForm({ ...popForm, popPass: '' }); }}
+                  />
+                  <button type="button" onClick={() => setShowPopPass(!showPopPass)} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary">
+                    {showPopPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Security</label>
+                <select className="input" value={popForm.popSecurity} onChange={(e) => setPopForm({ ...popForm, popSecurity: e.target.value })}>
+                  <option value="ssl">SSL/TLS (Port 995)</option>
+                  <option value="starttls">STARTTLS (Port 110)</option>
+                  <option value="none">None (Not recommended)</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <label className="flex items-center gap-2 cursor-pointer pb-2">
+                  <input
+                    type="checkbox"
+                    checked={popForm.popDeleteAfterFetch}
+                    onChange={(e) => setPopForm({ ...popForm, popDeleteAfterFetch: e.target.checked })}
+                    className="w-4 h-4 rounded text-brand-primary"
+                  />
+                  <span className="text-sm text-text-primary">Delete emails from server after fetching</span>
+                </label>
+              </div>
+            </div>
+
+            <button type="button" onClick={handleTestPop3} disabled={testing || !popForm.popHost || !popForm.popUser}
+              className="btn-secondary text-xs">
+              {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              {testing ? 'Testing...' : 'Test POP3 Connection'}
+            </button>
+          </div>
+        )}
+
+        {/* Fetch Settings */}
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-text-tertiary" />
+            Fetch Settings
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Fetch Interval (minutes)</label>
+              <select className="input" value={fetchInterval} onChange={(e) => setFetchInterval(e.target.value)}>
+                <option value="1">Every 1 minute</option>
+                <option value="2">Every 2 minutes</option>
+                <option value="5">Every 5 minutes</option>
+                <option value="10">Every 10 minutes</option>
+                <option value="15">Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+                <option value="60">Every 1 hour</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer pb-2">
+                <input
+                  type="checkbox"
+                  checked={autoFetch}
+                  onChange={(e) => setAutoFetch(e.target.checked)}
+                  className="w-4 h-4 rounded text-brand-primary"
+                />
+                <span className="text-sm text-text-primary">Enable automatic email fetching</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* Save Button */}
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={saving} className="btn-primary">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? 'Saving...' : 'Save Incoming Settings'}
+          </button>
+          <button type="button" onClick={handleFetchEmails} disabled={fetching} className="btn-secondary">
+            {fetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {fetching ? 'Fetching...' : 'Fetch Emails Now'}
+          </button>
+        </div>
+      </form>
+
+      {/* Fetched Emails Preview */}
+      {fetchedEmails !== null && (
+        <div className="card p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <Inbox className="h-4 w-4 text-text-tertiary" />
+            Fetched Emails ({fetchedEmails.length})
+          </h3>
+          {fetchedEmails.length === 0 ? (
+            <p className="text-xs text-text-tertiary">No new emails found.</p>
+          ) : (
+            <div className="divide-y divide-border-primary max-h-80 overflow-y-auto">
+              {fetchedEmails.map((email: any, idx: number) => (
+                <div key={idx} className="py-3 first:pt-0 last:pb-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-text-primary truncate">{email.subject}</p>
+                      <p className="text-xs text-text-secondary mt-0.5">
+                        From: {email.from?.map((f: any) => f.address || f.name).join(', ') || 'Unknown'}
+                      </p>
+                      <p className="text-2xs text-text-tertiary mt-0.5 line-clamp-2">{email.text?.substring(0, 200)}</p>
+                    </div>
+                    <span className="text-2xs text-text-tertiary whitespace-nowrap">
+                      {email.date ? new Date(email.date).toLocaleString() : ''}
+                    </span>
+                  </div>
+                  {email.attachments?.length > 0 && (
+                    <div className="flex items-center gap-1 mt-1">
+                      <FileText className="h-3 w-3 text-text-tertiary" />
+                      <span className="text-2xs text-text-tertiary">{email.attachments.length} attachment(s)</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Common Server Settings Reference */}
+      <div className="card p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-text-primary">Common Email Server Settings</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+          <div className="space-y-2">
+            <p className="font-medium text-text-secondary">Gmail</p>
+            <div className="bg-bg-secondary rounded-lg p-3 space-y-1 text-text-tertiary">
+              <p>IMAP: imap.gmail.com : 993 (SSL)</p>
+              <p>POP3: pop.gmail.com : 995 (SSL)</p>
+              <p>SMTP: smtp.gmail.com : 587 (STARTTLS)</p>
+              <p className="text-2xs mt-1">Requires App Password with 2FA enabled</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="font-medium text-text-secondary">Outlook / Office 365</p>
+            <div className="bg-bg-secondary rounded-lg p-3 space-y-1 text-text-tertiary">
+              <p>IMAP: outlook.office365.com : 993 (SSL)</p>
+              <p>POP3: outlook.office365.com : 995 (SSL)</p>
+              <p>SMTP: smtp.office365.com : 587 (STARTTLS)</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="font-medium text-text-secondary">Yahoo Mail</p>
+            <div className="bg-bg-secondary rounded-lg p-3 space-y-1 text-text-tertiary">
+              <p>IMAP: imap.mail.yahoo.com : 993 (SSL)</p>
+              <p>POP3: pop.mail.yahoo.com : 995 (SSL)</p>
+              <p>SMTP: smtp.mail.yahoo.com : 465 (SSL)</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="font-medium text-text-secondary">Zoho Mail</p>
+            <div className="bg-bg-secondary rounded-lg p-3 space-y-1 text-text-tertiary">
+              <p>IMAP: imap.zoho.com : 993 (SSL)</p>
+              <p>POP3: pop.zoho.com : 995 (SSL)</p>
+              <p>SMTP: smtp.zoho.com : 465 (SSL)</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>

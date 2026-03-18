@@ -562,6 +562,181 @@ router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
   }
 });
 
+// ─── Incoming Email Configuration (IMAP / POP3) ─────────────
+
+const { testImapConnection, testPop3Connection, fetchEmails } = require('../services/emailReceiveService');
+
+// Get incoming email config
+router.get('/email/incoming', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const config = settings.incomingEmailConfig || {};
+
+    // Never return passwords in plain text
+    const sanitized = { ...config };
+    if (sanitized.imapPass) {
+      sanitized.imapPass = '••••••••';
+      sanitized.hasImapPassword = true;
+    }
+    if (sanitized.popPass) {
+      sanitized.popPass = '••••••••';
+      sanitized.hasPopPassword = true;
+    }
+
+    res.json(sanitized);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Save incoming email config
+router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
+  protocol: z.enum(['imap', 'pop3']),
+  // IMAP fields
+  imapHost: z.string().min(1).optional(),
+  imapPort: z.coerce.number().int().min(1).max(65535).optional(),
+  imapUser: z.string().min(1).optional(),
+  imapPass: z.string().optional(),
+  imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+  imapFolder: z.string().optional(),
+  // POP3 fields
+  popHost: z.string().min(1).optional(),
+  popPort: z.coerce.number().int().min(1).max(65535).optional(),
+  popUser: z.string().min(1).optional(),
+  popPass: z.string().optional(),
+  popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+  popDeleteAfterFetch: z.boolean().optional(),
+  // Common
+  fetchInterval: z.coerce.number().int().min(1).max(1440).optional(),
+  autoFetch: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const existingConfig = settings.incomingEmailConfig || {};
+
+    // If passwords are masked or empty, keep the existing ones
+    if (!data.imapPass || data.imapPass === '••••••••') {
+      data.imapPass = existingConfig.imapPass || '';
+    }
+    if (!data.popPass || data.popPass === '••••••••') {
+      data.popPass = existingConfig.popPass || '';
+    }
+
+    const incomingEmailConfig = {
+      protocol: data.protocol,
+      // IMAP
+      imapHost: data.imapHost || existingConfig.imapHost || '',
+      imapPort: data.imapPort || existingConfig.imapPort || 993,
+      imapUser: data.imapUser || existingConfig.imapUser || '',
+      imapPass: data.imapPass,
+      imapSecurity: data.imapSecurity || existingConfig.imapSecurity || 'ssl',
+      imapFolder: data.imapFolder || existingConfig.imapFolder || 'INBOX',
+      // POP3
+      popHost: data.popHost || existingConfig.popHost || '',
+      popPort: data.popPort || existingConfig.popPort || 995,
+      popUser: data.popUser || existingConfig.popUser || '',
+      popPass: data.popPass,
+      popSecurity: data.popSecurity || existingConfig.popSecurity || 'ssl',
+      popDeleteAfterFetch: data.popDeleteAfterFetch ?? existingConfig.popDeleteAfterFetch ?? false,
+      // Common
+      fetchInterval: data.fetchInterval || existingConfig.fetchInterval || 5,
+      autoFetch: data.autoFetch ?? existingConfig.autoFetch ?? false,
+    };
+
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: { ...settings, incomingEmailConfig } },
+    });
+
+    // Return sanitized config
+    const sanitized = { ...incomingEmailConfig };
+    if (sanitized.imapPass) { sanitized.imapPass = '••••••••'; sanitized.hasImapPassword = true; }
+    if (sanitized.popPass) { sanitized.popPass = '••••••••'; sanitized.hasPopPassword = true; }
+
+    res.json(sanitized);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test IMAP connection
+router.post('/email/incoming/test-imap', authorize('ADMIN'), validate(z.object({
+  imapHost: z.string().min(1),
+  imapPort: z.coerce.number().int().min(1).max(65535),
+  imapUser: z.string().min(1),
+  imapPass: z.string().optional(),
+  imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+
+    // If password is masked, use the stored one
+    if (!data.imapPass || data.imapPass === '••••••••') {
+      const org = await prisma.organization.findUnique({
+        where: { id: req.orgId },
+        select: { settings: true },
+      });
+      const settings = typeof org.settings === 'object' ? org.settings : {};
+      data.imapPass = settings.incomingEmailConfig?.imapPass || '';
+    }
+
+    const result = await testImapConnection(data);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test POP3 connection
+router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
+  popHost: z.string().min(1),
+  popPort: z.coerce.number().int().min(1).max(65535),
+  popUser: z.string().min(1),
+  popPass: z.string().optional(),
+  popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+
+    // If password is masked, use the stored one
+    if (!data.popPass || data.popPass === '••••••••') {
+      const org = await prisma.organization.findUnique({
+        where: { id: req.orgId },
+        select: { settings: true },
+      });
+      const settings = typeof org.settings === 'object' ? org.settings : {};
+      data.popPass = settings.incomingEmailConfig?.popPass || '';
+    }
+
+    const result = await testPop3Connection(data);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Fetch emails from configured incoming server
+router.post('/email/incoming/fetch', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const result = await fetchEmails(req.orgId, {
+      limit: 20,
+      markAsRead: false,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Email Templates ────────────────────────────────────────
 
 const DEFAULT_TEMPLATES = [
