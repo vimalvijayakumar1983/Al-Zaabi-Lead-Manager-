@@ -16,6 +16,7 @@ const { startTimeBasedScheduler, stopTimeBasedScheduler } = require('./services/
 const authRoutes = require('./routes/auth');
 const divisionRoutes = require('./routes/divisions');
 const allocationRoutes = require('./routes/allocation');
+const emailSettingsRoutes = require('./routes/email-settings');
 const leadRoutes = require('./routes/leads');
 const pipelineRoutes = require('./routes/pipeline');
 const taskRoutes = require('./routes/tasks');

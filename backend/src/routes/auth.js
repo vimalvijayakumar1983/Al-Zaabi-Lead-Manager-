@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
+const crypto = require('crypto');
+const { sendPasswordResetEmail } = require('../email');
 const { config } = require('../config/env');
 const { validate } = require('../middleware/validate');
 const { authenticate } = require('../middleware/auth');
@@ -251,6 +253,110 @@ router.get('/me', authenticate, async (req, res, next) => {
     }
 
     res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ─── Forgot Password ───────────────────────────────────────────
+router.post('/forgot-password', async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    const user = await prisma.user.findUnique({ 
+      where: { email: email.toLowerCase().trim() },
+      select: { id: true, firstName: true, organizationId: true, isActive: true }
+    });
+    
+    // Always return success (don't reveal if email exists)
+    if (!user || !user.isActive) {
+      return res.json({ message: 'If an account exists with that email, a reset link has been sent.' });
+    }
+    
+    // Generate secure token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    
+    // Save token to user
+    await prisma.$executeRaw`
+      UPDATE users SET "resetToken" = ${resetToken}, "resetTokenExpiry" = ${resetTokenExpiry} WHERE id = ${user.id}
+    `;
+    
+    // Send email
+    try {
+      await sendPasswordResetEmail(email, resetToken, user.firstName, user.organizationId);
+    } catch (emailErr) {
+      console.error('Failed to send reset email:', emailErr.message);
+      return res.status(500).json({ error: 'Failed to send reset email. Please contact your administrator.' });
+    }
+    
+    res.json({ message: 'If an account exists with that email, a reset link has been sent.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Reset Password (with token) ────────────────────────────────
+router.post('/reset-password', async (req, res, next) => {
+  try {
+    const { token, password } = req.body;
+    
+    if (!token || !password) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+    
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    
+    // Find user with valid token
+    const users = await prisma.$queryRaw`
+      SELECT id, email, "firstName" FROM users 
+      WHERE "resetToken" = ${token} AND "resetTokenExpiry" > NOW()
+      LIMIT 1
+    `;
+    
+    if (!users || users.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired reset token. Please request a new reset link.' });
+    }
+    
+    const user = users[0];
+    
+    // Hash new password
+    const passwordHash = await bcrypt.hash(password, 12);
+    
+    // Update password and clear token
+    await prisma.$executeRaw`
+      UPDATE users SET "passwordHash" = ${passwordHash}, "resetToken" = NULL, "resetTokenExpiry" = NULL WHERE id = ${user.id}
+    `;
+    
+    res.json({ message: 'Password has been reset successfully. You can now log in with your new password.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Validate Reset Token ────────────────────────────────────────
+router.get('/validate-reset-token', async (req, res, next) => {
+  try {
+    const { token } = req.query;
+    
+    if (!token) {
+      return res.status(400).json({ valid: false, error: 'Token is required' });
+    }
+    
+    const users = await prisma.$queryRaw`
+      SELECT id, email FROM users 
+      WHERE "resetToken" = ${token} AND "resetTokenExpiry" > NOW()
+      LIMIT 1
+    `;
+    
+    res.json({ valid: users && users.length > 0 });
   } catch (err) {
     next(err);
   }

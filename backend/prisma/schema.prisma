@@ -68,7 +68,9 @@ enum Plan {
 model User {
   id             String   @id @default(uuid())
   email          String   @unique
-  passwordHash   String
+  passwordHash    String
+  resetToken      String?
+  resetTokenExpiry DateTime?
   firstName      String
   lastName       String
   role           Role     @default(SALES_REP)
@@ -982,4 +984,24 @@ model DivisionMembership {
   @@index([userId])
   @@index([divisionId])
   @@map("division_memberships")
+}
+
+
+model EmailSettings {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  smtpHost       String   @default("mail.alzaabigroup.com")
+  smtpPort       Int      @default(465)
+  smtpSecure     Boolean  @default(true)
+  smtpUsername   String   @default("")
+  smtpPassword   String   @default("")
+  fromEmail      String   @default("")
+  fromName       String   @default("Al-Zaabi Lead Manager")
+  imapHost       String?  @default("")
+  imapPort       Int?     @default(993)
+  imapSecure     Boolean? @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("email_settings")
 }
