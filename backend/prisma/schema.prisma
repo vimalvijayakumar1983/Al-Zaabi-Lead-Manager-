@@ -776,6 +776,8 @@ enum AutomationTrigger {
   LEAD_SLA_ESCALATED
   TASK_DUE
   TASK_OVERDUE
+  LEAD_CREATED_TIME_ELAPSED
+  LEAD_UPDATED_TIME_ELAPSED
 }
 
 // ─── Webhooks ────────────────────────────────────────────────────
@@ -839,7 +841,7 @@ model AuditLog {
   id             String   @id @default(uuid())
   action         String
   entity         String
-  entityId       String
+  entityId       String?
   oldData        Json?
   newData        Json?
   ipAddress      String?

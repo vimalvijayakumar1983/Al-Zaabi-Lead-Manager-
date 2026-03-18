@@ -350,7 +350,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             delete mapped.tags;
           }
 
-          // Duplicate detection
+          // Duplicate detection — check specified field AND auto-detect by email/phone
           let existingLead = null;
           if (duplicateField && mapped[duplicateField]) {
             existingLead = await prisma.lead.findFirst({
@@ -360,6 +360,10 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
                 isArchived: false,
               },
             });
+          }
+          if (!existingLead && (mapped.email || mapped.phone)) {
+            const { detectImportDuplicate } = require('../utils/duplicateDetection');
+            existingLead = await detectImportDuplicate('lead', targetOrgId, mapped);
           }
 
           if (existingLead) {
@@ -498,7 +502,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             delete mapped.tags;
           }
 
-          // Duplicate detection
+          // Duplicate detection — check specified field AND auto-detect by email/phone
           let existingContact = null;
           if (duplicateField && mapped[duplicateField]) {
             existingContact = await prisma.contact.findFirst({
@@ -508,6 +512,10 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
                 isArchived: false,
               },
             });
+          }
+          if (!existingContact && (mapped.email || mapped.phone)) {
+            const { detectImportDuplicate } = require('../utils/duplicateDetection');
+            existingContact = await detectImportDuplicate('contact', targetOrgId, mapped);
           }
 
           if (existingContact) {

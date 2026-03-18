@@ -413,15 +413,18 @@ router.post('/', validate(contactSchema), async (req, res, next) => {
     const tagNames = data.tags || [];
     delete data.tags;
 
-    // Duplicate detection
-    if (data.email) {
-      const existing = await prisma.contact.findFirst({
-        where: { email: data.email, organizationId: { in: req.orgIds }, isArchived: false },
+    // Duplicate detection — check both email and phone
+    if (data.email || data.phone) {
+      const { detectContactDuplicates } = require('../utils/duplicateDetection');
+      const duplicates = await detectContactDuplicates(req.orgIds, {
+        email: data.email,
+        phone: data.phone,
       });
-      if (existing) {
+      if (duplicates.length > 0) {
         return res.status(409).json({
-          error: 'A contact with this email already exists',
-          existingContact: { id: existing.id, firstName: existing.firstName, lastName: existing.lastName },
+          error: 'Potential duplicate contact found',
+          duplicates,
+          existingContact: { id: duplicates[0].id, firstName: duplicates[0].firstName, lastName: duplicates[0].lastName },
         });
       }
     }
