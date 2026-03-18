@@ -166,10 +166,14 @@ const executeSingleAction = async (action, context) => {
       });
       break;
 
-    case 'create_task':
+    case 'create_task': {
+      const taskTitle = (action.config.title || `Follow up with ${context.lead.firstName}`)
+        .replace(/\{\{firstName\}\}/g, context.lead.firstName || '')
+        .replace(/\{\{lastName\}\}/g, context.lead.lastName || '')
+        .replace(/\{\{company\}\}/g, context.lead.company || '');
       await prisma.task.create({
         data: {
-          title: action.config.title || `Follow up with ${context.lead.firstName}`,
+          title: taskTitle,
           type: action.config.taskType || 'FOLLOW_UP_CALL',
           priority: action.config.priority || 'MEDIUM',
           dueAt: new Date(Date.now() + (action.config.dueInHours || 24) * 3600000),
@@ -179,17 +183,25 @@ const executeSingleAction = async (action, context) => {
         },
       });
       break;
+    }
 
-    case 'notify_user':
-      const userId = action.config.userId || context.lead.assignedToId;
-      if (userId) {
-        notifyUser(userId, {
+    case 'notify_user': {
+      const notifyUserId = action.config.userId || context.lead.assignedToId;
+      const notifyMsg = (action.config.message || 'Automation triggered')
+        .replace(/\{\{firstName\}\}/g, context.lead.firstName || '')
+        .replace(/\{\{lastName\}\}/g, context.lead.lastName || '')
+        .replace(/\{\{source\}\}/g, context.lead.source || '')
+        .replace(/\{\{company\}\}/g, context.lead.company || '')
+        .replace(/\{\{status\}\}/g, context.lead.status || '');
+      if (notifyUserId) {
+        notifyUser(notifyUserId, {
           type: 'automation_notification',
-          message: action.config.message || 'Automation triggered',
+          message: notifyMsg,
           lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
         });
       }
       break;
+    }
 
     case 'send_email': {
       // Determine recipient: custom email, assigned user, or lead email
@@ -271,11 +283,12 @@ const executeSingleAction = async (action, context) => {
           throw new Error(result.error || 'Failed to send template email');
         }
       } else {
-        // Direct email with subject/body from config
+        // Direct email with subject/body from config — interpolate template variables
+        const interpolate = (str) => (str || '').replace(/\{\{(\w+)\}\}/g, (_, key) => variables[key] || '');
         const result = await sendEmail({
           to: recipientEmail,
-          subject: action.config.subject || 'Notification from Al-Zaabi CRM',
-          html: action.config.body || action.config.message || '',
+          subject: interpolate(action.config.subject) || 'Notification from Al-Zaabi CRM',
+          html: interpolate(action.config.body || action.config.message || ''),
           organizationId: context.organizationId,
         });
         if (!result.success) {
@@ -303,13 +316,120 @@ const executeSingleAction = async (action, context) => {
       break;
     }
 
-    case 'send_whatsapp':
-      logger.info(`[Automation] Send WhatsApp to ${context.lead.phone}: ${action.config.message}`);
-      break;
+    case 'send_whatsapp': {
+      const phone = context.lead.phone;
+      if (!phone) {
+        logger.warn(`[Automation] No phone number for lead ${context.lead.id} — skipping WhatsApp`);
+        break;
+      }
 
-    case 'webhook':
-      logger.info(`[Automation] Fire webhook: ${action.config.url}`);
+      // Interpolate template variables in the message
+      let whatsappMsg = action.config.message || '';
+      whatsappMsg = whatsappMsg
+        .replace(/\{\{firstName\}\}/g, context.lead.firstName || '')
+        .replace(/\{\{lastName\}\}/g, context.lead.lastName || '')
+        .replace(/\{\{email\}\}/g, context.lead.email || '')
+        .replace(/\{\{company\}\}/g, context.lead.company || '')
+        .replace(/\{\{source\}\}/g, context.lead.source || '');
+
+      // Attempt to send via WhatsApp integration if configured
+      try {
+        const orgSettings = await prisma.organization.findUnique({
+          where: { id: context.organizationId },
+          select: { settings: true },
+        });
+        const whatsappConfig = orgSettings?.settings?.whatsapp;
+
+        if (whatsappConfig?.apiUrl && whatsappConfig?.apiKey) {
+          const response = await fetch(whatsappConfig.apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${whatsappConfig.apiKey}`,
+            },
+            body: JSON.stringify({
+              phone: phone,
+              message: whatsappMsg,
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(`WhatsApp API returned ${response.status}`);
+          }
+          logger.info(`[Automation] WhatsApp sent to ${phone}`);
+        } else {
+          logger.info(`[Automation] WhatsApp not configured — logging message to ${phone}: ${whatsappMsg}`);
+        }
+      } catch (waErr) {
+        logger.warn(`[Automation] WhatsApp send failed: ${waErr.message}`);
+        throw waErr;
+      }
+
+      // Log the communication
+      try {
+        await prisma.communication.create({
+          data: {
+            leadId: context.lead.id,
+            channel: 'WHATSAPP',
+            direction: 'OUTBOUND',
+            body: whatsappMsg,
+            metadata: { source: 'automation' },
+          },
+        });
+      } catch (logErr) {
+        logger.warn('Failed to log WhatsApp communication:', logErr.message);
+      }
       break;
+    }
+
+    case 'webhook': {
+      const webhookUrl = action.config.url;
+      if (!webhookUrl) {
+        logger.warn('[Automation] Webhook URL not configured — skipping');
+        break;
+      }
+
+      const webhookMethod = (action.config.method || 'POST').toUpperCase();
+      const webhookPayload = {
+        event: context.trigger || 'automation',
+        timestamp: new Date().toISOString(),
+        lead: {
+          id: context.lead.id,
+          firstName: context.lead.firstName,
+          lastName: context.lead.lastName,
+          email: context.lead.email,
+          phone: context.lead.phone,
+          company: context.lead.company,
+          status: context.lead.status,
+          source: context.lead.source,
+          score: context.lead.score,
+        },
+        organizationId: context.organizationId,
+      };
+
+      // Merge any custom headers from config
+      const headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'AlZaabi-CRM-Automation/1.0',
+        ...(action.config.headers || {}),
+      };
+
+      try {
+        const fetchOpts = { method: webhookMethod, headers };
+        if (webhookMethod !== 'GET') {
+          fetchOpts.body = JSON.stringify(webhookPayload);
+        }
+        const response = await fetch(webhookUrl, fetchOpts);
+
+        if (!response.ok) {
+          throw new Error(`Webhook returned HTTP ${response.status}`);
+        }
+        logger.info(`[Automation] Webhook fired: ${webhookMethod} ${webhookUrl} — ${response.status}`);
+      } catch (whErr) {
+        logger.error(`[Automation] Webhook failed: ${whErr.message}`);
+        throw whErr;
+      }
+      break;
+    }
 
     default:
       logger.warn(`Unknown automation action type: ${action.type}`);

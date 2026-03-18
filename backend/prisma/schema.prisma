@@ -708,6 +708,7 @@ model AutomationRule {
   conditions     Json
   actions        Json
   isActive       Boolean             @default(true)
+  isTemplate     Boolean             @default(false)
   executionCount Int                 @default(0)
   lastExecutedAt DateTime?
   createdAt      DateTime            @default(now())
@@ -718,6 +719,7 @@ model AutomationRule {
   logs           AutomationLog[]
 
   @@index([organizationId, isActive])
+  @@index([organizationId, isTemplate])
   @@map("automation_rules")
 }
 

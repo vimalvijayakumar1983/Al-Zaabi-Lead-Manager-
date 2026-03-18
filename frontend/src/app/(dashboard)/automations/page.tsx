@@ -121,6 +121,8 @@ const templateCategories = [
   { id: 'task', label: 'Tasks' },
   { id: 'organization', label: 'Organization' },
   { id: 'integration', label: 'Integration' },
+  { id: 'workflow', label: 'Multi-Action Workflows' },
+  { id: 'custom', label: 'My Templates' },
 ];
 
 type ViewMode = 'list' | 'detail' | 'templates';
@@ -644,6 +646,19 @@ function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
             {rule.isActive ? <><Pause className="h-3.5 w-3.5" /> Pause</> : <><Play className="h-3.5 w-3.5" /> Activate</>}
           </button>
           <button onClick={() => onEdit(rule)} className="btn-secondary text-sm"><Edit3 className="h-3.5 w-3.5" /> Edit</button>
+          <button
+            onClick={async () => {
+              try {
+                await api.saveAutomationAsTemplate(rule.id);
+                alert('Automation saved as a reusable template!');
+              } catch (err: any) {
+                alert(err.message || 'Failed to save as template');
+              }
+            }}
+            className="btn-secondary text-sm"
+          >
+            <LayoutTemplate className="h-3.5 w-3.5" /> Save as Template
+          </button>
           <button onClick={() => onDelete(rule.id)} className="btn-secondary text-sm text-red-600 hover:text-red-700"><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
       </div>
@@ -819,6 +834,8 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
   const [templates, setTemplates] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [triggerFilter, setTriggerFilter] = useState('all');
 
   useEffect(() => {
     (async () => {
@@ -826,7 +843,6 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
         const data = await api.getAutomationTemplates();
         setTemplates(data);
       } catch {
-        // Fallback templates if API not available
         setTemplates([]);
       } finally {
         setLoading(false);
@@ -834,7 +850,18 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
     })();
   }, []);
 
-  const filtered = categoryFilter === 'all' ? templates : templates.filter(t => t.category === categoryFilter);
+  const filtered = templates.filter(t => {
+    if (categoryFilter !== 'all' && t.category !== categoryFilter) return false;
+    if (triggerFilter !== 'all' && t.trigger !== triggerFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchesName = t.name.toLowerCase().includes(q);
+      const matchesDesc = t.description?.toLowerCase().includes(q);
+      const matchesTags = t.tags?.some((tag: string) => tag.toLowerCase().includes(q));
+      if (!matchesName && !matchesDesc && !matchesTags) return false;
+    }
+    return true;
+  });
 
   const categoryIcons: Record<string, any> = {
     assignment: UserPlus,
@@ -843,7 +870,15 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
     task: ListTodo,
     organization: Tag,
     integration: Globe,
+    workflow: GitBranch,
+    custom: Sparkles,
   };
+
+  // Count templates per category
+  const categoryCounts = templateCategories.reduce((acc, cat) => {
+    acc[cat.id] = cat.id === 'all' ? templates.length : templates.filter(t => t.category === cat.id).length;
+    return acc;
+  }, {} as Record<string, number>);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -852,9 +887,32 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
           <button onClick={onBack} className="btn-icon h-8 w-8"><ArrowLeft className="h-4 w-4" /></button>
           <div>
             <h1 className="text-2xl font-bold text-text-primary tracking-tight">Automation Templates</h1>
-            <p className="text-text-secondary text-sm mt-0.5">Pre-built workflows to get started quickly</p>
+            <p className="text-text-secondary text-sm mt-0.5">{templates.length} pre-built workflows to get started quickly</p>
           </div>
         </div>
+      </div>
+
+      {/* Search and Filters */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+          <input
+            className="input pl-9 text-sm"
+            placeholder="Search templates by name, description, or tags..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <select
+          className="input w-auto text-sm"
+          value={triggerFilter}
+          onChange={(e) => setTriggerFilter(e.target.value)}
+        >
+          <option value="all">All Triggers</option>
+          {Object.entries(triggerLabels).map(([val, { label }]) => (
+            <option key={val} value={val}>{label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Category Tabs */}
@@ -870,6 +928,11 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
             }`}
           >
             {cat.label}
+            {categoryCounts[cat.id] > 0 && (
+              <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-2xs ${
+                categoryFilter === cat.id ? 'bg-white/20' : 'bg-surface-tertiary'
+              }`}>{categoryCounts[cat.id]}</span>
+            )}
           </button>
         ))}
       </div>
@@ -879,7 +942,22 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
           {[1, 2, 3, 4].map(i => <div key={i} className="card p-5"><div className="skeleton h-24 w-full" /></div>)}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card"><div className="empty-state"><LayoutTemplate className="h-5 w-5 text-text-tertiary" /><p className="text-sm text-text-secondary mt-2">No templates available</p></div></div>
+        <div className="card">
+          <div className="empty-state">
+            <LayoutTemplate className="h-5 w-5 text-text-tertiary" />
+            <p className="text-sm text-text-secondary mt-2">
+              {searchQuery || triggerFilter !== 'all' ? 'No templates match your search' : 'No templates available'}
+            </p>
+            {(searchQuery || triggerFilter !== 'all') && (
+              <button
+                onClick={() => { setSearchQuery(''); setTriggerFilter('all'); setCategoryFilter('all'); }}
+                className="btn-secondary text-xs mt-2"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {filtered.map((template: any) => {
@@ -894,11 +972,28 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
                     <CatIcon className="h-5 w-5" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-semibold text-text-primary">{template.name}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-text-primary">{template.name}</h3>
+                      {template.isCustom && (
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 font-medium">Custom</span>
+                      )}
+                      {template.actions?.length > 1 && (
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">{template.actions.length} actions</span>
+                      )}
+                    </div>
                     <p className="text-xs text-text-tertiary mt-0.5">{template.description}</p>
 
+                    {/* Tags */}
+                    {template.tags && template.tags.length > 0 && (
+                      <div className="mt-1.5 flex gap-1 flex-wrap">
+                        {template.tags.slice(0, 4).map((tag: string) => (
+                          <span key={tag} className="text-2xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-tertiary">{tag}</span>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Mini workflow */}
-                    <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+                    <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium ${trigger?.color || 'bg-surface-tertiary text-text-secondary'}`}>
                         <TriggerIcon className="h-3 w-3" />
                         {trigger?.label || template.trigger}

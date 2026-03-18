@@ -543,8 +543,17 @@ class ApiClient {
     return this.request<any>(`/automations/${id}/logs?page=${page}&limit=${limit}`);
   }
 
-  async getAutomationTemplates() {
-    return this.request<any[]>('/automations/templates');
+  async getAutomationTemplates(params?: { search?: string; category?: string; trigger?: string }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.category) query.set('category', params.category);
+    if (params?.trigger) query.set('trigger', params.trigger);
+    const qs = query.toString();
+    return this.request<any[]>(`/automations/templates${qs ? `?${qs}` : ''}`);
+  }
+
+  async saveAutomationAsTemplate(id: string, data?: { name?: string; description?: string }) {
+    return this.request<any>(`/automations/${id}/save-as-template`, { method: 'POST', body: JSON.stringify(data || {}) });
   }
 
   async getAutomationStats() {
