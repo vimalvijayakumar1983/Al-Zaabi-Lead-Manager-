@@ -495,7 +495,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
                       try {
                         await api.updateAllocationRules({ divisionId: selectedDivisionId, resetToGlobal: true });
                         setInherited(true);
-                        loadSettings();
+                        loadData();
                       } catch {}
                     }}
                     className="text-xs px-3 py-1 bg-amber-600 text-white rounded-md hover:bg-amber-700"
