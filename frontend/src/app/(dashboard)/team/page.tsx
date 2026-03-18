@@ -284,7 +284,7 @@ export default function TeamPage() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, filters, sortConfig]);
+  }, [searchQuery, roleFilters, statusFilter, divisionFilter, sortField, sortDirection]);
 
 
   // ─── Active filter count ───────────────────────────────────
