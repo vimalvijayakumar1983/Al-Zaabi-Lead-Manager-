@@ -7,6 +7,7 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const { getTemplate, getAllTemplates, labelToFieldName } = require('../config/industryTemplates');
 
 const bcrypt = require('bcryptjs');
+const { sendInviteEmail } = require('../email');
 
 const router = Router();
 
@@ -643,6 +644,7 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
     // Verify division exists and requester has access
     const division = await prisma.organization.findFirst({
       where: { id: divisionId, ...(req.isSuperAdmin ? {} : { id: { in: req.orgIds } }) },
+      select: { id: true, name: true, parentId: true },
     });
     if (!division) return res.status(404).json({ error: 'Division not found' });
 
@@ -663,6 +665,13 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
     });
 
     res.status(201).json(user);
+
+    // ── Fire-and-forget: Send invitation email with credentials ──
+    const parentOrgId = division.parentId || divisionId;
+    const inviterFullName = `${req.user.firstName} ${req.user.lastName}`;
+    sendInviteEmail(email, password, `${firstName} ${lastName}`, division.name, role, inviterFullName, parentOrgId).catch((err) => {
+      console.error('Failed to send invite email:', err.message);
+    });
 
     // Fire-and-forget notification
     notifyOrgAdmins(divisionId, {

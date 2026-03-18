@@ -6,6 +6,7 @@ const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { broadcastDataChange } = require('../websocket/server');
+const { sendInviteEmail } = require('../email');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -145,6 +146,14 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
     });
 
     res.status(201).json(user);
+
+    // ── Fire-and-forget: Send invitation email with credentials ──
+    const orgInfo = await prisma.organization.findUnique({ where: { id: targetOrgId }, select: { name: true, parentId: true } });
+    const emailOrgId = orgInfo?.parentId || targetOrgId;
+    const inviterName = `${req.user.firstName} ${req.user.lastName}`;
+    sendInviteEmail(email, password, `${firstName} ${lastName}`, orgInfo?.name, role, inviterName, emailOrgId).catch((err) => {
+      console.error('Failed to send invite email:', err.message);
+    });
 
     // ── Fire-and-forget notification — notify org admins ──
     notifyOrgAdmins(targetOrgId, {
