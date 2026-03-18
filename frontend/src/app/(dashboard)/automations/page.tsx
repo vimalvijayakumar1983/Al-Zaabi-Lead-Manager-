@@ -1382,7 +1382,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
 
   // Build merged value options: standard + custom + dynamic users
   const allConditionFieldValueOptions = React.useMemo(() => {
-    const merged: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean'> = {};
+    const merged: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'time' | 'boolean'> = {};
     // Copy standard options, resolving 'user' type to actual user list
     for (const [key, val] of Object.entries(standardConditionFieldValueOptions)) {
       if (val === 'user') {
