@@ -597,16 +597,16 @@ router.get('/email/incoming', authorize('ADMIN'), async (req, res, next) => {
 router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
   protocol: z.enum(['imap', 'pop3']),
   // IMAP fields
-  imapHost: z.string().min(1).optional(),
+  imapHost: z.string().optional(),
   imapPort: z.coerce.number().int().min(1).max(65535).optional(),
-  imapUser: z.string().min(1).optional(),
+  imapUser: z.string().optional(),
   imapPass: z.string().optional(),
   imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
   imapFolder: z.string().optional(),
   // POP3 fields
-  popHost: z.string().min(1).optional(),
+  popHost: z.string().optional(),
   popPort: z.coerce.number().int().min(1).max(65535).optional(),
-  popUser: z.string().min(1).optional(),
+  popUser: z.string().optional(),
   popPass: z.string().optional(),
   popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
   popDeleteAfterFetch: z.boolean().optional(),
