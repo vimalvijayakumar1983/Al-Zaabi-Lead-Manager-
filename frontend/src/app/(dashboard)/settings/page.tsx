@@ -1635,7 +1635,7 @@ function OutgoingEmailSettings() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">SMTP Host *</label>
-              <input className="input" required value={form.smtpHost} onChange={(e) => setForm({ ...form, smtpHost: e.target.value })} placeholder="smtp.gmail.com" />
+              <input className="input" required value={form.smtpHost} onChange={(e) => setForm({ ...form, smtpHost: e.target.value })} placeholder="mail.alzaabigroup.com" />
             </div>
             <div>
               <label className="label">SMTP Port *</label>
@@ -1645,7 +1645,7 @@ function OutgoingEmailSettings() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Username *</label>
-              <input className="input" required value={form.smtpUser} onChange={(e) => setForm({ ...form, smtpUser: e.target.value })} placeholder="your@email.com" />
+              <input className="input" required value={form.smtpUser} onChange={(e) => setForm({ ...form, smtpUser: e.target.value })} placeholder="vimal@alzaabigroup.com" />
             </div>
             <div>
               <label className="label">Password *</label>
@@ -1687,12 +1687,12 @@ function OutgoingEmailSettings() {
             </div>
             <div>
               <label className="label">From Email *</label>
-              <input className="input" type="email" required value={form.fromEmail} onChange={(e) => setForm({ ...form, fromEmail: e.target.value })} placeholder="noreply@alzaabi.ae" />
+              <input className="input" type="email" required value={form.fromEmail} onChange={(e) => setForm({ ...form, fromEmail: e.target.value })} placeholder="noreply@alzaabigroup.com" />
             </div>
           </div>
           <div>
             <label className="label">Reply-To Email (optional)</label>
-            <input className="input" type="email" value={form.replyTo} onChange={(e) => setForm({ ...form, replyTo: e.target.value })} placeholder="support@alzaabi.ae" />
+            <input className="input" type="email" value={form.replyTo} onChange={(e) => setForm({ ...form, replyTo: e.target.value })} placeholder="support@alzaabigroup.com" />
           </div>
         </div>
 
@@ -1919,7 +1919,7 @@ function IncomingEmailSettings() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">IMAP Host *</label>
-                <input className="input" required value={imapForm.imapHost} onChange={(e) => setImapForm({ ...imapForm, imapHost: e.target.value })} placeholder="imap.gmail.com" />
+                <input className="input" required value={imapForm.imapHost} onChange={(e) => setImapForm({ ...imapForm, imapHost: e.target.value })} placeholder="mail.alzaabigroup.com" />
               </div>
               <div>
                 <label className="label">IMAP Port *</label>
@@ -1929,7 +1929,7 @@ function IncomingEmailSettings() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Username *</label>
-                <input className="input" required value={imapForm.imapUser} onChange={(e) => setImapForm({ ...imapForm, imapUser: e.target.value })} placeholder="your@email.com" />
+                <input className="input" required value={imapForm.imapUser} onChange={(e) => setImapForm({ ...imapForm, imapUser: e.target.value })} placeholder="vimal@alzaabigroup.com" />
               </div>
               <div>
                 <label className="label">Password *</label>
@@ -1990,7 +1990,7 @@ function IncomingEmailSettings() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">POP3 Host *</label>
-                <input className="input" required value={popForm.popHost} onChange={(e) => setPopForm({ ...popForm, popHost: e.target.value })} placeholder="pop.gmail.com" />
+                <input className="input" required value={popForm.popHost} onChange={(e) => setPopForm({ ...popForm, popHost: e.target.value })} placeholder="mail.alzaabigroup.com" />
               </div>
               <div>
                 <label className="label">POP3 Port *</label>
@@ -2000,7 +2000,7 @@ function IncomingEmailSettings() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Username *</label>
-                <input className="input" required value={popForm.popUser} onChange={(e) => setPopForm({ ...popForm, popUser: e.target.value })} placeholder="your@email.com" />
+                <input className="input" required value={popForm.popUser} onChange={(e) => setPopForm({ ...popForm, popUser: e.target.value })} placeholder="vimal@alzaabigroup.com" />
               </div>
               <div>
                 <label className="label">Password *</label>
@@ -2139,6 +2139,15 @@ function IncomingEmailSettings() {
         <h3 className="text-sm font-semibold text-text-primary">Common Email Server Settings</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           <div className="space-y-2">
+            <p className="font-medium text-brand-primary">Zimbra (Al-Zaabi Group)</p>
+            <div className="bg-indigo-50 dark:bg-indigo-950/30 rounded-lg p-3 space-y-1 text-text-tertiary border border-indigo-200 dark:border-indigo-800">
+              <p>IMAP: mail.alzaabigroup.com : 993 (SSL)</p>
+              <p>POP3: mail.alzaabigroup.com : 995 (SSL)</p>
+              <p>SMTP: mail.alzaabigroup.com : 587 (STARTTLS)</p>
+              <p className="text-2xs mt-1">Use your Zimbra email and password</p>
+            </div>
+          </div>
+          <div className="space-y-2">
             <p className="font-medium text-text-secondary">Gmail</p>
             <div className="bg-bg-secondary rounded-lg p-3 space-y-1 text-text-tertiary">
               <p>IMAP: imap.gmail.com : 993 (SSL)</p>
@@ -2161,14 +2170,6 @@ function IncomingEmailSettings() {
               <p>IMAP: imap.mail.yahoo.com : 993 (SSL)</p>
               <p>POP3: pop.mail.yahoo.com : 995 (SSL)</p>
               <p>SMTP: smtp.mail.yahoo.com : 465 (SSL)</p>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <p className="font-medium text-text-secondary">Zoho Mail</p>
-            <div className="bg-bg-secondary rounded-lg p-3 space-y-1 text-text-tertiary">
-              <p>IMAP: imap.zoho.com : 993 (SSL)</p>
-              <p>POP3: pop.zoho.com : 995 (SSL)</p>
-              <p>SMTP: smtp.zoho.com : 465 (SSL)</p>
             </div>
           </div>
         </div>
