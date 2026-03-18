@@ -337,8 +337,8 @@ router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
       });
 
       await prisma.task.updateMany({
-        where: { assignedToId: req.params.id },
-        data: { assignedToId: reassignTo },
+        where: { assigneeId: req.params.id },
+        data: { assigneeId: reassignTo },
       });
     }
 
