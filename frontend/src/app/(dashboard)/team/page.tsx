@@ -2202,9 +2202,9 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
   return (
     <div className="modal">
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={onClose} />
-      <div className="modal-panel w-full max-w-2xl relative z-50">
+      <div className="modal-panel w-full max-w-2xl relative z-50 flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border-primary">
+        <div className="flex items-center justify-between p-6 border-b border-border-primary flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
               {(user.firstName?.[0] || user.email?.[0] || '?').toUpperCase()}
@@ -2220,7 +2220,7 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+        <div className="p-6 space-y-4 flex-1 overflow-y-auto min-h-0">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <RefreshCw className="h-6 w-6 animate-spin text-brand-primary" />
@@ -2445,7 +2445,7 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
         )}
 
         {/* Footer with prominent Save button */}
-        <div className="flex items-center justify-between p-6 border-t border-border-primary bg-surface-secondary/50 rounded-b-2xl">
+        <div className="flex items-center justify-between p-6 border-t border-border-primary bg-surface-secondary/50 rounded-b-2xl flex-shrink-0">
           <div className="text-sm text-text-tertiary">
             {hasChanges ? (
               <span className="text-amber-600 font-medium">{changeCount} unsaved change{changeCount !== 1 ? 's' : ''}</span>
