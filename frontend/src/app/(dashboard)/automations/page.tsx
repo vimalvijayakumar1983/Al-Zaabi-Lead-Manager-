@@ -120,6 +120,7 @@ const standardConditionFieldValueOptions: Record<string, { value: string; label:
   tags: 'text',       // match by tag name
   createdAt: 'date',
   updatedAt: 'date',
+  time: 'time',
   isArchived: 'boolean',
 };
 
@@ -149,6 +150,8 @@ const standardConditionFields: { value: string; label: string; category: 'standa
   // Timestamps
   { value: 'createdAt', label: 'Created', category: 'standard', fieldType: 'DATE' },
   { value: 'updatedAt', label: 'Updated', category: 'standard', fieldType: 'DATE' },
+  // Time
+  { value: 'time', label: 'Time', category: 'standard', fieldType: 'TIME' },
   // State
   { value: 'isArchived', label: 'Archived', category: 'standard', fieldType: 'BOOLEAN' },
 ];
@@ -181,6 +184,12 @@ const getOperatorsForFieldType = (fieldType: string): { value: string; label: st
         { value: 'gt', label: 'is after' },
         { value: 'lt', label: 'is before' },
       ];
+    case 'TIME':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'gt', label: 'is after' },
+        { value: 'lt', label: 'is before' },
+      ];
     default: // TEXT, EMAIL, PHONE, URL
       return [
         { value: 'equals', label: 'equals' },
@@ -198,6 +207,7 @@ const fieldTypeBadge: Record<string, { label: string; color: string }> = {
   TEXT: { label: 'Text', color: 'bg-sky-100 text-sky-700' },
   NUMBER: { label: 'Number', color: 'bg-amber-100 text-amber-700' },
   DATE: { label: 'Date', color: 'bg-emerald-100 text-emerald-700' },
+  TIME: { label: 'Time', color: 'bg-teal-100 text-teal-700' },
   BOOLEAN: { label: 'Yes/No', color: 'bg-pink-100 text-pink-700' },
   URL: { label: 'URL', color: 'bg-sky-100 text-sky-700' },
   EMAIL: { label: 'Email', color: 'bg-sky-100 text-sky-700' },
@@ -1670,6 +1680,9 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             }
                             if (opts === 'date') {
                               return <input type="date" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} />;
+                            }
+                            if (opts === 'time') {
+                              return <input type="time" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} />;
                             }
                             if (opts === 'boolean') {
                               return (
