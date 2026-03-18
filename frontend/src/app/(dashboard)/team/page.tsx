@@ -429,6 +429,57 @@ export default function TeamPage() {
         </div>
       </div>
 
+
+      {/* ─── Division Scope Bar ─── */}
+      {isSuperAdmin && divisions.length > 0 && (
+        <div className="bg-gradient-to-r from-brand-50 to-purple-50 border border-brand-200/60 rounded-xl p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-lg bg-white shadow-sm flex items-center justify-center">
+                <Building2 className="h-4.5 w-4.5 text-brand-600" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-brand-700/70 uppercase tracking-wider">View by Division</p>
+                <p className="text-xs text-text-tertiary mt-0.5">
+                  {divisionFilter === 'all' 
+                    ? `Showing all ${divisions.length} divisions`
+                    : `Filtered to ${divisions.find(d => d.id === divisionFilter)?.name || 'selected division'}`
+                  }
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {divisions.map((div) => (
+                <button
+                  key={div.id}
+                  onClick={() => setDivisionFilter(divisionFilter === div.id ? 'all' : div.id)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all duration-150 ${
+                    divisionFilter === div.id
+                      ? 'bg-white text-brand-700 border-brand-300 shadow-sm ring-1 ring-brand-200'
+                      : 'bg-white/60 text-text-secondary border-transparent hover:bg-white hover:border-border hover:shadow-sm'
+                  }`}
+                >
+                  <span
+                    className="inline-block h-2 w-2 rounded-full mr-1.5"
+                    style={{ backgroundColor: (div as any).primaryColor || '#6366f1' }}
+                  />
+                  {div.name}
+                </button>
+              ))}
+              {divisionFilter !== 'all' && (
+                <button
+                  onClick={() => setDivisionFilter('all')}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg text-brand-600 hover:bg-white/80 transition-colors flex items-center gap-1"
+                >
+                  <X className="h-3 w-3" />
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Enhanced Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {/* Total Users */}
@@ -442,10 +493,10 @@ export default function TeamPage() {
             <div className="h-8 w-8 rounded-lg bg-brand-50 flex items-center justify-center">
               <UsersIcon className="h-4 w-4 text-brand-600" />
             </div>
-            <span className="text-xl font-bold text-text-primary">{users.length}</span>
+            <span className="text-xl font-bold text-text-primary">{filteredAndSortedUsers.length}</span>
           </div>
           <p className="text-sm font-medium text-text-primary">Total Users</p>
-          <p className="text-2xs text-text-tertiary mt-0.5">All team members</p>
+          <p className="text-2xs text-text-tertiary mt-0.5">{divisionFilter !== 'all' ? 'In selected division' : 'All team members'}</p>
         </button>
 
         {/* Active Now (last 24h) */}
