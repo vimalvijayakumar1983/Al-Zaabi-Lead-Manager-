@@ -870,7 +870,7 @@ export default function TeamPage() {
                 </td>
               </tr>
             ) : (
-              filteredAndSortedUsers.map((user) => {
+              filteredAndSortedUsers.map((user, _idx) => {
                 const role = roleConfig[user.role] || roleConfig.VIEWER;
                 const RoleIcon = role.icon;
                 const isCurrentUser = currentUser?.id === user.id;
@@ -991,14 +991,30 @@ export default function TeamPage() {
                         {!isSelf && (
                           <div className="relative">
                             <button
-                              onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === user.id ? null : user.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveMenu(activeMenu === user.id ? null : user.id);
+                              }}
                               className="btn-icon h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
                             >
                               <MoreHorizontal className="h-4 w-4" />
                             </button>
 
                             {activeMenu === user.id && (
-                              <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-50">
+                              <div
+                                ref={(el) => {
+                                  if (el) {
+                                    const rect = el.getBoundingClientRect();
+                                    if (rect.bottom > window.innerHeight - 8) {
+                                      el.style.top = 'auto';
+                                      el.style.bottom = '100%';
+                                      el.style.marginBottom = '4px';
+                                      el.style.marginTop = '0';
+                                    }
+                                  }
+                                }}
+                                className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-50"
+                              >
                                 <button
                                   onClick={() => { setEditingUser(user); setActiveMenu(null); }}
                                   className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-tertiary transition-colors"
