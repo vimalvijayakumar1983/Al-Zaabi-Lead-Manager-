@@ -487,7 +487,6 @@ router.get('/dashboard-full', async (req, res, next) => {
 
     const lw = getLeadWhere(req, divisionId);
     const actWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
-    const tw = getTaskWhere(req, divisionId);
 
     // ── Parallel fetch everything ──
     const [
@@ -509,8 +508,6 @@ router.get('/dashboard-full', async (req, res, next) => {
       scoreLeads,
       // SLA stats
       slaAtRisk, slaBreached,
-      // Team (only for non-restricted roles)
-      ...teamResults
     ] = await Promise.all([
       prisma.lead.count({ where: lw }),
       prisma.lead.count({ where: { ...lw, createdAt: { gte: start } } }),
@@ -531,7 +528,7 @@ router.get('/dashboard-full', async (req, res, next) => {
         select: { id: true, firstName: true, lastName: true, email: true, company: true, source: true, status: true, score: true, budget: true, createdAt: true, assignedTo: { select: { firstName: true, lastName: true, avatar: true } } },
       }),
       prisma.task.findMany({
-        where: { ...getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { gte: now } }) },
+        where: getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { gte: now } }),
         orderBy: { dueAt: 'asc' }, take: 6,
         select: { id: true, title: true, type: true, priority: true, status: true, dueAt: true, lead: { select: { id: true, firstName: true, lastName: true } } },
       }),
@@ -564,24 +561,24 @@ router.get('/dashboard-full', async (req, res, next) => {
         select: { score: true, status: true },
       }),
 
-      prisma.lead.count({ where: { ...lw, slaStatus: 'AT_RISK' } }),
-      prisma.lead.count({ where: { ...lw, slaStatus: 'BREACHED' } }),
-
-      // Team performance (top 5)
-      ...(req.isRestrictedRole ? [] : [
-        prisma.user.findMany({
-          where: { organizationId: orgFilter, isActive: true },
-          select: { id: true, firstName: true, lastName: true, avatar: true, role: true, _count: { select: { assignedLeads: true } } },
-        }),
-      ]),
+      prisma.lead.count({ where: { ...lw, slaStatus: 'AT_RISK' } }).catch(() => 0),
+      prisma.lead.count({ where: { ...lw, slaStatus: 'BREACHED' } }).catch(() => 0),
     ]);
+
+    // ── Fetch team users separately (avoids spread/destructuring issues) ──
+    let teamUsers = [];
+    if (!req.isRestrictedRole) {
+      teamUsers = await prisma.user.findMany({
+        where: { organizationId: orgFilter, isActive: true },
+        select: { id: true, firstName: true, lastName: true, avatar: true, role: true, _count: { select: { assignedLeads: true } } },
+      });
+    }
 
     // ── Process KPIs ──
     const curPipe = Number(curPipeAgg._sum.budget || 0);
     const prevPipe = Number(prevPipeAgg._sum.budget || 0);
     const wonRevenue = Number(wonRevenueAgg._sum.budget || 0);
     const avgDealSize = wonRevenueAgg._count > 0 ? Math.round(wonRevenue / wonRevenueAgg._count) : 0;
-    const convRate = totalLeads > 0 ? Math.round(((curWon + (await prisma.lead.count({ where: { ...lw, status: 'WON' } }))) / totalLeads) * 10000) / 100 : 0;
 
     // ── Process trends ──
     const trendMap = {};
@@ -632,9 +629,8 @@ router.get('/dashboard-full', async (req, res, next) => {
 
     // ── Process team leaderboard ──
     let teamLeaderboard = [];
-    if (!req.isRestrictedRole && teamResults.length > 0) {
-      const users = teamResults[0];
-      const enriched = await Promise.all(users.slice(0, 10).map(async u => {
+    if (!req.isRestrictedRole && teamUsers.length > 0) {
+      const enriched = await Promise.all(teamUsers.slice(0, 10).map(async u => {
         const [won, revenue] = await Promise.all([
           prisma.lead.count({ where: { assignedToId: u.id, status: 'WON' } }),
           prisma.lead.aggregate({ where: { assignedToId: u.id, status: 'WON', budget: { not: null } }, _sum: { budget: true } }),
