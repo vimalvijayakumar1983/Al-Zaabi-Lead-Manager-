@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import type { AutomationRule } from '@/types';
 import {
@@ -91,7 +91,7 @@ const taskTypeOptions = [
   { value: 'OTHER', label: 'Other' },
 ];
 
-const conditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text'> = {
+const standardConditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean'> = {
   status: statusOptions,
   source: sourceOptions,
   score: 'number',
@@ -100,18 +100,79 @@ const conditionFieldValueOptions: Record<string, { value: string; label: string 
   location: 'text',
   company: 'text',
   email: 'text',
+  phone: 'text',
+  jobTitle: 'text',
+  campaign: 'text',
+  website: 'text',
+  firstName: 'text',
+  lastName: 'text',
 };
 
-const conditionFields = [
-  { value: 'status', label: 'Status' },
-  { value: 'source', label: 'Source' },
-  { value: 'score', label: 'Score' },
-  { value: 'budget', label: 'Budget' },
-  { value: 'productInterest', label: 'Product Interest' },
-  { value: 'location', label: 'Location' },
-  { value: 'company', label: 'Company' },
-  { value: 'email', label: 'Email' },
+const standardConditionFields: { value: string; label: string; category: 'standard'; fieldType: string }[] = [
+  { value: 'status', label: 'Status', category: 'standard', fieldType: 'SELECT' },
+  { value: 'source', label: 'Source', category: 'standard', fieldType: 'SELECT' },
+  { value: 'score', label: 'Score', category: 'standard', fieldType: 'NUMBER' },
+  { value: 'budget', label: 'Budget', category: 'standard', fieldType: 'NUMBER' },
+  { value: 'firstName', label: 'First Name', category: 'standard', fieldType: 'TEXT' },
+  { value: 'lastName', label: 'Last Name', category: 'standard', fieldType: 'TEXT' },
+  { value: 'email', label: 'Email', category: 'standard', fieldType: 'TEXT' },
+  { value: 'phone', label: 'Phone', category: 'standard', fieldType: 'TEXT' },
+  { value: 'company', label: 'Company', category: 'standard', fieldType: 'TEXT' },
+  { value: 'jobTitle', label: 'Job Title', category: 'standard', fieldType: 'TEXT' },
+  { value: 'productInterest', label: 'Product Interest', category: 'standard', fieldType: 'TEXT' },
+  { value: 'location', label: 'Location', category: 'standard', fieldType: 'TEXT' },
+  { value: 'campaign', label: 'Campaign', category: 'standard', fieldType: 'TEXT' },
+  { value: 'website', label: 'Website', category: 'standard', fieldType: 'TEXT' },
 ];
+
+// Returns which operators make sense for a field type
+const getOperatorsForFieldType = (fieldType: string): { value: string; label: string }[] => {
+  switch (fieldType) {
+    case 'SELECT':
+    case 'MULTI_SELECT':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'not_equals', label: 'does not equal' },
+        { value: 'in', label: 'is one of' },
+      ];
+    case 'NUMBER':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'not_equals', label: 'does not equal' },
+        { value: 'gt', label: 'is greater than' },
+        { value: 'lt', label: 'is less than' },
+      ];
+    case 'BOOLEAN':
+      return [
+        { value: 'equals', label: 'equals' },
+      ];
+    case 'DATE':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'gt', label: 'is after' },
+        { value: 'lt', label: 'is before' },
+      ];
+    default: // TEXT, EMAIL, PHONE, URL
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'not_equals', label: 'does not equal' },
+        { value: 'contains', label: 'contains' },
+      ];
+  }
+};
+
+// Field type to icon label for the dropdown badges
+const fieldTypeBadge: Record<string, { label: string; color: string }> = {
+  SELECT: { label: 'Select', color: 'bg-violet-100 text-violet-700' },
+  MULTI_SELECT: { label: 'Multi', color: 'bg-purple-100 text-purple-700' },
+  TEXT: { label: 'Text', color: 'bg-sky-100 text-sky-700' },
+  NUMBER: { label: 'Number', color: 'bg-amber-100 text-amber-700' },
+  DATE: { label: 'Date', color: 'bg-emerald-100 text-emerald-700' },
+  BOOLEAN: { label: 'Yes/No', color: 'bg-pink-100 text-pink-700' },
+  URL: { label: 'URL', color: 'bg-sky-100 text-sky-700' },
+  EMAIL: { label: 'Email', color: 'bg-sky-100 text-sky-700' },
+  PHONE: { label: 'Phone', color: 'bg-sky-100 text-sky-700' },
+};
 
 const templateCategories = [
   { id: 'all', label: 'All Templates' },
@@ -698,12 +759,14 @@ function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
                 <span className="text-2xs font-semibold text-text-tertiary mt-1.5 uppercase tracking-wider">Conditions</span>
                 <div className="mt-1 space-y-1">
                   {rule.conditions.map((c: any, i: number) => {
-                    const fieldLabel = conditionFields.find(f => f.value === c.field)?.label || c.field;
-                    const opts = conditionFieldValueOptions[c.field];
+                    const isCustom = c.field?.startsWith('custom.');
+                    const fieldLabel = standardConditionFields.find(f => f.value === c.field)?.label
+                      || (isCustom ? c.field.slice(7).replace(/([A-Z])/g, ' $1').replace(/^./, (s: string) => s.toUpperCase()) : c.field);
+                    const opts = standardConditionFieldValueOptions[c.field];
                     const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value)) : String(c.value);
                     return (
                       <span key={i} className="block text-xs text-text-secondary">
-                        {fieldLabel} {operatorLabels[c.operator] || c.operator} <strong>{valueLabel}</strong>
+                        {fieldLabel}{isCustom && <span className="text-violet-500"> *</span>} {operatorLabels[c.operator] || c.operator} <strong>{valueLabel}</strong>
                       </span>
                     );
                   })}
@@ -1033,6 +1096,132 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
 
 // ─── Create / Edit Form Modal ────────────────────────────────────
 
+// Searchable field picker for conditions
+function ConditionFieldPicker({ value, onChange, allFields }: {
+  value: string;
+  onChange: (fieldValue: string) => void;
+  allFields: { value: string; label: string; category: string; fieldType: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selected = allFields.find(f => f.value === value);
+  const filtered = allFields.filter(f =>
+    f.label.toLowerCase().includes(search.toLowerCase()) ||
+    f.value.toLowerCase().includes(search.toLowerCase())
+  );
+  const standardFields = filtered.filter(f => f.category === 'standard');
+  const customFields = filtered.filter(f => f.category === 'custom');
+
+  return (
+    <div className="relative flex-1" ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="input text-sm w-full text-left flex items-center justify-between gap-2 pr-2"
+      >
+        <span className="flex items-center gap-2 truncate">
+          <span className="truncate">{selected?.label || value}</span>
+          {selected && (
+            <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${fieldTypeBadge[selected.fieldType]?.color || 'bg-gray-100 text-gray-600'}`}>
+              {fieldTypeBadge[selected.fieldType]?.label || selected.fieldType}
+            </span>
+          )}
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 text-text-tertiary flex-shrink-0" />
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-80 bg-white rounded-xl shadow-xl border border-border-subtle z-50 overflow-hidden animate-fade-in">
+          {/* Search input */}
+          <div className="p-2 border-b border-border-subtle">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary" />
+              <input
+                autoFocus
+                className="input text-sm pl-8 w-full"
+                placeholder="Search fields..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="max-h-64 overflow-y-auto overscroll-contain">
+            {/* Standard Fields */}
+            {standardFields.length > 0 && (
+              <div>
+                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0">
+                  Standard Fields
+                </div>
+                {standardFields.map(f => (
+                  <button
+                    key={f.value}
+                    type="button"
+                    onClick={() => { onChange(f.value); setOpen(false); setSearch(''); }}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 hover:bg-surface-secondary transition-colors ${f.value === value ? 'bg-brand-50 text-brand-700 font-medium' : 'text-text-primary'}`}
+                  >
+                    <span className="truncate">{f.label}</span>
+                    <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${fieldTypeBadge[f.fieldType]?.color || 'bg-gray-100 text-gray-600'}`}>
+                      {fieldTypeBadge[f.fieldType]?.label || f.fieldType}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Custom Fields */}
+            {customFields.length > 0 && (
+              <div>
+                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0 flex items-center gap-1.5">
+                  <Sparkles className="h-3 w-3" />
+                  Custom Fields
+                </div>
+                {customFields.map(f => (
+                  <button
+                    key={f.value}
+                    type="button"
+                    onClick={() => { onChange(f.value); setOpen(false); setSearch(''); }}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 hover:bg-surface-secondary transition-colors ${f.value === value ? 'bg-brand-50 text-brand-700 font-medium' : 'text-text-primary'}`}
+                  >
+                    <span className="flex items-center gap-1.5 truncate">
+                      <Sparkles className="h-3 w-3 text-violet-400 flex-shrink-0" />
+                      <span className="truncate">{f.label}</span>
+                    </span>
+                    <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${fieldTypeBadge[f.fieldType]?.color || 'bg-gray-100 text-gray-600'}`}>
+                      {fieldTypeBadge[f.fieldType]?.label || f.fieldType}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {filtered.length === 0 && (
+              <div className="p-4 text-center text-sm text-text-tertiary">
+                No fields match &ldquo;{search}&rdquo;
+              </div>
+            )}
+          </div>
+
+          {/* Footer with count */}
+          <div className="border-t border-border-subtle px-3 py-1.5 text-2xs text-text-tertiary bg-surface-secondary">
+            {allFields.length} fields available ({allFields.filter(f => f.category === 'custom').length} custom)
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AutomationFormModal({ rule, onClose, onSubmit }: {
   rule: AutomationRule | null;
   onClose: () => void;
@@ -1047,6 +1236,73 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
     actions: rule?.actions?.length ? rule.actions : [{ type: 'notify_user', config: { message: '' } }],
   });
   const [step, setStep] = useState(1); // 1=basics, 2=conditions, 3=actions, 4=review
+
+  // Custom fields state
+  const [customFieldsRaw, setCustomFieldsRaw] = useState<any[]>([]);
+  const [loadingFields, setLoadingFields] = useState(true);
+
+  // Fetch custom fields for the current division on mount
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCustomFields = async () => {
+      try {
+        const fields = await api.getCustomFields();
+        if (!cancelled) setCustomFieldsRaw(fields || []);
+      } catch (err) {
+        console.error('Failed to fetch custom fields:', err);
+      } finally {
+        if (!cancelled) setLoadingFields(false);
+      }
+    };
+    fetchCustomFields();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Build merged field lists: standard + custom
+  const allConditionFields = React.useMemo(() => {
+    const customMapped = customFieldsRaw.map((cf: any) => ({
+      value: `custom.${cf.name}`,
+      label: cf.label,
+      category: 'custom' as const,
+      fieldType: cf.type,
+    }));
+    return [...standardConditionFields, ...customMapped];
+  }, [customFieldsRaw]);
+
+  // Build merged value options: standard + custom
+  const allConditionFieldValueOptions = React.useMemo(() => {
+    const merged: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean'> = {
+      ...standardConditionFieldValueOptions,
+    };
+    for (const cf of customFieldsRaw) {
+      const key = `custom.${cf.name}`;
+      switch (cf.type) {
+        case 'SELECT':
+        case 'MULTI_SELECT': {
+          const opts = Array.isArray(cf.options) ? cf.options : [];
+          merged[key] = opts.map((o: string) => ({ value: o, label: o }));
+          break;
+        }
+        case 'NUMBER':
+          merged[key] = 'number';
+          break;
+        case 'DATE':
+          merged[key] = 'date';
+          break;
+        case 'BOOLEAN':
+          merged[key] = 'boolean';
+          break;
+        default:
+          merged[key] = 'text';
+      }
+    }
+    return merged;
+  }, [customFieldsRaw]);
+
+  // Helper: get field type for a given field value
+  const getFieldType = (fieldValue: string): string => {
+    return allConditionFields.find(f => f.value === fieldValue)?.fieldType || 'TEXT';
+  };
 
   const totalSteps = 4;
 
@@ -1177,6 +1433,16 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 </button>
               </div>
 
+              {/* Field availability info */}
+              {!loadingFields && customFieldsRaw.length > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-50 border border-violet-200">
+                  <Sparkles className="h-3.5 w-3.5 text-violet-500 flex-shrink-0" />
+                  <p className="text-xs text-violet-700">
+                    <span className="font-medium">{customFieldsRaw.length} custom field{customFieldsRaw.length !== 1 ? 's' : ''}</span> available from your division settings
+                  </p>
+                </div>
+              )}
+
               {form.conditions.length === 0 ? (
                 <div className="rounded-lg border-2 border-dashed border-border-subtle p-8 text-center">
                   <Filter className="h-8 w-8 text-text-tertiary mx-auto mb-2" />
@@ -1188,40 +1454,85 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {form.conditions.map((cond: any, i: number) => (
-                    <div key={i} className="flex items-center gap-2 p-3 rounded-lg bg-surface-secondary">
-                      {i > 0 && <span className="text-2xs font-semibold text-text-tertiary uppercase">AND</span>}
-                      <select className="input text-sm flex-1" value={cond.field} onChange={(e) => {
-                        const newField = e.target.value;
-                        const opts = conditionFieldValueOptions[newField];
-                        const defaultValue = Array.isArray(opts) ? opts[0]?.value || '' : opts === 'number' ? '0' : '';
-                        updateCondition(i, { field: newField, value: defaultValue });
-                      }}>
-                        {conditionFields.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                      </select>
-                      <select className="input text-sm w-36" value={cond.operator} onChange={(e) => updateCondition(i, { operator: e.target.value })}>
-                        {Object.entries(operatorLabels).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-                      </select>
-                      {(() => {
-                        const opts = conditionFieldValueOptions[cond.field];
-                        if (Array.isArray(opts)) {
-                          return (
-                            <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
-                              <option value="">Select...</option>
-                              {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                          );
-                        }
-                        if (opts === 'number') {
-                          return <input type="number" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />;
-                        }
-                        return <input className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />;
-                      })()}
-                      <button type="button" onClick={() => removeCondition(i)} className="btn-icon h-8 w-8 text-red-500 hover:text-red-700">
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                  {form.conditions.map((cond: any, i: number) => {
+                    const fieldType = getFieldType(cond.field);
+                    const availableOperators = getOperatorsForFieldType(fieldType);
+                    const opts = allConditionFieldValueOptions[cond.field];
+                    const isCustom = cond.field?.startsWith('custom.');
+
+                    return (
+                      <div key={i} className={`p-3 rounded-lg border ${isCustom ? 'bg-violet-50/50 border-violet-200' : 'bg-surface-secondary border-transparent'}`}>
+                        {i > 0 && (
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="h-px flex-1 bg-border-subtle" />
+                            <span className="text-2xs font-semibold text-text-tertiary uppercase px-2">AND</span>
+                            <div className="h-px flex-1 bg-border-subtle" />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          {/* Field Picker */}
+                          <ConditionFieldPicker
+                            value={cond.field}
+                            allFields={allConditionFields}
+                            onChange={(newField) => {
+                              const newOpts = allConditionFieldValueOptions[newField];
+                              const newFieldType = getFieldType(newField);
+                              const newOperators = getOperatorsForFieldType(newFieldType);
+                              let defaultValue = '';
+                              if (Array.isArray(newOpts)) defaultValue = newOpts[0]?.value || '';
+                              else if (newOpts === 'number') defaultValue = '0';
+                              else if (newOpts === 'boolean') defaultValue = 'true';
+                              else if (newOpts === 'date') defaultValue = '';
+                              const defaultOp = newOperators[0]?.value || 'equals';
+                              updateCondition(i, { field: newField, value: defaultValue, operator: defaultOp });
+                            }}
+                          />
+
+                          {/* Smart Operator Select */}
+                          <select
+                            className="input text-sm w-40"
+                            value={cond.operator}
+                            onChange={(e) => updateCondition(i, { operator: e.target.value })}
+                          >
+                            {availableOperators.map(op => (
+                              <option key={op.value} value={op.value}>{op.label}</option>
+                            ))}
+                          </select>
+
+                          {/* Type-Aware Value Input */}
+                          {(() => {
+                            if (Array.isArray(opts)) {
+                              return (
+                                <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
+                                  <option value="">Select...</option>
+                                  {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                </select>
+                              );
+                            }
+                            if (opts === 'number') {
+                              return <input type="number" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Enter number..." />;
+                            }
+                            if (opts === 'date') {
+                              return <input type="date" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} />;
+                            }
+                            if (opts === 'boolean') {
+                              return (
+                                <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
+                                  <option value="true">Yes</option>
+                                  <option value="false">No</option>
+                                </select>
+                              );
+                            }
+                            return <input className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Enter value..." />;
+                          })()}
+
+                          <button type="button" onClick={() => removeCondition(i)} className="btn-icon h-8 w-8 text-red-500 hover:text-red-700 flex-shrink-0">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1442,14 +1753,19 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 <div className="card p-4">
                   <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider block mb-2">Conditions</span>
                   {form.conditions.map((c, i) => {
-                    const fieldLabel = conditionFields.find(f => f.value === c.field)?.label || c.field;
-                    const opts = conditionFieldValueOptions[c.field];
-                    const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value)) : String(c.value);
+                    const fieldDef = allConditionFields.find(f => f.value === c.field);
+                    const fieldLabel = fieldDef?.label || c.field.replace('custom.', '');
+                    const isCustom = c.field?.startsWith('custom.');
+                    const opts = allConditionFieldValueOptions[c.field];
+                    const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value))
+                      : opts === 'boolean' ? (c.value === 'true' ? 'Yes' : 'No')
+                      : String(c.value);
                     return (
                       <p key={i} className="text-xs text-text-secondary">
                         {i > 0 && <span className="text-text-tertiary font-medium">AND </span>}
-                        <span className="font-medium text-text-primary">{fieldLabel}</span>{' '}
-                        {operatorLabels[c.operator] || c.operator}{' '}
+                        <span className="font-medium text-text-primary">{fieldLabel}</span>
+                        {isCustom && <span className="text-2xs text-violet-500 ml-1">(custom)</span>}
+                        {' '}{operatorLabels[c.operator] || c.operator}{' '}
                         <span className="font-medium text-text-primary">{valueLabel}</span>
                       </p>
                     );

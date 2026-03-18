@@ -96,20 +96,42 @@ const executeAutomations = async (trigger, context) => {
 };
 
 /**
- * Evaluate conditions against lead data
+ * Resolve a field value from lead data.
+ * Supports standard fields (e.g. "status") and custom fields (e.g. "custom.propertyType").
+ * Custom field values are stored in lead.customData JSON object.
+ */
+const resolveFieldValue = (field, lead, previousData) => {
+  if (field && field.startsWith('custom.')) {
+    const customKey = field.slice(7); // strip "custom."
+    const customData = typeof lead.customData === 'string'
+      ? JSON.parse(lead.customData || '{}')
+      : (lead.customData || {});
+    const prevCustomData = previousData
+      ? (typeof previousData.customData === 'string'
+          ? JSON.parse(previousData.customData || '{}')
+          : (previousData.customData || {}))
+      : {};
+    return customData[customKey] ?? prevCustomData[customKey];
+  }
+  return lead[field] ?? previousData?.[field];
+};
+
+/**
+ * Evaluate conditions against lead data.
+ * Supports both standard lead fields and custom fields (prefixed with "custom.").
  */
 const evaluateConditions = (conditions, lead, previousData) => {
   if (!Array.isArray(conditions) || conditions.length === 0) return true;
 
   return conditions.every((cond) => {
-    const value = lead[cond.field] ?? previousData?.[cond.field];
+    const value = resolveFieldValue(cond.field, lead, previousData);
     switch (cond.operator) {
-      case 'equals': return value === cond.value;
-      case 'not_equals': return value !== cond.value;
+      case 'equals': return String(value) === String(cond.value);
+      case 'not_equals': return String(value) !== String(cond.value);
       case 'contains': return String(value).toLowerCase().includes(String(cond.value).toLowerCase());
       case 'gt': return Number(value) > Number(cond.value);
       case 'lt': return Number(value) < Number(cond.value);
-      case 'in': return Array.isArray(cond.value) && cond.value.includes(value);
+      case 'in': return Array.isArray(cond.value) && cond.value.includes(String(value));
       default: return false;
     }
   });
