@@ -648,6 +648,91 @@ const AUTOMATION_TEMPLATES = [
       { type: 'notify_user', config: { message: 'VIP lead alert! {{firstName}} {{lastName}} — high-value opportunity.' } },
     ],
   },
+
+  // ── New: Time-Based & Lifecycle Templates ──────────────────────
+  {
+    id: 'follow-up-nudge-48h',
+    name: 'Follow-Up Nudge (48 Hours)',
+    description: 'Automatically email the lead if no response within 48 hours of creation',
+    category: 'communication',
+    tags: ['follow-up', 'nudge', '48h', 'time-based', 'no response', 'email'],
+    trigger: 'LEAD_CREATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 2880 }],
+    actions: [
+      { type: 'send_email', config: { subject: 'Following up — {{companyName}}', template: 'follow-up', recipient: 'lead' } },
+      { type: 'create_task', config: { title: 'Follow up with {{firstName}} — no response after 48h', taskType: 'FOLLOW_UP_CALL', dueInHours: 24, priority: 'HIGH' } },
+    ],
+  },
+  {
+    id: 'sla-breach-email-alert',
+    name: 'SLA Breach Email to Manager',
+    description: 'Email the assigned rep AND their manager when a lead breaches the SLA response time',
+    category: 'communication',
+    tags: ['sla', 'breach', 'email', 'manager', 'escalation', 'urgent'],
+    trigger: 'LEAD_SLA_BREACHED',
+    conditions: [],
+    actions: [
+      { type: 'send_email', config: { subject: '⚠️ SLA Breach: {{firstName}} {{lastName}}', template: 'sla-breach-alert', recipient: 'assigned_user' } },
+      { type: 'notify_user', config: { message: 'SLA BREACH: Lead {{firstName}} {{lastName}} has not been contacted within the expected time.' } },
+      { type: 'add_tag', config: { tagName: 'SLA Breached' } },
+    ],
+  },
+  {
+    id: 'appointment-confirmation',
+    name: 'Appointment Confirmation Email',
+    description: 'Send a confirmation email when a lead moves to the Meeting Scheduled stage',
+    category: 'communication',
+    tags: ['appointment', 'confirmation', 'meeting', 'scheduled', 'email'],
+    trigger: 'LEAD_STAGE_CHANGED',
+    conditions: [{ field: 'stage', operator: 'equals', value: 'Meeting Scheduled' }],
+    actions: [
+      { type: 'send_email', config: { subject: 'Your appointment is confirmed — {{companyName}}', template: 'meeting-reminder', recipient: 'lead' } },
+      { type: 'create_task', config: { title: 'Prepare for meeting with {{firstName}} {{lastName}}', taskType: 'MEETING', dueInHours: 24, priority: 'HIGH' } },
+    ],
+  },
+  {
+    id: 'post-meeting-thank-you',
+    name: 'Post-Meeting Thank You Email',
+    description: 'Send a thank you email after the meeting is completed, with a follow-up task to prepare a proposal',
+    category: 'communication',
+    tags: ['meeting', 'thank you', 'post-meeting', 'follow-up', 'email'],
+    trigger: 'LEAD_STAGE_CHANGED',
+    conditions: [{ field: 'stage', operator: 'equals', value: 'Meeting Completed' }],
+    actions: [
+      { type: 'send_email', config: { subject: 'Great meeting with you — {{companyName}}', template: 'post-meeting-thank-you', recipient: 'lead' } },
+      { type: 'create_task', config: { title: 'Prepare proposal for {{firstName}} {{lastName}}', taskType: 'PROPOSAL', dueInHours: 48, priority: 'HIGH' } },
+    ],
+  },
+  {
+    id: 're-engagement-30d',
+    name: 'Re-Engagement Email (30 Days Inactive)',
+    description: 'Automatically re-engage leads that have been inactive for 30 days with a personalized email',
+    category: 'communication',
+    tags: ['re-engagement', 'inactive', '30 days', 'stale', 'nurture', 'email'],
+    trigger: 'LEAD_UPDATED_TIME_ELAPSED',
+    conditions: [{ field: '__delay__', operator: 'equals', value: 43200 }],
+    actions: [
+      { type: 'send_email', config: { subject: 'We miss you, {{firstName}}! — {{companyName}}', template: 're-engagement', recipient: 'lead' } },
+      { type: 'add_tag', config: { tagName: 'Re-engagement Sent' } },
+      { type: 'notify_user', config: { message: 'Re-engagement email sent to inactive lead {{firstName}} {{lastName}}.' } },
+    ],
+  },
+  {
+    id: 'referral-request-14d',
+    name: 'Referral Request (14 Days After Won)',
+    description: 'Ask won customers for referrals 14 days after closing the deal, when satisfaction is highest',
+    category: 'communication',
+    tags: ['referral', 'won', 'request', 'customer', 'post-sale', 'email'],
+    trigger: 'LEAD_UPDATED_TIME_ELAPSED',
+    conditions: [
+      { field: 'status', operator: 'equals', value: 'WON' },
+      { field: '__delay__', operator: 'equals', value: 20160 },
+    ],
+    actions: [
+      { type: 'send_email', config: { subject: 'A small favour — {{companyName}}', template: 'referral-request', recipient: 'lead' } },
+      { type: 'add_tag', config: { tagName: 'Referral Requested' } },
+    ],
+  },
 ];
 
 // ─── Get Templates (with search, category filter, and division context) ──

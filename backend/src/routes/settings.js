@@ -1026,6 +1026,89 @@ Best regards,
     description: 'Notification when lead status changes — can be sent to users or external emails',
     isDefault: true,
   },
+  {
+    name: 'sla-breach-alert',
+    label: 'SLA Breach Alert',
+    subject: '⚠️ SLA Breach: {{firstName}} {{lastName}} needs immediate attention',
+    body: `Hi {{senderName}},
+
+URGENT: Lead {{firstName}} {{lastName}} has breached the SLA response time and requires immediate attention.
+
+Lead Details:
+• Name: {{firstName}} {{lastName}}
+• Email: {{email}}
+• Phone: {{phone}}
+• Company: {{company}}
+• Status: {{status}}
+
+This lead has not been contacted within the expected response window. Please take action immediately or escalate to your manager.
+
+— {{companyName}} CRM`,
+    description: 'Sent to the assigned rep or manager when a lead breaches the SLA response time',
+    isDefault: true,
+  },
+  {
+    name: 'post-meeting-thank-you',
+    label: 'Post-Meeting Thank You',
+    subject: 'Great meeting with you — {{companyName}}',
+    body: `Hi {{firstName}},
+
+Thank you for taking the time to meet with us today. It was a pleasure learning more about your needs.
+
+As discussed, here are the next steps we'll be taking:
+• We will prepare a tailored proposal based on your requirements
+• Our team will follow up within the next 2 business days
+
+If you have any questions in the meantime, please don't hesitate to reach out.
+
+Looking forward to working together!
+
+Best regards,
+{{senderName}}
+{{companyName}}`,
+    description: 'Sent after a meeting to thank the lead and outline next steps',
+    isDefault: true,
+  },
+  {
+    name: 're-engagement',
+    label: 'Re-Engagement',
+    subject: 'We miss you, {{firstName}}! — {{companyName}}',
+    body: `Hi {{firstName}},
+
+It's been a while since we last connected, and I wanted to reach out to see how things are going.
+
+At {{companyName}}, we've been working on some exciting new offerings that might be of interest to you.
+
+Would you be open to a quick call to catch up? I'd love to explore how we can help.
+
+Looking forward to hearing from you!
+
+Best regards,
+{{senderName}}
+{{companyName}}`,
+    description: 'Sent to leads that have been inactive for 30+ days to re-engage them',
+    isDefault: true,
+  },
+  {
+    name: 'referral-request',
+    label: 'Referral Request',
+    subject: 'A small favour — {{companyName}}',
+    body: `Hi {{firstName}},
+
+I hope you've been enjoying your experience with {{companyName}}! We truly value our partnership.
+
+If you know anyone who could benefit from our services, we'd be grateful for a referral. A warm introduction goes a long way, and we promise to take excellent care of anyone you send our way.
+
+As a token of appreciation, we offer special benefits for both you and anyone you refer.
+
+Thank you for your trust and support!
+
+Warm regards,
+{{senderName}}
+{{companyName}}`,
+    description: 'Sent to won customers 14 days after closing to request referrals',
+    isDefault: true,
+  },
 ];
 
 // Get email templates
