@@ -116,6 +116,10 @@ export default function TeamPage() {
 
   // Bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkRoleDropdown, setShowBulkRoleDropdown] = useState(false);
+  const [showBulkDivisionDropdown, setShowBulkDivisionDropdown] = useState(false);
+  const bulkRoleRef = useRef<HTMLDivElement>(null);
+  const bulkDivisionRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
   const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
@@ -161,6 +165,21 @@ export default function TeamPage() {
     window.addEventListener('click', handler);
     return () => window.removeEventListener('click', handler);
   }, [activeMenu]);
+
+  // Close bulk dropdowns on outside click
+  useEffect(() => {
+    if (!showBulkRoleDropdown && !showBulkDivisionDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (bulkRoleRef.current && !bulkRoleRef.current.contains(e.target as Node)) {
+        setShowBulkRoleDropdown(false);
+      }
+      if (bulkDivisionRef.current && !bulkDivisionRef.current.contains(e.target as Node)) {
+        setShowBulkDivisionDropdown(false);
+      }
+    };
+    window.addEventListener('mousedown', handler);
+    return () => window.removeEventListener('mousedown', handler);
+  }, [showBulkRoleDropdown, showBulkDivisionDropdown]);
 
   // ─── Computed counts ───────────────────────────────────────
   const activeCount = users.filter(u => u.isActive).length;
@@ -472,26 +491,24 @@ export default function TeamPage() {
     }
   };
 
-  const handleBulkChangeRole = async () => {
-    const role = prompt('Enter new role (ADMIN, MANAGER, SALES_REP, VIEWER):');
+  const handleBulkChangeRole = async (role: string) => {
     if (!role || !['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'].includes(role)) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { role })));
       setSelectedIds(new Set());
+      setShowBulkRoleDropdown(false);
       fetchUsers();
     } catch (err: any) {
       alert(err.message);
     }
   };
 
-  const handleBulkTransferDivision = async () => {
-    if (!isSuperAdmin || divisions.length === 0) return;
-    const divName = prompt(`Enter division name to transfer to:\n${divisions.map(d => d.name).join(', ')}`);
-    const div = divisions.find(d => d.name.toLowerCase() === divName?.toLowerCase());
-    if (!div) { alert('Division not found'); return; }
+  const handleBulkTransferDivision = async (divisionId: string) => {
+    if (!isSuperAdmin || !divisionId) return;
     try {
-      await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { divisionId: div.id } as any)));
+      await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { divisionId } as any)));
       setSelectedIds(new Set());
+      setShowBulkDivisionDropdown(false);
       fetchUsers();
     } catch (err: any) {
       alert(err.message);
@@ -972,16 +989,80 @@ export default function TeamPage() {
             Deselect All
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={handleBulkChangeRole} className="btn-secondary text-sm">
-              <UserCog className="h-3.5 w-3.5" />
-              Change Role
-            </button>
-            {isSuperAdmin && divisions.length > 0 && (
-              <button onClick={handleBulkTransferDivision} className="btn-secondary text-sm">
-                <Building2 className="h-3.5 w-3.5" />
-                Transfer Division
+            {/* Change Role Dropdown */}
+            <div className="relative" ref={bulkRoleRef}>
+              <button
+                onClick={() => { setShowBulkRoleDropdown(!showBulkRoleDropdown); setShowBulkDivisionDropdown(false); }}
+                className="btn-secondary text-sm"
+              >
+                <UserCog className="h-3.5 w-3.5" />
+                Change Role
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showBulkRoleDropdown ? 'rotate-180' : ''}`} />
               </button>
+              {showBulkRoleDropdown && (
+                <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-xl ring-1 ring-gray-200 py-1 z-[60] animate-fade-in">
+                  <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Select Role</div>
+                  {[
+                    { value: 'ADMIN', label: 'Admin', icon: '👑', desc: 'Full division access' },
+                    { value: 'MANAGER', label: 'Manager', icon: '📋', desc: 'Manage team & leads' },
+                    { value: 'SALES_REP', label: 'Sales Rep', icon: '💼', desc: 'Work assigned leads' },
+                    { value: 'VIEWER', label: 'Viewer', icon: '👁️', desc: 'Read-only access' },
+                  ].map(role => (
+                    <button
+                      key={role.value}
+                      onClick={() => handleBulkChangeRole(role.value)}
+                      className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-center gap-3 transition-colors"
+                    >
+                      <span className="text-lg">{role.icon}</span>
+                      <div>
+                        <div className="text-sm font-medium text-gray-800">{role.label}</div>
+                        <div className="text-xs text-gray-500">{role.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Transfer Division Dropdown */}
+            {isSuperAdmin && divisions.length > 0 && (
+              <div className="relative" ref={bulkDivisionRef}>
+                <button
+                  onClick={() => { setShowBulkDivisionDropdown(!showBulkDivisionDropdown); setShowBulkRoleDropdown(false); }}
+                  className="btn-secondary text-sm"
+                >
+                  <Building2 className="h-3.5 w-3.5" />
+                  Transfer Division
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showBulkDivisionDropdown ? 'rotate-180' : ''}`} />
+                </button>
+                {showBulkDivisionDropdown && (
+                  <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl ring-1 ring-gray-200 py-1 z-[60] animate-fade-in max-h-72 overflow-y-auto">
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Select Division</div>
+                    {divisions.map(div => (
+                      <button
+                        key={div.id}
+                        onClick={() => handleBulkTransferDivision(div.id)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-center gap-3 transition-colors"
+                      >
+                        <div
+                          className="h-8 w-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0"
+                          style={{ backgroundColor: (div as any).settings?.brandColors?.primary || '#6366f1' }}
+                        >
+                          {div.name?.charAt(0) || 'D'}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-gray-800 truncate">{div.name}</div>
+                          {(div as any).tradeName && (
+                            <div className="text-xs text-gray-500 truncate">{(div as any).tradeName}</div>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+
             <button onClick={handleBulkDeactivate} className="btn-secondary text-sm text-red-600 hover:bg-red-50">
               <UserX className="h-3.5 w-3.5" />
               Deactivate
