@@ -145,9 +145,11 @@ function ImportWizard() {
   const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
   const [duplicateAction, setDuplicateAction] = useState('skip');
   const [duplicateField, setDuplicateField] = useState('email');
-  const [assignToId, setAssignToId] = useState('');
+  const [assignToIds, setAssignToIds] = useState<string[]>([]);
   const [defaultStatus, setDefaultStatus] = useState('');
   const [defaultSource, setDefaultSource] = useState('');
+  const [ownerDropdownOpen, setOwnerDropdownOpen] = useState(false);
+  const ownerDropdownRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -159,6 +161,22 @@ function ImportWizard() {
   useEffect(() => {
     api.getUsers().then(setUsers).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ownerDropdownRef.current && !ownerDropdownRef.current.contains(e.target as Node)) {
+        setOwnerDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggleOwner = (userId: string) => {
+    setAssignToIds((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
 
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile);
@@ -211,7 +229,7 @@ function ImportWizard() {
         fieldMapping,
         duplicateAction,
         duplicateField: duplicateField || undefined,
-        assignToId: assignToId || undefined,
+        assignToIds: assignToIds.length > 0 ? assignToIds : undefined,
         defaultStatus: defaultStatus || undefined,
         defaultSource: defaultSource || undefined,
       });
@@ -234,7 +252,7 @@ function ImportWizard() {
     setError('');
     setDuplicateAction('skip');
     setDuplicateField('email');
-    setAssignToId('');
+    setAssignToIds([]);
     setDefaultStatus('');
     setDefaultSource('');
   };
@@ -584,13 +602,61 @@ function ImportWizard() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">Assign To</label>
-                  <select value={assignToId} onChange={(e) => setAssignToId(e.target.value)} className="input">
-                    <option value="">No assignment</option>
-                    {users.map((u: any) => (
-                      <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                    ))}
-                  </select>
+                  <label className="label">Assign To <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+                  <div ref={ownerDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setOwnerDropdownOpen(!ownerDropdownOpen)}
+                      className="input w-full text-left flex items-center justify-between"
+                    >
+                      <span className={assignToIds.length === 0 ? 'text-text-tertiary' : 'text-text-primary'}>
+                        {assignToIds.length === 0
+                          ? 'No assignment'
+                          : assignToIds.length === 1
+                            ? users.find((u: any) => u.id === assignToIds[0])
+                              ? `${users.find((u: any) => u.id === assignToIds[0]).firstName} ${users.find((u: any) => u.id === assignToIds[0]).lastName}`
+                              : '1 selected'
+                            : `${assignToIds.length} owners selected`}
+                      </span>
+                      <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${ownerDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {ownerDropdownOpen && (
+                      <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                        {assignToIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAssignToIds([])}
+                            className="w-full px-3 py-1.5 text-left text-2xs text-red-500 hover:bg-red-50 border-b border-gray-100"
+                          >
+                            Clear all
+                          </button>
+                        )}
+                        {users.map((u: any) => {
+                          const isSelected = assignToIds.includes(u.id);
+                          return (
+                            <label
+                              key={u.id}
+                              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleOwner(u.id)}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              <span className="text-sm text-text-primary">{u.firstName} {u.lastName}</span>
+                            </label>
+                          );
+                        })}
+                        {users.length === 0 && (
+                          <p className="px-3 py-2 text-2xs text-text-tertiary">No team members found</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {assignToIds.length > 1 && (
+                    <p className="text-2xs text-brand-600 mt-1">Leads will be distributed round-robin among selected owners</p>
+                  )}
                 </div>
                 <div>
                   <label className="label">Default Status</label>
@@ -626,13 +692,61 @@ function ImportWizard() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">Owner</label>
-                  <select value={assignToId} onChange={(e) => setAssignToId(e.target.value)} className="input">
-                    <option value="">No owner</option>
-                    {users.map((u: any) => (
-                      <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                    ))}
-                  </select>
+                  <label className="label">Owner <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+                  <div ref={ownerDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setOwnerDropdownOpen(!ownerDropdownOpen)}
+                      className="input w-full text-left flex items-center justify-between"
+                    >
+                      <span className={assignToIds.length === 0 ? 'text-text-tertiary' : 'text-text-primary'}>
+                        {assignToIds.length === 0
+                          ? 'No owner'
+                          : assignToIds.length === 1
+                            ? users.find((u: any) => u.id === assignToIds[0])
+                              ? `${users.find((u: any) => u.id === assignToIds[0]).firstName} ${users.find((u: any) => u.id === assignToIds[0]).lastName}`
+                              : '1 selected'
+                            : `${assignToIds.length} owners selected`}
+                      </span>
+                      <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${ownerDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {ownerDropdownOpen && (
+                      <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                        {assignToIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAssignToIds([])}
+                            className="w-full px-3 py-1.5 text-left text-2xs text-red-500 hover:bg-red-50 border-b border-gray-100"
+                          >
+                            Clear all
+                          </button>
+                        )}
+                        {users.map((u: any) => {
+                          const isSelected = assignToIds.includes(u.id);
+                          return (
+                            <label
+                              key={u.id}
+                              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleOwner(u.id)}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              <span className="text-sm text-text-primary">{u.firstName} {u.lastName}</span>
+                            </label>
+                          );
+                        })}
+                        {users.length === 0 && (
+                          <p className="px-3 py-2 text-2xs text-text-tertiary">No team members found</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {assignToIds.length > 1 && (
+                    <p className="text-2xs text-brand-600 mt-1">Contacts will be distributed round-robin among selected owners</p>
+                  )}
                 </div>
                 <div>
                   <label className="label">Default Lifecycle</label>

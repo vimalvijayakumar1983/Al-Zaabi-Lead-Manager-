@@ -298,7 +298,7 @@ class ApiClient {
     fieldMapping: Record<string, string>;
     duplicateAction: string;
     duplicateField?: string;
-    assignToId?: string;
+    assignToIds?: string[];
     defaultStatus?: string;
     defaultSource?: string;
   }) {
@@ -308,7 +308,7 @@ class ApiClient {
     formData.append('fieldMapping', JSON.stringify(options.fieldMapping));
     formData.append('duplicateAction', options.duplicateAction);
     if (options.duplicateField) formData.append('duplicateField', options.duplicateField);
-    if (options.assignToId) formData.append('assignToId', options.assignToId);
+    if (options.assignToIds && options.assignToIds.length > 0) formData.append('assignToIds', JSON.stringify(options.assignToIds));
     if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
     if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
     const token = this.getToken();

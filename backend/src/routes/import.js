@@ -240,7 +240,17 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       return res.status(400).json({ error: 'File is required' });
     }
 
-    const { module = 'leads', fieldMapping: mappingStr, duplicateAction = 'skip', duplicateField, assignToId, defaultStatus, defaultSource, divisionId } = req.body;
+    const { module = 'leads', fieldMapping: mappingStr, duplicateAction = 'skip', duplicateField, assignToId, assignToIds: assignToIdsStr, defaultStatus, defaultSource, divisionId } = req.body;
+    // Support multi-owner assignment: parse assignToIds JSON array, fall back to single assignToId
+    let assignToIdsList = [];
+    if (assignToIdsStr) {
+      try {
+        assignToIdsList = typeof assignToIdsStr === 'string' ? JSON.parse(assignToIdsStr) : assignToIdsStr;
+      } catch { assignToIdsList = []; }
+    } else if (assignToId) {
+      assignToIdsList = [assignToId];
+    }
+    let roundRobinIndex = 0;
     const fieldMapping = typeof mappingStr === 'string' ? JSON.parse(mappingStr) : (mappingStr || {});
     const fields = MODULE_FIELDS[module];
 
@@ -390,7 +400,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             customData: Object.keys(customData).length > 0 ? customData : undefined,
             organizationId: targetOrgId,
             createdById: req.user.id,
-            assignedToId: assignToId || null,
+            assignedToId: assignToIdsList.length > 0 ? assignToIdsList[roundRobinIndex++ % assignToIdsList.length] : null,
             stageId: defaultStage?.id || null,
           };
 
@@ -548,7 +558,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             customData: Object.keys(customData).length > 0 ? customData : undefined,
             organizationId: targetOrgId,
             createdById: req.user.id,
-            ownerId: assignToId || null,
+            ownerId: assignToIdsList.length > 0 ? assignToIdsList[roundRobinIndex++ % assignToIdsList.length] : null,
           };
 
           const contact = await prisma.contact.create({ data: contactData });
