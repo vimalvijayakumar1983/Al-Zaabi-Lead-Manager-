@@ -100,7 +100,7 @@ const taskTypeOptions = [
 ];
 
 // Static value options for standard fields (assignedTo populated dynamically)
-const standardConditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'boolean' | 'user'> = {
+const standardConditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'time' | 'boolean' | 'user'> = {
   status: statusOptions,
   source: sourceOptions,
   score: 'number',
