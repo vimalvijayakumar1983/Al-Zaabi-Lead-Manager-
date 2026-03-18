@@ -491,7 +491,7 @@ export default function AllocationSettings({
                         ) : (
                           <Building2
                             className="w-4 h-4"
-                            style={{ color: div.color || '#6B7280' }}
+                            style={{ color: div.primaryColor || '#6B7280' }}
                           />
                         )}
                         <span className="flex-1 text-left">{div.name}</span>
@@ -728,7 +728,9 @@ export default function AllocationSettings({
                           <option value="">Select assignee...</option>
                           {effectiveUsers.map((user) => (
                             <option key={user.id} value={user.id}>
-                              {user.name || user.email}
+                              {user.firstName && user.lastName
+                                ? `${user.firstName} ${user.lastName}`
+                                : user.email}
                             </option>
                           ))}
                         </select>
@@ -795,13 +797,15 @@ export default function AllocationSettings({
                         />
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-medium text-blue-700 flex-shrink-0">
-                            {(user.name || user.email || '?')
+                            {(user.firstName || user.email || '?')
                               .charAt(0)
                               .toUpperCase()}
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-medium text-gray-900 truncate">
-                              {user.name || 'Unnamed'}
+                              {user.firstName && user.lastName
+                                ? `${user.firstName} ${user.lastName}`
+                                : 'Unnamed'}
                             </p>
                             <p className="text-xs text-gray-500 truncate">
                               {user.email}
@@ -935,16 +939,16 @@ export default function AllocationSettings({
                         <p className="text-xs text-gray-500">Allocated</p>
                       </div>
                       <div>
-                        <p className="text-lg font-semibold text-red-600">
-                          {autoAllocateResult.failed || 0}
+                        <p className="text-lg font-semibold text-gray-600">
+                          {autoAllocateResult.assigned || 0}
                         </p>
-                        <p className="text-xs text-gray-500">Failed</p>
+                        <p className="text-xs text-gray-500">Assigned</p>
                       </div>
                       <div>
-                        <p className="text-lg font-semibold text-gray-600">
-                          {autoAllocateResult.total || 0}
+                        <p className="text-lg font-semibold text-blue-600">
+                          {autoAllocateResult.details?.length || 0}
                         </p>
-                        <p className="text-xs text-gray-500">Total</p>
+                        <p className="text-xs text-gray-500">Details</p>
                       </div>
                     </div>
                   </div>
