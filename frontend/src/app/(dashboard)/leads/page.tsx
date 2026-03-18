@@ -236,6 +236,7 @@ function LeadsContent() {
       if (filters.conversionMax) params.conversionMax = filters.conversionMax;
       if (filters.stageId) params.stageId = filters.stageId;
       if (filters.callOutcome) params.callOutcome = filters.callOutcome;
+      if (filters.divisionId) params.divisionId = filters.divisionId;
       const res = await api.getLeads(params) as any;
       const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
       setLeads(leadsData);
@@ -636,6 +637,10 @@ function LeadsContent() {
             {Math.round(lead.conversionProb * 100)}%
           </span>
         ) : <span className="text-sm text-gray-400">-</span>;
+      case 'division':
+        return lead.organization ? (
+          <span className="text-sm text-gray-700">{lead.organization.name}</span>
+        ) : <span className="text-xs text-gray-400">-</span>;
       case 'assignedTo':
         return lead.assignedTo ? (
           <div className="flex items-center gap-1.5">

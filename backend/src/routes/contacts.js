@@ -70,6 +70,7 @@ const listContactsSchema = paginationSchema.extend({
   dateTo: z.string().optional(),
   minScore: z.string().optional(),
   maxScore: z.string().optional(),
+  divisionId: z.string().optional(),
 });
 
 const convertLeadSchema = z.object({
@@ -162,6 +163,11 @@ router.get('/', validateQuery(listContactsSchema), async (req, res, next) => {
       where.tags = { some: { tag: { name: { in: tagNames } } } };
     }
 
+    // Optional: filter to specific division
+    if (q.divisionId && req.isSuperAdmin) {
+      where.organizationId = q.divisionId;
+    }
+
     // Sort
     const orderBy = {};
     const validSorts = ['createdAt', 'updatedAt', 'firstName', 'lastName', 'email', 'company', 'lifecycle', 'score', 'lastContactedAt'];
@@ -176,6 +182,7 @@ router.get('/', validateQuery(listContactsSchema), async (req, res, next) => {
         include: {
           owner: { select: { id: true, firstName: true, lastName: true, avatar: true } },
           tags: { include: { tag: true } },
+          organization: { select: { id: true, name: true } },
           _count: { select: { activities: true, tasks: true, notes: true, deals: true } },
         },
       }),

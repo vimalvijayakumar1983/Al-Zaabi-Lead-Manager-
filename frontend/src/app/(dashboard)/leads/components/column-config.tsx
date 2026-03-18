@@ -30,6 +30,7 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
   { id: 'productInterest', label: 'Product Interest', visible: false, sortable: false },
   { id: 'campaign', label: 'Campaign', visible: false, sortable: false },
   { id: 'conversionProb', label: 'Conversion %', visible: false, sortable: false },
+  { id: 'division', label: 'Division', visible: false, sortable: false },
   { id: 'assignedTo', label: 'Assigned To', visible: true, sortable: false },
   { id: 'tags', label: 'Tags', visible: false, sortable: false },
   { id: 'channels', label: 'Channels', visible: true, sortable: false },

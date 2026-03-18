@@ -215,6 +215,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
           stage: { select: { id: true, name: true, color: true } },
           tags: { include: { tag: true } },
+          organization: { select: { id: true, name: true } },
           _count: { select: { activities: true, tasks: true, communications: true } },
         },
         orderBy: { [sortBy]: sortOrder },

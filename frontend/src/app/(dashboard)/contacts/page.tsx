@@ -49,7 +49,7 @@ export default function ContactsPage() {
   const [stats, setStats] = useState<ContactStats | null>(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ lifecycle: '', type: '', source: '', ownerId: '', company: '' });
+  const [filters, setFilters] = useState({ lifecycle: '', type: '', source: '', ownerId: '', company: '', divisionId: '' });
   const [sortBy, setSortBy] = useState('updatedAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -64,6 +64,7 @@ export default function ContactsPage() {
   const [showViewSidebar, setShowViewSidebar] = useState(false);
   const [columns, setColumns] = useState<ContactColumnDef[]>(() => loadContactColumns());
   const [showColumnManager, setShowColumnManager] = useState(false);
+  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
   const visibleColumns = columns.filter(c => c.visible);
 
   const fetchContacts = useCallback(async () => {
@@ -81,6 +82,7 @@ export default function ContactsPage() {
       if (filters.source) params.source = filters.source;
       if (filters.ownerId) params.ownerId = filters.ownerId;
       if (filters.company) params.company = filters.company;
+      if (filters.divisionId) params.divisionId = filters.divisionId;
 
       const res = await api.getContacts(params);
       setContacts(res.data);
@@ -106,6 +108,10 @@ export default function ContactsPage() {
   useEffect(() => {
     fetchStats();
     api.getContactFilterValues().then(setFilterValues).catch(() => {});
+    try {
+      const raw = localStorage.getItem('divisions');
+      if (raw) setDivisions(JSON.parse(raw));
+    } catch { /* ignore */ }
   }, [fetchStats]);
 
   // Auto-refresh when another user modifies contact/deal data
@@ -167,6 +173,7 @@ export default function ContactsPage() {
       if (filters.type) params.type = filters.type;
       if (filters.source) params.source = filters.source;
       if (filters.company) params.company = filters.company;
+      if (filters.divisionId) params.divisionId = filters.divisionId;
       // If specific contacts are selected, export only those
       if (selectedIds.size > 0) params.ids = Array.from(selectedIds).join(',');
       await api.exportContacts(params);
@@ -177,7 +184,7 @@ export default function ContactsPage() {
     }
   };
 
-  const activeFilterCount = [filters.type, filters.source, filters.ownerId, filters.company].filter(v => v !== '').length;
+  const activeFilterCount = [filters.type, filters.source, filters.ownerId, filters.company, filters.divisionId].filter(v => v !== '').length;
 
   const handleFormClose = () => {
     setShowForm(false);
@@ -324,8 +331,17 @@ export default function ContactsPage() {
                 </select>
               </div>
             )}
+            {divisions.length > 0 && (
+              <div>
+                <label className="text-2xs font-medium text-text-tertiary uppercase mb-1 block">Division</label>
+                <select className="input text-sm" value={filters.divisionId} onChange={(e) => { setFilters(f => ({ ...f, divisionId: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
+                  <option value="">All Divisions</option>
+                  {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            )}
             <div className="flex items-end">
-              <button onClick={() => { setFilters({ lifecycle: '', type: '', source: '', ownerId: '', company: '' }); setPagination(p => ({ ...p, page: 1 })); }}
+              <button onClick={() => { setFilters({ lifecycle: '', type: '', source: '', ownerId: '', company: '', divisionId: '' }); setPagination(p => ({ ...p, page: 1 })); }}
                 className="btn-secondary text-xs">
                 <X className="h-3 w-3" /> Clear All
               </button>
@@ -359,6 +375,12 @@ export default function ContactsPage() {
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
               Owner filter active
               <button onClick={() => { setFilters(f => ({ ...f, ownerId: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
+            </span>
+          )}
+          {filters.divisionId && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
+              Division: {divisions.find(d => d.id === filters.divisionId)?.name || filters.divisionId}
+              <button onClick={() => { setFilters(f => ({ ...f, divisionId: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
             </span>
           )}
         </div>
@@ -483,6 +505,12 @@ export default function ContactsPage() {
                               <TypeIcon className="h-3 w-3" />
                               {contactType.label}
                             </span>
+                          </td>;
+                        case 'division':
+                          return <td key={col.id} className="px-3 py-3">
+                            {contact.organization ? (
+                              <span className="text-xs text-text-secondary">{contact.organization.name}</span>
+                            ) : <span className="text-2xs text-text-tertiary">-</span>}
                           </td>;
                         case 'owner':
                           return <td key={col.id} className="px-3 py-3">

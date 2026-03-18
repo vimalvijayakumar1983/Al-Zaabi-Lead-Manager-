@@ -27,6 +27,7 @@ export interface FilterState {
   conversionMax: string;
   stageId: string;
   callOutcome: string;      // comma-separated CallDisposition values
+  divisionId: string;
 }
 
 export const emptyFilters: FilterState = {
@@ -52,6 +53,7 @@ export const emptyFilters: FilterState = {
   conversionMax: '',
   stageId: '',
   callOutcome: '',
+  divisionId: '',
 };
 
 const statusOptions = [
@@ -257,6 +259,15 @@ function toggleMulti(current: string, value: string): string {
 export function AdvancedFilters({ filters, onChange, users, tags: availableTags = [], stages = [], onClose }: AdvancedFiltersProps) {
   const [local, setLocal] = useState<FilterState>({ ...filters });
 
+  // Load divisions from localStorage
+  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('divisions');
+      if (raw) setDivisions(JSON.parse(raw));
+    } catch { /* ignore */ }
+  }, []);
+
   // Section open/closed state
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     statusPipeline: true,
@@ -300,7 +311,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
 
   // Count active filters per section
   const sectionCounts = {
-    statusPipeline: [local.status, local.stageId, local.source].filter(Boolean).length,
+    statusPipeline: [local.status, local.stageId, local.source, local.divisionId].filter(Boolean).length,
     callOutcome: local.callOutcome ? parseMulti(local.callOutcome).length : 0,
     assignmentContact: [local.assignedToId, local.hasEmail, local.hasPhone].filter(Boolean).length,
     scoreBudget: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
@@ -611,6 +622,15 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
                 </div>
               </div>
             </div>
+            {divisions.length > 0 && (
+              <div>
+                <label className="label">Division</label>
+                <select className="input" value={local.divisionId} onChange={(e) => setLocal({ ...local, divisionId: e.target.value })}>
+                  <option value="">All Divisions</option>
+                  {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -901,6 +921,15 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
     const outcomes = parseMulti(filters.callOutcome);
     const outcomeLabels = outcomes.map(v => callOutcomeOptions.find(o => o.value === v)?.label || v);
     badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
+  }
+  if (filters.divisionId) {
+    let divName = filters.divisionId;
+    try {
+      const divs = JSON.parse(localStorage.getItem('divisions') || '[]');
+      const found = divs.find((d: any) => d.id === filters.divisionId);
+      if (found) divName = found.name;
+    } catch { /* ignore */ }
+    badges.push({ key: 'divisionId', label: `Division: ${divName}` });
   }
 
   if (badges.length === 0) return null;

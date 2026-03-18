@@ -114,6 +114,7 @@ export interface Lead {
   unreadCommunications?: number;
   lastInboundMessage?: { channel: string; body: string; createdAt: string } | null;
   organizationId?: string;
+  organization?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -366,6 +367,8 @@ export interface Contact {
   tasks?: Task[];
   deals?: Deal[];
   _count?: { activities: number; tasks: number; notes: number; deals: number };
+  organizationId?: string;
+  organization?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
 }
