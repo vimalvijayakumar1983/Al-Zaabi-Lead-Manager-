@@ -89,6 +89,11 @@ export default function TeamPage() {
   const [showRoles, setShowRoles] = useState(false);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilters, setRoleFilters] = useState<string[]>([]);
@@ -269,6 +274,19 @@ export default function TeamPage() {
     return result;
   }, [users, searchQuery, roleFilters, statusFilter, divisionFilter, dateJoinedPreset, customDateFrom, customDateTo, performanceFilter, tasksFilter, sortField, sortDirection]);
 
+  // Pagination calculations
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedUsers.length / pageSize));
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredAndSortedUsers.slice(start, start + pageSize);
+  }, [filteredAndSortedUsers, currentPage, pageSize]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filters, sortConfig]);
+
+
   // ─── Active filter count ───────────────────────────────────
   const activeFilterCount = useMemo(() => {
     let count = 0;
@@ -298,10 +316,10 @@ export default function TeamPage() {
 
   // ─── Bulk actions ──────────────────────────────────────────
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredAndSortedUsers.length) {
+    if (selectedIds.size === paginatedUsers.length && paginatedUsers.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filteredAndSortedUsers.map(u => u.id)));
+      setSelectedIds(new Set(paginatedUsers.map(u => u.id)));
     }
   };
 
@@ -826,7 +844,7 @@ export default function TeamPage() {
                 <th className="table-cell w-10">
                   <input
                     type="checkbox"
-                    checked={filteredAndSortedUsers.length > 0 && selectedIds.size === filteredAndSortedUsers.length}
+                    checked={filteredAndSortedUsers.length > 0 && selectedIds.size === paginatedUsers.length && paginatedUsers.length > 0}
                     onChange={toggleSelectAll}
                     className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
                   />
@@ -870,7 +888,7 @@ export default function TeamPage() {
                 </td>
               </tr>
             ) : (
-              filteredAndSortedUsers.map((user, _idx) => {
+              paginatedUsers.map((user, _idx) => {
                 const role = roleConfig[user.role] || roleConfig.VIEWER;
                 const RoleIcon = role.icon;
                 const isCurrentUser = currentUser?.id === user.id;
@@ -1062,6 +1080,88 @@ export default function TeamPage() {
           </tbody>
         </table>
       </div>
+
+
+      {/* Pagination */}
+      {filteredAndSortedUsers.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-border bg-surface-secondary/30 rounded-b-xl">
+          <div className="flex items-center gap-3 text-sm text-text-secondary">
+            <span>
+              Showing {Math.min((currentPage - 1) * pageSize + 1, filteredAndSortedUsers.length)}–{Math.min(currentPage * pageSize, filteredAndSortedUsers.length)} of {filteredAndSortedUsers.length} member{filteredAndSortedUsers.length !== 1 ? 's' : ''}
+            </span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              className="px-2 py-1 text-xs rounded-lg border border-border bg-white text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+            >
+              <option value={5}>5 per page</option>
+              <option value={10}>10 per page</option>
+              <option value={20}>20 per page</option>
+              <option value={50}>50 per page</option>
+              <option value={100}>100 per page</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="px-2 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="First page"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+            </button>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+            {(() => {
+              const pages: number[] = [];
+              const maxVisible = 5;
+              let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+              let end = Math.min(totalPages, start + maxVisible - 1);
+              if (end - start + 1 < maxVisible) start = Math.max(1, end - maxVisible + 1);
+              if (start > 1) { pages.push(1); if (start > 2) pages.push(-1); }
+              for (let i = start; i <= end; i++) pages.push(i);
+              if (end < totalPages) { if (end < totalPages - 1) pages.push(-2); pages.push(totalPages); }
+              return pages.map((p, i) =>
+                p < 0 ? (
+                  <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-text-tertiary">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => setCurrentPage(p)}
+                    className={`min-w-[32px] px-2 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      currentPage === p
+                        ? 'bg-brand-primary text-white border-brand-primary shadow-sm'
+                        : 'bg-white text-text-secondary border-border hover:bg-surface-secondary'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                )
+              );
+            })()}
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Last page"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       {showInvite && (
