@@ -558,10 +558,9 @@ function LeadsContent() {
           </div>
         ) : <span className="text-xs text-gray-400">-</span>;
       case 'channels': {
-        const cc = lead.channelCounts || {};
         const ucc = lead.unreadChannelCounts || {};
-        const hasChannels = Object.keys(cc).length > 0;
-        if (!hasChannels) return <span className="text-xs text-gray-400">-</span>;
+        const unreadEntries = Object.entries(ucc).filter(([, cnt]) => cnt > 0);
+        if (unreadEntries.length === 0) return <span className="text-xs text-gray-400">-</span>;
         const channelConfig: Record<string, { icon: string; color: string; bg: string; label: string }> = {
           WHATSAPP: { icon: 'M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z', color: '#25D366', bg: 'bg-green-50', label: 'WhatsApp' },
           EMAIL: { icon: 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', color: '#6366F1', bg: 'bg-indigo-50', label: 'Email' },
@@ -571,16 +570,15 @@ function LeadsContent() {
         };
         return (
           <div className="flex items-center gap-1.5 flex-wrap">
-            {Object.entries(cc).map(([channel, count]) => {
+            {unreadEntries.map(([channel, unread]) => {
               const cfg = channelConfig[channel] || { icon: '', color: '#6B7280', bg: 'bg-gray-50', label: channel };
-              const unread = ucc[channel] || 0;
               return (
-                <span key={channel} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${unread > 0 ? 'bg-brand-50 ring-1 ring-brand-200 text-brand-700' : cfg.bg}`}
-                  style={{ color: unread > 0 ? undefined : cfg.color }} title={`${cfg.label}: ${count} message${count !== 1 ? 's' : ''}${unread > 0 ? ` (${unread} unread)` : ''}`}>
+                <span key={channel} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-brand-50 ring-1 ring-brand-200 text-brand-700"
+                  title={`${cfg.label}: ${unread} unread`}>
                   <svg className="h-3 w-3" fill={channel === 'WHATSAPP' ? 'currentColor' : 'none'} stroke={channel === 'WHATSAPP' ? 'none' : 'currentColor'} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={cfg.icon} />
                   </svg>
-                  {unread > 0 ? unread : ''}
+                  {unread}
                 </span>
               );
             })}
