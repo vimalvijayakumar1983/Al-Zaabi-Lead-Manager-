@@ -1418,7 +1418,7 @@ export default function TeamPage() {
                 </p>
               </div>
 
-              {/* Reassign leads dropdown */}
+              {/* Reassign leads dropdown — scoped to same division(s) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   Reassign leads & tasks to:
@@ -1429,16 +1429,62 @@ export default function TeamPage() {
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="">No reassignment (delete if no leads)</option>
-                  {users
-                    .filter((u) => u.id !== deleteConfirmUser.id && u.isActive)
-                    .map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.firstName} {u.lastName} ({u.role})
-                      </option>
-                    ))}
+                  {(() => {
+                    // Get the divisions the deleted user belongs to
+                    const deletedUserDivs = (userMemberships[deleteConfirmUser.id] || []).map((m: any) => m.divisionId || m.organizationId);
+                    // If user has no division memberships, fall back to showing all active users
+                    if (deletedUserDivs.length === 0) {
+                      return users
+                        .filter((u) => u.id !== deleteConfirmUser.id && u.isActive)
+                        .map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.firstName} {u.lastName} ({roleConfig[u.role]?.label || u.role})
+                          </option>
+                        ));
+                    }
+                    // Group eligible users by division
+                    const divisionGroups: { division: Organization; users: User[] }[] = [];
+                    for (const divId of deletedUserDivs) {
+                      const div = divisions.find((d) => d.id === divId);
+                      if (!div) continue;
+                      const divUsers = users.filter((u) => {
+                        if (u.id === deleteConfirmUser.id || !u.isActive) return false;
+                        const uDivs = (userMemberships[u.id] || []).map((m: any) => m.divisionId || m.organizationId);
+                        return uDivs.includes(divId);
+                      });
+                      if (divUsers.length > 0) {
+                        divisionGroups.push({ division: div, users: divUsers });
+                      }
+                    }
+                    // Render optgroups by division
+                    if (divisionGroups.length === 1) {
+                      // Single division — no need for optgroup header
+                      return divisionGroups[0].users.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.firstName} {u.lastName} ({roleConfig[u.role]?.label || u.role})
+                        </option>
+                      ));
+                    }
+                    return divisionGroups.map((g) => (
+                      <optgroup key={g.division.id} label={g.division.name}>
+                        {g.users.map((u) => (
+                          <option key={`${g.division.id}-${u.id}`} value={u.id}>
+                            {u.firstName} {u.lastName} ({roleConfig[u.role]?.label || u.role})
+                          </option>
+                        ))}
+                      </optgroup>
+                    ));
+                  })()}
                 </select>
                 <p className="text-xs text-gray-500 mt-1">
-                  If the user has assigned leads, you must select someone to reassign them to.
+                  {(() => {
+                    const deletedUserDivs = (userMemberships[deleteConfirmUser.id] || []).map((m: any) => m.divisionId || m.organizationId);
+                    const divNames = deletedUserDivs.map((id: string) => divisions.find((d) => d.id === id)?.name).filter(Boolean);
+                    if (divNames.length > 0) {
+                      return `Showing users from: ${divNames.join(', ')}`;
+                    }
+                    return 'If the user has assigned leads, you must select someone to reassign them to.';
+                  })()}
                 </p>
               </div>
             </div>
