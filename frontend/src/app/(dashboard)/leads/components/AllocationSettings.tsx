@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/authStore';
 import type {
+  Organization,
   AllocationMethod,
   AllocationRules,
   AllocationStats,
@@ -311,6 +313,22 @@ const METHODS: MethodOption[] = [
 ];
 
 export function AllocationSettings({ isOpen, onClose, users }: AllocationSettingsProps) {
+  // Division scope
+  const { user } = useAuthStore();
+  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
+  const [inherited, setInherited] = useState(false);
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+
+  // Load divisions for super admin
+  useEffect(() => {
+    if (isSuperAdmin && isOpen) {
+      api.get('/divisions').then((res: any) => {
+        setDivisions(res.data?.divisions || res.divisions || []);
+      }).catch(() => {});
+    }
+  }, [isSuperAdmin, isOpen]);
+
   /* ---- state ---- */
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -371,7 +389,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
         sourceRules: sourceRules.filter((r) => r.source && r.assignToId),
         eligibleUserIds,
       };
-      await api.updateAllocationRules(payload);
+      await api.updateAllocationRules({ ...payload, divisionId: selectedDivisionId || undefined });
       setSuccessMsg('Allocation settings saved successfully.');
       setTimeout(() => {
         onClose();
@@ -389,7 +407,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
     setError(null);
     setAllocateResult(null);
     try {
-      const result = await api.autoAllocateLeads();
+      const result = await api.autoAllocateLeads(selectedDivisionId || undefined);
       setAllocateResult(result);
       // Refresh stats after allocation
       const freshStats = await api.getAllocationStats();
@@ -435,6 +453,60 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
           <div>
             <h2 className="text-lg font-bold text-gray-900">Allocation Settings</h2>
             <p className="text-xs text-gray-500 mt-0.5">Configure how leads are assigned to your team</p>
+          {/* Division Scope Selector */}
+          {isSuperAdmin && divisions.length > 0 && (
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                <svg className="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                Division Scope
+              </label>
+              <select
+                value={selectedDivisionId || ''}
+                onChange={(e) => setSelectedDivisionId(e.target.value || null)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+              >
+                <option value="">🌐 All Divisions (Global Rules)</option>
+                {divisions.map((div) => (
+                  <option key={div.id} value={div.id}>
+                    🏢 {div.name}{div.tradeName ? ` (${div.tradeName})` : ''}
+                  </option>
+                ))}
+              </select>
+              {selectedDivisionId && inherited && (
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+                  <span className="text-sm text-blue-700">
+                    📋 This division is <strong>inheriting global rules</strong>
+                  </span>
+                  <button
+                    onClick={() => setInherited(false)}
+                    className="text-xs px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  >
+                    Customize
+                  </button>
+                </div>
+              )}
+              {selectedDivisionId && !inherited && (
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+                  <span className="text-sm text-amber-700">
+                    ⚡ This division has <strong>custom rules</strong>
+                  </span>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.updateAllocationRules({ divisionId: selectedDivisionId, resetToGlobal: true });
+                        setInherited(true);
+                        loadSettings();
+                      } catch {}
+                    }}
+                    className="text-xs px-3 py-1 bg-amber-600 text-white rounded-md hover:bg-amber-700"
+                  >
+                    Reset to Global
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           </div>
           <button
             type="button"
