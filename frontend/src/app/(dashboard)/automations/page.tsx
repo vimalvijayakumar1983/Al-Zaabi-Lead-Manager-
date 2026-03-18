@@ -1800,7 +1800,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             </div>
                             <div>
                               <label className="label">Escalation Level</label>
-                              <select className="input text-sm" value={action.config.escalationLevel ?? ''} onChange={(e) => updateActionConfig(i, 'escalationLevel', e.target.value ? Number(e.target.value) : undefined)}>
+                              <select className="input text-sm" value={String(action.config.escalationLevel ?? '')} onChange={(e) => updateActionConfig(i, 'escalationLevel', e.target.value || '')}>
                                 <option value="">No change</option>
                                 <option value="0">Level 0 — Normal</option>
                                 <option value="1">Level 1 — Reminded</option>
