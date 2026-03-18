@@ -394,8 +394,8 @@ function LeadsContent() {
           case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
           case 'channels': {
-            const cc = l.channelCounts || {};
-            return Object.entries(cc).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
+            const ucc = l.unreadChannelCounts || {};
+            return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
           }
           case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -575,12 +575,12 @@ function LeadsContent() {
               const cfg = channelConfig[channel] || { icon: '', color: '#6B7280', bg: 'bg-gray-50', label: channel };
               const unread = ucc[channel] || 0;
               return (
-                <span key={channel} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${unread > 0 ? 'bg-brand-50 ring-1 ring-brand-200' : cfg.bg}`}
+                <span key={channel} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${unread > 0 ? 'bg-brand-50 ring-1 ring-brand-200 text-brand-700' : cfg.bg}`}
                   style={{ color: unread > 0 ? undefined : cfg.color }} title={`${cfg.label}: ${count} message${count !== 1 ? 's' : ''}${unread > 0 ? ` (${unread} unread)` : ''}`}>
                   <svg className="h-3 w-3" fill={channel === 'WHATSAPP' ? 'currentColor' : 'none'} stroke={channel === 'WHATSAPP' ? 'none' : 'currentColor'} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={cfg.icon} />
                   </svg>
-                  {unread > 0 ? unread : count}
+                  {unread > 0 ? unread : ''}
                 </span>
               );
             })}
