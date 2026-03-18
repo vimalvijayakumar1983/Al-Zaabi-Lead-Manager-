@@ -210,7 +210,7 @@ function LeadsContent() {
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
 
   // Auto-refresh when another user modifies lead data
-  useRealtimeSync(['lead'], () => { fetchLeads(); fetchStats(); });
+  useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
   useEffect(() => {
     api.getLeadTags().then((data: any) => setAllTags(data || [])).catch(() => {});
     api.getPipelineStages().then((data: any) => setStages(data.stages || data || [])).catch(() => {});
