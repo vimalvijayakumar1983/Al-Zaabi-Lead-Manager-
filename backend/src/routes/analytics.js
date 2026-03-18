@@ -448,7 +448,7 @@ router.get('/score-distribution', async (req, res, next) => {
     const { divisionId } = req.query;
     const orgFilter = getOrgFilter(req, divisionId);
 
-    const scoreWhere = getLeadWhere(req, divisionId, { score: { not: null } });
+    const scoreWhere = getLeadWhere(req, divisionId);
 
     const leads = await prisma.lead.findMany({
       where: scoreWhere,
@@ -557,7 +557,7 @@ router.get('/dashboard-full', async (req, res, next) => {
       }),
 
       prisma.lead.findMany({
-        where: { ...lw, score: { not: null } },
+        where: lw,
         select: { score: true, status: true },
       }),
 
