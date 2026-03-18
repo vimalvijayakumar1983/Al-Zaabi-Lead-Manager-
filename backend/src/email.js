@@ -2,23 +2,63 @@ const nodemailer = require('nodemailer');
 const { prisma } = require('./config/database');
 
 // Get email settings for an organization
+// Priority: 1) Division's Settings page config  2) email_settings table  3) Parent org  4) Defaults
 async function getEmailSettings(organizationId) {
-  // Try to find org-specific settings
+  // 1) Check division's organization.settings.emailConfig (set from Settings page)
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { settings: true, parentId: true, type: true }
+  });
+
+  if (org) {
+    const orgSettings = typeof org.settings === 'object' && org.settings ? org.settings : {};
+    const emailConfig = orgSettings.emailConfig;
+    if (emailConfig && emailConfig.smtpHost && emailConfig.smtpUser) {
+      // Map Settings page field names to email.js field names
+      return {
+        smtpHost: emailConfig.smtpHost,
+        smtpPort: emailConfig.smtpPort || 465,
+        smtpSecure: emailConfig.smtpPort === 587 ? false : true,
+        smtpUsername: emailConfig.smtpUser,
+        smtpPassword: emailConfig.smtpPass,
+        fromEmail: emailConfig.fromEmail || emailConfig.smtpUser,
+        fromName: emailConfig.fromName || 'Al-Zaabi Lead Manager'
+      };
+    }
+  }
+
+  // 2) Check email_settings table for this org
   let settings = await prisma.$queryRaw`
     SELECT * FROM email_settings WHERE "organizationId" = ${organizationId} LIMIT 1
   `;
-  
   if (settings && settings.length > 0) {
     return settings[0];
   }
-  
-  // Try to find parent org settings (for divisions)
-  const org = await prisma.organization.findUnique({
-    where: { id: organizationId },
-    select: { parentId: true }
-  });
-  
+
+  // 3) Try parent org (for divisions inheriting group settings)
   if (org?.parentId) {
+    // Check parent's organization.settings.emailConfig
+    const parentOrg = await prisma.organization.findUnique({
+      where: { id: org.parentId },
+      select: { settings: true }
+    });
+    if (parentOrg) {
+      const parentSettings = typeof parentOrg.settings === 'object' && parentOrg.settings ? parentOrg.settings : {};
+      const parentEmailConfig = parentSettings.emailConfig;
+      if (parentEmailConfig && parentEmailConfig.smtpHost && parentEmailConfig.smtpUser) {
+        return {
+          smtpHost: parentEmailConfig.smtpHost,
+          smtpPort: parentEmailConfig.smtpPort || 465,
+          smtpSecure: parentEmailConfig.smtpPort === 587 ? false : true,
+          smtpUsername: parentEmailConfig.smtpUser,
+          smtpPassword: parentEmailConfig.smtpPass,
+          fromEmail: parentEmailConfig.fromEmail || parentEmailConfig.smtpUser,
+          fromName: parentEmailConfig.fromName || 'Al-Zaabi Lead Manager'
+        };
+      }
+    }
+
+    // Check parent's email_settings table
     settings = await prisma.$queryRaw`
       SELECT * FROM email_settings WHERE "organizationId" = ${org.parentId} LIMIT 1
     `;
@@ -26,8 +66,8 @@ async function getEmailSettings(organizationId) {
       return settings[0];
     }
   }
-  
-  // Fallback defaults
+
+  // 4) Fallback defaults (Zimbra)
   return {
     smtpHost: 'mail.alzaabigroup.com',
     smtpPort: 465,
