@@ -793,12 +793,14 @@ const DEFAULT_TEMPLATES = [
     name: 'welcome',
     label: 'Welcome',
     subject: 'Welcome to {{companyName}}!',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Welcome, {{firstName}}!</h2>
-  <p style="color: #374151; line-height: 1.6;">Thank you for your interest in {{companyName}}. We're excited to connect with you.</p>
-  <p style="color: #374151; line-height: 1.6;">A member of our team will be in touch shortly to discuss how we can help.</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Welcome, {{firstName}}!
+
+Thank you for your interest in {{companyName}}. We're excited to connect with you.
+
+A member of our team will be in touch shortly to discuss how we can help.
+
+Best regards,
+{{senderName}}`,
     description: 'Sent to new leads when they first enter the system',
     isDefault: true,
   },
@@ -806,12 +808,14 @@ const DEFAULT_TEMPLATES = [
     name: 'follow-up',
     label: 'Follow Up',
     subject: 'Following up — {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
-  <p style="color: #374151; line-height: 1.6;">I wanted to follow up on our recent conversation. Do you have any questions or would you like to schedule a call?</p>
-  <p style="color: #374151; line-height: 1.6;">I'm happy to help with anything you need.</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Hi {{firstName}},
+
+I wanted to follow up on our recent conversation. Do you have any questions or would you like to schedule a call?
+
+I'm happy to help with anything you need.
+
+Best regards,
+{{senderName}}`,
     description: 'Follow-up email for leads that have been contacted',
     isDefault: true,
   },
@@ -819,12 +823,14 @@ const DEFAULT_TEMPLATES = [
     name: 'proposal',
     label: 'Proposal',
     subject: 'Proposal from {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
-  <p style="color: #374151; line-height: 1.6;">Please find our proposal details below. We've tailored this based on our discussion about your needs.</p>
-  <p style="color: #374151; line-height: 1.6;">Feel free to reach out if you have any questions or would like to discuss further.</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Hi {{firstName}},
+
+Please find our proposal details below. We've tailored this based on our discussion about your needs.
+
+Feel free to reach out if you have any questions or would like to discuss further.
+
+Best regards,
+{{senderName}}`,
     description: 'Sent when sharing a proposal with a lead',
     isDefault: true,
   },
@@ -832,12 +838,14 @@ const DEFAULT_TEMPLATES = [
     name: 'meeting-reminder',
     label: 'Meeting Reminder',
     subject: 'Reminder: Upcoming meeting — {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
-  <p style="color: #374151; line-height: 1.6;">This is a friendly reminder about our upcoming meeting.</p>
-  <p style="color: #374151; line-height: 1.6;">Looking forward to speaking with you!</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Hi {{firstName}},
+
+This is a friendly reminder about our upcoming meeting.
+
+Looking forward to speaking with you!
+
+Best regards,
+{{senderName}}`,
     description: 'Reminder email before a scheduled meeting',
     isDefault: true,
   },
@@ -845,13 +853,35 @@ const DEFAULT_TEMPLATES = [
     name: 'thank-you',
     label: 'Thank You',
     subject: 'Thank you — {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Thank you, {{firstName}}!</h2>
-  <p style="color: #374151; line-height: 1.6;">We truly appreciate your business and trust in {{companyName}}.</p>
-  <p style="color: #374151; line-height: 1.6;">If there's anything else we can help with, please don't hesitate to reach out.</p>
-  <p style="color: #374151; line-height: 1.6;">Warm regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Thank you, {{firstName}}!
+
+We truly appreciate your business and trust in {{companyName}}.
+
+If there's anything else we can help with, please don't hesitate to reach out.
+
+Warm regards,
+{{senderName}}`,
     description: 'Thank you email after closing a deal',
+    isDefault: true,
+  },
+  {
+    name: 'status-update',
+    label: 'Status Update',
+    subject: 'Lead Status Update: {{firstName}} {{lastName}}',
+    body: `Hi,
+
+This is to inform you that the status of lead {{firstName}} {{lastName}} has been updated.
+
+New Status: {{status}}
+Company: {{company}}
+Email: {{email}}
+Phone: {{phone}}
+
+Please take the necessary action.
+
+Best regards,
+{{companyName}} CRM`,
+    description: 'Notification when lead status changes — can be sent to users or external emails',
     isDefault: true,
   },
 ];
@@ -876,12 +906,14 @@ router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
 });
 
 // Save a single email template (create or update by name)
+// Accepts plain text `body` (admin-friendly) or legacy `htmlBody`
 router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
   label: z.string().min(1).max(100),
   subject: z.string().min(1).max(500),
-  htmlBody: z.string().min(1),
+  body: z.string().min(1).optional(),
+  htmlBody: z.string().optional(),
   description: z.string().max(500).optional(),
-})), async (req, res, next) => {
+}).refine((d) => d.body || d.htmlBody, { message: 'Either body or htmlBody is required' })), async (req, res, next) => {
   try {
     const targetOrgId = await resolveEmailOrgId(req, res);
     if (!targetOrgId) return;
@@ -901,13 +933,25 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
       name,
       label: data.label,
       subject: data.subject,
-      htmlBody: data.htmlBody,
       description: data.description || '',
       isDefault: false,
     };
 
+    // Store plain text body (preferred) or legacy htmlBody
+    if (data.body) {
+      templateData.body = data.body;
+      // Remove legacy htmlBody if switching to plain text
+      templateData.htmlBody = undefined;
+    } else if (data.htmlBody) {
+      templateData.htmlBody = data.htmlBody;
+    }
+
     if (existingIdx >= 0) {
       templates[existingIdx] = { ...templates[existingIdx], ...templateData };
+      // Clean up: if switching to body, remove old htmlBody
+      if (data.body) {
+        delete templates[existingIdx].htmlBody;
+      }
     } else {
       templates.push(templateData);
     }
@@ -917,7 +961,57 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
       data: { settings: { ...settings, emailTemplates: templates } },
     });
 
-    res.json(templateData);
+    res.json(templates[existingIdx >= 0 ? existingIdx : templates.length - 1]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Preview an email template — renders with sample variables
+router.post('/email/templates/preview', authorize('ADMIN'), validate(z.object({
+  subject: z.string().optional(),
+  body: z.string().optional(),
+  htmlBody: z.string().optional(),
+})), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const { renderTemplate, wrapInHtmlLayout, textToHtml } = require('../services/emailService');
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { name: true, tradeName: true, primaryColor: true },
+    });
+
+    const sampleVariables = {
+      firstName: 'Ahmed',
+      lastName: 'Al-Zaabi',
+      email: 'ahmed@example.com',
+      phone: '+971 50 123 4567',
+      company: 'Sample Corp',
+      companyName: org?.tradeName || org?.name || 'Your Company',
+      senderName: 'Sales Team',
+      status: 'QUALIFIED',
+      source: 'WEBSITE',
+      jobTitle: 'Manager',
+      location: 'Dubai, UAE',
+      assignedTo: 'Sarah Johnson',
+    };
+
+    const layoutOptions = {
+      orgName: org?.tradeName || org?.name || 'Your Company',
+      brandColor: org?.primaryColor || '#6366f1',
+    };
+
+    const template = {
+      subject: req.validated.subject || 'Preview Subject',
+      body: req.validated.body,
+      htmlBody: req.validated.htmlBody,
+    };
+
+    const result = renderTemplate(template, sampleVariables, layoutOptions);
+    res.json({ subject: result.subject, html: result.html });
   } catch (err) {
     next(err);
   }

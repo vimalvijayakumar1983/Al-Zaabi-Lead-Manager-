@@ -740,7 +740,7 @@ class ApiClient {
     return this.request<any[]>(`/settings/email/templates${qs}`);
   }
 
-  async saveEmailTemplate(name: string, data: { label: string; subject: string; htmlBody: string; description?: string }, divisionId?: string) {
+  async saveEmailTemplate(name: string, data: { label: string; subject: string; body?: string; htmlBody?: string; description?: string }, divisionId?: string) {
     const qs = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any>(`/settings/email/templates/${name}${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
@@ -748,6 +748,11 @@ class ApiClient {
   async deleteEmailTemplate(name: string, divisionId?: string) {
     const qs = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any>(`/settings/email/templates/${name}${qs}`, { method: 'DELETE' });
+  }
+
+  async previewEmailTemplate(data: { subject?: string; body?: string; htmlBody?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ subject: string; html: string }>(`/settings/email/templates/preview${qs}`, { method: 'POST', body: JSON.stringify(data) });
   }
 
   // ─── Incoming Email (IMAP / POP3) Settings ──────────────────────

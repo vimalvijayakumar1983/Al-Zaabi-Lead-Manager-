@@ -192,25 +192,77 @@ const executeSingleAction = async (action, context) => {
       break;
 
     case 'send_email': {
-      const leadEmail = context.lead.email;
-      if (!leadEmail) {
-        logger.warn(`[Automation] No email address for lead ${context.lead.id}`);
+      // Determine recipient: custom email, assigned user, or lead email
+      let recipientEmail = null;
+      const recipientType = action.config.recipientType || 'lead';
+
+      if (recipientType === 'custom' && action.config.recipientEmail) {
+        recipientEmail = action.config.recipientEmail;
+      } else if (recipientType === 'assigned_user' && context.lead.assignedToId) {
+        try {
+          const assignedUser = await prisma.user.findUnique({
+            where: { id: context.lead.assignedToId },
+            select: { email: true, firstName: true, lastName: true },
+          });
+          recipientEmail = assignedUser?.email;
+        } catch (err) {
+          logger.warn('[Automation] Failed to lookup assigned user email:', err.message);
+        }
+      } else {
+        recipientEmail = context.lead.email;
+      }
+
+      if (!recipientEmail) {
+        logger.warn(`[Automation] No email address for ${recipientType} on lead ${context.lead.id}`);
         break;
+      }
+
+      // Build comprehensive variables for template rendering
+      const variables = {
+        firstName: context.lead.firstName || '',
+        lastName: context.lead.lastName || '',
+        email: context.lead.email || '',
+        phone: context.lead.phone || '',
+        company: context.lead.company || '',
+        jobTitle: context.lead.jobTitle || '',
+        source: context.lead.source || '',
+        status: context.lead.status || '',
+        location: context.lead.location || '',
+        score: String(context.lead.score || 0),
+        companyName: 'Al-Zaabi Group',
+        senderName: 'Al-Zaabi Team',
+        assignedTo: '',
+      };
+
+      // Fetch org name and assigned user name for variables
+      try {
+        const [org, assignedUser] = await Promise.all([
+          prisma.organization.findUnique({
+            where: { id: context.organizationId },
+            select: { name: true, tradeName: true },
+          }),
+          context.lead.assignedToId
+            ? prisma.user.findUnique({
+                where: { id: context.lead.assignedToId },
+                select: { firstName: true, lastName: true },
+              })
+            : null,
+        ]);
+        if (org) {
+          variables.companyName = org.tradeName || org.name;
+          variables.senderName = org.tradeName || org.name;
+        }
+        if (assignedUser) {
+          variables.assignedTo = `${assignedUser.firstName} ${assignedUser.lastName}`.trim();
+        }
+      } catch (err) {
+        logger.warn('[Automation] Failed to enrich email variables:', err.message);
       }
 
       if (action.config.template) {
         // Use a named template
-        const variables = {
-          firstName: context.lead.firstName || '',
-          lastName: context.lead.lastName || '',
-          email: leadEmail,
-          phone: context.lead.phone || '',
-          company: context.lead.company || '',
-          companyName: 'Al-Zaabi Group',
-          senderName: 'Al-Zaabi Team',
-        };
         const result = await sendTemplateEmail({
-          to: leadEmail,
+          to: recipientEmail,
           templateName: action.config.template,
           variables,
           organizationId: context.organizationId,
@@ -221,7 +273,7 @@ const executeSingleAction = async (action, context) => {
       } else {
         // Direct email with subject/body from config
         const result = await sendEmail({
-          to: leadEmail,
+          to: recipientEmail,
           subject: action.config.subject || 'Notification from Al-Zaabi CRM',
           html: action.config.body || action.config.message || '',
           organizationId: context.organizationId,
@@ -240,14 +292,14 @@ const executeSingleAction = async (action, context) => {
             direction: 'OUTBOUND',
             subject: action.config.subject || action.config.template || 'Automation Email',
             body: action.config.body || `Template: ${action.config.template}`,
-            metadata: { source: 'automation' },
+            metadata: { source: 'automation', recipientType, recipientEmail },
           },
         });
       } catch (logErr) {
         logger.warn('Failed to log automation email communication:', logErr.message);
       }
 
-      logger.info(`[Automation] Email sent to ${leadEmail}`);
+      logger.info(`[Automation] Email sent to ${recipientEmail} (${recipientType})`);
       break;
     }
 

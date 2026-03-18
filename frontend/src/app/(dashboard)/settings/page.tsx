@@ -2266,7 +2266,9 @@ function EmailTemplatesSection() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
-  const [newForm, setNewForm] = useState({ name: '', label: '', subject: '', htmlBody: '', description: '' });
+  const [newForm, setNewForm] = useState({ name: '', label: '', subject: '', body: '', description: '' });
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const divisionId = isSuperAdmin ? selectedDivisionId : undefined;
 
@@ -2295,6 +2297,7 @@ function EmailTemplatesSection() {
       await fetchTemplates();
       setEditingTemplate(null);
       setShowNewForm(false);
+      setPreviewHtml(null);
       setStatus({ type: 'success', message: 'Template saved successfully' });
       setTimeout(() => setStatus(null), 3000);
     } catch (err: any) {
@@ -2317,27 +2320,51 @@ function EmailTemplatesSection() {
   };
 
   const handleCreateNew = async () => {
-    if (!newForm.name || !newForm.label || !newForm.subject || !newForm.htmlBody) {
-      setStatus({ type: 'error', message: 'All fields are required' });
+    if (!newForm.name || !newForm.label || !newForm.subject || !newForm.body) {
+      setStatus({ type: 'error', message: 'Name, label, subject and body are required' });
       return;
     }
     const safeName = newForm.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
     await handleSaveTemplate(safeName, {
       label: newForm.label,
       subject: newForm.subject,
-      htmlBody: newForm.htmlBody,
+      body: newForm.body,
       description: newForm.description,
     });
-    setNewForm({ name: '', label: '', subject: '', htmlBody: '', description: '' });
+    setNewForm({ name: '', label: '', subject: '', body: '', description: '' });
+  };
+
+  const handlePreview = async (bodyContent: string, subject?: string) => {
+    setPreviewing(true);
+    try {
+      const result = await api.previewEmailTemplate({ body: bodyContent, subject }, divisionId);
+      setPreviewHtml(result.html);
+    } catch {
+      setStatus({ type: 'error', message: 'Failed to generate preview' });
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  // Get the body content from a template (supports both new `body` and legacy `htmlBody`)
+  const getTemplateBody = (tmpl: any): string => {
+    return tmpl.body || tmpl.htmlBody || '';
   };
 
   const VARIABLE_HINTS = [
     { var: '{{firstName}}', desc: 'Lead first name' },
     { var: '{{lastName}}', desc: 'Lead last name' },
     { var: '{{email}}', desc: 'Lead email' },
+    { var: '{{phone}}', desc: 'Lead phone' },
     { var: '{{company}}', desc: 'Lead company' },
+    { var: '{{jobTitle}}', desc: 'Lead job title' },
+    { var: '{{status}}', desc: 'Lead status' },
+    { var: '{{source}}', desc: 'Lead source' },
+    { var: '{{location}}', desc: 'Lead location' },
+    { var: '{{score}}', desc: 'Lead score' },
+    { var: '{{assignedTo}}', desc: 'Assigned user name' },
     { var: '{{companyName}}', desc: 'Your organization name' },
-    { var: '{{senderName}}', desc: 'Sender name' },
+    { var: '{{senderName}}', desc: 'Sender / org name' },
   ];
 
   if (loading) {
@@ -2347,9 +2374,9 @@ function EmailTemplatesSection() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <SectionHeader title="Email Templates" description="Manage email templates used in automations and communications" />
+        <SectionHeader title="Email Templates" description="Write your email content in plain text with variables. The system auto-wraps it in a branded HTML email." />
         {(!isSuperAdmin || selectedDivisionId) && (
-          <button onClick={() => { setShowNewForm(true); setEditingTemplate(null); }} className="btn-primary text-xs">
+          <button onClick={() => { setShowNewForm(true); setEditingTemplate(null); setPreviewHtml(null); }} className="btn-primary text-xs">
             <Plus className="h-3.5 w-3.5" /> New Template
           </button>
         )}
@@ -2359,7 +2386,7 @@ function EmailTemplatesSection() {
       {isSuperAdmin && (
         <DivisionEmailSelector
           selectedDivisionId={selectedDivisionId}
-          onSelect={(id) => { setSelectedDivisionId(id); setEditingTemplate(null); setShowNewForm(false); }}
+          onSelect={(id) => { setSelectedDivisionId(id); setEditingTemplate(null); setShowNewForm(false); setPreviewHtml(null); }}
         />
       )}
 
@@ -2375,20 +2402,56 @@ function EmailTemplatesSection() {
         </div>
       )}
 
+      {/* How it works */}
+      <div className="card p-4 bg-blue-50 border-blue-200">
+        <h4 className="text-xs font-semibold text-blue-800 uppercase tracking-wider mb-1.5">How it works</h4>
+        <p className="text-xs text-blue-700 leading-relaxed">
+          Just write your email content as plain text. Use the variables below (e.g. {'{{firstName}}'}) and the system will automatically
+          format it into a professional branded HTML email. No coding required.
+        </p>
+      </div>
+
       {/* Variable reference */}
       <div className="card p-4">
         <h4 className="text-xs font-semibold text-text-tertiary uppercase tracking-wider flex items-center gap-1.5 mb-2">
-          <Code2 className="h-3.5 w-3.5" /> Available Variables
+          <Code2 className="h-3.5 w-3.5" /> Available Variables (click to copy)
         </h4>
         <div className="flex flex-wrap gap-2">
           {VARIABLE_HINTS.map((v) => (
-            <span key={v.var} className="inline-flex items-center gap-1 px-2 py-1 bg-surface-secondary rounded text-2xs">
+            <button
+              key={v.var}
+              type="button"
+              onClick={() => { navigator.clipboard.writeText(v.var); }}
+              className="inline-flex items-center gap-1 px-2 py-1 bg-surface-secondary rounded text-2xs hover:bg-surface-tertiary transition-colors cursor-pointer"
+              title={`Click to copy ${v.var}`}
+            >
               <code className="text-brand-600 font-mono">{v.var}</code>
               <span className="text-text-tertiary">— {v.desc}</span>
-            </span>
+            </button>
           ))}
         </div>
       </div>
+
+      {/* Preview modal */}
+      {previewHtml && (
+        <div className="card border-2 border-brand-200 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 bg-brand-50 border-b border-brand-200">
+            <h4 className="text-sm font-semibold text-brand-700 flex items-center gap-1.5">
+              <Eye className="h-4 w-4" /> Email Preview
+            </h4>
+            <button onClick={() => setPreviewHtml(null)} className="btn-icon h-7 w-7"><X className="h-4 w-4" /></button>
+          </div>
+          <div className="bg-gray-100 p-4">
+            <iframe
+              srcDoc={previewHtml}
+              className="w-full bg-white rounded-lg border border-gray-200"
+              style={{ height: '500px' }}
+              title="Email Preview"
+              sandbox=""
+            />
+          </div>
+        </div>
+      )}
 
       {/* New template form */}
       {showNewForm && (
@@ -2416,14 +2479,24 @@ function EmailTemplatesSection() {
             <input className="input text-sm" value={newForm.description} onChange={(e) => setNewForm({ ...newForm, description: e.target.value })} placeholder="When is this template used?" />
           </div>
           <div>
-            <label className="label">HTML Body *</label>
-            <textarea className="input text-sm font-mono" rows={8} value={newForm.htmlBody} onChange={(e) => setNewForm({ ...newForm, htmlBody: e.target.value })}
-              placeholder="<div>Hi {{firstName}}, ...</div>" />
+            <label className="label">Email Body *</label>
+            <p className="text-2xs text-text-tertiary mb-1.5">Write your email content as plain text. Use variables like {'{{firstName}}'} that will be replaced with actual values. Blank lines create new paragraphs.</p>
+            <textarea className="input text-sm" rows={10} value={newForm.body} onChange={(e) => setNewForm({ ...newForm, body: e.target.value })}
+              placeholder={`Hi {{firstName}},\n\nThank you for your interest in {{companyName}}.\n\nWe'll be in touch shortly.\n\nBest regards,\n{{senderName}}`} />
           </div>
           <div className="flex gap-2">
             <button onClick={handleCreateNew} disabled={saving} className="btn-primary text-xs">
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               {saving ? 'Saving...' : 'Create Template'}
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePreview(newForm.body, newForm.subject)}
+              disabled={previewing || !newForm.body}
+              className="btn-secondary text-xs"
+            >
+              {previewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+              Preview
             </button>
             <button onClick={() => setShowNewForm(false)} className="btn-secondary text-xs">Cancel</button>
           </div>
@@ -2451,15 +2524,51 @@ function EmailTemplatesSection() {
                   <input className="input text-sm" value={editingTemplate.subject} onChange={(e) => setEditingTemplate({ ...editingTemplate, subject: e.target.value })} />
                 </div>
                 <div>
-                  <label className="label">HTML Body</label>
-                  <textarea className="input text-sm font-mono" rows={8} value={editingTemplate.htmlBody} onChange={(e) => setEditingTemplate({ ...editingTemplate, htmlBody: e.target.value })} />
+                  <label className="label">Email Body</label>
+                  <p className="text-2xs text-text-tertiary mb-1.5">Write your content as plain text with variables. The system formats it into a professional HTML email automatically.</p>
+                  <textarea
+                    className="input text-sm"
+                    rows={10}
+                    value={editingTemplate._editBody ?? getTemplateBody(editingTemplate)}
+                    onChange={(e) => setEditingTemplate({ ...editingTemplate, _editBody: e.target.value })}
+                  />
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => handleSaveTemplate(tmpl.name, editingTemplate)} disabled={saving} className="btn-primary text-xs">
+                  <button
+                    onClick={() => {
+                      const bodyContent = editingTemplate._editBody ?? getTemplateBody(editingTemplate);
+                      const saveData: any = {
+                        label: editingTemplate.label,
+                        subject: editingTemplate.subject,
+                        description: editingTemplate.description || '',
+                      };
+                      // If the content looks like plain text (no HTML tags), save as body
+                      if (!bodyContent.includes('<') || editingTemplate.body) {
+                        saveData.body = bodyContent;
+                      } else {
+                        saveData.htmlBody = bodyContent;
+                      }
+                      handleSaveTemplate(tmpl.name, saveData);
+                    }}
+                    disabled={saving}
+                    className="btn-primary text-xs"
+                  >
                     {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                     Save
                   </button>
-                  <button onClick={() => setEditingTemplate(null)} className="btn-secondary text-xs">Cancel</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const bodyContent = editingTemplate._editBody ?? getTemplateBody(editingTemplate);
+                      handlePreview(bodyContent, editingTemplate.subject);
+                    }}
+                    disabled={previewing}
+                    className="btn-secondary text-xs"
+                  >
+                    {previewing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                    Preview
+                  </button>
+                  <button onClick={() => { setEditingTemplate(null); setPreviewHtml(null); }} className="btn-secondary text-xs">Cancel</button>
                 </div>
               </div>
             ) : (
@@ -2472,8 +2581,16 @@ function EmailTemplatesSection() {
                   </div>
                   {tmpl.description && <p className="text-xs text-text-tertiary mt-0.5">{tmpl.description}</p>}
                   <p className="text-xs text-text-secondary mt-1 truncate">Subject: {tmpl.subject}</p>
+                  <p className="text-xs text-text-tertiary mt-0.5 line-clamp-2 whitespace-pre-line">{getTemplateBody(tmpl).substring(0, 120)}{getTemplateBody(tmpl).length > 120 ? '...' : ''}</p>
                 </div>
                 <div className="flex items-center gap-1 ml-3">
+                  <button
+                    onClick={() => handlePreview(getTemplateBody(tmpl), tmpl.subject)}
+                    className="btn-icon h-7 w-7"
+                    title="Preview"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                  </button>
                   <button onClick={() => setEditingTemplate({ ...tmpl })} className="btn-icon h-7 w-7" title="Edit">
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
