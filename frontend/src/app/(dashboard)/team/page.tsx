@@ -1063,10 +1063,12 @@ export default function TeamPage() {
               </div>
             )}
 
-            <button onClick={handleBulkDeactivate} className="btn-secondary text-sm text-red-600 hover:bg-red-50">
-              <UserX className="h-3.5 w-3.5" />
-              Deactivate
-            </button>
+            {isSuperAdmin && (
+              <button onClick={handleBulkDeactivate} className="btn-secondary text-sm text-red-600 hover:bg-red-50">
+                <UserX className="h-3.5 w-3.5" />
+                Deactivate
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1312,7 +1314,7 @@ export default function TeamPage() {
                                   <Building2 className="h-3.5 w-3.5 text-text-tertiary" />
                                   Manage Divisions
                                 </button>
-                                {isAdmin && (
+                                {isSuperAdmin && (
                                   <button
                                     onClick={() => { setResetPasswordUser(user); setActiveMenu(null); }}
                                     className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-tertiary transition-colors"
@@ -1321,27 +1323,27 @@ export default function TeamPage() {
                                     Reset Password
                                   </button>
                                 )}
-                                <div className="my-1 h-px bg-border-subtle" />
-                                {user.isActive ? (
-                                  <button
-                                    onClick={() => { handleDeactivate(user); setActiveMenu(null); }}
-                                    className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
-                                  >
-                                    <UserX className="h-3.5 w-3.5" />
-                                    Deactivate
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => { handleReactivate(user); setActiveMenu(null); }}
-                                    className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-emerald-600 hover:bg-emerald-50 transition-colors"
-                                  >
-                                    <UserCheck className="h-3.5 w-3.5" />
-                                    Reactivate
-                                  </button>
-                                )}
-                                {isAdmin && (
+                                {isSuperAdmin && (
                                   <>
                                     <div className="my-1 h-px bg-border-subtle" />
+                                    <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-red-400">Danger Zone</p>
+                                    {user.isActive ? (
+                                      <button
+                                        onClick={() => { handleDeactivate(user); setActiveMenu(null); }}
+                                        className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                                      >
+                                        <UserX className="h-3.5 w-3.5" />
+                                        Deactivate
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => { handleReactivate(user); setActiveMenu(null); }}
+                                        className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                      >
+                                        <UserCheck className="h-3.5 w-3.5" />
+                                        Reactivate
+                                      </button>
+                                    )}
                                     <button
                                       onClick={() => { setDeleteConfirmUser(user); setActiveMenu(null); }}
                                       className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
