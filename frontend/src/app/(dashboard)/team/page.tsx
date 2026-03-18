@@ -13,7 +13,7 @@ import {
   AlertTriangle, ChevronDown, ChevronUp, Filter, RotateCcw, Save,
   Building2, Sparkles, ArrowUpDown, ArrowUp, ArrowDown,
   Clock, TrendingUp, ListChecks, Hash, SlidersHorizontal,
-  UserCog, Zap,
+  UserCog, Zap, Star, Trash2, Plus, RefreshCw,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
 
@@ -1342,6 +1342,14 @@ export default function TeamPage() {
       {editingUser && <EditMemberModal user={editingUser} onClose={() => setEditingUser(null)} onSaved={fetchUsers} />}
       {resetPasswordUser && <ResetPasswordModal user={resetPasswordUser} onClose={() => setResetPasswordUser(null)} />}
       {showRoles && <RolesAccessModal onClose={() => setShowRoles(false)} />}
+      {showMembershipModal && (
+        <ManageDivisionsModal
+          user={showMembershipModal}
+          divisions={divisions}
+          onClose={() => setShowMembershipModal(null)}
+          onSaved={fetchUsers}
+        />
+      )}
     </div>
   );
 }
@@ -2031,3 +2039,307 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
+
+/* ─── Manage Divisions Modal ──────────────────────────────────── */
+function ManageDivisionsModal({ user, divisions, onClose, onSaved }: { 
+  user: User; 
+  divisions: any[]; 
+  onClose: () => void; 
+  onSaved: () => void;
+}) {
+  const [memberships, setMemberships] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [addingDivision, setAddingDivision] = useState(false);
+  const [selectedNewDivision, setSelectedNewDivision] = useState('');
+  const [selectedNewRole, setSelectedNewRole] = useState('AGENT');
+
+  useEffect(() => {
+    loadMemberships();
+  }, []);
+
+  const loadMemberships = async () => {
+    try {
+      setLoading(true);
+      const data = await api.getUserDivisions(user.id);
+      setMemberships(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load memberships:', err);
+      // Fallback: create a membership from user's current division
+      if (user.organizationId) {
+        setMemberships([{
+          id: 'current',
+          divisionId: user.organizationId,
+          role: user.role,
+          isPrimary: true,
+          division: divisions.find(d => d.id === user.organizationId) || { name: 'Current Division' }
+        }]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRoleChange = async (membership: any, newRole: string) => {
+    try {
+      setSaving(true);
+      await api.updateUserDivisionRole(user.id, membership.divisionId, { role: newRole });
+      setMemberships(prev => prev.map(m => 
+        m.divisionId === membership.divisionId ? { ...m, role: newRole } : m
+      ));
+    } catch (err) {
+      console.error('Failed to update role:', err);
+      alert('Failed to update role');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSetPrimary = async (membership: any) => {
+    try {
+      setSaving(true);
+      await api.updateUserDivisionRole(user.id, membership.divisionId, { isPrimary: true });
+      setMemberships(prev => prev.map(m => ({
+        ...m,
+        isPrimary: m.divisionId === membership.divisionId
+      })));
+    } catch (err) {
+      console.error('Failed to set primary:', err);
+      alert('Failed to set primary division');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemove = async (membership: any) => {
+    if (memberships.length <= 1) {
+      alert('User must belong to at least one division');
+      return;
+    }
+    if (!confirm(`Remove ${user.firstName || user.email} from ${membership.division?.name || 'this division'}?`)) return;
+    try {
+      setSaving(true);
+      await api.removeUserFromDivision(user.id, membership.divisionId);
+      setMemberships(prev => prev.filter(m => m.divisionId !== membership.divisionId));
+      onSaved();
+    } catch (err) {
+      console.error('Failed to remove:', err);
+      alert('Failed to remove from division');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!selectedNewDivision) return;
+    try {
+      setSaving(true);
+      const result = await api.addUserToDivision(user.id, { 
+        divisionId: selectedNewDivision, 
+        role: selectedNewRole 
+      });
+      const div = divisions.find(d => d.id === selectedNewDivision);
+      setMemberships(prev => [...prev, {
+        id: result?.id || Date.now().toString(),
+        divisionId: selectedNewDivision,
+        role: selectedNewRole,
+        isPrimary: prev.length === 0,
+        division: div || { name: 'Division' }
+      }]);
+      setAddingDivision(false);
+      setSelectedNewDivision('');
+      setSelectedNewRole('AGENT');
+      onSaved();
+    } catch (err: any) {
+      console.error('Failed to add:', err);
+      alert(err?.message || 'Failed to add to division');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const availableDivisions = divisions.filter(
+    d => !memberships.some(m => m.divisionId === d.id)
+  );
+
+  const roleOptions = [
+    { value: 'SUPER_ADMIN', label: 'Super Admin', color: 'text-purple-600' },
+    { value: 'DIVISION_ADMIN', label: 'Division Admin', color: 'text-blue-600' },
+    { value: 'TEAM_LEAD', label: 'Team Lead', color: 'text-emerald-600' },
+    { value: 'AGENT', label: 'Agent', color: 'text-gray-600' },
+  ];
+
+  return (
+    <div className="modal">
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={onClose} />
+      <div className="modal-panel w-full max-w-2xl relative z-50">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-border-primary">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+              {(user.firstName?.[0] || user.email?.[0] || '?').toUpperCase()}
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-text-primary">Manage Division Access</h2>
+              <p className="text-sm text-text-secondary">{user.firstName} {user.lastName} · {user.email}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-surface-tertiary rounded-lg transition-colors">
+            <X className="h-5 w-5 text-text-tertiary" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <RefreshCw className="h-6 w-6 animate-spin text-brand-primary" />
+              <span className="ml-2 text-text-secondary">Loading divisions...</span>
+            </div>
+          ) : (
+            <>
+              {/* Current Memberships */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-text-primary uppercase tracking-wider">
+                    Current Divisions ({memberships.length})
+                  </h3>
+                </div>
+                
+                {memberships.length === 0 ? (
+                  <div className="text-center py-8 text-text-secondary">
+                    <Building2 className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                    <p>No division memberships found</p>
+                  </div>
+                ) : (
+                  memberships.map((membership) => (
+                    <div key={membership.divisionId || membership.id} 
+                      className="flex items-center justify-between p-4 rounded-xl border border-border-primary bg-surface-secondary hover:bg-surface-tertiary transition-colors">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                          style={{ backgroundColor: membership.division?.primaryColor || '#6366f1' }}>
+                          {(membership.division?.name?.[0] || 'D').toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-text-primary">{membership.division?.name || 'Unknown Division'}</span>
+                            {membership.isPrimary && (
+                              <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 rounded">Primary</span>
+                            )}
+                          </div>
+                          <span className="text-xs text-text-tertiary">{membership.division?.tradeName || ''}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={membership.role}
+                          onChange={(e) => handleRoleChange(membership, e.target.value)}
+                          disabled={saving}
+                          className="text-sm border border-border-primary rounded-lg px-2 py-1.5 bg-surface-primary text-text-primary focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
+                        >
+                          {roleOptions.map(r => (
+                            <option key={r.value} value={r.value}>{r.label}</option>
+                          ))}
+                        </select>
+                        {!membership.isPrimary && (
+                          <button
+                            onClick={() => handleSetPrimary(membership)}
+                            disabled={saving}
+                            className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                            title="Set as primary division"
+                          >
+                            <Star className="h-4 w-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleRemove(membership)}
+                          disabled={saving || memberships.length <= 1}
+                          className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30"
+                          title="Remove from division"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Add New Division */}
+              {availableDivisions.length > 0 && (
+                <div className="pt-2">
+                  {!addingDivision ? (
+                    <button
+                      onClick={() => setAddingDivision(true)}
+                      className="flex items-center gap-2 w-full justify-center py-3 border-2 border-dashed border-border-primary rounded-xl text-sm font-medium text-text-secondary hover:text-brand-primary hover:border-brand-primary transition-colors"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add to Another Division
+                    </button>
+                  ) : (
+                    <div className="p-4 rounded-xl border-2 border-brand-primary bg-brand-primary/5 space-y-3">
+                      <h4 className="text-sm font-semibold text-text-primary">Add to Division</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1">Division</label>
+                          <select
+                            value={selectedNewDivision}
+                            onChange={(e) => setSelectedNewDivision(e.target.value)}
+                            className="w-full border border-border-primary rounded-lg px-3 py-2 text-sm bg-surface-primary text-text-primary"
+                          >
+                            <option value="">Select division...</option>
+                            {availableDivisions.map(d => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1">Role</label>
+                          <select
+                            value={selectedNewRole}
+                            onChange={(e) => setSelectedNewRole(e.target.value)}
+                            className="w-full border border-border-primary rounded-lg px-3 py-2 text-sm bg-surface-primary text-text-primary"
+                          >
+                            {roleOptions.map(r => (
+                              <option key={r.value} value={r.value}>{r.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => { setAddingDivision(false); setSelectedNewDivision(''); }}
+                          className="px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-tertiary rounded-lg transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleAdd}
+                          disabled={!selectedNewDivision || saving}
+                          className="px-4 py-1.5 text-sm font-medium text-white bg-brand-primary hover:bg-brand-hover rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {saving ? 'Adding...' : 'Add to Division'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-3 p-6 border-t border-border-primary">
+          <button
+            onClick={onClose}
+            className="px-5 py-2.5 text-sm font-medium text-text-primary bg-surface-tertiary hover:bg-surface-secondary rounded-xl transition-colors"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
