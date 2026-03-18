@@ -209,7 +209,7 @@ function LeadsContent() {
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
 
-  // Auto-refresh when another user modifies lead data
+  // Auto-refresh when data changes (including the current user marking messages as read)
   useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
   useEffect(() => {
     api.getLeadTags().then((data: any) => setAllTags(data || [])).catch(() => {});

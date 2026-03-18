@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNotificationStore } from '@/store/notificationStore';
 
 /**
@@ -18,10 +18,15 @@ export function useRealtimeSync(
   const subscribe = useNotificationStore((s) => s.subscribeDataChange);
   const unsubscribe = useNotificationStore((s) => s.unsubscribeDataChange);
 
+  // Use a ref so the handler always calls the latest callback
+  // without needing to re-subscribe on every render.
+  const callbackRef = useRef(onDataChanged);
+  callbackRef.current = onDataChanged;
+
   useEffect(() => {
     const handler = (event: { entity: string; action: string; entityId?: string }) => {
       if (entities.includes(event.entity)) {
-        onDataChanged(event);
+        callbackRef.current(event);
       }
     };
 

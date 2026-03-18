@@ -376,7 +376,7 @@ export default function LeadDetailPage() {
       if (unreadCommsCount > 0) {
         api.markConversationRead(lead.id).then(() => {
           setUnreadCommsCount(0);
-        }).catch(() => {});
+        }).catch((err) => console.error('Failed to mark conversation read:', err));
       }
     }
     if (activeTab === 'call_logs' && lead?.id) {
