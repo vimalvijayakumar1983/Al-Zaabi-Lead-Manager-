@@ -596,7 +596,7 @@ function ImportWizard() {
 
           {/* Default Values — Leads */}
           {selectedModule === 'leads' && (
-            <div className="card p-6">
+            <div className="card p-6 overflow-visible">
               <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
               <p className="text-2xs text-text-tertiary mb-4">Set defaults for fields not present in your file</p>
 
@@ -621,7 +621,7 @@ function ImportWizard() {
                       <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${ownerDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {ownerDropdownOpen && (
-                      <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      <div className="absolute z-50 bottom-full mb-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
                         {assignToIds.length > 0 && (
                           <button
                             type="button"
@@ -686,7 +686,7 @@ function ImportWizard() {
 
           {/* Default Values — Contacts */}
           {selectedModule === 'contacts' && (
-            <div className="card p-6">
+            <div className="card p-6 overflow-visible">
               <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
               <p className="text-2xs text-text-tertiary mb-4">Set defaults for fields not present in your file</p>
 
@@ -711,7 +711,7 @@ function ImportWizard() {
                       <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${ownerDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {ownerDropdownOpen && (
-                      <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      <div className="absolute z-50 bottom-full mb-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
                         {assignToIds.length > 0 && (
                           <button
                             type="button"
