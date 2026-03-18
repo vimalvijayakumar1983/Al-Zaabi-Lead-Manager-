@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import { api } from '@/lib/api';
 import type { AutomationRule } from '@/types';
 import {
@@ -1096,7 +1097,7 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
 
 // ─── Create / Edit Form Modal ────────────────────────────────────
 
-// Searchable field picker for conditions
+// Searchable field picker for conditions — renders dropdown via portal to avoid overflow clipping
 function ConditionFieldPicker({ value, onChange, allFields }: {
   value: string;
   onChange: (fieldValue: string) => void;
@@ -1104,15 +1105,48 @@ function ConditionFieldPicker({ value, onChange, allFields }: {
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 320 });
 
+  // Position the dropdown relative to the button
   useEffect(() => {
+    if (open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const dropdownHeight = 340; // approximate max height
+      // Open upward if not enough space below
+      if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
+        setPos({ top: rect.top - dropdownHeight, left: rect.left, width: Math.max(rect.width, 320) });
+      } else {
+        setPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 320) });
+      }
+    }
+  }, [open]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setOpen(false);
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+        buttonRef.current && !buttonRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+        setSearch('');
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setSearch(''); } };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [open]);
 
   const selected = allFields.find(f => f.value === value);
   const filtered = allFields.filter(f =>
@@ -1123,25 +1157,25 @@ function ConditionFieldPicker({ value, onChange, allFields }: {
   const customFields = filtered.filter(f => f.category === 'custom');
 
   return (
-    <div className="relative flex-1" ref={dropdownRef}>
+    <div className="relative flex-1">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen(!open)}
         className="input text-sm w-full text-left flex items-center justify-between gap-2 pr-2"
       >
-        <span className="flex items-center gap-2 truncate">
+        <span className="flex items-center gap-2 truncate min-w-0">
           <span className="truncate">{selected?.label || value}</span>
-          {selected && (
-            <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium ${fieldTypeBadge[selected.fieldType]?.color || 'bg-gray-100 text-gray-600'}`}>
-              {fieldTypeBadge[selected.fieldType]?.label || selected.fieldType}
-            </span>
-          )}
         </span>
-        <ChevronDown className="h-3.5 w-3.5 text-text-tertiary flex-shrink-0" />
+        <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-80 bg-white rounded-xl shadow-xl border border-border-subtle z-50 overflow-hidden animate-fade-in">
+      {open && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed bg-white rounded-xl shadow-2xl border border-border-subtle overflow-hidden animate-fade-in"
+          style={{ top: pos.top, left: pos.left, width: pos.width, zIndex: 9999 }}
+        >
           {/* Search input */}
           <div className="p-2 border-b border-border-subtle">
             <div className="relative">
@@ -1156,11 +1190,11 @@ function ConditionFieldPicker({ value, onChange, allFields }: {
             </div>
           </div>
 
-          <div className="max-h-64 overflow-y-auto overscroll-contain">
+          <div className="max-h-60 overflow-y-auto overscroll-contain">
             {/* Standard Fields */}
             {standardFields.length > 0 && (
               <div>
-                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0">
+                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0 z-10">
                   Standard Fields
                 </div>
                 {standardFields.map(f => (
@@ -1182,7 +1216,7 @@ function ConditionFieldPicker({ value, onChange, allFields }: {
             {/* Custom Fields */}
             {customFields.length > 0 && (
               <div>
-                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0 flex items-center gap-1.5">
+                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0 z-10 flex items-center gap-1.5">
                   <Sparkles className="h-3 w-3" />
                   Custom Fields
                 </div>
@@ -1216,7 +1250,8 @@ function ConditionFieldPicker({ value, onChange, allFields }: {
           <div className="border-t border-border-subtle px-3 py-1.5 text-2xs text-text-tertiary bg-surface-secondary">
             {allFields.length} fields available ({allFields.filter(f => f.category === 'custom').length} custom)
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
