@@ -323,8 +323,8 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
   // Load divisions for super admin
   useEffect(() => {
     if (isSuperAdmin && isOpen) {
-      api.get('/divisions').then((res: any) => {
-        setDivisions(res.data?.divisions || res.divisions || []);
+      api.getDivisions().then((divs) => {
+        setDivisions(divs || []);
       }).catch(() => {});
     }
   }, [isSuperAdmin, isOpen]);
