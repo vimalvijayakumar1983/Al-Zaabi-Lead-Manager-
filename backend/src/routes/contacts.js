@@ -11,6 +11,19 @@ const { broadcastDataChange } = require('../websocket/server');
 const router = Router();
 router.use(authenticate, orgScope);
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 // ─── Validation Schemas ──────────────────────────────────────────
 
 const contactSchema = z.object({
@@ -255,7 +268,7 @@ router.get('/export', async (req, res, next) => {
       c.website, c.linkedin, c.twitter, c.address, c.city, c.state, c.country,
       c.postalCode, c.description, c.score, c.doNotEmail, c.doNotCall,
       c.hasOptedOutEmail,
-      c.owner ? `${c.owner.firstName} ${c.owner.lastName}` : '',
+      c.owner ? getDisplayName(c.owner) : '',
       c.lastContactedAt ? new Date(c.lastContactedAt).toISOString() : '',
       new Date(c.createdAt).toISOString(),
       c.deals?.map(d => `${d.name} ($${d.amount || 0} - ${d.stage})`).join('; ') || '',
@@ -707,7 +720,7 @@ router.post('/convert-lead', validate(convertLeadSchema), async (req, res, next)
           contactId: created.id,
           userId: req.user.id,
           type: 'CUSTOM',
-          description: `Converted from lead: ${lead.firstName} ${lead.lastName}`,
+          description: `Converted from lead: ${getDisplayName(lead)}`,
           metadata: { leadId, leadStatus: lead.status },
         },
       });
@@ -807,7 +820,7 @@ router.post('/merge', validate(mergeContactsSchema), async (req, res, next) => {
           contactId: primaryContactId,
           userId: req.user.id,
           type: 'CUSTOM',
-          description: `Merged with contact: ${secondary.firstName} ${secondary.lastName}`,
+          description: `Merged with contact: ${getDisplayName(secondary)}`,
           metadata: { mergedContactId: secondaryContactId },
         },
       });

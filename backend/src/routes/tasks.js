@@ -7,6 +7,19 @@ const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagi
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 const router = Router();
 router.use(authenticate, orgScope);
 
@@ -119,7 +132,7 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
       createNotification({
         type: NOTIFICATION_TYPES.TASK_ASSIGNED,
         title: 'New Task Assigned',
-        message: `${req.user.firstName} ${req.user.lastName} assigned you task: ${task.title}`,
+        message: `${getDisplayName(req.user)} assigned you task: ${task.title}`,
         userId: data.assigneeId,
         actorId: req.user.id,
         entityType: 'task',
@@ -195,7 +208,7 @@ router.post('/:id/complete', async (req, res, next) => {
       createNotification({
         type: NOTIFICATION_TYPES.TASK_COMPLETED,
         title: 'Task Completed',
-        message: `${req.user.firstName} ${req.user.lastName} completed task: ${task.title}`,
+        message: `${getDisplayName(req.user)} completed task: ${task.title}`,
         userId: task.createdById,
         actorId: req.user.id,
         entityType: 'task',

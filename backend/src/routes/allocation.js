@@ -22,6 +22,19 @@ const { notifyUser } = require('../websocket/server');
 const { createNotification, notifyOrgAdmins, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { autoAssign, getWorkloadStats, bulkAutoAssign } = require('../services/leadAssignment');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 const router = Router();
 
 // All routes require authentication and org scope
@@ -372,7 +385,7 @@ router.post(
                 leadId: lead.id,
                 userId: req.user.id,
                 type: 'ASSIGNMENT_CHANGED',
-                description: `Auto-allocated to ${result.assignedTo.firstName} ${result.assignedTo.lastName}`,
+                description: `Auto-allocated to ${getDisplayName(result.assignedTo)}`,
                 metadata: {
                   previousAssigneeId: null,
                   newAssigneeId: assigneeId,
@@ -387,7 +400,7 @@ router.post(
           details.push({
             leadId: updated.id,
             assignedToId: updated.assignedTo.id,
-            assignedToName: `${updated.assignedTo.firstName} ${updated.assignedTo.lastName}`,
+            assignedToName: getDisplayName(updated.assignedTo),
           });
 
           // Notify assigned user (fire-and-forget)
@@ -399,7 +412,7 @@ router.post(
             createNotification({
               type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
               title: 'New Lead Assigned',
-              message: `${lead.firstName} ${lead.lastName} has been auto-assigned to you`,
+              message: `${getDisplayName(lead)} has been auto-assigned to you`,
               userId: assigneeId,
               actorId: req.user.id,
               entityType: 'lead',

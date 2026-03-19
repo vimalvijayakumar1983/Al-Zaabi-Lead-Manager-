@@ -8,6 +8,19 @@ const { logger } = require('../config/logger');
 const router = Router();
 router.use(authenticate, orgScope);
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 // ─── Disposition labels for display ──────────────────────────────
 const DISPOSITION_LABELS = {
   CALLBACK: 'Call Back Requested',
@@ -98,7 +111,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
 
       const task = await prisma.task.create({
         data: {
-          title: autoAction.taskTitle + ` - ${lead.firstName} ${lead.lastName}`,
+          title: autoAction.taskTitle + ` - ${getDisplayName(lead)}`,
           description: data.notes || null,
           type: autoAction.taskType,
           priority: autoAction.priority || 'MEDIUM',

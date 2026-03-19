@@ -8,6 +8,19 @@ const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 // ─── Multer config for attachments (memory storage for serverless) ──
 
 const upload = multer({
@@ -183,7 +196,7 @@ router.get('/conversations', async (req, res, next) => {
       const platform = lastMsg ? resolvePlatform(lastMsg) : 'UNKNOWN';
       return {
         leadId: lead.id,
-        contactName: `${lead.firstName} ${lead.lastName}`.trim(),
+        contactName: getDisplayName(lead),
         contactEmail: lead.email,
         contactPhone: lead.phone,
         company: lead.company,

@@ -6,6 +6,19 @@ const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { executeAutomations } = require('../services/automationEngine');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 const router = Router();
 router.use(authenticate, orgScope);
 
@@ -151,7 +164,7 @@ router.post('/move', validate(z.object({
       createNotification({
         type: NOTIFICATION_TYPES.PIPELINE_STAGE_CHANGED,
         title: 'Lead Moved',
-        message: `${lead.firstName} ${lead.lastName} moved to ${stage.name}`,
+        message: `${getDisplayName(lead)} moved to ${stage.name}`,
         userId: lead.assignedToId,
         actorId: req.user.id,
         entityType: 'lead',

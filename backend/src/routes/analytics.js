@@ -7,6 +7,19 @@ router.use(authenticate, orgScope);
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 function getOrgFilter(req, divisionId) {
   if (divisionId && req.isSuperAdmin) return divisionId;
   return { in: req.orgIds };
@@ -238,7 +251,7 @@ router.get('/team-performance', async (req, res, next) => {
       const wonRevenue = Number(revenueAgg._sum.budget || 0);
       return {
         id: u.id,
-        name: `${u.firstName} ${u.lastName}`,
+        name: getDisplayName(u),
         role: u.role,
         totalLeads: total,
         wonLeads: won,
@@ -636,7 +649,7 @@ router.get('/dashboard-full', async (req, res, next) => {
           prisma.lead.aggregate({ where: { assignedToId: u.id, status: 'WON', budget: { not: null } }, _sum: { budget: true } }),
         ]);
         return {
-          id: u.id, name: `${u.firstName} ${u.lastName}`, avatar: u.avatar, role: u.role,
+          id: u.id, name: getDisplayName(u), avatar: u.avatar, role: u.role,
           totalLeads: u._count.assignedLeads, wonLeads: won,
           wonRevenue: Number(revenue._sum.budget || 0),
           conversionRate: u._count.assignedLeads > 0 ? Math.round((won / u._count.assignedLeads) * 10000) / 100 : 0,

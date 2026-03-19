@@ -9,6 +9,19 @@ const { getTemplate, getAllTemplates, labelToFieldName } = require('../config/in
 const bcrypt = require('bcryptjs');
 const { sendInviteEmail } = require('../email');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────
@@ -175,7 +188,7 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
     notifyOrgAdmins(req.user.organizationId, {
       type: NOTIFICATION_TYPES.DIVISION_CREATED,
       title: 'New Division Created',
-      message: `${req.user.firstName} ${req.user.lastName} created division: ${name}${template ? ` (${template.name} template)` : ''}`,
+      message: `${getDisplayName(req.user)} created division: ${name}${template ? ` (${template.name} template)` : ''}`,
       entityType: 'division',
       entityId: division.id,
     }, req.user.id).catch(() => {});
@@ -669,8 +682,8 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
 
     // ── Fire-and-forget: Send invitation email with credentials ──
     const parentOrgId = division.parentId || divisionId;
-    const inviterFullName = `${req.user.firstName} ${req.user.lastName}`;
-    sendInviteEmail(email, password, `${firstName} ${lastName}`, division.name, role, inviterFullName, parentOrgId).catch((err) => {
+    const inviterFullName = getDisplayName(req.user);
+    sendInviteEmail(email, password, getDisplayName({ firstName, lastName }), division.name, role, inviterFullName, parentOrgId).catch((err) => {
       console.error('Failed to send invite email:', err.message);
     });
 
@@ -678,7 +691,7 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
     notifyOrgAdmins(divisionId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED || 'TEAM_MEMBER_INVITED',
       title: 'New Team Member',
-      message: `${req.user.firstName} ${req.user.lastName} invited ${email} to ${division.name}`,
+      message: `${getDisplayName(req.user)} invited ${email} to ${division.name}`,
       entityType: 'user',
       entityId: user.id,
     }, req.user.id).catch(() => {});

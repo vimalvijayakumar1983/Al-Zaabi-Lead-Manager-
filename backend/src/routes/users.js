@@ -8,6 +8,19 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const { broadcastDataChange } = require('../websocket/server');
 const { sendInviteEmail } = require('../email');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 const router = Router();
 router.use(authenticate, orgScope);
 
@@ -150,8 +163,8 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
     // ── Fire-and-forget: Send invitation email with credentials ──
     const orgInfo = await prisma.organization.findUnique({ where: { id: targetOrgId }, select: { name: true, parentId: true } });
     const emailOrgId = orgInfo?.parentId || targetOrgId;
-    const inviterName = `${req.user.firstName} ${req.user.lastName}`;
-    sendInviteEmail(email, password, `${firstName} ${lastName}`, orgInfo?.name, role, inviterName, emailOrgId).catch((err) => {
+    const inviterName = getDisplayName(req.user);
+    sendInviteEmail(email, password, getDisplayName({ firstName, lastName }), orgInfo?.name, role, inviterName, emailOrgId).catch((err) => {
       console.error('Failed to send invite email:', err.message);
     });
 
@@ -159,7 +172,7 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
     notifyOrgAdmins(targetOrgId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED,
       title: 'New Team Member',
-      message: `${req.user.firstName} ${req.user.lastName} invited ${email}`,
+      message: `${getDisplayName(req.user)} invited ${email}`,
       entityType: 'user',
       entityId: user.id,
     }, req.user.id).catch(() => {});
@@ -283,7 +296,7 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
     notifyOrgAdmins(existing.organizationId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_DEACTIVATED,
       title: 'Team Member Deactivated',
-      message: `${req.user.firstName} ${req.user.lastName} deactivated ${existing.firstName} ${existing.lastName}`,
+      message: `${getDisplayName(req.user)} deactivated ${getDisplayName(existing)}`,
       entityType: 'user',
       entityId: existing.id,
     }, req.user.id).catch(() => {});
@@ -361,7 +374,7 @@ router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
     });
 
     res.json({
-      message: `User ${existing.firstName} ${existing.lastName} permanently deleted`,
+      message: `User ${getDisplayName(existing)} permanently deleted`,
       reassignedLeads: existing._count.assignedLeads,
       reassignedTasks: existing._count.tasks,
     });
@@ -370,7 +383,7 @@ router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
     notifyOrgAdmins(existing.organizationId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_DEACTIVATED || 'TEAM_MEMBER_DEACTIVATED',
       title: 'Team Member Deleted',
-      message: `${req.user.firstName} ${req.user.lastName} permanently deleted ${existing.firstName} ${existing.lastName}`,
+      message: `${getDisplayName(req.user)} permanently deleted ${getDisplayName(existing)}`,
       entityType: 'user',
       entityId: existing.id,
     }, req.user.id).catch(() => {});
@@ -389,6 +402,7 @@ router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
 
 
 // ─── Division Memberships ─────────────────────────────────────
+
 
 // GET /users/:userId/divisions - Get user's division memberships
 router.get('/:userId/divisions', async (req, res) => {

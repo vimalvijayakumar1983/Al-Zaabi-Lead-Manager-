@@ -7,6 +7,19 @@ const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagi
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { broadcastDataChange } = require('../websocket/server');
 
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 const router = Router();
 
 // ─── Validation Schemas ────────────────────────────────────────────────────────
@@ -394,7 +407,7 @@ router.post('/', validate(createCampaignSchema), async (req, res, next) => {
     notifyOrgAdmins(targetOrgId, {
       type: NOTIFICATION_TYPES.CAMPAIGN_STARTED,
       title: 'New Campaign Created',
-      message: `${req.user.firstName} ${req.user.lastName} created campaign: ${name}`,
+      message: `${getDisplayName(req.user)} created campaign: ${name}`,
       entityType: 'campaign',
       entityId: campaign.id,
     }, req.user.id).catch(() => {});
