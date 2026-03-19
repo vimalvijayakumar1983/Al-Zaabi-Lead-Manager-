@@ -15,9 +15,7 @@ const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } }); // 25MB
 
 // ─── Lead field definitions for mapping ─────────────────────────
 const LEAD_FIELDS = [
-  { key: 'name', label: 'Full Name', required: false, type: 'string' },
-  { key: 'firstName', label: 'First Name', required: false, type: 'string' },
-  { key: 'lastName', label: 'Last Name', required: false, type: 'string' },
+  { key: 'name', label: 'Name', required: true, type: 'string' },
   { key: 'email', label: 'Email', required: false, type: 'email' },
   { key: 'phone', label: 'Phone', required: false, type: 'string' },
   { key: 'company', label: 'Company', required: false, type: 'string' },
@@ -33,8 +31,7 @@ const LEAD_FIELDS = [
 ];
 
 const CONTACT_FIELDS = [
-  { key: 'firstName', label: 'First Name', required: true, type: 'string' },
-  { key: 'lastName', label: 'Last Name', required: true, type: 'string' },
+  { key: 'name', label: 'Name', required: true, type: 'string' },
   { key: 'email', label: 'Email', required: false, type: 'email' },
   { key: 'phone', label: 'Phone', required: false, type: 'string' },
   { key: 'mobile', label: 'Mobile', required: false, type: 'string' },
@@ -887,8 +884,6 @@ router.get('/template/:module', async (req, res, next) => {
     const headers = fields.map(f => f.label);
     const sampleRow = fields.map(f => {
       if (f.key === 'name') return 'Ahmed Al-Zaabi';
-      if (f.key === 'firstName') return 'Ahmed';
-      if (f.key === 'lastName') return 'Doe';
       if (f.key === 'email') return 'john.doe@example.com';
       if (f.key === 'phone') return '+971501234567';
       if (f.key === 'company') return 'Acme Corp';
@@ -1065,7 +1060,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
         take: 50000,
       });
 
-      const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Company', 'Job Title',
+      const headers = ['Name', 'Email', 'Phone', 'Company', 'Job Title',
         'Source', 'Status', 'Score', 'Budget', 'Product Interest', 'Location', 'Campaign',
         'Website', 'Pipeline Stage', 'Assigned To', 'Tags', 'Created At',
         ...customFields.map(cf => cf.label)];
@@ -1082,7 +1077,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
       const rows = leads.map(l => {
         const cd = typeof l.customData === 'object' && l.customData ? l.customData : {};
         return [
-          l.firstName, l.lastName, l.email || '', l.phone || '',
+          [l.firstName, l.lastName].filter(Boolean).join(' '), l.email || '', l.phone || '',
           l.company || '', l.jobTitle || '', l.source, l.status,
           l.score, l.budget ? parseFloat(l.budget) : '',
           l.productInterest || '', l.location || '', l.campaign || '',
@@ -1134,7 +1129,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
         take: 50000,
       });
 
-      const headers = ['First Name', 'Last Name', 'Email', 'Phone', 'Mobile', 'Company', 'Job Title',
+      const headers = ['Name', 'Email', 'Phone', 'Mobile', 'Company', 'Job Title',
         'Department', 'Source', 'Lifecycle', 'Type', 'Salutation', 'Date of Birth',
         'Website', 'LinkedIn', 'Twitter', 'Address', 'City', 'State', 'Country', 'Postal Code',
         'Description', 'Score', 'Owner', 'Tags', 'Created At',
@@ -1152,7 +1147,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
       const rows = contacts.map(c => {
         const cd = typeof c.customData === 'object' && c.customData ? c.customData : {};
         return [
-          c.firstName, c.lastName, c.email || '', c.phone || '', c.mobile || '',
+          [c.firstName, c.lastName].filter(Boolean).join(' '), c.email || '', c.phone || '', c.mobile || '',
           c.company || '', c.jobTitle || '', c.department || '', c.source, c.lifecycle, c.type,
           c.salutation || '',
           c.dateOfBirth ? new Date(c.dateOfBirth).toISOString().split('T')[0] : '',
