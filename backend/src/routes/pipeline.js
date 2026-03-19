@@ -19,6 +19,33 @@ function getDisplayName(obj) {
   return `${fn} ${ln}`;
 }
 
+// ─── Smart stage-to-status mapping ──────────────────────────────
+// Maps pipeline stage names to lead status enum values.
+// Uses keyword matching to handle custom stage names intelligently.
+// Falls back to current status if stage name is unrecognized.
+function mapStageToStatus(stageName, isWonStage, isLostStage, currentStatus) {
+  if (isWonStage) return 'WON';
+  if (isLostStage) return 'LOST';
+
+  const name = (stageName || '').toLowerCase().trim();
+
+  // NEW status keywords
+  if (/\bnew\b|untouched|fresh|incoming|unassigned/.test(name)) return 'NEW';
+
+  // CONTACTED status keywords
+  if (/contact|touched|follow[\s-]?up|reach|called|responded|engaged|attempt/.test(name)) return 'CONTACTED';
+
+  // QUALIFIED status keywords (including advanced pipeline stages)
+  if (/qualif|interested|hot|warm|ready|propos|negoti|present|demo|trial|review|meeting|scheduled/.test(name)) return 'QUALIFIED';
+
+  // WON/LOST by name
+  if (/\bwon\b|closed[\s-]?won|deal[\s-]?won|converted|signed/.test(name)) return 'WON';
+  if (/\blost\b|closed[\s-]?lost|dead|rejected|disqualif|churned/.test(name)) return 'LOST';
+
+  // Unrecognized stage name — keep current status
+  return currentStatus;
+}
+
 const router = Router();
 router.use(authenticate, orgScope);
 
@@ -126,10 +153,8 @@ router.post('/move', validate(z.object({
     });
     if (!stage) return res.status(404).json({ error: 'Stage not found' });
 
-    // Determine status based on stage
-    let newStatus = lead.status;
-    if (stage.isWonStage) newStatus = 'WON';
-    else if (stage.isLostStage) newStatus = 'LOST';
+    // ── Smart status sync: map pipeline stage name → lead status ──
+    let newStatus = mapStageToStatus(stage.name, stage.isWonStage, stage.isLostStage, lead.status);
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.lead.update({

@@ -777,6 +777,47 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
       updateData.slaStatus = 'RESPONDED';
     }
 
+    // ── Reverse sync: status change → find matching pipeline stage ──
+    if (updateData.status && updateData.status !== existing.status && !updateData.stageId) {
+      const statusToKeywords = {
+        NEW:       ['new', 'untouched', 'fresh', 'incoming'],
+        CONTACTED: ['contact', 'touched', 'follow', 'reach', 'called', 'engaged'],
+        QUALIFIED: ['qualif', 'interested', 'hot', 'warm', 'ready'],
+        WON:       ['won', 'converted', 'signed', 'closed won'],
+        LOST:      ['lost', 'dead', 'rejected', 'disqualif', 'closed lost'],
+      };
+
+      const keywords = statusToKeywords[updateData.status] || [];
+      if (keywords.length > 0) {
+        const orgStages = await prisma.pipelineStage.findMany({
+          where: { organizationId: existing.organizationId },
+          orderBy: { order: 'asc' },
+        });
+
+        // Find best matching stage by keyword
+        let matchedStage = null;
+        for (const stage of orgStages) {
+          const sName = stage.name.toLowerCase();
+          if (keywords.some(kw => sName.includes(kw))) {
+            matchedStage = stage;
+            break;
+          }
+        }
+
+        // Also check isWonStage / isLostStage flags
+        if (!matchedStage && updateData.status === 'WON') {
+          matchedStage = orgStages.find(s => s.isWonStage);
+        }
+        if (!matchedStage && updateData.status === 'LOST') {
+          matchedStage = orgStages.find(s => s.isLostStage);
+        }
+
+        if (matchedStage && matchedStage.id !== existing.stageId) {
+          updateData.stageId = matchedStage.id;
+        }
+      }
+    }
+
     const lead = await prisma.$transaction(async (tx) => {
       const updated = await tx.lead.update({
         where: { id: req.params.id },
