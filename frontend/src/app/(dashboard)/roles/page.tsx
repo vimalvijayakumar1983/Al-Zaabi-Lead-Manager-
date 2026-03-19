@@ -1279,7 +1279,7 @@ function RoleFormModal({
               </h2>
               <p className="text-sm text-text-secondary">
                 {isEditing
-                  ? `Modifying "${editingRole.name}"`
+                  ? `Modifying "${editingRole?.name}"`
                   : 'Define a new role with custom permissions'}
               </p>
             </div>
@@ -2094,7 +2094,7 @@ export default function RolesPage() {
       if (!!editingRole) return;
       setIsSaving(true);
       try {
-        const res = await fetch(apiUrl(`/api/roles/${editingRole.id}`), {
+        const res = await fetch(apiUrl(`/api/roles/${editingRole!.id}`), {
           method: 'PUT',
           headers: authHeaders(),
           body: JSON.stringify({
@@ -2133,7 +2133,7 @@ export default function RolesPage() {
     if (!!deletingRole) return;
     setIsDeleting(true);
     try {
-      const res = await fetch(apiUrl(`/api/roles/${deletingRole.id}`), {
+      const res = await fetch(apiUrl(`/api/roles/${deletingRole!.id}`), {
         method: 'DELETE',
         headers: authHeaders(),
       });
@@ -2144,7 +2144,7 @@ export default function RolesPage() {
             `Failed to delete role (${res.status})`
         );
       }
-      const roleName = deletingRole.name;
+      const roleName = deletingRole!.name;
       setDeletingRole(null);
       addToast('success', `Role "${roleName}" deleted successfully`);
       await fetchRoles();
@@ -2163,7 +2163,7 @@ export default function RolesPage() {
       if (!!cloningRole) return;
       setIsCloning(true);
       try {
-        const res = await fetch(apiUrl(`/api/roles/${cloningRole.id}/clone`), {
+        const res = await fetch(apiUrl(`/api/roles/${cloningRole!.id}/clone`), {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify({ name: newName }),
