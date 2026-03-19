@@ -38,7 +38,8 @@ const DEFAULT_PIPELINE_STAGES = [
 // ─── Register (creates group org + default division + super admin user) ───
 router.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
-    const { email, password, firstName, lastName, organizationName } = req.validated;
+    const { email: rawEmail, password, firstName, lastName, organizationName } = req.validated;
+    const email = rawEmail.toLowerCase().trim();
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -122,7 +123,8 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
 // ─── Login ───────────────────────────────────────────────────────
 router.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
-    const { email, password } = req.validated;
+    const { email: rawEmail, password } = req.validated;
+    const email = rawEmail.toLowerCase().trim();
 
     const user = await prisma.user.findUnique({
       where: { email },
