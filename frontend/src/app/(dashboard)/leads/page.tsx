@@ -189,6 +189,21 @@ function LeadsContent() {
   const [customLabels, setCustomLabels] = useState<Record<string, string>>({});
   const [showColumnManager, setShowColumnManager] = useState(false);
 
+  // Status labels (custom per division)
+  const [statusLabelsMap, setStatusLabelsMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setStatusLabelsMap(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+  const getStatusLabel = (status: string): string => {
+    return statusLabelsMap[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
+  };
+
   // Saved views
   const [activeViewId, setActiveViewId] = useState('all');
   const [customViews, setCustomViews] = useState<SavedView[]>(() => loadCustomViews());
