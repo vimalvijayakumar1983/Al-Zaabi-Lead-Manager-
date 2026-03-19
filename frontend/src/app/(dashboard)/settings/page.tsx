@@ -1343,6 +1343,25 @@ const DISPOSITION_GROUPS: { label: string; icon: string; dispositions: string[] 
   { label: 'Other', icon: '📝', dispositions: ['OTHER'] },
 ];
 
+// Default disposition labels — used as fallback when API fails or returns empty
+const DEFAULT_DISPOSITION_SETTINGS: { disposition: string; label: string; requireNotes: boolean }[] = [
+  { disposition: 'CALLBACK', label: 'Call Back Requested', requireNotes: false },
+  { disposition: 'MEETING_ARRANGED', label: 'Meeting Arranged', requireNotes: false },
+  { disposition: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', requireNotes: false },
+  { disposition: 'INTERESTED', label: 'Interested - Send Info', requireNotes: false },
+  { disposition: 'NOT_INTERESTED', label: 'Not Interested', requireNotes: false },
+  { disposition: 'NO_ANSWER', label: 'No Answer', requireNotes: false },
+  { disposition: 'VOICEMAIL_LEFT', label: 'Voicemail Left', requireNotes: false },
+  { disposition: 'WRONG_NUMBER', label: 'Wrong Number', requireNotes: false },
+  { disposition: 'BUSY', label: 'Line Busy', requireNotes: false },
+  { disposition: 'GATEKEEPER', label: 'Reached Gatekeeper', requireNotes: false },
+  { disposition: 'FOLLOW_UP_EMAIL', label: 'Follow-up Email Requested', requireNotes: false },
+  { disposition: 'QUALIFIED', label: 'Lead Qualified', requireNotes: false },
+  { disposition: 'PROPOSAL_REQUESTED', label: 'Proposal Requested', requireNotes: false },
+  { disposition: 'DO_NOT_CALL', label: 'Do Not Call', requireNotes: false },
+  { disposition: 'OTHER', label: 'Other', requireNotes: true },
+];
+
 function CallDispositionsSection() {
   const [settings, setSettings] = useState<{ disposition: string; label: string; requireNotes: boolean }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1352,9 +1371,18 @@ function CallDispositionsSection() {
 
   useEffect(() => {
     api.getDispositionSettings().then(data => {
-      setSettings(data);
+      // If API returns empty or invalid data, use defaults
+      if (!data || !Array.isArray(data) || data.length === 0) {
+        setSettings(DEFAULT_DISPOSITION_SETTINGS);
+      } else {
+        setSettings(data);
+      }
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      // Fallback to defaults if API fails
+      setSettings(DEFAULT_DISPOSITION_SETTINGS);
+      setLoading(false);
+    });
   }, []);
 
   const toggleRequireNotes = (disposition: string) => {

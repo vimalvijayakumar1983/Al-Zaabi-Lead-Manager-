@@ -304,34 +304,35 @@ router.get('/dispositions', (_req, res) => {
 });
 
 // ─── Get Disposition Settings for Org ────────────────────────────
-router.get('/dispositions/settings', async (req, res, next) => {
+router.get('/dispositions/settings', async (req, res) => {
+  // Build defaults first — always return something even if DB fails
+  const settingsMap = {};
+  Object.keys(DISPOSITION_LABELS).forEach(d => {
+    settingsMap[d] = { disposition: d, label: DISPOSITION_LABELS[d], requireNotes: d === 'OTHER' };
+  });
+
   try {
     await ensureDispositionSettings();
-    const orgId = req.orgIds[0];
-
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT disposition, require_notes FROM disposition_settings WHERE organization_id = $1`,
-      orgId
-    );
-
-    // Build a map: disposition -> requireNotes
-    // Default: OTHER = true, everything else = false
-    const settingsMap = {};
-    Object.keys(DISPOSITION_LABELS).forEach(d => {
-      settingsMap[d] = { disposition: d, label: DISPOSITION_LABELS[d], requireNotes: d === 'OTHER' };
-    });
-
-    // Override with stored settings
-    rows.forEach(row => {
-      if (settingsMap[row.disposition]) {
-        settingsMap[row.disposition].requireNotes = row.require_notes;
+    const orgId = req.orgIds?.[0];
+    if (orgId) {
+      const rows = await prisma.$queryRawUnsafe(
+        `SELECT disposition, require_notes FROM disposition_settings WHERE organization_id = $1::uuid`,
+        orgId
+      );
+      // Override with stored settings
+      if (rows && Array.isArray(rows)) {
+        rows.forEach(row => {
+          if (settingsMap[row.disposition]) {
+            settingsMap[row.disposition].requireNotes = row.require_notes;
+          }
+        });
       }
-    });
-
-    res.json(Object.values(settingsMap));
+    }
   } catch (err) {
-    next(err);
+    logger.warn('Failed to load disposition settings, using defaults:', err.message);
   }
+
+  res.json(Object.values(settingsMap));
 });
 
 // ─── Update Disposition Settings (Admin only) ───────────────────
@@ -355,7 +356,7 @@ router.put('/dispositions/settings', async (req, res, next) => {
       if (!DISPOSITION_LABELS[s.disposition]) continue; // Skip invalid dispositions
       await prisma.$executeRawUnsafe(
         `INSERT INTO disposition_settings (organization_id, disposition, require_notes, updated_at)
-         VALUES ($1, $2, $3, NOW())
+         VALUES ($1::uuid, $2, $3, NOW())
          ON CONFLICT (organization_id, disposition)
          DO UPDATE SET require_notes = $3, updated_at = NOW()`,
         orgId, s.disposition, !!s.requireNotes
@@ -364,7 +365,7 @@ router.put('/dispositions/settings', async (req, res, next) => {
 
     // Return updated settings
     const rows = await prisma.$queryRawUnsafe(
-      `SELECT disposition, require_notes FROM disposition_settings WHERE organization_id = $1`,
+      `SELECT disposition, require_notes FROM disposition_settings WHERE organization_id = $1::uuid`,
       orgId
     );
 
