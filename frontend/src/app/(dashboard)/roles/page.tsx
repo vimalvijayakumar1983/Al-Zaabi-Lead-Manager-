@@ -306,9 +306,10 @@ function apiUrl(path: string): string {
   return `${process.env.NEXT_PUBLIC_API_URL}${path}`;
 }
 
-function authHeaders(token: string): Record<string, string> {
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
   return {
-    Authorization: `Bearer ${token}`,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     'Content-Type': 'application/json',
   };
 }
@@ -1953,7 +1954,7 @@ function ErrorState({
 // ─────────────────────────────────────────────────────────────
 
 export default function RolesPage() {
-  const { user, token } = useAuthStore();
+  const { user } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
   // ── Data State ──
@@ -2022,12 +2023,12 @@ export default function RolesPage() {
 
   // ── Fetch roles ──
   const fetchRoles = useCallback(async () => {
-    if (!token) return;
+    // token handled by authHeaders
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(apiUrl('/api/roles'), {
-        headers: authHeaders(token),
+        headers: authHeaders(),
       });
       if (!res.ok) {
         throw new Error(`Failed to fetch roles (${res.status})`);
@@ -2041,7 +2042,7 @@ export default function RolesPage() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     fetchRoles();
@@ -2050,12 +2051,12 @@ export default function RolesPage() {
   // ── Create role ──
   const handleCreateRole = useCallback(
     async (formData: FormState) => {
-      if (!token) return;
+      // token handled by authHeaders
       setIsSaving(true);
       try {
         const res = await fetch(apiUrl('/api/roles'), {
           method: 'POST',
-          headers: authHeaders(token),
+          headers: authHeaders(),
           body: JSON.stringify({
             name: formData.name,
             description: formData.description,
@@ -2084,18 +2085,18 @@ export default function RolesPage() {
         setIsSaving(false);
       }
     },
-    [token, fetchRoles, addToast]
+    [fetchRoles, addToast]
   );
 
   // ── Update role ──
   const handleUpdateRole = useCallback(
     async (formData: FormState) => {
-      if (!token || !editingRole) return;
+      if (!!editingRole) return;
       setIsSaving(true);
       try {
         const res = await fetch(apiUrl(`/api/roles/${editingRole.id}`), {
           method: 'PUT',
-          headers: authHeaders(token),
+          headers: authHeaders(),
           body: JSON.stringify({
             name: formData.name,
             description: formData.description,
@@ -2124,17 +2125,17 @@ export default function RolesPage() {
         setIsSaving(false);
       }
     },
-    [token, editingRole, fetchRoles, addToast]
+    [editingRole, fetchRoles, addToast]
   );
 
   // ── Delete role ──
   const handleDeleteRole = useCallback(async () => {
-    if (!token || !deletingRole) return;
+    if (!!deletingRole) return;
     setIsDeleting(true);
     try {
       const res = await fetch(apiUrl(`/api/roles/${deletingRole.id}`), {
         method: 'DELETE',
-        headers: authHeaders(token),
+        headers: authHeaders(),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -2154,17 +2155,17 @@ export default function RolesPage() {
     } finally {
       setIsDeleting(false);
     }
-  }, [token, deletingRole, fetchRoles, addToast]);
+  }, [deletingRole, fetchRoles, addToast]);
 
   // ── Clone role ──
   const handleCloneRole = useCallback(
     async (newName: string) => {
-      if (!token || !cloningRole) return;
+      if (!!cloningRole) return;
       setIsCloning(true);
       try {
         const res = await fetch(apiUrl(`/api/roles/${cloningRole.id}/clone`), {
           method: 'POST',
-          headers: authHeaders(token),
+          headers: authHeaders(),
           body: JSON.stringify({ name: newName }),
         });
         if (!res.ok) {
@@ -2185,7 +2186,7 @@ export default function RolesPage() {
         setIsCloning(false);
       }
     },
-    [token, cloningRole, fetchRoles, addToast]
+    [cloningRole, fetchRoles, addToast]
   );
 
   // ── Stats data ──
