@@ -41,7 +41,7 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
     const { email: rawEmail, password, firstName, lastName, organizationName } = req.validated;
     const email = rawEmail.toLowerCase().trim();
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const existing = await prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
     if (existing) {
       return res.status(409).json({ error: 'Email already registered' });
     }
@@ -126,8 +126,8 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
     const { email: rawEmail, password } = req.validated;
     const email = rawEmail.toLowerCase().trim();
 
-    const user = await prisma.user.findUnique({
-      where: { email },
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
       include: {
         organization: {
           select: {
@@ -270,8 +270,8 @@ router.post('/forgot-password', async (req, res, next) => {
       return res.status(400).json({ error: 'Email is required' });
     }
     
-    const user = await prisma.user.findUnique({ 
-      where: { email: email.toLowerCase().trim() },
+    const user = await prisma.user.findFirst({ 
+      where: { email: { equals: email.toLowerCase().trim(), mode: 'insensitive' } },
       select: { id: true, firstName: true, organizationId: true, isActive: true }
     });
     
