@@ -1353,8 +1353,26 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
   const [customFieldsRaw, setCustomFieldsRaw] = useState<any[]>([]);
   const [teamUsers, setTeamUsers] = useState<any[]>([]);
   const [loadingFields, setLoadingFields] = useState(true);
+  const [modalStatusLabelMap, setModalStatusLabelMap] = useState<Record<string, string>>({});
 
-  // Fetch custom fields and team members on mount
+  // Dynamic status options with custom labels (scoped to this modal)
+  const dynamicStatusOptions = statusOptions.map(s => ({
+    ...s,
+    label: modalStatusLabelMap[s.value] || s.label,
+  }));
+
+  // Fetch custom fields, team members, and status labels on mount
+  useEffect(() => {
+    // Fetch status labels
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setModalStatusLabelMap(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
