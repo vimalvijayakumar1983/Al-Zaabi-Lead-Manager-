@@ -1346,11 +1346,20 @@ function CustomFieldsSection() {
   const [editingField, setEditingField] = useState<CustomField | null>(null);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels'>('builtin');
+  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'pipelineStages'>('builtin');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
   const [editingStatusKey, setEditingStatusKey] = useState<string | null>(null);
   const [statusUnsaved, setStatusUnsaved] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
+  // Pipeline Stages
+  const [pipelineStages, setPipelineStages] = useState<any[]>([]);
+  const [loadingStages, setLoadingStages] = useState(false);
+  const [editingStageId, setEditingStageId] = useState<string | null>(null);
+  const [newStageName, setNewStageName] = useState('');
+  const [newStageColor, setNewStageColor] = useState('#6366f1');
+  const [showAddStage, setShowAddStage] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string; leadCount: number } | null>(null);
+  const [reassignTarget, setReassignTarget] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [divDropdownOpen, setDivDropdownOpen] = useState(false);
@@ -1408,6 +1417,22 @@ function CustomFieldsSection() {
   }, [selectedDivisionId]);
 
   useEffect(() => { fetchFieldConfig(); }, [fetchFieldConfig]);
+
+  // ─── Fetch pipeline stages ───────────────────────────────────────
+  const fetchPipelineStages = useCallback(async () => {
+    setLoadingStages(true);
+    try {
+      const stages = await api.getPipelineStages(selectedDivisionId || undefined);
+      setPipelineStages(stages);
+    } catch {
+      setPipelineStages([]);
+    }
+    setLoadingStages(false);
+  }, [selectedDivisionId]);
+
+  useEffect(() => {
+    if (activeSection === 'pipelineStages') fetchPipelineStages();
+  }, [activeSection, fetchPipelineStages]);
 
   // ─── Computed stats ────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -1481,6 +1506,83 @@ function CustomFieldsSection() {
     }
     setSavingStatus(false);
   };
+
+  // ─── Pipeline stage handlers ─────────────────────────────────────
+  const handleAddStage = async () => {
+    if (!newStageName.trim()) return;
+    try {
+      await api.createPipelineStage({
+        name: newStageName.trim(),
+        color: newStageColor,
+        divisionId: selectedDivisionId || undefined,
+      });
+      setNewStageName('');
+      setNewStageColor('#6366f1');
+      setShowAddStage(false);
+      setToast({ type: 'success', message: 'Stage added!' });
+      fetchPipelineStages();
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to add stage' });
+    }
+  };
+
+  const handleRenameStage = async (stageId: string, newName: string) => {
+    if (!newName.trim()) return;
+    try {
+      await api.updatePipelineStage(stageId, { name: newName.trim() });
+      setEditingStageId(null);
+      setToast({ type: 'success', message: 'Stage renamed!' });
+      fetchPipelineStages();
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to rename stage' });
+    }
+  };
+
+  const handleChangeStageColor = async (stageId: string, color: string) => {
+    try {
+      await api.updatePipelineStage(stageId, { color });
+      fetchPipelineStages();
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to change color' });
+    }
+  };
+
+  const handleDeleteStage = async () => {
+    if (!deleteConfirm) return;
+    try {
+      await api.deletePipelineStage(
+        deleteConfirm.id,
+        deleteConfirm.leadCount > 0 ? reassignTarget : undefined
+      );
+      setDeleteConfirm(null);
+      setReassignTarget('');
+      setToast({ type: 'success', message: 'Stage deleted!' });
+      fetchPipelineStages();
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to delete stage' });
+    }
+  };
+
+  const handleMoveStage = async (index: number, direction: 'up' | 'down') => {
+    const newStages = [...pipelineStages];
+    const swapIdx = direction === 'up' ? index - 1 : index + 1;
+    if (swapIdx < 0 || swapIdx >= newStages.length) return;
+    [newStages[index], newStages[swapIdx]] = [newStages[swapIdx], newStages[index]];
+    setPipelineStages(newStages);
+    try {
+      await api.reorderPipelineStages(newStages.map(s => s.id));
+      setToast({ type: 'success', message: 'Stage order updated!' });
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to reorder' });
+      fetchPipelineStages();
+    }
+  };
+
+  const STAGE_COLORS = [
+    '#6366f1', '#3b82f6', '#06b6d4', '#10b981', '#22c55e',
+    '#eab308', '#f97316', '#ef4444', '#ec4899', '#8b5cf6',
+    '#64748b', '#0ea5e9', '#14b8a6', '#84cc16', '#f43f5e',
+  ];
 
   // ─── Custom field actions ──────────────────────────────────────────
   const handleDeleteCustomField = async (field: CustomField) => {
@@ -1694,6 +1796,22 @@ function CustomFieldsSection() {
           >
             <Tag className="h-4 w-4" />
             Status Labels
+          </button>
+          <button
+            onClick={() => setActiveSection('pipelineStages')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'pipelineStages'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <Layers className="h-4 w-4" />
+            Pipeline Stages
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'pipelineStages' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {pipelineStages.length}
+            </span>
           </button>
         </div>
 
@@ -1937,6 +2055,227 @@ function CustomFieldsSection() {
                   {savingStatus ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                   Save Status Labels
                 </button>
+              </div>
+            )}
+          </div>
+        ) : activeSection === 'pipelineStages' ? (
+          /* ═══ PIPELINE STAGES TAB ═══════════════════════════════ */
+          <div>
+            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+              <p className="text-xs text-gray-500">Manage pipeline stages for this division. Drag to reorder, click to rename.</p>
+              <button
+                onClick={() => setShowAddStage(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Stage
+              </button>
+            </div>
+
+            {/* Add Stage Form */}
+            {showAddStage && (
+              <div className="px-5 py-4 bg-indigo-50/50 border-b border-indigo-100">
+                <div className="flex items-center gap-3">
+                  <input
+                    autoFocus
+                    placeholder="Stage name (e.g., Follow-Up, Negotiation)"
+                    value={newStageName}
+                    onChange={(e) => setNewStageName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddStage(); if (e.key === 'Escape') setShowAddStage(false); }}
+                    className="flex-1 text-sm border border-indigo-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-xs text-gray-500">Color:</label>
+                    <div className="flex gap-1">
+                      {STAGE_COLORS.slice(0, 8).map(c => (
+                        <button
+                          key={c}
+                          onClick={() => setNewStageColor(c)}
+                          className={`w-5 h-5 rounded-full border-2 transition-all ${newStageColor === c ? 'border-gray-800 scale-110' : 'border-transparent hover:border-gray-400'}`}
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleAddStage}
+                    disabled={!newStageName.trim()}
+                    className="px-4 py-2 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => { setShowAddStage(false); setNewStageName(''); }}
+                    className="px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {loadingStages ? (
+              <div className="p-10 text-center">
+                <Loader2 className="h-6 w-6 animate-spin text-indigo-500 mx-auto" />
+                <p className="text-sm text-gray-500 mt-2">Loading stages...</p>
+              </div>
+            ) : pipelineStages.length === 0 ? (
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                  <Layers className="h-7 w-7 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-700">No pipeline stages</p>
+                <p className="text-xs text-gray-400 mt-1">Add stages to define your sales pipeline flow.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {pipelineStages.map((stage, idx) => (
+                  <div key={stage.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors group">
+                    {/* Order arrows */}
+                    <div className="flex flex-col gap-0.5">
+                      <button
+                        onClick={() => handleMoveStage(idx, 'up')}
+                        disabled={idx === 0}
+                        className="p-0.5 rounded text-gray-300 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5 rotate-180" />
+                      </button>
+                      <button
+                        onClick={() => handleMoveStage(idx, 'down')}
+                        disabled={idx === pipelineStages.length - 1}
+                        className="p-0.5 rounded text-gray-300 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Order number */}
+                    <span className="text-xs text-gray-400 font-mono w-5 text-center">{idx + 1}</span>
+
+                    {/* Color dot with picker */}
+                    <div className="relative group/color">
+                      <button
+                        className="w-6 h-6 rounded-full border-2 border-white shadow-sm hover:scale-110 transition-transform"
+                        style={{ backgroundColor: stage.color || '#6366f1' }}
+                        title="Change color"
+                      />
+                      <div className="absolute left-0 top-8 bg-white rounded-lg shadow-xl border border-gray-200 p-2 hidden group-hover/color:grid grid-cols-5 gap-1 z-50 w-[140px]">
+                        {STAGE_COLORS.map(c => (
+                          <button
+                            key={c}
+                            onClick={() => handleChangeStageColor(stage.id, c)}
+                            className={`w-5 h-5 rounded-full border-2 transition-all ${stage.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:border-gray-400'}`}
+                            style={{ backgroundColor: c }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Stage name (inline editable) */}
+                    <div className="flex-1 min-w-0">
+                      {editingStageId === stage.id ? (
+                        <input
+                          autoFocus
+                          className="text-sm font-medium text-gray-900 border border-indigo-300 rounded px-2 py-1 w-48 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          defaultValue={stage.name}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRenameStage(stage.id, (e.target as HTMLInputElement).value);
+                            if (e.key === 'Escape') setEditingStageId(null);
+                          }}
+                          onBlur={(e) => {
+                            const val = e.target.value.trim();
+                            if (val && val !== stage.name) handleRenameStage(stage.id, val);
+                            else setEditingStageId(null);
+                          }}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => setEditingStageId(stage.id)}
+                          className="flex items-center gap-1.5 text-sm font-medium text-gray-900 hover:text-indigo-600 transition-colors group/edit"
+                        >
+                          {stage.name}
+                          <Pencil className="h-3 w-3 text-gray-300 group-hover/edit:text-indigo-500 transition-colors" />
+                        </button>
+                      )}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <p className="text-[11px] text-gray-400">
+                          {stage._count?.leads ?? 0} lead{(stage._count?.leads ?? 0) !== 1 ? 's' : ''}
+                        </p>
+                        {stage.isWonStage && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Won Stage</span>}
+                        {stage.isLostStage && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Lost Stage</span>}
+                      </div>
+                    </div>
+
+                    {/* Delete button */}
+                    <button
+                      onClick={() => setDeleteConfirm({ id: stage.id, name: stage.name, leadCount: stage._count?.leads ?? 0 })}
+                      className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Delete stage"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {deleteConfirm && (
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                  <div className="px-6 py-5 border-b border-gray-100">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+                        <AlertTriangle className="h-5 w-5 text-red-600" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-semibold text-gray-900">Delete Stage</h3>
+                        <p className="text-sm text-gray-500">Remove &quot;{deleteConfirm.name}&quot; from pipeline</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-4">
+                    {deleteConfirm.leadCount > 0 ? (
+                      <div>
+                        <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-lg border border-amber-200 mb-4">
+                          <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                          <p className="text-sm text-amber-800">
+                            This stage has <strong>{deleteConfirm.leadCount} lead{deleteConfirm.leadCount !== 1 ? 's' : ''}</strong>. Choose where to move them:
+                          </p>
+                        </div>
+                        <select
+                          value={reassignTarget}
+                          onChange={(e) => setReassignTarget(e.target.value)}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">Select a stage...</option>
+                          {pipelineStages
+                            .filter(s => s.id !== deleteConfirm.id)
+                            .map(s => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-600">This stage has no leads and can be safely deleted.</p>
+                    )}
+                  </div>
+                  <div className="px-6 py-4 bg-gray-50 flex items-center justify-end gap-3">
+                    <button
+                      onClick={() => { setDeleteConfirm(null); setReassignTarget(''); }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleDeleteStage}
+                      disabled={deleteConfirm.leadCount > 0 && !reassignTarget}
+                      className="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                    >
+                      Delete Stage
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

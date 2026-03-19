@@ -173,6 +173,34 @@ class ApiClient {
     });
   }
 
+  async createPipelineStage(data: { name: string; color?: string; divisionId?: string; isWonStage?: boolean; isLostStage?: boolean }) {
+    return this.request<any>('/pipeline/stages', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePipelineStage(stageId: string, data: { name?: string; color?: string; order?: number }) {
+    return this.request<any>(`/pipeline/stages/${stageId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deletePipelineStage(stageId: string, reassignStageId?: string) {
+    const query = reassignStageId ? `?reassignStageId=${reassignStageId}` : '';
+    return this.request<any>(`/pipeline/stages/${stageId}${query}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async reorderPipelineStages(stageIds: string[]) {
+    return this.request<any>('/pipeline/stages/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ stageIds }),
+    });
+  }
+
   // Tasks
   async getTasks(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';

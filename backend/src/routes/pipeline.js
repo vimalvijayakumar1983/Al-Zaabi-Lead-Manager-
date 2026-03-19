@@ -205,4 +205,47 @@ router.post('/stages/reorder', authorize('ADMIN', 'MANAGER'), validate(z.object(
   }
 });
 
+// ─── Delete Pipeline Stage ────────────────────────────────────────
+router.delete('/stages/:id', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { reassignStageId } = req.query; // Optional: move leads to another stage
+
+    const existing = await prisma.pipelineStage.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      include: { _count: { select: { leads: true } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Stage not found' });
+
+    // If stage has leads, require reassignment target
+    if (existing._count.leads > 0) {
+      if (!reassignStageId) {
+        return res.status(400).json({
+          error: 'Stage has leads. Provide reassignStageId query param to move them.',
+          leadCount: existing._count.leads,
+        });
+      }
+      // Move all leads to the target stage
+      await prisma.lead.updateMany({
+        where: { stageId: req.params.id },
+        data: { stageId: reassignStageId },
+      });
+    }
+
+    await prisma.pipelineStage.delete({ where: { id: req.params.id } });
+
+    // Re-order remaining stages
+    const remaining = await prisma.pipelineStage.findMany({
+      where: { organizationId: existing.organizationId },
+      orderBy: { order: 'asc' },
+    });
+    await prisma.$transaction(
+      remaining.map((s, i) => prisma.pipelineStage.update({ where: { id: s.id }, data: { order: i } }))
+    );
+
+    res.json({ message: 'Stage deleted', reassignedLeads: existing._count.leads });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
