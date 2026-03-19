@@ -774,7 +774,14 @@ class ApiClient {
   // Field Configuration (built-in field visibility + custom fields)
   async getFieldConfig(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';
-    return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[] }>(`/settings/field-config${q}`);
+    return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[]; statusLabels?: Record<string, string> }>(`/settings/field-config${q}`);
+  }
+
+  async saveStatusLabels(divisionId: string | null, labels: Record<string, string>) {
+    return this.request<{ success: boolean }>('/settings/status-labels', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, labels }),
+    });
   }
 
   async saveFieldConfig(divisionId: string | null, fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }>) {

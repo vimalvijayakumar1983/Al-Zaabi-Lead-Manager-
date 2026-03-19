@@ -1346,7 +1346,11 @@ function CustomFieldsSection() {
   const [editingField, setEditingField] = useState<CustomField | null>(null);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<'builtin' | 'custom'>('builtin');
+  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels'>('builtin');
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const [editingStatusKey, setEditingStatusKey] = useState<string | null>(null);
+  const [statusUnsaved, setStatusUnsaved] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [divDropdownOpen, setDivDropdownOpen] = useState(false);
@@ -1386,6 +1390,8 @@ function CustomFieldsSection() {
       const data = await api.getFieldConfig(selectedDivisionId || undefined);
       setBuiltInFields(data.builtInFields || DEFAULT_BUILTIN_FIELDS);
       setCustomFields(data.customFields || []);
+      setStatusLabels(data.statusLabels || {});
+      setStatusUnsaved(false);
     } catch {
       // Fallback: fetch custom fields only
       try {
@@ -1461,6 +1467,19 @@ function CustomFieldsSection() {
       setToast({ type: 'error', message: err.message || 'Failed to save configuration' });
     }
     setSaving(false);
+  };
+
+  // ─── Save status labels ───────────────────────────────────────────
+  const saveStatusLabels = async () => {
+    setSavingStatus(true);
+    try {
+      await api.saveStatusLabels(selectedDivisionId || null, statusLabels);
+      setStatusUnsaved(false);
+      setToast({ type: 'success', message: 'Status labels saved successfully' });
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to save status labels' });
+    }
+    setSavingStatus(false);
   };
 
   // ─── Custom field actions ──────────────────────────────────────────
@@ -1665,6 +1684,17 @@ function CustomFieldsSection() {
               {customFields.length}
             </span>
           </button>
+          <button
+            onClick={() => setActiveSection('statusLabels')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'statusLabels'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <Tag className="h-4 w-4" />
+            Status Labels
+          </button>
         </div>
 
         {/* ── Loading State ──────────────────────────────────────── */}
@@ -1823,6 +1853,90 @@ function CustomFieldsSection() {
               <div className="p-8 text-center">
                 <Search className="h-8 w-8 text-gray-300 mx-auto mb-2" />
                 <p className="text-sm text-gray-500">No built-in fields match "{searchQuery}"</p>
+              </div>
+            )}
+          </div>
+        ) : activeSection === 'statusLabels' ? (
+          /* ═══ STATUS LABELS TAB ═══════════════════════════════════ */
+          <div>
+            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+              <p className="text-xs text-gray-500">Customize how pipeline statuses are displayed. Changes apply to stat cards, badges, filters, and dropdowns.</p>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {[
+                { key: 'NEW', default: 'New', color: 'bg-indigo-100 text-indigo-800' },
+                { key: 'CONTACTED', default: 'Contacted', color: 'bg-blue-100 text-blue-800' },
+                { key: 'QUALIFIED', default: 'Qualified', color: 'bg-cyan-100 text-cyan-800' },
+                { key: 'PROPOSAL_SENT', default: 'Proposal Sent', color: 'bg-amber-100 text-amber-800' },
+                { key: 'NEGOTIATION', default: 'Negotiation', color: 'bg-purple-100 text-purple-800' },
+                { key: 'WON', default: 'Won', color: 'bg-green-100 text-green-800' },
+                { key: 'LOST', default: 'Lost', color: 'bg-red-100 text-red-800' },
+              ].map(status => (
+                <div key={status.key} className="flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition-colors">
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.color}`}>
+                    {statusLabels[status.key] || status.default}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    {editingStatusKey === status.key ? (
+                      <input
+                        autoFocus
+                        className="text-sm font-medium text-gray-900 border border-indigo-300 rounded px-2 py-1 w-48 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        defaultValue={statusLabels[status.key] || status.default}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const val = (e.target as HTMLInputElement).value.trim();
+                            if (!val || val === status.default) {
+                              const next = { ...statusLabels };
+                              delete next[status.key];
+                              setStatusLabels(next);
+                            } else {
+                              setStatusLabels({ ...statusLabels, [status.key]: val });
+                            }
+                            setEditingStatusKey(null);
+                            setStatusUnsaved(true);
+                          }
+                          if (e.key === 'Escape') setEditingStatusKey(null);
+                        }}
+                        onBlur={(e) => {
+                          const val = e.target.value.trim();
+                          if (!val || val === status.default) {
+                            const next = { ...statusLabels };
+                            delete next[status.key];
+                            setStatusLabels(next);
+                          } else {
+                            setStatusLabels({ ...statusLabels, [status.key]: val });
+                          }
+                          setEditingStatusKey(null);
+                          setStatusUnsaved(true);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setEditingStatusKey(status.key)}
+                        className="flex items-center gap-1.5 text-sm font-medium text-gray-900 hover:text-indigo-600 transition-colors group"
+                      >
+                        {statusLabels[status.key] || status.default}
+                        <Pencil className="h-3 w-3 text-gray-300 group-hover:text-indigo-500 transition-colors" />
+                      </button>
+                    )}
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Internal: {status.key}{statusLabels[status.key] && <span className="ml-1 text-gray-300">· default: {status.default}</span>}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {statusUnsaved && (
+              <div className="px-5 py-3 bg-amber-50 border-t border-amber-200 flex items-center justify-between">
+                <p className="text-xs text-amber-700 font-medium">You have unsaved status label changes</p>
+                <button
+                  onClick={saveStatusLabels}
+                  disabled={savingStatus}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  {savingStatus ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  Save Status Labels
+                </button>
               </div>
             )}
           </div>

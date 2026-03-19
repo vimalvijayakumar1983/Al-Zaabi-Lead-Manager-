@@ -269,6 +269,7 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>('30d');
   const [divisions, setDivisions] = useState<Organization[]>([]);
   const [divisionFilter, setDivisionFilter] = useState<string>('all');
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
@@ -300,6 +301,15 @@ export default function DashboardPage() {
   }, [period, divisionFilter]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch custom status labels
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    api.getFieldConfig(activeDivisionId || undefined)
+      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
+      .catch(() => {});
+  }, []);
 
   // Real-time refresh
   useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
@@ -355,11 +365,13 @@ export default function DashboardPage() {
   const groupTotalWon = divisionBreakdown.reduce((s, d) => s + (d.wonLeads || 0), 0);
   const groupConvRate = groupTotalLeads > 0 ? Number(((groupTotalWon / groupTotalLeads) * 100).toFixed(1)) : 0;
 
+  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
+
   const kpiCards = [
     { label: 'Total Leads', value: fmt(k.totalLeads), icon: Users, color: 'brand', change: null },
-    { label: 'New Leads', value: fmt(k.newLeads), icon: UserPlus, color: 'indigo', change: k.newLeadsChange },
-    { label: 'Won Deals', value: fmt(k.wonLeads), icon: Trophy, color: 'emerald', change: k.wonLeadsChange },
-    { label: 'Lost Deals', value: fmt(k.lostLeads), icon: XCircle, color: 'red', change: k.lostLeadsChange },
+    { label: `${getStatusLabel('NEW')} Leads`, value: fmt(k.newLeads), icon: UserPlus, color: 'indigo', change: k.newLeadsChange },
+    { label: `${getStatusLabel('WON')} Deals`, value: fmt(k.wonLeads), icon: Trophy, color: 'emerald', change: k.wonLeadsChange },
+    { label: `${getStatusLabel('LOST')} Deals`, value: fmt(k.lostLeads), icon: XCircle, color: 'red', change: k.lostLeadsChange },
     { label: 'Conversion', value: `${k.conversionRate}%`, icon: Target, color: 'cyan', change: k.conversionRateChange },
     { label: 'Pipeline', value: fmt(k.pipelineValue, 'currency'), icon: Banknote, color: 'amber', change: k.pipelineValueChange },
     { label: 'Won Revenue', value: fmt(k.wonRevenue, 'currency'), icon: DollarSign, color: 'emerald', change: null },

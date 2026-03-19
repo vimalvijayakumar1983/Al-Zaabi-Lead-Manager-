@@ -631,7 +631,7 @@ function LeadsContent() {
       case 'status':
         return (
           <InlineEdit value={lead.status} onSave={(v) => handleInlineUpdate(lead.id, 'status', v)}
-            type="select" options={Object.keys(statusColors).map((s) => ({ value: s, label: s.replace(/_/g, ' ') }))}
+            type="select" options={Object.keys(statusColors).map((s) => ({ value: s, label: getStatusLabel(s) }))}
             displayClassName={`badge ${statusColors[lead.status]}`} />
         );
       case 'source':
@@ -761,7 +761,7 @@ function LeadsContent() {
                 {Object.keys(statusColors).filter((s) => s !== lead.status).map((s) => (
                   <button key={s} onClick={() => handleQuickStatus(lead.id, s)} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                     <span className={`inline-block w-2 h-2 rounded-full ${statusColors[s].split(' ')[0]}`} />
-                    {s.replace(/_/g, ' ')}
+                    {getStatusLabel(s)}
                   </button>
                 ))}
                 <div className="border-t border-gray-100 my-1" />
@@ -859,10 +859,10 @@ function LeadsContent() {
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <StatCard label="Total" value={stats.overview.totalLeads} color="brand" />
-          <StatCard label="New" value={stats.overview.newLeads} color="indigo" />
-          <StatCard label="Qualified" value={stats.overview.qualifiedLeads} color="cyan" />
-          <StatCard label="Won" value={stats.overview.wonLeads} color="green" />
-          <StatCard label="Lost" value={stats.overview.lostLeads} color="red" />
+          <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
+          <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
+          <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="green" />
+          <StatCard label={getStatusLabel('LOST')} value={stats.overview.lostLeads} color="red" />
           <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
           <div className="col-span-full flex gap-2 mt-1">
             <button onClick={() => setShowWorkload(!showWorkload)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
@@ -918,7 +918,7 @@ function LeadsContent() {
               <select className="input max-w-[140px] text-sm" value={filters.status}
                 onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPagination((p) => ({ ...p, page: 1 })); setActiveViewId('all'); }}>
                 <option value="">All Statuses</option>
-                {Object.keys(statusColors).map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+                {Object.keys(statusColors).map((s) => <option key={s} value={s}>{getStatusLabel(s)}</option>)}
               </select>
 
               {/* Advanced Filters Toggle */}
@@ -991,7 +991,7 @@ function LeadsContent() {
                       {Object.keys(statusColors).map((s) => (
                         <button key={s} onClick={() => handleBulkStatusUpdate(s)} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                           <span className={`inline-block w-2 h-2 rounded-full mr-2 ${statusColors[s].split(' ')[0]}`} />
-                          {s.replace(/_/g, ' ')}
+                          {getStatusLabel(s)}
                         </button>
                       ))}
                     </div>
@@ -1108,7 +1108,7 @@ function LeadsContent() {
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>
-                          <span className={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`}>{(lead.status || 'NEW').replace(/_/g, ' ')}</span>
+                          <span className={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`}>{getStatusLabel(lead.status || 'NEW')}</span>
                         </div>
                         <div className="space-y-1.5 text-sm">
                           {lead.email && <p className="text-gray-600 truncate flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8" /></svg>{lead.email}</p>}
@@ -1333,6 +1333,7 @@ function CreateLeadModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
 
   // Fetch field config to know which fields are required for this division
   useEffect(() => {
@@ -1349,9 +1350,14 @@ function CreateLeadModal({
           config[f.key] = { isRequired: f.isRequired || false, customLabel: f.customLabel || undefined };
         });
         setFieldConfig(config);
+        if (data.statusLabels) setStatusLabels(data.statusLabels);
       })
       .catch(() => {}); // fallback: only name required (hardcoded)
   }, []);
+
+  const getStatusLabel = (status: string): string => {
+    return statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
+  };
 
   const isFieldRequired = (key: string): boolean => {
     if (key === 'name') return true; // always required

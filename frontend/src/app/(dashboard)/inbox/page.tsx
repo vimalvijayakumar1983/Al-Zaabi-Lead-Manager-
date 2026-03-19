@@ -217,6 +217,20 @@ function InboxContent() {
 
   // Right panel tabs: info | notes | canned | attachments
   const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+
+  // Fetch custom status labels
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+
+  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -773,7 +787,7 @@ function InboxContent() {
                     : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary'
                 }`}
               >
-                {s ? s.replace(/_/g, ' ') : 'All Status'}
+                {s ? getStatusLabel(s) : 'All Status'}
               </button>
             ))}
           </div>
@@ -915,7 +929,7 @@ function InboxContent() {
                           {/* Status pill */}
                           <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
                             <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
-                            {(convo.leadStatus || 'NEW').replace(/_/g, ' ')}
+                            {getStatusLabel(convo.leadStatus || 'NEW')}
                           </span>
 
                           {/* Unread count badge or message count */}
@@ -1042,7 +1056,7 @@ function InboxContent() {
                         } ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}
                       >
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {(leadInfo.status || 'NEW').replace(/_/g, ' ')}
+                        {getStatusLabel(leadInfo.status || 'NEW')}
                         <ChevronDown className="h-2.5 w-2.5" />
                       </button>
 
@@ -1057,7 +1071,7 @@ function InboxContent() {
                               }`}
                             >
                               <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-                              {status.replace(/_/g, ' ')}
+                              {getStatusLabel(status)}
                             </button>
                           ))}
                         </div>
@@ -1596,7 +1610,7 @@ function InboxContent() {
                       <p className="text-2xs text-text-tertiary mb-0.5">Status</p>
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium ${STATUS_COLORS[leadInfo.status]?.bg || 'bg-gray-50'} ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}>
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {(leadInfo.status || 'NEW').replace(/_/g, ' ')}
+                        {getStatusLabel(leadInfo.status || 'NEW')}
                       </span>
                     </div>
                     <div className="p-2 rounded-lg bg-surface-secondary/50">

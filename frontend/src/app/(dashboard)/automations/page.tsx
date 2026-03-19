@@ -243,6 +243,24 @@ export default function AutomationsPage() {
   const [filterTrigger, setFilterTrigger] = useState('all');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [stats, setStats] = useState<any>(null);
+  const [statusLabelMap, setStatusLabelMap] = useState<Record<string, string>>({});
+
+  // Fetch custom status labels
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setStatusLabelMap(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+
+  // Dynamic status options with custom labels
+  const dynamicStatusOptions = statusOptions.map(s => ({
+    ...s,
+    label: statusLabelMap[s.value] || s.label,
+  }));
 
   const fetchRules = useCallback(async () => {
     try {
@@ -1786,7 +1804,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             <label className="label">New Status</label>
                             <select className="input text-sm" value={action.config.status || ''} onChange={(e) => updateActionConfig(i, 'status', e.target.value)}>
                               <option value="">Select status...</option>
-                              {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                              {dynamicStatusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                             </select>
                           </div>
                         )}
@@ -1994,7 +2012,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                         <p className="text-xs font-medium text-text-primary">{act?.label || a.type}</p>
                         {Object.entries(a.config).filter(([, v]) => v).map(([k, v]) => {
                           const configLabels: Record<string, string> = { status: 'Status', taskType: 'Task Type', priority: 'Priority', stage: 'Stage', template: 'Template', subject: 'Subject', message: 'Message', tagName: 'Tag', title: 'Title', dueInHours: 'Due In (hours)', url: 'URL', method: 'Method' };
-                          const valueMappers: Record<string, { value: string; label: string }[]> = { status: statusOptions, taskType: taskTypeOptions, priority: priorityOptions };
+                          const valueMappers: Record<string, { value: string; label: string }[]> = { status: dynamicStatusOptions, taskType: taskTypeOptions, priority: priorityOptions };
                           const displayVal = valueMappers[k]?.find(o => o.value === String(v))?.label || String(v);
                           return <p key={k} className="text-2xs text-text-tertiary">{configLabels[k] || k}: {displayVal}</p>;
                         })}

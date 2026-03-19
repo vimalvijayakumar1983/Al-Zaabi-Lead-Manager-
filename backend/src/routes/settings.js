@@ -303,6 +303,9 @@ router.get('/field-config', async (req, res, next) => {
     // Cascade: division-specific → group-level defaults → empty
     const fieldConfig = settings.fieldConfig?.[divKey] || settings.fieldConfig?.['default'] || {};
 
+    // Get status labels for this division
+    const statusLabels = settings.statusLabels?.[divKey] || settings.statusLabels?.['default'] || {};
+
     // Merge built-in fields with saved config
     const builtInFields = BUILT_IN_FIELDS.map((f, idx) => ({
       ...f,
@@ -327,7 +330,7 @@ router.get('/field-config', async (req, res, next) => {
         },
         orderBy: { order: 'asc' },
       });
-      return res.json({ builtInFields, customFields });
+      return res.json({ builtInFields, customFields, statusLabels });
     }
 
     const customFields = await prisma.customField.findMany({
@@ -335,7 +338,7 @@ router.get('/field-config', async (req, res, next) => {
       orderBy: { order: 'asc' },
     });
 
-    res.json({ builtInFields, customFields });
+    res.json({ builtInFields, customFields, statusLabels });
   } catch (err) { next(err); }
 });
 
@@ -354,6 +357,31 @@ router.put('/field-config', authorize('ADMIN'), async (req, res, next) => {
     const settings = (org?.settings || {});
     if (!settings.fieldConfig) settings.fieldConfig = {};
     settings.fieldConfig[divKey] = fields;
+
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: { settings },
+    });
+
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+// PUT /status-labels — Save custom status labels per division
+router.put('/status-labels', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const { divisionId, labels } = req.body;
+    const orgId = req.orgId;
+    const divKey = divisionId ? `division_${divisionId}` : 'default';
+
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+
+    const settings = (org?.settings || {});
+    if (!settings.statusLabels) settings.statusLabels = {};
+    settings.statusLabels[divKey] = labels || {};
 
     await prisma.organization.update({
       where: { id: orgId },
