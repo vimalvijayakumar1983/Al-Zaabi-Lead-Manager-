@@ -860,7 +860,7 @@ function LeadsContent() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <StatCard label="Total" value={stats.overview.totalLeads} color="brand" />
           <StatCard label="New" value={stats.overview.newLeads} color="indigo" />
-          <StatCard label="Qualified" value={stats.leadsByStatus?.find((s: any) => s.status === 'QUALIFIED')?._count?.status || 0} color="cyan" />
+          <StatCard label="Qualified" value={stats.overview.qualifiedLeads} color="cyan" />
           <StatCard label="Won" value={stats.overview.wonLeads} color="green" />
           <StatCard label="Lost" value={stats.overview.lostLeads} color="red" />
           <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />

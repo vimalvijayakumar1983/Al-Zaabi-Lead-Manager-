@@ -73,15 +73,16 @@ router.get('/dashboard', async (req, res, next) => {
     const taskWhere = getTaskWhere(req, divisionId, { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { gte: new Date() } });
 
     const [
-      totalLeads, newLeads, wonLeads, lostLeads,
+      totalLeads, newLeads, qualifiedLeads, wonLeads, lostLeads,
       leadsByStatus, leadsBySource, recentLeads, upcomingTasks, pipelineValue,
     ] = await Promise.all([
       prisma.lead.count({ where: leadWhere }),
       prisma.lead.count({ where: { ...leadWhere, status: 'NEW' } }),
+      prisma.lead.count({ where: { ...leadWhere, status: 'QUALIFIED' } }),
       prisma.lead.count({ where: { ...leadWhere, status: 'WON' } }),
       prisma.lead.count({ where: { ...leadWhere, status: 'LOST' } }),
-      prisma.lead.groupBy({ by: ['status'], where: leadWhere, _count: true }),
-      prisma.lead.groupBy({ by: ['source'], where: leadWhere, _count: true }),
+      prisma.lead.groupBy({ by: ['status'], where: leadWhere, _count: { status: true } }),
+      prisma.lead.groupBy({ by: ['source'], where: leadWhere, _count: { source: true } }),
       prisma.lead.findMany({
         where: leadWhere,
         orderBy: { createdAt: 'desc' }, take: 5,
@@ -100,9 +101,9 @@ router.get('/dashboard', async (req, res, next) => {
 
     const conversionRate = totalLeads > 0 ? Math.round((wonLeads / totalLeads) * 10000) / 100 : 0;
     res.json({
-      overview: { totalLeads, newLeads, wonLeads, lostLeads, conversionRate, pipelineValue: pipelineValue._sum.budget || 0 },
-      leadsByStatus: leadsByStatus.map(s => ({ status: s.status, count: s._count })),
-      leadsBySource: leadsBySource.map(s => ({ source: s.source, count: s._count })),
+      overview: { totalLeads, newLeads, qualifiedLeads, wonLeads, lostLeads, conversionRate, pipelineValue: pipelineValue._sum.budget || 0 },
+      leadsByStatus: leadsByStatus.map(s => ({ status: s.status, count: s._count.status || s._count._all || s._count })),
+      leadsBySource: leadsBySource.map(s => ({ source: s.source, count: s._count.source || s._count._all || s._count })),
       recentLeads,
       upcomingTasks,
     });
@@ -533,8 +534,8 @@ router.get('/dashboard-full', async (req, res, next) => {
       prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null }, createdAt: { gte: prevStart, lt: prevEnd } }, _sum: { budget: true } }),
       prisma.lead.aggregate({ where: { ...lw, status: 'WON', budget: { not: null } }, _sum: { budget: true }, _avg: { budget: true }, _count: true }),
 
-      prisma.lead.groupBy({ by: ['status'], where: lw, _count: true }),
-      prisma.lead.groupBy({ by: ['source'], where: lw, _count: true }),
+      prisma.lead.groupBy({ by: ['status'], where: lw, _count: { status: true } }),
+      prisma.lead.groupBy({ by: ['source'], where: lw, _count: { source: true } }),
 
       prisma.lead.findMany({
         where: lw, orderBy: { createdAt: 'desc' }, take: 8,
@@ -700,8 +701,8 @@ router.get('/dashboard-full', async (req, res, next) => {
         slaAtRisk: slaAtRisk || 0,
         slaBreached: slaBreached || 0,
       },
-      leadsByStatus: leadsByStatus.map(s => ({ status: s.status, count: s._count })),
-      leadsBySource: leadsBySource.map(s => ({ source: s.source, count: s._count })).sort((a, b) => b.count - a.count),
+      leadsByStatus: leadsByStatus.map(s => ({ status: s.status, count: s._count.status || s._count._all || s._count })),
+      leadsBySource: leadsBySource.map(s => ({ source: s.source, count: s._count.source || s._count._all || s._count })).sort((a, b) => b.count - a.count),
       recentLeads,
       upcomingTasks,
       trends,
