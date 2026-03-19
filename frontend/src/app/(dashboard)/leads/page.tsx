@@ -535,7 +535,7 @@ function LeadsContent() {
         switch (c.id) {
           case 'name': return getDisplayName(l);
           case 'email': return l.email || '';
-          case 'phone': return l.phone || '';
+          case 'phone': return formatPhone(l.phone) || '';
           case 'company': return l.company || '';
           case 'jobTitle': return l.jobTitle || '';
           case 'status': return l.status;
@@ -1154,7 +1154,7 @@ function LeadsContent() {
                         </div>
                         <div className="space-y-1.5 text-sm">
                           {lead.email && <p className="text-gray-600 truncate flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8" /></svg>{lead.email}</p>}
-                          {lead.phone && <p className="text-gray-600 flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28" /></svg>{lead.phone}</p>}
+                          {lead.phone && <p className="text-gray-600 flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28" /></svg>{formatPhone(lead.phone)}</p>}
                         </div>
                         <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
                           <div className="flex items-center gap-2">
