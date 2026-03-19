@@ -146,11 +146,35 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       ];
     }
 
-    // Date range
-    if (dateFrom || dateTo) {
+    // Date range — resolve shortcut tokens first
+    let resolvedFrom = dateFrom;
+    let resolvedTo = dateTo;
+    if (resolvedFrom === '__this_week__') {
+      const now = new Date();
+      const day = now.getDay(); // 0=Sun
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
+      resolvedFrom = new Date(now.getFullYear(), now.getMonth(), diff).toISOString().split('T')[0];
+      resolvedTo = undefined; // up to now
+    } else if (resolvedFrom === '__today__') {
+      resolvedFrom = new Date().toISOString().split('T')[0];
+      resolvedTo = resolvedFrom;
+    } else if (resolvedFrom === '__this_month__') {
+      const now = new Date();
+      resolvedFrom = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      resolvedTo = undefined;
+    } else if (resolvedFrom === '__last_7_days__') {
+      const d = new Date(); d.setDate(d.getDate() - 7);
+      resolvedFrom = d.toISOString().split('T')[0];
+      resolvedTo = undefined;
+    } else if (resolvedFrom === '__last_30_days__') {
+      const d = new Date(); d.setDate(d.getDate() - 30);
+      resolvedFrom = d.toISOString().split('T')[0];
+      resolvedTo = undefined;
+    }
+    if (resolvedFrom || resolvedTo) {
       where.createdAt = {};
-      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
-      if (dateTo) where.createdAt.lte = new Date(dateTo + 'T23:59:59.999Z');
+      if (resolvedFrom) where.createdAt.gte = new Date(resolvedFrom);
+      if (resolvedTo) where.createdAt.lte = new Date(resolvedTo + 'T23:59:59.999Z');
     }
     // Text field filters
     if (company) where.company = { contains: company, mode: 'insensitive' };
