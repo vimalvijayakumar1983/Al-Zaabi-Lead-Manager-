@@ -18,8 +18,9 @@ router.use(authenticate, orgScope);
 
 // ─── Schemas ─────────────────────────────────────────────────────
 const createLeadSchema = z.object({
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
+  name: z.string().optional(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional().default(''),
   email: z.string().email().optional().nullable(),
   phone: z.string().optional().nullable(),
   company: z.string().optional().nullable(),
@@ -493,6 +494,25 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
   try {
     const data = req.validated;
 
+    // Smart-split unified "name" field into firstName / lastName
+    if (data.name && !data.firstName) {
+      const parts = data.name.trim().split(/\s+/);
+      if (parts.length === 1) {
+        data.firstName = parts[0];
+        data.lastName = '';
+      } else {
+        data.lastName = parts.pop();
+        data.firstName = parts.join(' ');
+      }
+    }
+    delete data.name;
+
+    // Ensure firstName is present
+    if (!data.firstName || data.firstName.trim() === '') {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    if (data.lastName === undefined || data.lastName === null) data.lastName = '';
+
     // Determine target org: SUPER_ADMIN can target a division.
     // If SUPER_ADMIN doesn't specify a division, fall back to the first child
     // division instead of the GROUP org (which has no pipeline stages).
@@ -668,6 +688,21 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     const data = req.validated;
     delete data.divisionId; // not applicable for update
+
+    // Smart-split unified "name" field into firstName / lastName
+    if (data.name) {
+      const parts = data.name.trim().split(/\s+/);
+      if (parts.length === 1) {
+        data.firstName = parts[0];
+        data.lastName = '';
+      } else {
+        data.lastName = parts.pop();
+        data.firstName = parts.join(' ');
+      }
+      delete data.name;
+    }
+    if (data.lastName === undefined || data.lastName === null) data.lastName = '';
+
     const { tags: tagNames, ...updateData } = data;
 
     // Recalculate score if relevant fields change

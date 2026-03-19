@@ -227,8 +227,7 @@ export default function LeadDetailPage() {
   const startEditing = () => {
     if (!lead) return;
     setEditForm({
-      firstName: lead.firstName,
-      lastName: lead.lastName,
+      name: `${lead.firstName}${lead.lastName ? ' ' + lead.lastName : ''}`,
       email: lead.email || '',
       phone: lead.phone || '',
       company: lead.company || '',
@@ -277,6 +276,20 @@ export default function LeadDetailPage() {
         }
       }
       data.customData = newCustomData;
+
+      // Smart-split unified Name field into firstName/lastName
+      if (data.name && typeof data.name === 'string') {
+        const nameParts = data.name.trim().split(/\s+/);
+        if (nameParts.length <= 1) {
+          data.firstName = nameParts[0] || lead.firstName;
+          data.lastName = '';
+        } else {
+          data.lastName = nameParts.pop() || '';
+          data.firstName = nameParts.join(' ');
+        }
+        delete data.name;
+      }
+
       await api.updateLead(lead.id, data);
       setIsEditing(false);
       await refreshLead();
@@ -360,7 +373,7 @@ export default function LeadDetailPage() {
         lifecycle: 'CUSTOMER',
         type: 'CUSTOMER',
         createDeal,
-        dealName: lead.company ? `${lead.company} - Deal` : `${lead.firstName} ${lead.lastName} - Deal`,
+        dealName: lead.company ? `${lead.company} - Deal` : `${lead.firstName}${lead.lastName ? " " + lead.lastName : ""} - Deal`,
         dealAmount: lead.budget ? Number(lead.budget) : undefined,
       });
       setShowConvertToContact(false);
@@ -598,10 +611,10 @@ export default function LeadDetailPage() {
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
           </button>
           <div className="h-14 w-14 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-md">
-            {lead.firstName[0]}{lead.lastName[0]}
+            {(lead.firstName || '?')[0]}{lead.lastName ? lead.lastName[0] : ''}
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{lead.firstName} {lead.lastName}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</h1>
             <p className="text-gray-500">{lead.company || 'No company'} {lead.jobTitle ? `· ${lead.jobTitle}` : ''}</p>
           </div>
         </div>
@@ -688,12 +701,11 @@ export default function LeadDetailPage() {
               <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-gray-500">First Name</label>
-                    <input className="input text-sm" value={editForm.firstName} onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })} />
+                    <label className="text-xs text-gray-500">Name</label>
+                    <input className="input text-sm" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Ahmed Al-Zaabi" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Last Name</label>
-                    <input className="input text-sm" value={editForm.lastName} onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })} />
+
                   </div>
                 </div>
                 <div>
@@ -1351,7 +1363,7 @@ export default function LeadDetailPage() {
                               {/* Sender name for inbound */}
                               {!isOutbound && (
                                 <p className="text-xs font-semibold text-teal-700 mb-0.5">
-                                  {lead.firstName} {lead.lastName}
+                                  {lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}
                                 </p>
                               )}
                               {isOutbound && msg.user && (
@@ -1513,7 +1525,7 @@ export default function LeadDetailPage() {
       {showTaskModal && <CreateTaskModal onClose={() => setShowTaskModal(false)} onSubmit={handleCreateTask} />}
 
       {/* Log Call Modal */}
-      {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={`${lead.firstName} ${lead.lastName}`} />}
+      {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={`${lead.firstName}${lead.lastName ? " " + lead.lastName : ""}`} />}
 
       {/* Log Communication Modal */}
       {showCommModal && <LogCommModal onClose={() => setShowCommModal(false)} onSubmit={handleLogComm} leadEmail={lead.email} />}
@@ -1524,7 +1536,7 @@ export default function LeadDetailPage() {
           onClose={() => setShowEmailComposer(false)}
           onSend={handleSendEmail}
           toEmail={lead.email}
-          leadName={`${lead.firstName} ${lead.lastName}`}
+          leadName={`${lead.firstName}${lead.lastName ? " " + lead.lastName : ""}`}
         />
       )}
 
@@ -1537,7 +1549,7 @@ export default function LeadDetailPage() {
                 <svg className="h-6 w-6 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
               </div>
               <h2 className="text-lg font-semibold text-gray-900">Convert to Contact</h2>
-              <p className="text-sm text-gray-500 mt-1">Convert <strong>{lead.firstName} {lead.lastName}</strong> into a contact record.</p>
+              <p className="text-sm text-gray-500 mt-1">Convert <strong>{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</strong> into a contact record.</p>
             </div>
             <div className="space-y-3 mb-5">
               <p className="text-xs text-gray-500">This will create a new contact with all existing lead information. You can optionally create a deal at the same time.</p>
@@ -1578,7 +1590,7 @@ export default function LeadDetailPage() {
                 <svg className="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
               </div>
               <h2 className="text-lg font-semibold text-gray-900">Convert to Won Deal</h2>
-              <p className="text-sm text-gray-500 mt-1">Mark <strong>{lead.firstName} {lead.lastName}</strong> as a won deal? This will update the status to WON.</p>
+              <p className="text-sm text-gray-500 mt-1">Mark <strong>{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</strong> as a won deal? This will update the status to WON.</p>
             </div>
             <div className="flex gap-2">
               <button onClick={() => setShowConvertModal(false)} className="btn-secondary flex-1">Cancel</button>
