@@ -127,7 +127,7 @@ enum Role {
 model Lead {
   id              String     @id @default(uuid())
   firstName       String
-  lastName        String
+  lastName        String     @default("")
   email           String?
   phone           String?
   company         String?
@@ -231,7 +231,7 @@ enum LeadSLAStatus {
 model Contact {
   id              String        @id @default(uuid())
   firstName       String
-  lastName        String
+  lastName        String     @default("")
   email           String?
   phone           String?
   mobile          String?

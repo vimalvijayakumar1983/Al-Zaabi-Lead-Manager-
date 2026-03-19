@@ -100,7 +100,7 @@ export type LeadStatus =
 export interface Lead {
   id: string;
   firstName: string;
-  lastName: string;
+  lastName?: string;
   email?: string;
   phone?: string;
   company?: string;

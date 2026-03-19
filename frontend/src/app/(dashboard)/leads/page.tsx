@@ -472,7 +472,7 @@ function LeadsContent() {
     const rows = leads.map((l) =>
       visibleCols.map((c) => {
         switch (c.id) {
-          case 'name': return `${l.firstName} ${l.lastName}`;
+          case 'name': return `${l.firstName}${l.lastName ? ` ${l.lastName}` : ''}`;
           case 'email': return l.email || '';
           case 'phone': return l.phone || '';
           case 'company': return l.company || '';
@@ -565,10 +565,10 @@ function LeadsContent() {
         return (
           <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
             <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
-              {(lead.firstName || '?')[0]}{(lead.lastName || '?')[0]}
+              {(lead.firstName || '?')[0]}{lead.lastName ? lead.lastName[0] : ''}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{lead.firstName} {lead.lastName}</p>
+              <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</p>
               {lead.jobTitle && <p className="text-xs text-gray-500 truncate">{lead.jobTitle}</p>}
             </div>
           </Link>
@@ -1066,10 +1066,10 @@ function LeadsContent() {
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
-                              {(lead.firstName || '?')[0]}{(lead.lastName || '?')[0]}
+                              {(lead.firstName || '?')[0]}{lead.lastName ? lead.lastName[0] : ''}
                             </div>
                             <div>
-                              <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{lead.firstName} {lead.lastName}</p>
+                              <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</p>
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>
@@ -1279,8 +1279,7 @@ function CreateLeadModal({
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     return {
-      firstName: '',
-      lastName: '',
+      name: '',
       email: '',
       phone: '',
       company: '',
@@ -1311,11 +1310,8 @@ function CreateLeadModal({
   const validate = useCallback((): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.firstName || String(formData.firstName).trim() === '') {
-      newErrors.firstName = 'First name is required';
-    }
-    if (!formData.lastName || String(formData.lastName).trim() === '') {
-      newErrors.lastName = 'Last name is required';
+    if (!formData.name || String(formData.name).trim() === '') {
+      newErrors.name = 'Name is required';
     }
     if (formData.email && String(formData.email).trim() !== '') {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1354,12 +1350,31 @@ function CreateLeadModal({
           delete submitData.budget;
         }
 
+        // Smart-split unified Name into firstName/lastName for the API
+        if (submitData.name && typeof submitData.name === 'string') {
+          const nameParts = (submitData.name as string).trim().split(/\s+/);
+          if (nameParts.length <= 1) {
+            submitData.firstName = nameParts[0] || '';
+            submitData.lastName = '';
+          } else {
+            submitData.lastName = nameParts.pop() || '';
+            submitData.firstName = nameParts.join(' ');
+          }
+          delete submitData.name;
+        }
+
         // Clean up empty strings
         Object.keys(submitData).forEach((key) => {
           if (submitData[key] === '') {
             delete submitData[key];
           }
         });
+
+        // Ensure firstName is always sent (even after clean-up)
+        if (!submitData.firstName && submitData.name) {
+          submitData.firstName = submitData.name;
+          delete submitData.name;
+        }
 
         // Handle custom fields — store in customData keyed by cf.name
         const customData: Record<string, unknown> = {};
@@ -1479,8 +1494,7 @@ function CreateLeadModal({
                 </h3>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {renderInput('firstName', 'First Name', { placeholder: 'John', required: true })}
-                {renderInput('lastName', 'Last Name', { placeholder: 'Doe', required: true })}
+                {renderInput('name', 'Name', { placeholder: 'Ahmed Al-Zaabi', required: true })}
                 {renderInput('email', 'Email', { type: 'email', placeholder: 'john@example.com' })}
                 {renderInput('phone', 'Phone', { type: 'tel', placeholder: '+971 50 123 4567' })}
               </div>
