@@ -228,7 +228,7 @@ function LeadsContent() {
   const [showWorkload, setShowWorkload] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [allTags, setAllTags] = useState<{id: string; name: string; color: string}[]>([]);
-  const [stages, setStages] = useState<{id: string; name: string}[]>([]);
+  const [stages, setStages] = useState<{id: string; name: string; color?: string; isWonStage?: boolean; isLostStage?: boolean}[]>([]);
 
   // Custom fields
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
@@ -538,7 +538,7 @@ function LeadsContent() {
           case 'phone': return formatPhone(l.phone) || '';
           case 'company': return l.company || '';
           case 'jobTitle': return l.jobTitle || '';
-          case 'status': return l.status;
+          case 'status': return (l as any).stage?.name || l.status;
           case 'source': return l.source;
           case 'score': return (l.score ?? 0).toString();
           case 'budget': return l.budget?.toString() || '';
@@ -654,12 +654,25 @@ function LeadsContent() {
           <InlineEdit value={lead.jobTitle || ''} onSave={(v) => handleInlineUpdate(lead.id, 'jobTitle', v)}
             placeholder="Add title" displayClassName="text-sm text-gray-700" />
         );
-      case 'status':
+      case 'status': {
+        // Show pipeline stage name (e.g., "Proposal Sent") instead of status enum ("QUALIFIED")
+        const useStages = stages.length > 0;
+        const stageOpts = useStages
+          ? stages.map((s) => ({ value: s.id, label: s.name }))
+          : Object.keys(statusColors).map((s) => ({ value: s, label: getStatusLabel(s) }));
+        const currentVal = useStages ? ((lead as any).stageId || lead.status) : lead.status;
         return (
-          <InlineEdit value={lead.status} onSave={(v) => handleInlineUpdate(lead.id, 'status', v)}
-            type="select" options={Object.keys(statusColors).map((s) => ({ value: s, label: getStatusLabel(s) }))}
-            displayClassName={`badge ${statusColors[lead.status]}`} />
+          <InlineEdit value={currentVal} onSave={async (v) => {
+              if (useStages) {
+                try { await api.moveLead(lead.id, v, 0); fetchLeads(); fetchStats(); } catch (err: any) { alert(err.message); }
+              } else {
+                handleInlineUpdate(lead.id, 'status', v);
+              }
+            }}
+            type="select" options={stageOpts}
+            displayClassName={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`} />
         );
+      }
       case 'source':
         return <span className="text-sm text-gray-700">{sourceLabels[lead.source] || lead.source}</span>;
       case 'score':
@@ -783,13 +796,22 @@ function LeadsContent() {
                   View Details
                 </Link>
                 <div className="border-t border-gray-100 my-1" />
-                <div className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase">Change Status</div>
-                {Object.keys(statusColors).filter((s) => s !== lead.status).map((s) => (
-                  <button key={s} onClick={() => handleQuickStatus(lead.id, s)} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-                    <span className={`inline-block w-2 h-2 rounded-full ${statusColors[s].split(' ')[0]}`} />
-                    {getStatusLabel(s)}
-                  </button>
-                ))}
+                <div className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase">Move to Stage</div>
+                {stages.length > 0
+                  ? stages.filter((s) => s.id !== (lead as any).stageId).map((s) => (
+                      <button key={s.id} onClick={async () => {
+                        try { await api.moveLead(lead.id, s.id, 0); setQuickActionId(null); fetchLeads(); fetchStats(); } catch (err: any) { alert(err.message); }
+                      }} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: s.color || '#6B7280' }} />
+                        {s.name}
+                      </button>
+                    ))
+                  : Object.keys(statusColors).filter((s) => s !== lead.status).map((s) => (
+                      <button key={s} onClick={() => handleQuickStatus(lead.id, s)} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                        <span className={`inline-block w-2 h-2 rounded-full ${statusColors[s].split(' ')[0]}`} />
+                        {getStatusLabel(s)}
+                      </button>
+                    ))}
                 <div className="border-t border-gray-100 my-1" />
                 <button onClick={() => handleQuickDelete(lead.id)} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
@@ -1018,16 +1040,25 @@ function LeadsContent() {
                 <div className="relative">
                   <button onClick={() => setShowBulkActions(!showBulkActions)} className="btn-secondary text-xs gap-1">
                     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    Update Status
+                    Move to Stage
                   </button>
                   {showBulkActions && (
-                    <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
-                      {Object.keys(statusColors).map((s) => (
-                        <button key={s} onClick={() => handleBulkStatusUpdate(s)} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-                          <span className={`inline-block w-2 h-2 rounded-full mr-2 ${statusColors[s].split(' ')[0]}`} />
-                          {getStatusLabel(s)}
-                        </button>
-                      ))}
+                    <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 max-h-60 overflow-y-auto">
+                      {stages.length > 0
+                        ? stages.map((s) => (
+                            <button key={s.id} onClick={async () => {
+                              try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); } catch (err: any) { alert(err.message); }
+                            }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                              <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
+                              {s.name}
+                            </button>
+                          ))
+                        : Object.keys(statusColors).map((s) => (
+                            <button key={s} onClick={() => handleBulkStatusUpdate(s)} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                              <span className={`inline-block w-2 h-2 rounded-full mr-2 ${statusColors[s].split(' ')[0]}`} />
+                              {getStatusLabel(s)}
+                            </button>
+                          ))}
                     </div>
                   )}
                 </div>
@@ -1150,7 +1181,7 @@ function LeadsContent() {
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>
-                          <span className={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`}>{getStatusLabel(lead.status || 'NEW')}</span>
+                          <span className={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`}>{(lead as any).stage?.name || getStatusLabel(lead.status || 'NEW')}</span>
                         </div>
                         <div className="space-y-1.5 text-sm">
                           {lead.email && <p className="text-gray-600 truncate flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8" /></svg>{lead.email}</p>}
