@@ -38,6 +38,16 @@ const sourceLabels: Record<string, string> = {
 
 type ViewMode = 'table' | 'cards' | 'kanban';
 
+// ─── Phone formatting - auto-add UAE country code if missing ────
+const formatPhone = (phone: string | null | undefined): string => {
+  if (!phone) return '';
+  const cleaned = phone.trim();
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('00')) return '+' + cleaned.slice(2);
+  return '+971' + cleaned;
+};
+
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getDisplayName = (lead: { firstName?: string; lastName?: string }) => {
   const fn = (lead.firstName || '').trim();
@@ -631,8 +641,8 @@ function LeadsContent() {
         );
       case 'phone':
         return (
-          <InlineEdit value={lead.phone || ''} onSave={(v) => handleInlineUpdate(lead.id, 'phone', v)}
-            type="tel" placeholder="Add phone" displayClassName="text-sm text-gray-700" />
+          <InlineEdit value={formatPhone(lead.phone) || ''} onSave={(v) => handleInlineUpdate(lead.id, 'phone', v)}
+            type="tel" placeholder="+971 50 123 4567" displayClassName="text-sm text-gray-700" />
         );
       case 'company':
         return (

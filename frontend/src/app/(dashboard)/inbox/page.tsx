@@ -160,6 +160,16 @@ interface CannedResponse {
   category: string;
 }
 
+// ─── Phone formatting - auto-add UAE country code if missing ────
+function formatPhone(phone: string | null | undefined): string {
+  if (!phone) return '';
+  const cleaned = phone.trim();
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('00')) return '+' + cleaned.slice(2);
+  return '+971' + cleaned;
+}
+
 // ─── Name Display Helpers ────────────────────────────────────────────
 
 function getDisplayName(first?: string | null, last?: string | null): string {
@@ -1548,7 +1558,7 @@ function InboxContent() {
                   <p className="text-2xs font-bold text-text-tertiary uppercase tracking-wider mb-2">Contact Details</p>
                   {[
                     { icon: Mail, label: 'Email', value: leadInfo.email },
-                    { icon: Phone, label: 'Phone', value: leadInfo.phone },
+                    { icon: Phone, label: 'Phone', value: formatPhone(leadInfo.phone) },
                     { icon: Building2, label: 'Company', value: leadInfo.company },
                     { icon: Briefcase, label: 'Job Title', value: leadInfo.jobTitle },
                   ].filter(d => d.value).map(d => (
