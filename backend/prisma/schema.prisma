@@ -108,6 +108,7 @@ model User {
 
   customRoleId         String?
   customRole           CustomRole?    @relation("UserCustomRole", fields: [customRoleId], references: [id], onDelete: SetNull)
+  createdCustomRoles   CustomRole[]   @relation("CustomRoleCreator")
 
   @@index([organizationId])
   @@map("users")
@@ -1010,6 +1011,7 @@ model CustomRole {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   createdById    String?
+  createdBy      User?    @relation("CustomRoleCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   users          User[]   @relation("UserCustomRole")
 
