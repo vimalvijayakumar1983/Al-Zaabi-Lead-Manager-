@@ -115,6 +115,10 @@ export interface Lead {
   website?: string;
   customData?: Record<string, unknown>;
   lostReason?: string;
+  doNotCall?: boolean;
+  doNotCallAt?: string;
+  doNotCallById?: string;
+  doNotCallByUser?: { id: string; firstName: string; lastName?: string };
   aiSummary?: string;
   conversionProb?: number;
   stageId?: string;

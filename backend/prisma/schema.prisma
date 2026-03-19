@@ -147,6 +147,9 @@ model Lead {
   wonAt           DateTime?
   lostAt          DateTime?
   lostReason      String?
+  doNotCall       Boolean   @default(false)
+  doNotCallAt     DateTime?
+  doNotCallById   String?
 
   // ── SLA Tracking ──
   firstRespondedAt  DateTime?            // When the assigned user first interacted with this lead

@@ -279,6 +279,32 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       },
     });
 
+    // ── Auto-flag Do Not Call leads ──────────────────────────────
+    if (data.disposition === 'DO_NOT_CALL') {
+      try {
+        await prisma.lead.update({
+          where: { id: data.leadId },
+          data: {
+            doNotCall: true,
+            doNotCallAt: new Date(),
+            doNotCallById: req.user.id,
+          },
+        });
+        await prisma.leadActivity.create({
+          data: {
+            leadId: data.leadId,
+            userId: req.user.id,
+            type: 'STATUS_CHANGE',
+            description: 'Lead blocked — marked as Do Not Call. Removed from active outreach.',
+            metadata: { trigger: 'call_disposition', disposition: 'DO_NOT_CALL' },
+          },
+        });
+        logger.info(`Lead ${data.leadId} marked as Do Not Call by user ${req.user.id}`);
+      } catch (dncErr) {
+        logger.warn('Failed to auto-flag DNC lead:', dncErr.message);
+      }
+    }
+
     res.status(201).json({
       callLog,
       followUpTaskId,

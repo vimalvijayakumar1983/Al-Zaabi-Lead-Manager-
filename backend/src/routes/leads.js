@@ -87,17 +87,30 @@ const leadFilterSchema = paginationSchema.extend({
   callOutcome: z.string().optional(), // comma-separated CallDisposition values
   minCallCount: z.coerce.number().int().min(0).optional(),
   maxCallCount: z.coerce.number().int().min(0).optional(),
+  showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, minCallCount, maxCallCount } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
 
     const where = {
       organizationId: { in: req.orgIds },
       isArchived: false,
     };
+
+    // ── Do Not Call / Blocked filter ──
+    // By default, hide DNC leads from all views
+    // showBlocked=true shows ONLY DNC leads (admin Blocked tab)
+    if (showBlocked === 'true') {
+      if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'Only admins can view blocked leads' });
+      }
+      where.doNotCall = true;
+    } else {
+      where.doNotCall = false;
+    }
 
     // Role-based data scoping: SALES_REP only sees their own assigned leads
     if (req.isRestrictedRole) {
@@ -372,6 +385,8 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     // Enrich leads with channel counts, unread counts, last message, last call outcome, and SLA info
     const enrichedLeads = leads.map(lead => ({
       ...lead,
+      doNotCall: lead.doNotCall || false,
+      doNotCallAt: lead.doNotCallAt || null,
       channelCounts: channelCountsMap[lead.id] || {},
       unreadChannelCounts: unreadChannelCountsMap[lead.id] || {},
       lastInboundMessage: lastMessageMap[lead.id] || null,
@@ -695,10 +710,22 @@ router.get('/:id', async (req, res, next) => {
       }),
     ]);
 
+    // Fetch DNC blocker info if lead is blocked
+    let doNotCallByUser = null;
+    if (lead.doNotCall && lead.doNotCallById) {
+      try {
+        doNotCallByUser = await prisma.user.findUnique({
+          where: { id: lead.doNotCallById },
+          select: { id: true, firstName: true, lastName: true },
+        });
+      } catch { /* non-critical */ }
+    }
+
     res.json({
       ...lead,
       unreadCommunications: unreadCount,
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
+      doNotCallByUser,
     });
   } catch (err) {
     next(err);
@@ -1446,6 +1473,79 @@ router.patch('/bulk', validate(z.object({
     }, req.user.id).catch(() => {});
 
     broadcastDataChange(req.user.organizationId, 'lead', 'bulk_updated', req.user.id).catch(() => {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Block Lead (Do Not Call) ────────────────────────────────────
+router.post('/:id/block', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        doNotCall: true,
+        doNotCallAt: new Date(),
+        doNotCallById: req.user.id,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead manually blocked (Do Not Call) by ${getDisplayName(req.user)}`,
+        metadata: { trigger: 'manual_block' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead blocked — removed from active outreach' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Unblock Lead (Remove Do Not Call) ───────────────────────────
+router.post('/:id/unblock', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (!lead.doNotCall) return res.status(400).json({ error: 'Lead is not blocked' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        doNotCall: false,
+        doNotCallAt: null,
+        doNotCallById: null,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead unblocked by ${getDisplayName(req.user)} — restored to active outreach`,
+        metadata: { trigger: 'manual_unblock' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead unblocked — restored to active leads' });
   } catch (err) {
     next(err);
   }

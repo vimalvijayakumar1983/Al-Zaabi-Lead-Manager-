@@ -20,6 +20,7 @@ export interface SavedView {
     stageId?: string;
     divisionId?: string;
     callOutcome?: string;
+    showBlocked?: string;
     budgetMin?: number | string;
     budgetMax?: number | string;
     hasEmail?: string;
@@ -84,6 +85,13 @@ export const SYSTEM_VIEWS: SavedView[] = [
     icon: 'M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z',
     isSystem: true,
     filters: { assignedToId: '__unassigned__' },
+  },
+  {
+    id: 'blocked',
+    name: 'Blocked (DNC)',
+    icon: 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636',
+    isSystem: true,
+    filters: { showBlocked: 'true' },
   },
   {
     id: 'this-week',

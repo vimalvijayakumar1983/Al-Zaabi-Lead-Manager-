@@ -428,6 +428,30 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             // duplicateAction === 'clone': fall through to create new
           }
 
+          // ── Do Not Call guard: skip if phone/email matches a blocked lead ──
+          if (mapped.phone || mapped.email) {
+            try {
+              const dncConditions = [];
+              if (mapped.phone) dncConditions.push({ phone: mapped.phone });
+              if (mapped.email) dncConditions.push({ email: mapped.email });
+              const blockedLead = await prisma.lead.findFirst({
+                where: {
+                  organizationId: targetOrgId,
+                  doNotCall: true,
+                  OR: dncConditions,
+                },
+                select: { id: true, phone: true, email: true },
+              });
+              if (blockedLead) {
+                errors.push({ row: i + 2, error: 'Skipped: phone/email matches a Do Not Call lead', data: row });
+                skipped++;
+                continue;
+              }
+            } catch (dncErr) {
+              // Non-critical: proceed if DNC check fails
+            }
+          }
+
           // Build lead data
           const leadData = {
             firstName: mapped.firstName,

@@ -181,6 +181,14 @@ class ApiClient {
     return this.request<any>(`/leads/${id}`, { method: 'DELETE' });
   }
 
+  async blockLead(id: string) {
+    return this.request<any>(`/leads/${id}/block`, { method: 'POST' });
+  }
+
+  async unblockLead(id: string) {
+    return this.request<any>(`/leads/${id}/unblock`, { method: 'POST' });
+  }
+
   async bulkUpdateLeads(leadIds: string[], data: any) {
     return this.request<any>('/leads/bulk', {
       method: 'PATCH',

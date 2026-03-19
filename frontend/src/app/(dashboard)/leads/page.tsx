@@ -301,6 +301,7 @@ function LeadsContent() {
       if (filters.minCallCount) params.minCallCount = filters.minCallCount;
       if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
       if (filters.divisionId) params.divisionId = filters.divisionId;
+      if (filters.showBlocked) params.showBlocked = filters.showBlocked;
       const res = await api.getLeads(params) as any;
       const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
       setLeads(leadsData);
@@ -693,7 +694,10 @@ function LeadsContent() {
               {getInitials(lead)}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{getDisplayName(lead)}</p>
+              <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">
+                {getDisplayName(lead)}
+                {(lead as any).doNotCall && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">🚫 DNC</span>}
+              </p>
               {lead.jobTitle && <p className="text-xs text-gray-500 truncate">{lead.jobTitle}</p>}
             </div>
           </Link>
@@ -1027,6 +1031,21 @@ function LeadsContent() {
         </div>
       )}
 
+      {/* DNC Warning Banner */}
+      {filters.showBlocked === 'true' && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200">
+          <div className="flex-shrink-0 h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+            <svg className="h-5 w-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-red-800">Blocked Leads — Do Not Call</h3>
+            <p className="text-xs text-red-600 mt-0.5">These leads have opted out of contact. They are hidden from all agent views, pipeline, and import. Only admins can view and unblock.</p>
+          </div>
+        </div>
+      )}
+
       {/* Main Layout: Sidebar + Content */}
       <div className="flex gap-4 flex-1 min-h-0">
         {/* View Sidebar */}
@@ -1271,7 +1290,10 @@ function LeadsContent() {
                               {getInitials(lead)}
                             </div>
                             <div>
-                              <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{getDisplayName(lead)}</p>
+                              <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">
+                                {getDisplayName(lead)}
+                                {(lead as any).doNotCall && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">🚫 DNC</span>}
+                              </p>
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>

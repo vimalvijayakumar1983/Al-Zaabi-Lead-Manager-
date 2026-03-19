@@ -60,7 +60,7 @@ router.use(authenticate, orgScope);
 // ─── Get Pipeline Stages ─────────────────────────────────────────
 router.get('/stages', async (req, res, next) => {
   try {
-    const leadFilter = { isArchived: false };
+    const leadFilter = { isArchived: false, doNotCall: false };
     if (req.isRestrictedRole) leadFilter.assignedToId = req.user.id;
 
     // Allow filtering to a single division via ?organizationId=

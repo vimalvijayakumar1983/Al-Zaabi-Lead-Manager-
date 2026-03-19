@@ -636,6 +636,43 @@ export default function LeadDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* DNC Warning Banner */}
+      {lead.doNotCall && (
+        <div className="flex items-center justify-between p-4 rounded-xl bg-red-50 border-2 border-red-300">
+          <div className="flex items-center gap-3">
+            <div className="flex-shrink-0 h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+              <svg className="h-5 w-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-red-800">🚫 Do Not Call — This lead is blocked</h3>
+              <p className="text-xs text-red-600 mt-0.5">
+                Blocked {lead.doNotCallAt ? `on ${new Date(lead.doNotCallAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}` : ''}
+                {(lead as any).doNotCallByUser ? ` by ${(lead as any).doNotCallByUser.firstName} ${(lead as any).doNotCallByUser.lastName || ''}`.trim() : ''}
+                . This lead is hidden from all agent views, pipeline board, and import.
+              </p>
+            </div>
+          </div>
+          {fullUsers.find(u => u.id === currentUserId && ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(u.role)) && (
+            <button
+              onClick={async () => {
+                if (!confirm('Unblock this lead? They will reappear in active lead views.')) return;
+                try {
+                  await api.unblockLead(lead.id);
+                  window.location.reload();
+                } catch (err: any) {
+                  alert(err.message || 'Failed to unblock lead');
+                }
+              }}
+              className="flex-shrink-0 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors"
+            >
+              Unblock Lead
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
