@@ -115,7 +115,24 @@ export default function PipelinePage() {
     try {
       const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
       const data = await api.getPipelineStages(activeDivisionId || undefined);
-      setStages(data);
+
+      // When "All Divisions" is selected, merge stages with the same name
+      // (e.g., 4× "New Lead" from different orgs → 1 combined "New Lead" column)
+      if (!activeDivisionId && data.length > 0) {
+        const mergedMap = new Map<string, any>();
+        for (const stage of data) {
+          const key = stage.name.trim().toLowerCase();
+          if (mergedMap.has(key)) {
+            const existing = mergedMap.get(key);
+            existing.leads = [...existing.leads, ...stage.leads];
+          } else {
+            mergedMap.set(key, { ...stage, leads: [...stage.leads] });
+          }
+        }
+        setStages(Array.from(mergedMap.values()));
+      } else {
+        setStages(data);
+      }
     } finally {
       setLoading(false);
     }
@@ -684,7 +701,7 @@ export default function PipelinePage() {
 
       {/* ─── KANBAN VIEW ─────────────────────────────────────── */}
       {viewMode === 'kanban' && (
-        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin" style={{ minHeight: 'calc(100vh - 380px)', maxHeight: 'calc(100vh - 280px)' }}>
+        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin" style={{ height: 'calc(100vh - 300px)' }}>
           {sortedStages.map((stage) => {
             const stageValue = stage.leads.reduce((sum: number, l: any) => sum + (Number(l.budget) || 0), 0);
             const leadCount = stage.leads.length;
@@ -693,7 +710,7 @@ export default function PipelinePage() {
             return (
               <div
                 key={stage.id}
-                className="flex-shrink-0 w-72 flex flex-col"
+                className="flex-shrink-0 w-72 flex flex-col h-full min-h-0"
                 onDragOver={(e) => handleDragOver(e, stage.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, stage.id)}
@@ -728,11 +745,11 @@ export default function PipelinePage() {
                 </div>
 
                 {/* Cards Container */}
-                <div className={`flex-1 space-y-2 rounded-xl p-2 transition-all duration-200 overflow-y-auto scrollbar-thin ${
+                <div className={`flex-1 min-h-0 space-y-2 rounded-xl p-2 transition-all duration-200 overflow-y-auto scrollbar-thin ${
                   isDragOver
                     ? 'bg-brand-50 ring-2 ring-brand-500/30 ring-offset-1'
                     : 'bg-surface-tertiary/50'
-                }`} style={{ maxHeight: 'calc(100vh - 380px)' }}>
+                }`}>
                   {stage.leads.map((lead: any) => {
                     const isSearchMatch = !searchQuery || matchesLead(lead);
                     const priority = getPriority(lead.score || 0);
