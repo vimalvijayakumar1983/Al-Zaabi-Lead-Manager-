@@ -1,7 +1,7 @@
 'use client';
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
@@ -155,6 +155,7 @@ export default function LeadsPage() {
 
 function LeadsContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // ─── State ──────────────────────────────────────────────────────
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -1041,7 +1042,7 @@ function LeadsContent() {
                   <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#e5e7eb]">
                     <tr className="border-b border-border">
                       {visibleColumns.map((col) => (
-                        <th key={col.id} className={`table-header px-4 py-3 text-left ${col.width || ''} ${col.sortable ? 'cursor-pointer hover:text-text-secondary select-none' : ''}`}
+                        <th key={col.id} className={`table-header px-4 py-3 text-left border-r border-gray-100 last:border-r-0 ${col.width || ''} ${col.sortable ? 'cursor-pointer hover:text-text-secondary select-none' : ''}`}
                           onClick={() => col.sortable && col.sortField && handleSort(col.sortField)}>
                           {col.id === 'select' ? (
                             <input type="checkbox" checked={leads.length > 0 && selectedLeads.size === leads.length}
@@ -1087,9 +1088,15 @@ function LeadsContent() {
                       </td></tr>
                     ) : (
                       leads.map((lead) => (
-                        <tr key={lead.id} className={`table-row transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}>
+                        <tr key={lead.id}
+                          className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
+                          onClick={(e) => {
+                            const target = e.target as HTMLElement;
+                            if (target.closest('input, button, a, select, [role="listbox"], [data-inline-edit]')) return;
+                            router.push(`/leads/${lead.id}`);
+                          }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell ${col.width || ''}`}>{renderCell(col, lead)}</td>
+                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead)}</td>
                           ))}
                         </tr>
                       ))
