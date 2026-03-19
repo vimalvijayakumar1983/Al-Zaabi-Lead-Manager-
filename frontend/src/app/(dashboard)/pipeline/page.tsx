@@ -113,7 +113,8 @@ export default function PipelinePage() {
   // ─── Fetch ─────────────────────────────────────────────────
   const fetchStages = useCallback(async () => {
     try {
-      const data = await api.getPipelineStages();
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const data = await api.getPipelineStages(activeDivisionId || undefined);
       setStages(data);
     } finally {
       setLoading(false);
@@ -683,7 +684,7 @@ export default function PipelinePage() {
 
       {/* ─── KANBAN VIEW ─────────────────────────────────────── */}
       {viewMode === 'kanban' && (
-        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin" style={{ minHeight: 'calc(100vh - 380px)' }}>
+        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin" style={{ minHeight: 'calc(100vh - 380px)', maxHeight: 'calc(100vh - 280px)' }}>
           {sortedStages.map((stage) => {
             const stageValue = stage.leads.reduce((sum: number, l: any) => sum + (Number(l.budget) || 0), 0);
             const leadCount = stage.leads.length;
@@ -727,11 +728,11 @@ export default function PipelinePage() {
                 </div>
 
                 {/* Cards Container */}
-                <div className={`flex-1 space-y-2 rounded-xl p-2 transition-all duration-200 ${
+                <div className={`flex-1 space-y-2 rounded-xl p-2 transition-all duration-200 overflow-y-auto scrollbar-thin ${
                   isDragOver
                     ? 'bg-brand-50 ring-2 ring-brand-500/30 ring-offset-1'
                     : 'bg-surface-tertiary/50'
-                }`}>
+                }`} style={{ maxHeight: 'calc(100vh - 380px)' }}>
                   {stage.leads.map((lead: any) => {
                     const isSearchMatch = !searchQuery || matchesLead(lead);
                     const priority = getPriority(lead.score || 0);
@@ -844,7 +845,8 @@ export default function PipelinePage() {
                 </div>
 
                 {stage.leads.length > 0 ? (
-                  <table className="w-full">
+                  <div className="overflow-x-auto">
+                  <table className="w-full min-w-[600px]">
                     <thead>
                       <tr className="table-header">
                         <th className="table-cell text-left">Name</th>
@@ -904,6 +906,7 @@ export default function PipelinePage() {
                       })}
                     </tbody>
                   </table>
+                  </div>
                 ) : (
                   <div className="px-4 py-6 text-center text-sm text-text-tertiary">
                     {activeFilterCount > 0 ? 'No matching leads in this stage' : 'No leads in this stage'}
