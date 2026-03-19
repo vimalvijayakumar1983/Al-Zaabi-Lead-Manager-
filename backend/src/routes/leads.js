@@ -953,9 +953,14 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     // Handle won/lost timestamps
     if (updateData.status === 'WON' && existing.status !== 'WON') {
       updateData.wonAt = new Date();
-    }
-    if (updateData.status === 'LOST' && existing.status !== 'LOST') {
+      updateData.lostAt = null;  // Clear lost if re-won
+    } else if (updateData.status === 'LOST' && existing.status !== 'LOST') {
       updateData.lostAt = new Date();
+      updateData.wonAt = null;   // Clear won if lost
+    } else if (updateData.status && updateData.status !== 'WON' && updateData.status !== 'LOST') {
+      // Moving away from terminal status — clear both dates (deal re-opened)
+      if (existing.status === 'WON') updateData.wonAt = null;
+      if (existing.status === 'LOST') updateData.lostAt = null;
     }
 
     // Mark first response — any status change from NEW counts as "responded"

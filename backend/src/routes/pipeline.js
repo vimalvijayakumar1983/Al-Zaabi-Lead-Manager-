@@ -22,25 +22,33 @@ function getDisplayName(obj) {
 // ─── Smart stage-to-status mapping ──────────────────────────────
 // Maps pipeline stage names to lead status enum values.
 // Uses keyword matching to handle custom stage names intelligently.
-// Falls back to current status if stage name is unrecognized.
+// KEY: Demotes WON/LOST when moving back to a non-terminal stage.
 function mapStageToStatus(stageName, isWonStage, isLostStage, currentStatus) {
+  // Terminal stages via explicit flags (set in Pipeline Stage Manager)
   if (isWonStage) return 'WON';
   if (isLostStage) return 'LOST';
 
   const name = (stageName || '').toLowerCase().trim();
 
   // NEW status keywords
-  if (/\bnew\b|untouched|fresh|incoming|unassigned/.test(name)) return 'NEW';
+  if (/\bnew\b|untouched|fresh|incoming|unassigned|inquiry/.test(name)) return 'NEW';
 
   // CONTACTED status keywords
-  if (/contact|touched|follow[\s-]?up|reach|called|responded|engaged|attempt/.test(name)) return 'CONTACTED';
+  if (/contact|touched|follow[\s-]?up|reach|called|responded|engaged|attempt|assessment|inspect|evaluat/.test(name)) return 'CONTACTED';
 
   // QUALIFIED status keywords (including advanced pipeline stages)
-  if (/qualif|interested|hot|warm|ready|propos|negoti|present|demo|trial|review|meeting|scheduled/.test(name)) return 'QUALIFIED';
+  if (/qualif|interested|hot|warm|ready|propos|negoti|present|demo|trial|review|meeting|scheduled|quote|service|sale|confirm|in[\s-]?progress|processing|working|active|pending|deliver|visit|booked/.test(name)) return 'QUALIFIED';
 
-  // WON/LOST by name
-  if (/\bwon\b|closed[\s-]?won|deal[\s-]?won|converted|signed/.test(name)) return 'WON';
-  if (/\blost\b|closed[\s-]?lost|dead|rejected|disqualif|churned/.test(name)) return 'LOST';
+  // WON/LOST by name (for stages without explicit flags)
+  if (/\bwon\b|closed[\s-]?won|deal[\s-]?won|converted|signed|completed|done|finished/.test(name)) return 'WON';
+  if (/\blost\b|closed[\s-]?lost|dead|rejected|disqualif|churned|cancelled|canceled/.test(name)) return 'LOST';
+
+  // ── KEY FIX: Demotion logic ──
+  // If lead was WON or LOST but is being moved to a non-terminal stage,
+  // it means the deal is being re-opened — demote to QUALIFIED
+  if (currentStatus === 'WON' || currentStatus === 'LOST') {
+    return 'QUALIFIED';
+  }
 
   // Unrecognized stage name — keep current status
   return currentStatus;
@@ -161,6 +169,22 @@ router.post('/move', validate(z.object({
     // ── Smart status sync: map pipeline stage name → lead status ──
     let newStatus = mapStageToStatus(stage.name, stage.isWonStage, stage.isLostStage, lead.status);
 
+    // ── Smart wonAt/lostAt handling ──
+    // Set date when entering terminal stage, clear when leaving it
+    let wonAt = lead.wonAt;
+    let lostAt = lead.lostAt;
+    if (stage.isWonStage) {
+      wonAt = wonAt || new Date();  // Set if not already set
+      lostAt = null;                // Clear lost date
+    } else if (stage.isLostStage) {
+      lostAt = lostAt || new Date();
+      wonAt = null;                 // Clear won date
+    } else if (newStatus !== 'WON' && newStatus !== 'LOST') {
+      // Moving to a non-terminal stage — clear both (deal re-opened)
+      wonAt = null;
+      lostAt = null;
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.lead.update({
         where: { id: leadId },
@@ -168,8 +192,8 @@ router.post('/move', validate(z.object({
           stageId,
           stageOrder: order,
           status: newStatus,
-          wonAt: stage.isWonStage && !lead.wonAt ? new Date() : lead.wonAt,
-          lostAt: stage.isLostStage && !lead.lostAt ? new Date() : lead.lostAt,
+          wonAt,
+          lostAt,
         },
       });
 
