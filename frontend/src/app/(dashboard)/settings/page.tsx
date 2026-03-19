@@ -1162,20 +1162,6 @@ function DangerZoneSection() {
   );
 }
 
-/* ─── Custom Fields Section ──────────────────────────────────────── */
-
-const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
-  TEXT: { label: 'Text', icon: Type, color: 'bg-gray-100 text-gray-700' },
-  NUMBER: { label: 'Number', icon: Hash, color: 'bg-blue-100 text-blue-700' },
-  DATE: { label: 'Date', icon: Calendar, color: 'bg-purple-100 text-purple-700' },
-  SELECT: { label: 'Dropdown', icon: List, color: 'bg-amber-100 text-amber-700' },
-  MULTI_SELECT: { label: 'Multi-Select', icon: List, color: 'bg-orange-100 text-orange-700' },
-  BOOLEAN: { label: 'Yes/No', icon: ToggleLeft, color: 'bg-green-100 text-green-700' },
-  URL: { label: 'URL', icon: Link2, color: 'bg-cyan-100 text-cyan-700' },
-  EMAIL: { label: 'Email', icon: AtSign, color: 'bg-indigo-100 text-indigo-700' },
-  PHONE: { label: 'Phone', icon: Phone, color: 'bg-pink-100 text-pink-700' },
-};
-
 /* ─── Field Type Configuration ──────────────────────────────────────── */
 
 const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.ComponentType<{ className?: string }>; color: string; description: string }> = {
