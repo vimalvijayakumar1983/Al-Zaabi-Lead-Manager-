@@ -1420,9 +1420,13 @@ function CustomFieldsSection() {
 
   // ─── Fetch pipeline stages ───────────────────────────────────────
   const fetchPipelineStages = useCallback(async () => {
+    if (!selectedDivisionId) {
+      setPipelineStages([]);
+      return;
+    }
     setLoadingStages(true);
     try {
-      const stages = await api.getPipelineStages(selectedDivisionId || undefined);
+      const stages = await api.getPipelineStages(selectedDivisionId);
       setPipelineStages(stages);
     } catch {
       setPipelineStages([]);
@@ -2061,6 +2065,16 @@ function CustomFieldsSection() {
         ) : activeSection === 'pipelineStages' ? (
           /* ═══ PIPELINE STAGES TAB ═══════════════════════════════ */
           <div>
+            {!selectedDivisionId ? (
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                  <Layers className="h-7 w-7 text-amber-500" />
+                </div>
+                <p className="text-sm font-medium text-gray-700">Select a Division</p>
+                <p className="text-xs text-gray-400 mt-1">Pipeline stages are managed per division. Please select a specific division from the Scope dropdown above.</p>
+              </div>
+            ) : (
+            <>
             <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
               <p className="text-xs text-gray-500">Manage pipeline stages for this division. Drag to reorder, click to rename.</p>
               <button
@@ -2277,6 +2291,8 @@ function CustomFieldsSection() {
                   </div>
                 </div>
               </div>
+            )}
+            </>
             )}
           </div>
         ) : (
