@@ -16,6 +16,15 @@ export interface SavedView {
     maxScore?: number | string;
     dateFrom?: string;
     dateTo?: string;
+    tags?: string;
+    stageId?: string;
+    divisionId?: string;
+    callOutcome?: string;
+    budgetMin?: number | string;
+    budgetMax?: number | string;
+    hasEmail?: string;
+    hasPhone?: string;
+    searchText?: string;
   };
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
@@ -88,6 +97,17 @@ export const SYSTEM_VIEWS: SavedView[] = [
 ];
 
 const STORAGE_KEY = 'leads-custom-views';
+const ACTIVE_VIEW_KEY = 'leads-active-view-id';
+
+export function saveActiveViewId(id: string) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(ACTIVE_VIEW_KEY, id);
+}
+
+export function loadActiveViewId(): string {
+  if (typeof window === 'undefined') return 'all';
+  return localStorage.getItem(ACTIVE_VIEW_KEY) || 'all';
+}
 
 export function loadCustomViews(): SavedView[] {
   if (typeof window === 'undefined') return [];

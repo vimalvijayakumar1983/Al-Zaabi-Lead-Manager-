@@ -7,7 +7,7 @@ import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
 import { ColumnManager, loadColumns, saveColumns, type ColumnDef } from './components/column-config';
-import { ViewSidebar, SYSTEM_VIEWS, loadCustomViews, saveCustomViews, type SavedView } from './components/saved-views';
+import { ViewSidebar, SYSTEM_VIEWS, loadCustomViews, saveCustomViews, loadActiveViewId, saveActiveViewId, type SavedView } from './components/saved-views';
 import { KanbanView } from './components/kanban-view';
 import { InlineEdit } from './components/inline-edit';
 import { AdvancedFilters, FilterBadges, emptyFilters, type FilterState } from './components/advanced-filters';
@@ -216,7 +216,7 @@ function LeadsContent() {
   };
 
   // Saved views
-  const [activeViewId, setActiveViewId] = useState('all');
+  const [activeViewId, setActiveViewId] = useState(() => loadActiveViewId());
   const [customViews, setCustomViews] = useState<SavedView[]>(() => loadCustomViews());
   const [showViewSidebar, setShowViewSidebar] = useState(true);
 
@@ -340,6 +340,33 @@ function LeadsContent() {
       });
     } catch { /* non-critical */ }
   }, []);
+
+  // Restore saved view filters on page mount
+  useEffect(() => {
+    const savedViewId = loadActiveViewId();
+    if (savedViewId && savedViewId !== 'all') {
+      // Check system views first
+      const systemView = SYSTEM_VIEWS.find(v => v.id === savedViewId);
+      // Then check custom views
+      const allViews = [...SYSTEM_VIEWS, ...loadCustomViews()];
+      const view = allViews.find(v => v.id === savedViewId);
+      if (view) {
+        const restored = { ...emptyFilters };
+        Object.entries(view.filters).forEach(([key, val]) => {
+          if (val !== undefined && val !== null && val !== '') {
+            (restored as any)[key] = String(val);
+          }
+        });
+        setFilters(restored);
+        if (view.sortBy) setSortBy(view.sortBy);
+        if (view.sortOrder) setSortOrder(view.sortOrder);
+      } else {
+        // Saved view was deleted — reset
+        setActiveViewId('all');
+        saveActiveViewId('all');
+      }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
@@ -494,13 +521,14 @@ function LeadsContent() {
 
   const handleSelectView = (view: SavedView) => {
     setActiveViewId(view.id);
+    saveActiveViewId(view.id);
+    // Spread ALL saved filters over empty defaults — no cherry-picking
     const newFilters = { ...emptyFilters };
-    if (view.filters.status) newFilters.status = view.filters.status;
-    if (view.filters.source) newFilters.source = view.filters.source;
-    if (view.filters.minScore) newFilters.minScore = String(view.filters.minScore);
-    if (view.filters.maxScore) newFilters.maxScore = String(view.filters.maxScore);
-    if (view.filters.assignedToId) newFilters.assignedToId = view.filters.assignedToId;
-    if (view.filters.dateFrom) newFilters.dateFrom = view.filters.dateFrom;
+    Object.entries(view.filters).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== '') {
+        (newFilters as any)[key] = String(val);
+      }
+    });
     setFilters(newFilters);
     if (view.sortBy) setSortBy(view.sortBy);
     if (view.sortOrder) setSortOrder(view.sortOrder);
@@ -512,6 +540,7 @@ function LeadsContent() {
     setCustomViews(updated);
     saveCustomViews(updated);
     setActiveViewId(view.id);
+    saveActiveViewId(view.id);
   };
 
   const handleDeleteView = (id: string) => {
@@ -525,6 +554,7 @@ function LeadsContent() {
     setFilters({ ...filters, [key]: '' });
     setPagination((p) => ({ ...p, page: 1 }));
     setActiveViewId('all');
+    saveActiveViewId('all');
   };
 
   const exportCSV = () => {
