@@ -740,6 +740,17 @@ class ApiClient {
     return this.request<any[]>('/call-logs/dispositions');
   }
 
+  async getDispositionSettings() {
+    return this.request<{ disposition: string; label: string; requireNotes: boolean }[]>('/call-logs/dispositions/settings');
+  }
+
+  async updateDispositionSettings(settings: { disposition: string; requireNotes: boolean }[]) {
+    return this.request<{ disposition: string; label: string; requireNotes: boolean }[]>(
+      '/call-logs/dispositions/settings',
+      { method: 'PUT', body: JSON.stringify({ settings }) }
+    );
+  }
+
   // Settings
   async getProfile() {
     return this.request<any>('/settings/profile');

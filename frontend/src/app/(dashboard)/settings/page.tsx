@@ -15,7 +15,7 @@ import {
   Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
@@ -23,6 +23,7 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
   { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
+  { key: 'callDispositions', label: 'Call Dispositions', icon: Phone, adminOnly: true },
   { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
   { key: 'emailTemplates', label: 'Email Templates', icon: LayoutTemplate, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
@@ -91,6 +92,7 @@ export default function SettingsPage() {
             <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
           )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
+          {activeTab === 'callDispositions' && isAdmin && <CallDispositionsSection />}
           {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
           {activeTab === 'emailTemplates' && isAdmin && <EmailTemplatesSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
@@ -1325,6 +1327,190 @@ function SearchInput({ value, onChange, placeholder }: { value: string; onChange
         <button onClick={() => onChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-gray-100">
           <X className="h-3.5 w-3.5 text-gray-400" />
         </button>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Call Dispositions Section — Admin-configurable mandatory notes
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const DISPOSITION_GROUPS: { label: string; icon: string; dispositions: string[] }[] = [
+  { label: 'Positive Outcomes', icon: '✅', dispositions: ['INTERESTED', 'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'QUALIFIED', 'PROPOSAL_REQUESTED'] },
+  { label: 'Retry / Follow-up', icon: '🔄', dispositions: ['NO_ANSWER', 'VOICEMAIL_LEFT', 'CALLBACK', 'BUSY', 'GATEKEEPER', 'FOLLOW_UP_EMAIL'] },
+  { label: 'Closed / Negative', icon: '🚫', dispositions: ['NOT_INTERESTED', 'WRONG_NUMBER', 'DO_NOT_CALL'] },
+  { label: 'Other', icon: '📝', dispositions: ['OTHER'] },
+];
+
+function CallDispositionsSection() {
+  const [settings, setSettings] = useState<{ disposition: string; label: string; requireNotes: boolean }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getDispositionSettings().then(data => {
+      setSettings(data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const toggleRequireNotes = (disposition: string) => {
+    setSettings(prev => prev.map(s =>
+      s.disposition === disposition ? { ...s, requireNotes: !s.requireNotes } : s
+    ));
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const updated = await api.updateDispositionSettings(
+        settings.map(s => ({ disposition: s.disposition, requireNotes: s.requireNotes }))
+      );
+      setSettings(updated);
+      setDirty(false);
+      setToast('Disposition settings saved successfully');
+      setTimeout(() => setToast(null), 3000);
+    } catch (err) {
+      setToast('Failed to save settings');
+      setTimeout(() => setToast(null), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const settingsMap = useMemo(() => {
+    const map: Record<string, { label: string; requireNotes: boolean }> = {};
+    settings.forEach(s => { map[s.disposition] = s; });
+    return map;
+  }, [settings]);
+
+  const activeCount = settings.filter(s => s.requireNotes).length;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-6 w-6 animate-spin text-brand-500" />
+        <span className="ml-2 text-text-secondary">Loading disposition settings...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Phone className="h-5 w-5 text-brand-600" />
+            Call Disposition Settings
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Control which call outcomes require agents to write notes before saving.
+            When enabled, the agent <strong>cannot save the call log</strong> until they describe what happened.
+          </p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={!dirty || saving}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+            dirty
+              ? 'bg-brand-600 text-white hover:bg-brand-700 shadow-sm'
+              : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+          }`}
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          {saving ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+
+      {/* Info Banner */}
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
+        <Info className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+        <div className="text-sm text-amber-800">
+          <p className="font-medium">Why require notes?</p>
+          <p className="mt-1">
+            When agents select a call outcome with mandatory notes, they must describe the conversation before saving.
+            This helps track patterns — for example, if many leads get marked &quot;Other&quot; with similar notes,
+            you can add that as a dedicated outcome option.
+          </p>
+        </div>
+      </div>
+
+      {/* Active Count */}
+      <div className="flex items-center gap-2 text-sm">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-brand-50 text-brand-700 rounded-full font-medium">
+          <Check className="h-3.5 w-3.5" />
+          {activeCount} outcome{activeCount !== 1 ? 's' : ''} require notes
+        </span>
+        {dirty && (
+          <span className="text-amber-600 flex items-center gap-1">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+            Unsaved changes
+          </span>
+        )}
+      </div>
+
+      {/* Disposition Groups */}
+      {DISPOSITION_GROUPS.map(group => (
+        <div key={group.label} className="card overflow-hidden">
+          <div className="px-5 py-3 bg-gray-50 border-b flex items-center gap-2">
+            <span className="text-base">{group.icon}</span>
+            <h3 className="text-sm font-semibold text-gray-700">{group.label}</h3>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {group.dispositions.map(d => {
+              const s = settingsMap[d];
+              if (!s) return null;
+              return (
+                <div key={d} className="flex items-center justify-between px-5 py-3.5 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <span className={`inline-flex items-center justify-center h-8 w-8 rounded-lg text-sm font-semibold ${
+                      s.requireNotes
+                        ? 'bg-brand-100 text-brand-700'
+                        : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {s.label.charAt(0)}
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{s.label}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {s.requireNotes ? '📝 Notes mandatory — agents must describe the outcome' : 'Notes optional'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => toggleRequireNotes(d)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 ${
+                      s.requireNotes ? 'bg-brand-600' : 'bg-gray-200'
+                    }`}
+                    role="switch"
+                    aria-checked={s.requireNotes}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      s.requireNotes ? 'translate-x-6' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-50 animate-fade-in">
+          <div className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
+            toast.includes('success') ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+          }`}>
+            {toast.includes('success') ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+            {toast}
+          </div>
+        </div>
       )}
     </div>
   );

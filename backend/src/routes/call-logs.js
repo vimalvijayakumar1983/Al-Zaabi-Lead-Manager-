@@ -21,6 +21,28 @@ function getDisplayName(obj) {
   return `${fn} ${ln}`;
 }
 
+// ─── Ensure disposition_settings table exists ────────────────────
+let dispositionSettingsReady = false;
+async function ensureDispositionSettings() {
+  if (dispositionSettingsReady) return;
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS disposition_settings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id UUID NOT NULL,
+        disposition VARCHAR(50) NOT NULL,
+        require_notes BOOLEAN NOT NULL DEFAULT false,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, disposition)
+      )
+    `);
+    dispositionSettingsReady = true;
+  } catch (err) {
+    logger.warn('disposition_settings table check:', err.message);
+    dispositionSettingsReady = true; // Don't block on error
+  }
+}
+
 // ─── Disposition labels for display ──────────────────────────────
 const DISPOSITION_LABELS = {
   CALLBACK: 'Call Back Requested',
@@ -100,6 +122,26 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       where: { id: data.leadId, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // ─── Check if notes are required for this disposition ─────────
+    await ensureDispositionSettings();
+    const orgId = lead.organizationId;
+    const dispRows = await prisma.$queryRawUnsafe(
+      `SELECT require_notes FROM disposition_settings WHERE organization_id = $1 AND disposition = $2`,
+      orgId, data.disposition
+    );
+
+    // Default: OTHER requires notes if no setting exists
+    const notesRequired = dispRows.length > 0
+      ? dispRows[0].require_notes
+      : data.disposition === 'OTHER';
+
+    if (notesRequired && (!data.notes || !data.notes.trim())) {
+      return res.status(400).json({
+        error: `Notes are required when call outcome is "${DISPOSITION_LABELS[data.disposition] || data.disposition}". Please describe the outcome.`,
+        field: 'notes',
+      });
+    }
 
     const autoAction = DISPOSITION_AUTO_ACTIONS[data.disposition];
     let followUpTaskId = null;
@@ -255,6 +297,87 @@ router.get('/dispositions', (_req, res) => {
     autoStatus: DISPOSITION_AUTO_ACTIONS[value]?.statusChange || null,
   }));
   res.json(dispositions);
+});
+
+// ─── Get Disposition Settings for Org ────────────────────────────
+router.get('/dispositions/settings', async (req, res, next) => {
+  try {
+    await ensureDispositionSettings();
+    const orgId = req.orgIds[0];
+
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT disposition, require_notes FROM disposition_settings WHERE organization_id = $1`,
+      orgId
+    );
+
+    // Build a map: disposition -> requireNotes
+    // Default: OTHER = true, everything else = false
+    const settingsMap = {};
+    Object.keys(DISPOSITION_LABELS).forEach(d => {
+      settingsMap[d] = { disposition: d, label: DISPOSITION_LABELS[d], requireNotes: d === 'OTHER' };
+    });
+
+    // Override with stored settings
+    rows.forEach(row => {
+      if (settingsMap[row.disposition]) {
+        settingsMap[row.disposition].requireNotes = row.require_notes;
+      }
+    });
+
+    res.json(Object.values(settingsMap));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Update Disposition Settings (Admin only) ───────────────────
+router.put('/dispositions/settings', async (req, res, next) => {
+  try {
+    // Check admin
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    await ensureDispositionSettings();
+    const orgId = req.orgIds[0];
+    const { settings } = req.body; // Array of { disposition, requireNotes }
+
+    if (!Array.isArray(settings)) {
+      return res.status(400).json({ error: 'settings must be an array of { disposition, requireNotes }' });
+    }
+
+    // Upsert each setting
+    for (const s of settings) {
+      if (!DISPOSITION_LABELS[s.disposition]) continue; // Skip invalid dispositions
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO disposition_settings (organization_id, disposition, require_notes, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (organization_id, disposition)
+         DO UPDATE SET require_notes = $3, updated_at = NOW()`,
+        orgId, s.disposition, !!s.requireNotes
+      );
+    }
+
+    // Return updated settings
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT disposition, require_notes FROM disposition_settings WHERE organization_id = $1`,
+      orgId
+    );
+
+    const settingsMap = {};
+    Object.keys(DISPOSITION_LABELS).forEach(d => {
+      settingsMap[d] = { disposition: d, label: DISPOSITION_LABELS[d], requireNotes: d === 'OTHER' };
+    });
+    rows.forEach(row => {
+      if (settingsMap[row.disposition]) {
+        settingsMap[row.disposition].requireNotes = row.require_notes;
+      }
+    });
+
+    res.json(Object.values(settingsMap));
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;
