@@ -303,7 +303,8 @@ const DEFAULT_FORM_STATE: FormState = {
 // ─────────────────────────────────────────────────────────────
 
 function apiUrl(path: string): string {
-  return `${process.env.NEXT_PUBLIC_API_URL}${path}`;
+  // Use same-origin /api path — Next.js rewrites proxy to backend
+  return path.startsWith('/api') ? path : `/api${path}`;
 }
 
 function authHeaders(): Record<string, string> {
