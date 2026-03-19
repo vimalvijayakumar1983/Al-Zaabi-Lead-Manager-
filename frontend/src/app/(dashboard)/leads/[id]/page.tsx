@@ -581,7 +581,7 @@ export default function LeadDetailPage() {
     conversionProb: (l) => l.conversionProb != null ? `${Math.round(l.conversionProb * 100)}%` : '-',
     stage: (l) => l.stage?.name || '-',
     stageId: (l) => l.stage?.name || '-',
-    tags: (l) => Array.isArray(l.tags) && l.tags.length > 0 ? l.tags.join(', ') : '-',
+    tags: (l) => Array.isArray(l.tags) && l.tags.length > 0 ? l.tags.map((t: any) => t.tag?.name || t.name || String(t)).join(', ') : '-',
     assignedTo: (l) => l.assignedTo ? getLeadDisplayName(l.assignedTo) : '-',
     createdAt: (l) => l.createdAt ? new Date(l.createdAt).toLocaleString() : '-',
     updatedAt: (l) => l.updatedAt ? new Date(l.updatedAt).toLocaleString() : '-',
