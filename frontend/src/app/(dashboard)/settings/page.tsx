@@ -2425,7 +2425,7 @@ function CustomFieldModal({
   );
 }
 
-export { CustomFieldsSection, CustomFieldModal, FIELD_TYPE_CONFIG };
+// Internal components - not exported (Next.js page files only allow default export)
 function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivisionId: string; onSelect: (id: string) => void }) {
   const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
