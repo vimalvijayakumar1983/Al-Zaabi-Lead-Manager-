@@ -15,8 +15,9 @@ const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } }); // 25MB
 
 // ─── Lead field definitions for mapping ─────────────────────────
 const LEAD_FIELDS = [
-  { key: 'firstName', label: 'First Name', required: true, type: 'string' },
-  { key: 'lastName', label: 'Last Name', required: true, type: 'string' },
+  { key: 'name', label: 'Full Name', required: false, type: 'string' },
+  { key: 'firstName', label: 'First Name', required: false, type: 'string' },
+  { key: 'lastName', label: 'Last Name', required: false, type: 'string' },
   { key: 'email', label: 'Email', required: false, type: 'email' },
   { key: 'phone', label: 'Phone', required: false, type: 'string' },
   { key: 'company', label: 'Company', required: false, type: 'string' },
@@ -104,6 +105,7 @@ async function parseFileToRows(file) {
 function autoDetectMapping(csvColumns, moduleFields) {
   const mapping = {};
   const aliases = {
+    name: ['name', 'full name', 'fullname', 'contact name', 'lead name', 'customer name', 'customer'],
     firstName: ['firstname', 'first_name', 'first name', 'fname', 'given name'],
     lastName: ['lastname', 'last_name', 'last name', 'lname', 'surname', 'family name'],
     email: ['email', 'email address', 'e-mail', 'emailaddress'],
@@ -316,12 +318,25 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             }
           }
 
-          // Validation: required fields
-          if (!mapped.firstName || !mapped.lastName) {
-            errors.push({ row: i + 2, error: 'Missing required field: firstName or lastName', data: row });
+          // Smart-split name field if firstName not provided
+          if (mapped.name && !mapped.firstName) {
+            const nameParts = mapped.name.trim().split(/\s+/);
+            if (nameParts.length === 1) {
+              mapped.firstName = nameParts[0];
+              mapped.lastName = '';
+            } else {
+              mapped.lastName = nameParts.pop();
+              mapped.firstName = nameParts.join(' ');
+            }
+            delete mapped.name;
+          }
+          // Validation: firstName is required (lastName defaults to empty)
+          if (!mapped.firstName) {
+            errors.push({ row: i + 2, error: 'Missing required field: Name (or First Name)', data: row });
             skipped++;
             continue;
           }
+          if (!mapped.lastName) mapped.lastName = '';
 
           // Type coercion
           if (mapped.budget) mapped.budget = parseFloat(mapped.budget) || null;
@@ -454,12 +469,25 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             }
           }
 
-          // Validation: required fields
-          if (!mapped.firstName || !mapped.lastName) {
-            errors.push({ row: i + 2, error: 'Missing required field: firstName or lastName', data: row });
+          // Smart-split name field if firstName not provided
+          if (mapped.name && !mapped.firstName) {
+            const nameParts = mapped.name.trim().split(/\s+/);
+            if (nameParts.length === 1) {
+              mapped.firstName = nameParts[0];
+              mapped.lastName = '';
+            } else {
+              mapped.lastName = nameParts.pop();
+              mapped.firstName = nameParts.join(' ');
+            }
+            delete mapped.name;
+          }
+          // Validation: firstName is required (lastName defaults to empty)
+          if (!mapped.firstName) {
+            errors.push({ row: i + 2, error: 'Missing required field: Name (or First Name)', data: row });
             skipped++;
             continue;
           }
+          if (!mapped.lastName) mapped.lastName = '';
 
           // Enum validation & coercion
           const lifecycleOptions = CONTACT_FIELDS.find(f => f.key === 'lifecycle').options;
@@ -858,7 +886,8 @@ router.get('/template/:module', async (req, res, next) => {
 
     const headers = fields.map(f => f.label);
     const sampleRow = fields.map(f => {
-      if (f.key === 'firstName') return 'John';
+      if (f.key === 'name') return 'Ahmed Al-Zaabi';
+      if (f.key === 'firstName') return 'Ahmed';
       if (f.key === 'lastName') return 'Doe';
       if (f.key === 'email') return 'john.doe@example.com';
       if (f.key === 'phone') return '+971501234567';
