@@ -44,6 +44,21 @@ const priorityColors: Record<string, string> = {
   URGENT: 'bg-red-100 text-red-700',
 };
 
+// ─── Smart Name Display (handles duplicate firstName/lastName) ────
+const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
+  const fn = (obj.firstName || '').trim();
+  const ln = (obj.lastName || '').trim();
+  if (!ln || fn.toLowerCase() === ln.toLowerCase()) return fn || 'Unknown';
+  if (fn.toLowerCase().endsWith(ln.toLowerCase())) return fn;
+  return `${fn} ${ln}`.trim() || 'Unknown';
+};
+const getLeadInitials = (obj: { firstName?: string; lastName?: string }) => {
+  const name = getLeadDisplayName(obj);
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+};
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -227,7 +242,7 @@ export default function LeadDetailPage() {
   const startEditing = () => {
     if (!lead) return;
     setEditForm({
-      name: `${lead.firstName}${lead.lastName ? ' ' + lead.lastName : ''}`,
+      name: getLeadDisplayName(lead),
       email: lead.email || '',
       phone: lead.phone || '',
       company: lead.company || '',
@@ -373,7 +388,7 @@ export default function LeadDetailPage() {
         lifecycle: 'CUSTOMER',
         type: 'CUSTOMER',
         createDeal,
-        dealName: lead.company ? `${lead.company} - Deal` : `${lead.firstName}${lead.lastName ? " " + lead.lastName : ""} - Deal`,
+        dealName: lead.company ? `${lead.company} - Deal` : `${getLeadDisplayName(lead)} - Deal`,
         dealAmount: lead.budget ? Number(lead.budget) : undefined,
       });
       setShowConvertToContact(false);
@@ -550,7 +565,7 @@ export default function LeadDetailPage() {
     stage: (l) => l.stage?.name || '-',
     stageId: (l) => l.stage?.name || '-',
     tags: (l) => Array.isArray(l.tags) && l.tags.length > 0 ? l.tags.join(', ') : '-',
-    assignedTo: (l) => l.assignedTo ? `${l.assignedTo.firstName || ''} ${l.assignedTo.lastName || ''}`.trim() || '-' : '-',
+    assignedTo: (l) => l.assignedTo ? getLeadDisplayName(l.assignedTo) : '-',
     createdAt: (l) => l.createdAt ? new Date(l.createdAt).toLocaleString() : '-',
     updatedAt: (l) => l.updatedAt ? new Date(l.updatedAt).toLocaleString() : '-',
   };
@@ -611,10 +626,10 @@ export default function LeadDetailPage() {
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
           </button>
           <div className="h-14 w-14 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-md">
-            {(lead.firstName || '?')[0]}{lead.lastName ? lead.lastName[0] : ''}
+            {getLeadInitials(lead)}
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{getLeadDisplayName(lead)}</h1>
             <p className="text-gray-500">{lead.company || 'No company'} {lead.jobTitle ? `· ${lead.jobTitle}` : ''}</p>
           </div>
         </div>
@@ -1363,7 +1378,7 @@ export default function LeadDetailPage() {
                               {/* Sender name for inbound */}
                               {!isOutbound && (
                                 <p className="text-xs font-semibold text-teal-700 mb-0.5">
-                                  {lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}
+                                  {getLeadDisplayName(lead)}
                                 </p>
                               )}
                               {isOutbound && msg.user && (
@@ -1525,7 +1540,7 @@ export default function LeadDetailPage() {
       {showTaskModal && <CreateTaskModal onClose={() => setShowTaskModal(false)} onSubmit={handleCreateTask} />}
 
       {/* Log Call Modal */}
-      {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={`${lead.firstName}${lead.lastName ? " " + lead.lastName : ""}`} />}
+      {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={getLeadDisplayName(lead)} />}
 
       {/* Log Communication Modal */}
       {showCommModal && <LogCommModal onClose={() => setShowCommModal(false)} onSubmit={handleLogComm} leadEmail={lead.email} />}
@@ -1536,7 +1551,7 @@ export default function LeadDetailPage() {
           onClose={() => setShowEmailComposer(false)}
           onSend={handleSendEmail}
           toEmail={lead.email}
-          leadName={`${lead.firstName}${lead.lastName ? " " + lead.lastName : ""}`}
+          leadName={getLeadDisplayName(lead)}
         />
       )}
 

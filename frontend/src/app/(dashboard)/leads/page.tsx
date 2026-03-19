@@ -38,6 +38,21 @@ const sourceLabels: Record<string, string> = {
 
 type ViewMode = 'table' | 'cards' | 'kanban';
 
+// ─── Smart Name Display (handles duplicate firstName/lastName) ────
+const getDisplayName = (lead: { firstName?: string; lastName?: string }) => {
+  const fn = (lead.firstName || '').trim();
+  const ln = (lead.lastName || '').trim();
+  if (!ln || fn.toLowerCase() === ln.toLowerCase()) return fn || 'Unknown';
+  if (fn.toLowerCase().endsWith(ln.toLowerCase())) return fn;
+  return `${fn} ${ln}`.trim() || 'Unknown';
+};
+const getInitials = (lead: { firstName?: string; lastName?: string }) => {
+  const name = getDisplayName(lead);
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+};
+
 // ─── Time Formatting ─────────────────────────────────────────────
 
 function formatTimeAgo(dateStr: string): string {
@@ -472,7 +487,7 @@ function LeadsContent() {
     const rows = leads.map((l) =>
       visibleCols.map((c) => {
         switch (c.id) {
-          case 'name': return `${l.firstName}${l.lastName ? ` ${l.lastName}` : ''}`;
+          case 'name': return getDisplayName(l);
           case 'email': return l.email || '';
           case 'phone': return l.phone || '';
           case 'company': return l.company || '';
@@ -565,10 +580,10 @@ function LeadsContent() {
         return (
           <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
             <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
-              {(lead.firstName || '?')[0]}{lead.lastName ? lead.lastName[0] : ''}
+              {getInitials(lead)}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</p>
+              <p className="text-sm font-medium text-gray-900 group-hover:text-brand-600 transition-colors truncate">{getDisplayName(lead)}</p>
               {lead.jobTitle && <p className="text-xs text-gray-500 truncate">{lead.jobTitle}</p>}
             </div>
           </Link>
@@ -1066,10 +1081,10 @@ function LeadsContent() {
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
-                              {(lead.firstName || '?')[0]}{lead.lastName ? lead.lastName[0] : ''}
+                              {getInitials(lead)}
                             </div>
                             <div>
-                              <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</p>
+                              <p className="font-medium text-gray-900 group-hover:text-brand-600 transition-colors">{getDisplayName(lead)}</p>
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>
