@@ -36,6 +36,26 @@ const sourceLabels: Record<string, string> = {
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',
 };
 
+// ─── Call disposition labels for display ────
+const dispositionLabels: Record<string, string> = {
+  CALLBACK: 'Call Back Requested', MEETING_ARRANGED: 'Meeting Arranged',
+  APPOINTMENT_BOOKED: 'Appointment Booked', INTERESTED: 'Interested',
+  QUALIFIED: 'Lead Qualified', PROPOSAL_REQUESTED: 'Proposal Requested',
+  FOLLOW_UP_EMAIL: 'Follow-up Email', NO_ANSWER: 'No Answer',
+  VOICEMAIL_LEFT: 'Voicemail Left', BUSY: 'Line Busy',
+  GATEKEEPER: 'Reached Gatekeeper', NOT_INTERESTED: 'Not Interested',
+  WRONG_NUMBER: 'Wrong Number', DO_NOT_CALL: 'Do Not Call', OTHER: 'Other',
+};
+
+// Color-coded outcome groups
+const dispositionColor = (d: string): string => {
+  if (['MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED', 'QUALIFIED', 'PROPOSAL_REQUESTED'].includes(d)) return 'text-green-600';
+  if (['CALLBACK', 'FOLLOW_UP_EMAIL'].includes(d)) return 'text-blue-600';
+  if (['NO_ANSWER', 'VOICEMAIL_LEFT', 'BUSY', 'GATEKEEPER'].includes(d)) return 'text-amber-600';
+  if (['NOT_INTERESTED', 'WRONG_NUMBER', 'DO_NOT_CALL'].includes(d)) return 'text-red-600';
+  return 'text-gray-500';
+};
+
 type ViewMode = 'table' | 'cards' | 'kanban';
 
 // ─── Phone formatting - auto-add UAE country code if missing ────
@@ -585,6 +605,10 @@ function LeadsContent() {
           case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
           case 'callCount': return String(l._count?.callLogs || 0);
+          case 'lastCallOutcome': {
+            const lco = (l as any).lastCallOutcome;
+            return lco ? (dispositionLabels[lco.disposition] || lco.disposition) : '';
+          }
           case 'channels': {
             const ucc = l.unreadChannelCounts || {};
             return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
@@ -772,6 +796,22 @@ function LeadsContent() {
               {count}
             </span>
             {count === 0 && <span className="text-xs text-gray-400">Never called</span>}
+          </div>
+        );
+      }
+      case 'lastCallOutcome': {
+        const lco = (lead as any).lastCallOutcome;
+        if (!lco) return <span className="text-xs text-gray-400">-</span>;
+        return (
+          <div className="flex flex-col">
+            <span className={`text-xs font-medium ${dispositionColor(lco.disposition)}`}>
+              {dispositionLabels[lco.disposition] || lco.disposition}
+            </span>
+            {lco.date && (
+              <span className="text-[10px] text-gray-400">
+                {new Date(lco.date).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+              </span>
+            )}
           </div>
         );
       }
@@ -1252,6 +1292,11 @@ function LeadsContent() {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                               </svg>
                               {lead._count.callLogs} calls
+                              {(lead as any).lastCallOutcome && (
+                                <span className={`ml-1 ${dispositionColor((lead as any).lastCallOutcome.disposition)}`}>
+                                  · {dispositionLabels[(lead as any).lastCallOutcome.disposition] || (lead as any).lastCallOutcome.disposition}
+                                </span>
+                              )}
                             </span>
                           ) : null}
                         </div>

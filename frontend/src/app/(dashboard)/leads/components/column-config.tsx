@@ -35,6 +35,7 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
   { id: 'assignedTo', label: 'Assigned To', visible: true, sortable: false },
   { id: 'tags', label: 'Tags', visible: false, sortable: false },
   { id: 'callCount', label: 'Calls', visible: true, sortable: false },
+  { id: 'lastCallOutcome', label: 'Last Call Outcome', visible: true, sortable: false },
   { id: 'channels', label: 'Channels', visible: true, sortable: false },
   { id: 'sla', label: 'SLA', visible: true, sortable: true, sortField: 'slaStatus' },
   { id: 'createdAt', label: 'Created', visible: true, sortable: true, sortField: 'createdAt' },

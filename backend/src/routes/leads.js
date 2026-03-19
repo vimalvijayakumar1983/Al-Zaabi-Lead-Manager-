@@ -296,12 +296,28 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       prisma.lead.count({ where }),
     ]);
 
-    // Fetch per-channel communication counts, unread counts, and last message info for the current page of leads
+    // Fetch per-channel communication counts, unread counts, last message, and last call outcome for the current page of leads
     const leadIds = leads.map(l => l.id);
     let channelCountsMap = {};
     let unreadChannelCountsMap = {};
     let lastMessageMap = {};
+    let lastCallOutcomeMap = {};
     if (leadIds.length > 0) {
+      // Fetch last call log per lead (most recent call's disposition + date)
+      const lastCallLogs = await prisma.callLog.findMany({
+        where: { leadId: { in: leadIds } },
+        orderBy: { createdAt: 'desc' },
+        distinct: ['leadId'],
+        select: { leadId: true, disposition: true, notes: true, createdAt: true },
+      });
+      for (const cl of lastCallLogs) {
+        lastCallOutcomeMap[cl.leadId] = {
+          disposition: cl.disposition,
+          notes: cl.notes,
+          date: cl.createdAt,
+        };
+      }
+
       const [channelCounts, unreadChannelCounts, lastMessages] = await Promise.all([
         prisma.communication.groupBy({
           by: ['leadId', 'channel'],
@@ -353,12 +369,13 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       orgSettings = org?.settings;
     } catch { /* non-critical */ }
 
-    // Enrich leads with channel counts, unread counts, last message, and SLA info
+    // Enrich leads with channel counts, unread counts, last message, last call outcome, and SLA info
     const enrichedLeads = leads.map(lead => ({
       ...lead,
       channelCounts: channelCountsMap[lead.id] || {},
       unreadChannelCounts: unreadChannelCountsMap[lead.id] || {},
       lastInboundMessage: lastMessageMap[lead.id] || null,
+      lastCallOutcome: lastCallOutcomeMap[lead.id] || null,
       slaInfo: getLeadSLAInfo(lead, orgSettings),
     }));
 
