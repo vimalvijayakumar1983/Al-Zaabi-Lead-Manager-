@@ -16,6 +16,18 @@ const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 const router = Router();
 router.use(authenticate, orgScope);
 
+// Smart name display — deduplicates when firstName and lastName are identical
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return '';
+  if (!ln) return fn;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 // ─── Schemas ─────────────────────────────────────────────────────
 const createLeadSchema = z.object({
   name: z.string().optional(),
@@ -685,7 +697,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
       createNotification({
         type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
         title: 'New Lead Assigned',
-        message: `${req.user.firstName} ${req.user.lastName} assigned lead ${lead.firstName} ${lead.lastName} to you`,
+        message: `${getDisplayName(req.user)} assigned lead ${getDisplayName(lead)} to you`,
         userId: lead.assignedToId,
         actorId: req.user.id,
         entityType: 'lead',
@@ -698,7 +710,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     notifyOrgAdmins(targetOrgId, {
       type: NOTIFICATION_TYPES.LEAD_CREATED,
       title: 'New Lead Created',
-      message: `${req.user.firstName} ${req.user.lastName} created lead ${lead.firstName} ${lead.lastName}`,
+      message: `${getDisplayName(req.user)} created lead ${getDisplayName(lead)}`,
       entityType: 'lead',
       entityId: lead.id,
     }, req.user.id).catch(() => {});
@@ -847,8 +859,8 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     res.json(lead);
 
     // ── Fire-and-forget notifications ──
-    const leadName = `${lead.firstName} ${lead.lastName}`;
-    const actorName = `${req.user.firstName} ${req.user.lastName}`;
+    const leadName = getDisplayName(lead);
+    const actorName = getDisplayName(req.user);
 
     // Status changed notification
     if (data.status && data.status !== existing.status) {
@@ -1073,8 +1085,8 @@ router.post('/:id/reassign', validate(z.object({
         },
       });
 
-      const prevName = previousAssignee ? `${previousAssignee.firstName} ${previousAssignee.lastName}` : 'Unassigned';
-      const newName = `${result.assignedTo.firstName} ${result.assignedTo.lastName}`;
+      const prevName = previousAssignee ? getDisplayName(previousAssignee) : 'Unassigned';
+      const newName = getDisplayName(result.assignedTo);
 
       await tx.leadActivity.create({
         data: {
@@ -1104,7 +1116,7 @@ router.post('/:id/reassign', validate(z.object({
       createNotification({
         type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
         title: 'Lead Reassigned to You',
-        message: `${req.user.firstName} ${req.user.lastName} reassigned ${updated.firstName} ${updated.lastName} to you${reason ? '. Reason: ' + reason : ''}`,
+        message: `${getDisplayName(req.user)} reassigned ${getDisplayName(updated)} to you${reason ? '. Reason: ' + reason : ''}`,
         userId: assignedToId,
         actorId: req.user.id,
         entityType: 'lead',
@@ -1118,7 +1130,7 @@ router.post('/:id/reassign', validate(z.object({
       createNotification({
         type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
         title: 'Lead Reassigned',
-        message: `${req.user.firstName} ${req.user.lastName} reassigned ${updated.firstName} ${updated.lastName} to another team member${reason ? '. Reason: ' + reason : ''}`,
+        message: `${getDisplayName(req.user)} reassigned ${getDisplayName(updated)} to another team member${reason ? '. Reason: ' + reason : ''}`,
         userId: previousAssignee.id,
         actorId: req.user.id,
         entityType: 'lead',
@@ -1163,7 +1175,7 @@ router.patch('/bulk', validate(z.object({
     notifyOrgAdmins(req.user.organizationId, {
       type: NOTIFICATION_TYPES.LEAD_STATUS_CHANGED,
       title: 'Bulk Lead Update',
-      message: `${req.user.firstName} ${req.user.lastName} updated ${leadIds.length} leads`,
+      message: `${getDisplayName(req.user)} updated ${leadIds.length} leads`,
       entityType: 'lead',
       entityId: null,
     }, req.user.id).catch(() => {});

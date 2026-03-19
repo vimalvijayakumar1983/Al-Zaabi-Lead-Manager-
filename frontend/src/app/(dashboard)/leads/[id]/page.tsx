@@ -549,6 +549,7 @@ export default function LeadDetailPage() {
   ]);
 
   const BUILT_IN_FIELD_RENDERER: Record<string, (lead: any) => string> = {
+    name: (l) => getLeadDisplayName(l) || '-',
     email: (l) => l.email || '-',
     phone: (l) => l.phone || '-',
     company: (l) => l.company || '-',
