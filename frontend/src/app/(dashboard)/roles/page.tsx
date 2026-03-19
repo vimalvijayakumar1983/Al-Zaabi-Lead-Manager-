@@ -655,7 +655,7 @@ function IconPicker({
                   ? {
                       backgroundColor: `${color}15`,
                       color: color,
-                      ringColor: color,
+                      outlineColor: color,
                     }
                   : undefined
               }
