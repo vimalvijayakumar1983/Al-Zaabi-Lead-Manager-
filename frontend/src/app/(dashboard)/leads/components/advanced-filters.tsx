@@ -399,9 +399,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   const selectedCallOutcomes = parseMulti(local.callOutcome);
 
   return (
-    <div className="card p-5 border-brand-200 bg-white shadow-lg space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="card border-brand-200 bg-white shadow-lg flex flex-col max-h-[calc(100vh-12rem)] overflow-hidden">
+      {/* Header - pinned */}
+      <div className="flex items-center justify-between px-5 pt-5 pb-3 flex-shrink-0 border-b border-gray-100">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <FilterIcon />
           Advanced Filters
@@ -420,6 +420,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
           </button>
         </div>
       </div>
+
+      {/* Scrollable content area */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4 [&::-webkit-scrollbar]:w-[6px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-gray-400" style={{ scrollbarWidth: 'thin', scrollbarColor: '#d1d5db transparent' }}>
 
       {/* Save Dialog */}
       {showSaveDialog && (
@@ -859,12 +862,14 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         </div>
       )}
 
-      {/* Footer */}
-      <div className="flex items-center justify-between pt-4 border-t">
-        <button onClick={handleClear} className="text-sm text-gray-500 hover:text-gray-700">Clear All Filters</button>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
-          <button onClick={handleApply} className="btn-primary text-sm">Apply Filters</button>
+      </div>{/* end scrollable content area */}
+
+      {/* Footer - pinned at bottom */}
+      <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50/80 flex-shrink-0 rounded-b-lg">
+        <button onClick={handleClear} className="text-sm text-gray-500 hover:text-red-600 hover:underline transition-colors">Clear All Filters</button>
+        <div className="flex gap-2.5">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
+          <button onClick={handleApply} className="px-5 py-2 rounded-lg text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 shadow-sm transition-colors">Apply Filters</button>
         </div>
       </div>
     </div>
