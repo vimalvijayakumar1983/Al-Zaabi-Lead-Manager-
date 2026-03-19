@@ -128,7 +128,7 @@ export interface Lead {
   tasks?: Task[];
   communications?: Communication[];
   attachments?: Attachment[];
-  _count?: { activities: number; tasks: number; communications: number };
+  _count?: { activities: number; tasks: number; communications: number; callLogs: number };
   channelCounts?: Record<string, number>;
   unreadChannelCounts?: Record<string, number>;
   unreadCommunications?: number;

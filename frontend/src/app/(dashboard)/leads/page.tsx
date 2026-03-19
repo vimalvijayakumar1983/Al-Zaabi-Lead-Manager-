@@ -278,6 +278,8 @@ function LeadsContent() {
       if (filters.conversionMax) params.conversionMax = filters.conversionMax;
       if (filters.stageId) params.stageId = filters.stageId;
       if (filters.callOutcome) params.callOutcome = filters.callOutcome;
+      if (filters.minCallCount) params.minCallCount = filters.minCallCount;
+      if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
       if (filters.divisionId) params.divisionId = filters.divisionId;
       const res = await api.getLeads(params) as any;
       const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
@@ -551,7 +553,11 @@ function LeadsContent() {
   };
 
   const handleRemoveFilter = (key: keyof FilterState) => {
-    setFilters({ ...filters, [key]: '' });
+    const updated = { ...filters, [key]: '' };
+    // When removing call count, clear both min and max
+    if (key === 'minCallCount') updated.maxCallCount = '';
+    if (key === 'maxCallCount') updated.minCallCount = '';
+    setFilters(updated);
     setPagination((p) => ({ ...p, page: 1 }));
     setActiveViewId('all');
     saveActiveViewId('all');
@@ -578,6 +584,7 @@ function LeadsContent() {
           case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
           case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
           case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
+          case 'callCount': return String(l._count?.callLogs || 0);
           case 'channels': {
             const ucc = l.unreadChannelCounts || {};
             return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
@@ -754,6 +761,20 @@ function LeadsContent() {
             <span className="text-sm text-gray-700">{lead.assignedTo.firstName}</span>
           </div>
         ) : <span className="text-xs text-gray-400">Unassigned</span>;
+      case 'callCount': {
+        const count = lead._count?.callLogs || 0;
+        return (
+          <div className="flex items-center gap-1.5">
+            <svg className="h-4 w-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+            </svg>
+            <span className={`text-sm font-medium ${count === 0 ? 'text-gray-400' : count >= 5 ? 'text-red-600' : count >= 3 ? 'text-amber-600' : 'text-gray-700'}`}>
+              {count}
+            </span>
+            {count === 0 && <span className="text-xs text-gray-400">Never called</span>}
+          </div>
+        );
+      }
       case 'tags':
         return lead.tags && lead.tags.length > 0 ? (
           <div className="flex gap-1 flex-wrap">
@@ -1225,6 +1246,14 @@ function LeadsContent() {
                             <span className="text-xs font-semibold tabular-nums" style={{ color: (lead.score ?? 0) >= 70 ? '#16a34a' : (lead.score ?? 0) >= 40 ? '#d97706' : '#dc2626' }}>{lead.score ?? 0}</span>
                           </div>
                           <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}</span>
+                          {lead._count?.callLogs ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                              </svg>
+                              {lead._count.callLogs} calls
+                            </span>
+                          ) : null}
                         </div>
                         {/* Channel Indicators */}
                         {lead.channelCounts && Object.keys(lead.channelCounts).length > 0 && (

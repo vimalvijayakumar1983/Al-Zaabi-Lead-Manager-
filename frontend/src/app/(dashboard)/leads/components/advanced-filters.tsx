@@ -27,6 +27,8 @@ export interface FilterState {
   conversionMax: string;
   stageId: string;
   callOutcome: string;      // comma-separated CallDisposition values
+  minCallCount: string;
+  maxCallCount: string;
   divisionId: string;
 }
 
@@ -53,6 +55,8 @@ export const emptyFilters: FilterState = {
   conversionMax: '',
   stageId: '',
   callOutcome: '',
+  minCallCount: '',
+  maxCallCount: '',
   divisionId: '',
 };
 
@@ -208,6 +212,9 @@ function TagIcon() {
 function CalendarIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
 }
+function PhoneCountIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>;
+}
 function PhoneOutcomeIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>;
 }
@@ -272,6 +279,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     statusPipeline: true,
     callOutcome: false,
+    callCount: false,
     assignmentContact: false,
     scoreBudget: false,
     textSearch: false,
@@ -313,6 +321,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   const sectionCounts = {
     statusPipeline: [local.status, local.stageId, local.source, local.divisionId].filter(Boolean).length,
     callOutcome: local.callOutcome ? parseMulti(local.callOutcome).length : 0,
+    callCount: (local.minCallCount || local.maxCallCount) ? 1 : 0,
     assignmentContact: [local.assignedToId, local.hasEmail, local.hasPhone].filter(Boolean).length,
     scoreBudget: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
     textSearch: [local.company, local.jobTitle, local.location, local.campaign, local.productInterest].filter(Boolean).length,
@@ -682,6 +691,70 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         )}
       </div>
 
+      {/* Call Count */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader title="Call Count" icon={<PhoneCountIcon />} count={sectionCounts.callCount} open={openSections.callCount} onToggle={() => toggleSection('callCount')} />
+        {openSections.callCount && (
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-gray-500">Filter leads by how many times they&apos;ve been called</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Min Calls</label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={local.minCallCount}
+                  onChange={(e) => setLocal({ ...local, minCallCount: e.target.value })}
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-400 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Max Calls</label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="∞"
+                  value={local.maxCallCount}
+                  onChange={(e) => setLocal({ ...local, maxCallCount: e.target.value })}
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-400 outline-none"
+                />
+              </div>
+            </div>
+            {/* Quick presets */}
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { label: 'Never called', min: '0', max: '0' },
+                { label: 'Called once', min: '1', max: '1' },
+                { label: 'Called 2×', min: '2', max: '2' },
+                { label: 'Called 3+', min: '3', max: '' },
+                { label: 'Called 5+', min: '5', max: '' },
+              ].map((preset) => (
+                <button
+                  key={preset.label}
+                  onClick={() => setLocal({ ...local, minCallCount: preset.min, maxCallCount: preset.max })}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                    local.minCallCount === preset.min && local.maxCallCount === preset.max
+                      ? 'bg-blue-50 border-blue-300 text-blue-700'
+                      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            {(local.minCallCount || local.maxCallCount) && (
+              <button
+                onClick={() => setLocal({ ...local, minCallCount: '', maxCallCount: '' })}
+                className="text-xs text-blue-600 hover:text-blue-800"
+              >
+                Clear call count filter
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Section 2: Assignment & Contact */}
       <div className="border border-gray-200 rounded-lg overflow-hidden">
         <SectionHeader title="Assignment & Contact" icon={<UserIcon />} count={sectionCounts.assignmentContact} open={openSections.assignmentContact} onToggle={() => toggleSection('assignmentContact')} />
@@ -926,6 +999,12 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
     const outcomes = parseMulti(filters.callOutcome);
     const outcomeLabels = outcomes.map(v => callOutcomeOptions.find(o => o.value === v)?.label || v);
     badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
+  }
+  if (filters.minCallCount || filters.maxCallCount) {
+    const min = filters.minCallCount || '0';
+    const max = filters.maxCallCount;
+    const label = max ? (min === max ? `Called ${min}×` : `Called ${min}-${max}×`) : `Called ${min}+×`;
+    badges.push({ key: 'minCallCount', label: `Calls: ${label}` });
   }
   if (filters.divisionId) {
     let divName = filters.divisionId;

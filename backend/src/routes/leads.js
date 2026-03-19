@@ -85,12 +85,14 @@ const leadFilterSchema = paginationSchema.extend({
   customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
   divisionId: z.string().optional(),
   callOutcome: z.string().optional(), // comma-separated CallDisposition values
+  minCallCount: z.coerce.number().int().min(0).optional(),
+  maxCallCount: z.coerce.number().int().min(0).optional(),
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, minCallCount, maxCallCount } = req.validatedQuery;
 
     const where = {
       organizationId: { in: req.orgIds },
@@ -245,6 +247,39 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       } catch { /* ignore invalid JSON */ }
     }
 
+    // ─── Call Count Filtering ──────────────────────────────────
+    if (minCallCount !== undefined || maxCallCount !== undefined) {
+      const min = minCallCount !== undefined ? Number(minCallCount) : 0;
+      const max = maxCallCount !== undefined ? Number(maxCallCount) : Infinity;
+
+      if (min > 0) {
+        // Only leads that have been called at least `min` times
+        const having = { id: { _count: { gte: min } } };
+        if (max < Infinity) having.id._count.lte = max;
+
+        const results = await prisma.callLog.groupBy({
+          by: ['leadId'],
+          _count: { id: true },
+          having,
+        });
+        const ids = results.map(r => r.leadId);
+        // If no leads match, add impossible condition to return 0 results
+        where.AND = [...(where.AND || []), { id: { in: ids.length > 0 ? ids : ['__none__'] } }];
+      } else if (max < Infinity) {
+        // Min is 0, so include leads with 0 calls too
+        // Exclude leads with MORE than max calls
+        const tooMany = await prisma.callLog.groupBy({
+          by: ['leadId'],
+          _count: { id: true },
+          having: { id: { _count: { gt: max } } },
+        });
+        const excludeIds = tooMany.map(r => r.leadId);
+        if (excludeIds.length > 0) {
+          where.AND = [...(where.AND || []), { id: { notIn: excludeIds } }];
+        }
+      }
+    }
+
     const [leads, total] = await Promise.all([
       prisma.lead.findMany({
         where,
@@ -253,7 +288,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           stage: { select: { id: true, name: true, color: true } },
           tags: { include: { tag: true } },
           organization: { select: { id: true, name: true } },
-          _count: { select: { activities: true, tasks: true, communications: true } },
+          _count: { select: { activities: true, tasks: true, communications: true, callLogs: true } },
         },
         orderBy: { [sortBy]: sortOrder },
         ...paginate(page, limit),
