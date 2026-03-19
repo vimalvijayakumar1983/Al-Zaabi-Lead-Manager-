@@ -333,9 +333,22 @@ export default function PipelinePage() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="flex flex-col gap-4 h-[calc(100dvh-7rem)] animate-fade-in overflow-hidden">
+      {/* Thin scrollbar styles */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        .pipeline-board::-webkit-scrollbar { width: 6px; height: 6px; }
+        .pipeline-board::-webkit-scrollbar-track { background: transparent; border-radius: 3px; }
+        .pipeline-board::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 3px; }
+        .pipeline-board::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.22); }
+        .pipeline-col::-webkit-scrollbar { width: 5px; }
+        .pipeline-col::-webkit-scrollbar-track { background: transparent; }
+        .pipeline-col::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+        .pipeline-col::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.2); }
+        .pipeline-board { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.12) transparent; }
+        .pipeline-col { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.1) transparent; }
+      `}} />
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Pipeline</h1>
           <p className="text-text-secondary text-sm mt-0.5">
@@ -365,7 +378,7 @@ export default function PipelinePage() {
       </div>
 
       {/* Pipeline Summary Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-shrink-0">
         <div className="card p-3.5">
           <div className="flex items-center gap-2 mb-1">
             <div className="h-7 w-7 rounded-lg bg-brand-50 flex items-center justify-center">
@@ -405,7 +418,7 @@ export default function PipelinePage() {
       </div>
 
       {/* Search & Filter Bar */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-3 flex-wrap flex-shrink-0">
         {/* Search */}
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
@@ -635,7 +648,7 @@ export default function PipelinePage() {
 
       {/* Active Filter Badges */}
       {activeFilterCount > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
           <span className="text-sm font-medium text-text-secondary">
             Showing {totalLeadsFiltered} of {totalLeadsAll} leads
           </span>
@@ -701,7 +714,7 @@ export default function PipelinePage() {
 
       {/* ─── KANBAN VIEW ─────────────────────────────────────── */}
       {viewMode === 'kanban' && (
-        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin" style={{ height: 'calc(100vh - 300px)' }}>
+        <div className="flex-1 min-h-0 flex gap-3 overflow-x-auto overflow-y-hidden pb-2 pipeline-board">
           {sortedStages.map((stage) => {
             const stageValue = stage.leads.reduce((sum: number, l: any) => sum + (Number(l.budget) || 0), 0);
             const leadCount = stage.leads.length;
@@ -745,7 +758,7 @@ export default function PipelinePage() {
                 </div>
 
                 {/* Cards Container */}
-                <div className={`flex-1 min-h-0 space-y-2 rounded-xl p-2 transition-all duration-200 overflow-y-auto scrollbar-thin ${
+                <div className={`flex-1 min-h-0 space-y-2 rounded-xl p-2 transition-all duration-200 overflow-y-auto pipeline-col ${
                   isDragOver
                     ? 'bg-brand-50 ring-2 ring-brand-500/30 ring-offset-1'
                     : 'bg-surface-tertiary/50'
@@ -847,7 +860,7 @@ export default function PipelinePage() {
 
       {/* ─── LIST VIEW ───────────────────────────────────────── */}
       {viewMode === 'list' && (
-        <div className="space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pipeline-board">
           {sortedStages.map((stage) => {
             const stageValue = stage.leads.reduce((sum: number, l: any) => sum + (Number(l.budget) || 0), 0);
 
