@@ -105,6 +105,12 @@ export default function LeadDetailPage() {
 
   const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
 
+  const getFieldLabel = (key: string, defaultLabel: string): string => {
+    if (!fieldConfig) return defaultLabel;
+    const f = fieldConfig.builtInFields?.find((b: any) => b.key === key);
+    return f?.customLabel || defaultLabel;
+  };
+
   useEffect(() => {
     // Scope custom fields to the lead's division when available
     const divisionId = lead?.organizationId;
@@ -725,28 +731,28 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Email</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('email', 'Email')}</label>
                   <input type="email" className="input text-sm" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Phone</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('phone', 'Phone')}</label>
                   <input className="input text-sm" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Location</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('location', 'Location')}</label>
                   <input className="input text-sm" value={editForm.location} onChange={(e) => setEditForm({ ...editForm, location: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Website</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('website', 'Website')}</label>
                   <input className="input text-sm" value={editForm.website} onChange={(e) => setEditForm({ ...editForm, website: e.target.value })} />
                 </div>
               </div>
             ) : (
               <>
-                <ContactRow icon="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" label="Email" value={lead.email} isLink={lead.email ? `mailto:${lead.email}` : undefined} />
-                <ContactRow icon="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" label="Phone" value={lead.phone} isLink={lead.phone ? `tel:${lead.phone}` : undefined} />
-                <ContactRow icon="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" label="Location" value={lead.location} />
-                <ContactRow icon="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" label="Website" value={lead.website} isLink={lead.website || undefined} />
+                <ContactRow icon="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" label={getFieldLabel('email', 'Email')} value={lead.email} isLink={lead.email ? `mailto:${lead.email}` : undefined} />
+                <ContactRow icon="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" label={getFieldLabel('phone', 'Phone')} value={lead.phone} isLink={lead.phone ? `tel:${lead.phone}` : undefined} />
+                <ContactRow icon="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" label={getFieldLabel('location', 'Location')} value={lead.location} />
+                <ContactRow icon="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" label={getFieldLabel('website', 'Website')} value={lead.website} isLink={lead.website || undefined} />
               </>
             )}
           </div>
@@ -760,23 +766,23 @@ export default function LeadDetailPage() {
             {isEditing ? (
               <div className="space-y-2">
                 <div>
-                  <label className="text-xs text-gray-500">Company</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('company', 'Company')}</label>
                   <input className="input text-sm" value={editForm.company} onChange={(e) => setEditForm({ ...editForm, company: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Job Title</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('jobTitle', 'Job Title')}</label>
                   <input className="input text-sm" value={editForm.jobTitle} onChange={(e) => setEditForm({ ...editForm, jobTitle: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Product Interest</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('productInterest', 'Product Interest')}</label>
                   <input className="input text-sm" value={editForm.productInterest} onChange={(e) => setEditForm({ ...editForm, productInterest: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Budget</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('budget', 'Budget')}</label>
                   <input type="number" className="input text-sm" value={editForm.budget} onChange={(e) => setEditForm({ ...editForm, budget: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Campaign</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('campaign', 'Campaign')}</label>
                   <input className="input text-sm" value={editForm.campaign} onChange={(e) => setEditForm({ ...editForm, campaign: e.target.value })} />
                 </div>
                 <div>
@@ -858,7 +864,7 @@ export default function LeadDetailPage() {
                         {fields.map((field: any) => (
                           <InfoRow
                             key={field.key}
-                            label={field.label}
+                            label={field.customLabel || field.label}
                             value={(BUILT_IN_FIELD_RENDERER[field.key] || (() => '-'))(lead)}
                           />
                         ))}
@@ -888,10 +894,10 @@ export default function LeadDetailPage() {
               ) : (
                 /* Fallback: original hardcoded fields when field config API is unavailable */
                 <>
-                  <InfoRow label="Source" value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
-                  <InfoRow label="Campaign" value={lead.campaign || '-'} />
-                  <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
-                  <InfoRow label="Budget" value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
+                  <InfoRow label={getFieldLabel('source', 'Source')} value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
+                  <InfoRow label={getFieldLabel('campaign', 'Campaign')} value={lead.campaign || '-'} />
+                  <InfoRow label={getFieldLabel('productInterest', 'Product Interest')} value={lead.productInterest || '-'} />
+                  <InfoRow label={getFieldLabel('budget', 'Budget')} value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
                   <InfoRow label="Stage" value={lead.stage?.name || '-'} />
                   {/* Custom fields (fallback) */}
                   {customFields.map(cf => {

@@ -11,6 +11,27 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const router = Router();
 router.use(authenticate, orgScope);
 
+// Helper: fetch custom labels from field config for an organization
+async function getCustomLabelMap(orgIds) {
+  try {
+    const configs = await prisma.fieldConfig.findMany({
+      where: { organizationId: { in: orgIds } },
+    });
+    const labelMap = {}; // key -> customLabel
+    for (const config of configs) {
+      const builtIn = config.builtInFields || [];
+      for (const field of builtIn) {
+        if (field.customLabel && field.customLabel.trim()) {
+          labelMap[field.key] = field.customLabel.trim();
+        }
+      }
+    }
+    return labelMap;
+  } catch (e) {
+    return {}; // fail silently — use default labels
+  }
+}
+
 const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } }); // 25MB
 
 // ─── Lead field definitions for mapping ─────────────────────────
@@ -139,7 +160,11 @@ function autoDetectMapping(csvColumns, moduleFields) {
   for (const col of csvColumns) {
     const normalized = col.toLowerCase().trim();
     for (const field of moduleFields) {
-      const fieldAliases = aliases[field.key] || [field.key.toLowerCase()];
+      const fieldAliases = [...(aliases[field.key] || [field.key.toLowerCase()])];
+      // Also match custom labels (e.g., "Mobile Number" for phone)
+      if (field.customLabel) {
+        fieldAliases.push(field.customLabel.toLowerCase().trim());
+      }
       if (fieldAliases.includes(normalized) || normalized === field.key.toLowerCase()) {
         mapping[col] = field.key;
         break;
@@ -158,8 +183,13 @@ router.get('/fields/:module', async (req, res, next) => {
       return res.status(400).json({ error: `Unknown module: ${req.params.module}. Supported: ${Object.keys(MODULE_FIELDS).join(', ')}` });
     }
 
-    // For leads & contacts, append custom fields from all accessible orgs
-    let allFields = [...fields];
+    // Apply custom labels from field config
+    const customLabelMap = await getCustomLabelMap(req.orgIds);
+    let allFields = fields.map(f => ({
+      ...f,
+      customLabel: customLabelMap[f.key] || null,
+      label: customLabelMap[f.key] || f.label,
+    }));
     if (req.params.module === 'leads' || req.params.module === 'contacts') {
       const customFields = await prisma.customField.findMany({
         where: { organizationId: { in: req.orgIds } },
@@ -881,7 +911,9 @@ router.get('/template/:module', async (req, res, next) => {
       return res.status(400).json({ error: `Unknown module: ${req.params.module}` });
     }
 
-    const headers = fields.map(f => f.label);
+    // Fetch custom labels from field config
+    const customLabelMap = await getCustomLabelMap(req.orgIds);
+    const headers = fields.map(f => customLabelMap[f.key] || f.label);
     const sampleRow = fields.map(f => {
       if (f.key === 'name') return 'Ahmed Al-Zaabi';
       if (f.key === 'email') return 'john.doe@example.com';

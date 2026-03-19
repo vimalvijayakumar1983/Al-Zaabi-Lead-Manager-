@@ -306,6 +306,7 @@ router.get('/field-config', async (req, res, next) => {
     // Merge built-in fields with saved config
     const builtInFields = BUILT_IN_FIELDS.map((f, idx) => ({
       ...f,
+      customLabel: fieldConfig[f.key]?.customLabel || null,
       showInList: fieldConfig[f.key]?.showInList ?? true,
       showInDetail: fieldConfig[f.key]?.showInDetail ?? true,
       isRequired: f.canToggleRequired === false ? (f.isRequired ?? false) : (fieldConfig[f.key]?.isRequired ?? f.isRequired ?? false),

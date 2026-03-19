@@ -6,6 +6,7 @@ import type { CustomField } from '@/types';
 export interface ColumnDef {
   id: string;
   label: string;
+  customLabel?: string;
   visible: boolean;
   sortable: boolean;
   sortField?: string;

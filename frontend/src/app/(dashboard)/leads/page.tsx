@@ -186,6 +186,7 @@ function LeadsContent() {
 
   // Column management
   const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumns());
+  const [customLabels, setCustomLabels] = useState<Record<string, string>>({});
   const [showColumnManager, setShowColumnManager] = useState(false);
 
   // Saved views
@@ -317,6 +318,25 @@ function LeadsContent() {
   useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
+
+  // Fetch field config to get custom labels for column headers
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const params = new URLSearchParams();
+    if (activeDivisionId) params.append('divisionId', activeDivisionId);
+    fetch(`/api/settings/field-config?${params}`, {
+      headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}` },
+    })
+      .then(r => r.json())
+      .then(data => {
+        const labels: Record<string, string> = {};
+        (data.builtInFields || []).forEach((f: any) => {
+          if (f.customLabel) labels[f.key] = f.customLabel;
+        });
+        setCustomLabels(labels);
+      })
+      .catch(() => {});
+  }, []);
 
   // Auto-refresh when data changes (including the current user marking messages as read)
   useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
@@ -483,7 +503,7 @@ function LeadsContent() {
 
   const exportCSV = () => {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
-    const headers = visibleCols.map((c) => c.label);
+    const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
     const rows = leads.map((l) =>
       visibleCols.map((c) => {
         switch (c.id) {
@@ -1004,7 +1024,7 @@ function LeadsContent() {
                             <input type="checkbox" checked={leads.length > 0 && selectedLeads.size === leads.length}
                               onChange={toggleSelectAll} className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500" />
                           ) : (
-                            <>{col.label}{col.sortable && col.sortField && <SortIcon field={col.sortField} />}</>
+                            <>{customLabels[col.id] || col.label}{col.sortable && col.sortField && <SortIcon field={col.sortField} />}</>
                           )}
                         </th>
                       ))}
@@ -1312,7 +1332,7 @@ function CreateLeadModal({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean }>>({});
+  const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
 
   // Fetch field config to know which fields are required for this division
   useEffect(() => {
@@ -1324,9 +1344,9 @@ function CreateLeadModal({
     })
       .then(r => r.json())
       .then(data => {
-        const config: Record<string, { isRequired?: boolean }> = {};
+        const config: Record<string, { isRequired?: boolean; customLabel?: string }> = {};
         (data.builtInFields || []).forEach((f: any) => {
-          config[f.key] = { isRequired: f.isRequired || false };
+          config[f.key] = { isRequired: f.isRequired || false, customLabel: f.customLabel || undefined };
         });
         setFieldConfig(config);
       })
@@ -1336,6 +1356,10 @@ function CreateLeadModal({
   const isFieldRequired = (key: string): boolean => {
     if (key === 'name') return true; // always required
     return fieldConfig[key]?.isRequired || false;
+  };
+
+  const getLabel = (key: string, defaultLabel: string): string => {
+    return fieldConfig[key]?.customLabel || defaultLabel;
   };
 
   const updateField = useCallback((field: string, value: unknown) => {
@@ -1357,16 +1381,16 @@ function CreateLeadModal({
 
     // Dynamic required fields from Field Manager config
     const requirableFields = [
-      { key: 'email', label: 'Email' },
-      { key: 'phone', label: 'Phone' },
-      { key: 'company', label: 'Company' },
-      { key: 'jobTitle', label: 'Job Title' },
-      { key: 'source', label: 'Source' },
-      { key: 'budget', label: 'Budget' },
-      { key: 'productInterest', label: 'Product Interest' },
-      { key: 'location', label: 'Location' },
-      { key: 'website', label: 'Website' },
-      { key: 'campaign', label: 'Campaign' },
+      { key: 'email', label: getLabel('email', 'Email') },
+      { key: 'phone', label: getLabel('phone', 'Phone') },
+      { key: 'company', label: getLabel('company', 'Company') },
+      { key: 'jobTitle', label: getLabel('jobTitle', 'Job Title') },
+      { key: 'source', label: getLabel('source', 'Source') },
+      { key: 'budget', label: getLabel('budget', 'Budget') },
+      { key: 'productInterest', label: getLabel('productInterest', 'Product Interest') },
+      { key: 'location', label: getLabel('location', 'Location') },
+      { key: 'website', label: getLabel('website', 'Website') },
+      { key: 'campaign', label: getLabel('campaign', 'Campaign') },
     ];
     requirableFields.forEach(({ key, label }) => {
       if (isFieldRequired(key) && (!formData[key] || String(formData[key]).trim() === '')) {
@@ -1556,9 +1580,9 @@ function CreateLeadModal({
                 </h3>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {renderInput('name', 'Name', { placeholder: 'Ahmed Al-Zaabi', required: true })}
-                {renderInput('email', 'Email', { type: 'email', placeholder: 'john@example.com', required: isFieldRequired('email') })}
-                {renderInput('phone', 'Phone', { type: 'tel', placeholder: '+971 50 123 4567', required: isFieldRequired('phone') })}
+                {renderInput('name', getLabel('name', 'Name'), { placeholder: 'Ahmed Al-Zaabi', required: true })}
+                {renderInput('email', getLabel('email', 'Email'), { type: 'email', placeholder: 'john@example.com', required: isFieldRequired('email') })}
+                {renderInput('phone', getLabel('phone', 'Phone'), { type: 'tel', placeholder: '+971 50 123 4567', required: isFieldRequired('phone') })}
               </div>
             </section>
 
@@ -1573,10 +1597,10 @@ function CreateLeadModal({
                 </h3>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {renderInput('company', 'Company', { placeholder: 'Acme Corp', required: isFieldRequired('company') })}
-                {renderInput('jobTitle', 'Job Title', { placeholder: 'Marketing Director', required: isFieldRequired('jobTitle') })}
+                {renderInput('company', getLabel('company', 'Company'), { placeholder: 'Acme Corp', required: isFieldRequired('company') })}
+                {renderInput('jobTitle', getLabel('jobTitle', 'Job Title'), { placeholder: 'Marketing Director', required: isFieldRequired('jobTitle') })}
                 <div>
-                  <label className="label">Source{isFieldRequired('source') && <span className="text-red-500 ml-0.5">*</span>}</label>
+                  <label className="label">{getLabel('source', 'Source')}{isFieldRequired('source') && <span className="text-red-500 ml-0.5">*</span>}</label>
                   {errors.source && <p className="mt-1 text-xs text-red-600">{errors.source}</p>}
                   <select
                     value={String(formData.source ?? '')}
@@ -1593,7 +1617,7 @@ function CreateLeadModal({
                 </div>
                 <div>
                   <label className="label">
-                    Budget <span className="text-gray-400 font-normal">(AED)</span>{isFieldRequired('budget') && <span className="text-red-500 ml-0.5">*</span>}
+                    {getLabel('budget', 'Budget')} <span className="text-gray-400 font-normal">(AED)</span>{isFieldRequired('budget') && <span className="text-red-500 ml-0.5">*</span>}
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
@@ -1609,10 +1633,10 @@ function CreateLeadModal({
                   </div>
                   {errors.budget && <p className="mt-1 text-xs text-red-600">{errors.budget}</p>}
                 </div>
-                {renderInput('productInterest', 'Product Interest', { placeholder: 'e.g. Enterprise Plan', required: isFieldRequired('productInterest') })}
-                {renderInput('location', 'Location', { placeholder: 'Dubai, UAE', required: isFieldRequired('location') })}
-                {renderInput('website', 'Website', { type: 'url', placeholder: 'https://example.com', required: isFieldRequired('website') })}
-                {renderInput('campaign', 'Campaign', { placeholder: 'Q1 2026 Campaign', required: isFieldRequired('campaign') })}
+                {renderInput('productInterest', getLabel('productInterest', 'Product Interest'), { placeholder: 'e.g. Enterprise Plan', required: isFieldRequired('productInterest') })}
+                {renderInput('location', getLabel('location', 'Location'), { placeholder: 'Dubai, UAE', required: isFieldRequired('location') })}
+                {renderInput('website', getLabel('website', 'Website'), { type: 'url', placeholder: 'https://example.com', required: isFieldRequired('website') })}
+                {renderInput('campaign', getLabel('campaign', 'Campaign'), { placeholder: 'Q1 2026 Campaign', required: isFieldRequired('campaign') })}
               </div>
             </section>
 

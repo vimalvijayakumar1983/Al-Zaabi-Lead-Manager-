@@ -284,6 +284,7 @@ export interface CustomField {
 export interface BuiltInField {
   key: string;
   label: string;
+  customLabel?: string;
   type: string;
   locked?: boolean;
   category: string;

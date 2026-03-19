@@ -1339,6 +1339,7 @@ function CustomFieldsSection() {
   const [divisions, setDivisions] = useState<Organization[]>([]);
   const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
   const [builtInFields, setBuiltInFields] = useState<BuiltInField[]>([]);
+  const [editingLabelKey, setEditingLabelKey] = useState<string | null>(null);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -1428,13 +1429,30 @@ function CustomFieldsSection() {
     setUnsavedChanges(true);
   };
 
+  // ─── Rename built-in field label ──────────────────────────────────
+  const renameBuiltIn = (key: string, newLabel: string) => {
+    const trimmed = newLabel.trim();
+    setBuiltInFields(prev => prev.map(f => {
+      if (f.key !== key) return f;
+      // If empty or same as default label, clear customLabel
+      if (!trimmed || trimmed === f.label) {
+        const { customLabel, ...rest } = f as any;
+        return rest;
+      }
+      return { ...f, customLabel: trimmed };
+    }));
+    setUnsavedChanges(true);
+  };
+
   // ─── Save built-in field config ────────────────────────────────────
   const saveBuiltInConfig = async () => {
     setSaving(true);
     try {
-      const fields: Record<string, { showInList: boolean; showInDetail: boolean; isRequired: boolean; order: number }> = {};
+      const fields: Record<string, { showInList: boolean; showInDetail: boolean; isRequired: boolean; order: number; customLabel?: string }> = {};
       builtInFields.forEach(f => {
-        fields[f.key] = { showInList: f.showInList, showInDetail: f.showInDetail, isRequired: f.isRequired, order: f.order };
+        const entry: any = { showInList: f.showInList, showInDetail: f.showInDetail, isRequired: f.isRequired, order: f.order };
+        if (f.customLabel) entry.customLabel = f.customLabel;
+        fields[f.key] = entry;
       });
       await api.saveFieldConfig(selectedDivisionId || null, fields);
       setUnsavedChanges(false);
@@ -1694,11 +1712,33 @@ function CustomFieldsSection() {
                         idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'
                       } hover:bg-indigo-50/30`}
                     >
-                      {/* Field name */}
+                      {/* Field name — click to rename */}
                       <div className="col-span-4 flex items-center gap-2.5">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{field.label}{field.isRequired && <span className="text-red-500 ml-0.5">*</span>}</p>
-                          <p className="text-[10px] text-gray-400 font-mono">{field.key}</p>
+                        <div className="flex-1 min-w-0">
+                          {editingLabelKey === field.key ? (
+                            <input
+                              autoFocus
+                              className="text-sm font-medium text-gray-900 bg-white border border-indigo-300 rounded px-1.5 py-0.5 w-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              defaultValue={field.customLabel || field.label}
+                              placeholder={field.label}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { renameBuiltIn(field.key, (e.target as HTMLInputElement).value); setEditingLabelKey(null); }
+                                if (e.key === 'Escape') setEditingLabelKey(null);
+                              }}
+                              onBlur={(e) => { renameBuiltIn(field.key, e.target.value); setEditingLabelKey(null); }}
+                            />
+                          ) : (
+                            <div className="group flex items-center gap-1.5 cursor-pointer" onClick={() => setEditingLabelKey(field.key)}>
+                              <p className="text-sm font-medium text-gray-900">
+                                {field.customLabel || field.label}
+                                {field.isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                              </p>
+                              <Pencil className="h-3 w-3 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                          )}
+                          <p className="text-[10px] text-gray-400 font-mono">
+                            {field.key}{field.customLabel && <span className="ml-1 text-gray-300">· default: {field.label}</span>}
+                          </p>
                         </div>
                       </div>
 
