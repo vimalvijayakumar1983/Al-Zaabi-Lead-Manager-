@@ -289,6 +289,8 @@ export interface BuiltInField {
   category: string;
   showInList: boolean;
   showInDetail: boolean;
+  isRequired: boolean;
+  canToggleRequired?: boolean;
   order: number;
   isBuiltIn: true;
 }

@@ -1189,29 +1189,28 @@ const BUILTIN_FIELD_CATEGORIES = [
 
 const DEFAULT_BUILTIN_FIELDS: BuiltInField[] = [
   // Contact Info
-  { key: 'firstName',      label: 'First Name',      type: 'text',    category: 'contact',  locked: true,  showInList: true,  showInDetail: true, order: 1,  isBuiltIn: true },
-  { key: 'lastName',       label: 'Last Name',       type: 'text',    category: 'contact',  locked: true,  showInList: true,  showInDetail: true, order: 2,  isBuiltIn: true },
-  { key: 'email',          label: 'Email',            type: 'email',   category: 'contact',  locked: false, showInList: true,  showInDetail: true, order: 3,  isBuiltIn: true },
-  { key: 'phone',          label: 'Phone',            type: 'phone',   category: 'contact',  locked: false, showInList: true,  showInDetail: true, order: 4,  isBuiltIn: true },
-  { key: 'company',        label: 'Company',          type: 'text',    category: 'contact',  locked: false, showInList: true,  showInDetail: true, order: 5,  isBuiltIn: true },
-  { key: 'jobTitle',       label: 'Job Title',        type: 'text',    category: 'contact',  locked: false, showInList: false, showInDetail: true, order: 6,  isBuiltIn: true },
-  { key: 'location',       label: 'Location',         type: 'text',    category: 'contact',  locked: false, showInList: false, showInDetail: true, order: 7,  isBuiltIn: true },
-  { key: 'website',        label: 'Website',          type: 'url',     category: 'contact',  locked: false, showInList: false, showInDetail: true, order: 8,  isBuiltIn: true },
+  { key: 'name',           label: 'Name',             type: 'text',    category: 'contact',  locked: true,  showInList: true,  showInDetail: true, isRequired: true,  canToggleRequired: false, order: 1,  isBuiltIn: true },
+  { key: 'email',          label: 'Email',            type: 'email',   category: 'contact',  locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: true,  order: 2,  isBuiltIn: true },
+  { key: 'phone',          label: 'Phone',            type: 'phone',   category: 'contact',  locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: true,  order: 3,  isBuiltIn: true },
+  { key: 'company',        label: 'Company',          type: 'text',    category: 'contact',  locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: true,  order: 4,  isBuiltIn: true },
+  { key: 'jobTitle',       label: 'Job Title',        type: 'text',    category: 'contact',  locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 5,  isBuiltIn: true },
+  { key: 'location',       label: 'Location',         type: 'text',    category: 'contact',  locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 6,  isBuiltIn: true },
+  { key: 'website',        label: 'Website',          type: 'url',     category: 'contact',  locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 7,  isBuiltIn: true },
   // Lead Info
-  { key: 'source',         label: 'Source',           type: 'select',  category: 'lead',     locked: false, showInList: true,  showInDetail: true, order: 9,  isBuiltIn: true },
-  { key: 'status',         label: 'Status',           type: 'select',  category: 'lead',     locked: true,  showInList: true,  showInDetail: true, order: 10, isBuiltIn: true },
-  { key: 'score',          label: 'Score',            type: 'number',  category: 'lead',     locked: false, showInList: true,  showInDetail: true, order: 11, isBuiltIn: true },
-  { key: 'stageId',        label: 'Pipeline Stage',   type: 'select',  category: 'lead',     locked: false, showInList: false, showInDetail: true, order: 12, isBuiltIn: true },
-  { key: 'assignedTo',     label: 'Assigned To',      type: 'user',    category: 'lead',     locked: true,  showInList: true,  showInDetail: true, order: 13, isBuiltIn: true },
-  { key: 'tags',           label: 'Tags',             type: 'tags',    category: 'lead',     locked: false, showInList: false, showInDetail: true, order: 14, isBuiltIn: true },
-  { key: 'conversionProb', label: 'Conversion %',     type: 'number',  category: 'lead',     locked: false, showInList: false, showInDetail: true, order: 15, isBuiltIn: true },
+  { key: 'source',         label: 'Source',           type: 'select',  category: 'lead',     locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: true,  order: 8,  isBuiltIn: true },
+  { key: 'status',         label: 'Status',           type: 'select',  category: 'lead',     locked: true,  showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 9,  isBuiltIn: true },
+  { key: 'score',          label: 'Score',            type: 'number',  category: 'lead',     locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 10, isBuiltIn: true },
+  { key: 'stageId',        label: 'Pipeline Stage',   type: 'select',  category: 'lead',     locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: false, order: 11, isBuiltIn: true },
+  { key: 'assignedTo',     label: 'Assigned To',      type: 'user',    category: 'lead',     locked: true,  showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 12, isBuiltIn: true },
+  { key: 'tags',           label: 'Tags',             type: 'tags',    category: 'lead',     locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: false, order: 13, isBuiltIn: true },
+  { key: 'conversionProb', label: 'Conversion %',     type: 'number',  category: 'lead',     locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: false, order: 14, isBuiltIn: true },
   // Business
-  { key: 'budget',         label: 'Budget',           type: 'currency', category: 'business', locked: false, showInList: false, showInDetail: true, order: 16, isBuiltIn: true },
-  { key: 'productInterest', label: 'Product Interest', type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, order: 17, isBuiltIn: true },
-  { key: 'campaign',       label: 'Campaign',         type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, order: 18, isBuiltIn: true },
+  { key: 'budget',         label: 'Budget',           type: 'currency', category: 'business', locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 15, isBuiltIn: true },
+  { key: 'productInterest', label: 'Product Interest', type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 16, isBuiltIn: true },
+  { key: 'campaign',       label: 'Campaign',         type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 17, isBuiltIn: true },
   // System
-  { key: 'createdAt',      label: 'Created Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, order: 19, isBuiltIn: true },
-  { key: 'updatedAt',      label: 'Updated Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, order: 20, isBuiltIn: true },
+  { key: 'createdAt',      label: 'Created Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 18, isBuiltIn: true },
+  { key: 'updatedAt',      label: 'Updated Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 19, isBuiltIn: true },
 ];
 
 /* ─── Helper: Toggle Switch ─────────────────────────────────────────── */
@@ -1413,14 +1412,17 @@ function CustomFieldsSection() {
       total: allFields.length,
       inList: allFields.filter(f => f.showInList).length,
       inDetail: allFields.filter(f => f.showInDetail).length,
+      required: builtInFields.filter(f => f.isRequired).length,
       custom: customFields.length,
     };
   }, [builtInFields, customFields]);
 
   // ─── Built-in field toggle ─────────────────────────────────────────
-  const toggleBuiltIn = (key: string, prop: 'showInList' | 'showInDetail') => {
+  const toggleBuiltIn = (key: string, prop: 'showInList' | 'showInDetail' | 'isRequired') => {
     setBuiltInFields(prev => prev.map(f => {
-      if (f.key !== key || f.locked) return f;
+      if (f.key !== key) return f;
+      if (prop === 'isRequired' && !f.canToggleRequired) return f;
+      if (prop !== 'isRequired' && f.locked) return f;
       return { ...f, [prop]: !f[prop] };
     }));
     setUnsavedChanges(true);
@@ -1430,9 +1432,9 @@ function CustomFieldsSection() {
   const saveBuiltInConfig = async () => {
     setSaving(true);
     try {
-      const fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }> = {};
+      const fields: Record<string, { showInList: boolean; showInDetail: boolean; isRequired: boolean; order: number }> = {};
       builtInFields.forEach(f => {
-        fields[f.key] = { showInList: f.showInList, showInDetail: f.showInDetail, order: f.order };
+        fields[f.key] = { showInList: f.showInList, showInDetail: f.showInDetail, isRequired: f.isRequired, order: f.order };
       });
       await api.saveFieldConfig(selectedDivisionId || null, fields);
       setUnsavedChanges(false);
@@ -1659,10 +1661,11 @@ function CustomFieldsSection() {
             {/* Column headers */}
             <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50">
               <div className="grid grid-cols-12 gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                <div className="col-span-5">Field</div>
-                <div className="col-span-2">Type</div>
-                <div className="col-span-2 text-center">Show in List</div>
-                <div className="col-span-2 text-center">Show in Detail</div>
+                <div className="col-span-4">Field</div>
+                <div className="col-span-1">Type</div>
+                <div className="col-span-2 text-center">In List</div>
+                <div className="col-span-2 text-center">In Detail</div>
+                <div className="col-span-2 text-center">Required</div>
                 <div className="col-span-1 text-center">Status</div>
               </div>
             </div>
@@ -1692,15 +1695,15 @@ function CustomFieldsSection() {
                       } hover:bg-indigo-50/30`}
                     >
                       {/* Field name */}
-                      <div className="col-span-5 flex items-center gap-2.5">
+                      <div className="col-span-4 flex items-center gap-2.5">
                         <div>
-                          <p className="text-sm font-medium text-gray-900">{field.label}</p>
+                          <p className="text-sm font-medium text-gray-900">{field.label}{field.isRequired && <span className="text-red-500 ml-0.5">*</span>}</p>
                           <p className="text-[10px] text-gray-400 font-mono">{field.key}</p>
                         </div>
                       </div>
 
                       {/* Type */}
-                      <div className="col-span-2">
+                      <div className="col-span-1">
                         <TypeBadge type={field.type} small />
                       </div>
 
@@ -1730,6 +1733,25 @@ function CustomFieldsSection() {
                           <FieldToggle
                             checked={field.showInDetail}
                             onChange={() => toggleBuiltIn(field.key, 'showInDetail')}
+                          />
+                        )}
+                      </div>
+
+                      {/* Required toggle */}
+                      <div className="col-span-2 flex justify-center">
+                        {!field.canToggleRequired ? (
+                          field.isRequired ? (
+                            <div className="flex items-center gap-1 text-[10px] text-red-500 font-medium">
+                              <Lock className="h-3 w-3" />
+                              Always
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-gray-300">—</span>
+                          )
+                        ) : (
+                          <FieldToggle
+                            checked={field.isRequired}
+                            onChange={() => toggleBuiltIn(field.key, 'isRequired')}
                           />
                         )}
                       </div>

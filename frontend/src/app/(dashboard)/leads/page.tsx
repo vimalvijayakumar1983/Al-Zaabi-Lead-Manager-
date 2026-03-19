@@ -1297,6 +1297,31 @@ function CreateLeadModal({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean }>>({});
+
+  // Fetch field config to know which fields are required for this division
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const params = new URLSearchParams();
+    if (activeDivisionId) params.append('divisionId', activeDivisionId);
+    fetch(`/api/settings/field-config?${params}`, {
+      headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}` },
+    })
+      .then(r => r.json())
+      .then(data => {
+        const config: Record<string, { isRequired?: boolean }> = {};
+        (data.builtInFields || []).forEach((f: any) => {
+          config[f.key] = { isRequired: f.isRequired || false };
+        });
+        setFieldConfig(config);
+      })
+      .catch(() => {}); // fallback: only name required (hardcoded)
+  }, []);
+
+  const isFieldRequired = (key: string): boolean => {
+    if (key === 'name') return true; // always required
+    return fieldConfig[key]?.isRequired || false;
+  };
 
   const updateField = useCallback((field: string, value: unknown) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -1310,9 +1335,31 @@ function CreateLeadModal({
   const validate = useCallback((): boolean => {
     const newErrors: Record<string, string> = {};
 
+    // Name is always required
     if (!formData.name || String(formData.name).trim() === '') {
       newErrors.name = 'Name is required';
     }
+
+    // Dynamic required fields from Field Manager config
+    const requirableFields = [
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'company', label: 'Company' },
+      { key: 'jobTitle', label: 'Job Title' },
+      { key: 'source', label: 'Source' },
+      { key: 'budget', label: 'Budget' },
+      { key: 'productInterest', label: 'Product Interest' },
+      { key: 'location', label: 'Location' },
+      { key: 'website', label: 'Website' },
+      { key: 'campaign', label: 'Campaign' },
+    ];
+    requirableFields.forEach(({ key, label }) => {
+      if (isFieldRequired(key) && (!formData[key] || String(formData[key]).trim() === '')) {
+        newErrors[key] = `${label} is required`;
+      }
+    });
+
+    // Format validations
     if (formData.email && String(formData.email).trim() !== '') {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(String(formData.email))) {
@@ -1332,7 +1379,7 @@ function CreateLeadModal({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [formData]);
+  }, [formData, fieldConfig]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -1495,8 +1542,8 @@ function CreateLeadModal({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {renderInput('name', 'Name', { placeholder: 'Ahmed Al-Zaabi', required: true })}
-                {renderInput('email', 'Email', { type: 'email', placeholder: 'john@example.com' })}
-                {renderInput('phone', 'Phone', { type: 'tel', placeholder: '+971 50 123 4567' })}
+                {renderInput('email', 'Email', { type: 'email', placeholder: 'john@example.com', required: isFieldRequired('email') })}
+                {renderInput('phone', 'Phone', { type: 'tel', placeholder: '+971 50 123 4567', required: isFieldRequired('phone') })}
               </div>
             </section>
 
@@ -1511,10 +1558,11 @@ function CreateLeadModal({
                 </h3>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {renderInput('company', 'Company', { placeholder: 'Acme Corp' })}
-                {renderInput('jobTitle', 'Job Title', { placeholder: 'Marketing Director' })}
+                {renderInput('company', 'Company', { placeholder: 'Acme Corp', required: isFieldRequired('company') })}
+                {renderInput('jobTitle', 'Job Title', { placeholder: 'Marketing Director', required: isFieldRequired('jobTitle') })}
                 <div>
-                  <label className="label">Source</label>
+                  <label className="label">Source{isFieldRequired('source') && <span className="text-red-500 ml-0.5">*</span>}</label>
+                  {errors.source && <p className="mt-1 text-xs text-red-600">{errors.source}</p>}
                   <select
                     value={String(formData.source ?? '')}
                     onChange={(e) => updateField('source', e.target.value)}
@@ -1530,7 +1578,7 @@ function CreateLeadModal({
                 </div>
                 <div>
                   <label className="label">
-                    Budget <span className="text-gray-400 font-normal">(AED)</span>
+                    Budget <span className="text-gray-400 font-normal">(AED)</span>{isFieldRequired('budget') && <span className="text-red-500 ml-0.5">*</span>}
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
@@ -1546,10 +1594,10 @@ function CreateLeadModal({
                   </div>
                   {errors.budget && <p className="mt-1 text-xs text-red-600">{errors.budget}</p>}
                 </div>
-                {renderInput('productInterest', 'Product Interest', { placeholder: 'e.g. Enterprise Plan' })}
-                {renderInput('location', 'Location', { placeholder: 'Dubai, UAE' })}
-                {renderInput('website', 'Website', { type: 'url', placeholder: 'https://example.com' })}
-                {renderInput('campaign', 'Campaign', { placeholder: 'Q1 2026 Campaign' })}
+                {renderInput('productInterest', 'Product Interest', { placeholder: 'e.g. Enterprise Plan', required: isFieldRequired('productInterest') })}
+                {renderInput('location', 'Location', { placeholder: 'Dubai, UAE', required: isFieldRequired('location') })}
+                {renderInput('website', 'Website', { type: 'url', placeholder: 'https://example.com', required: isFieldRequired('website') })}
+                {renderInput('campaign', 'Campaign', { placeholder: 'Q1 2026 Campaign', required: isFieldRequired('campaign') })}
               </div>
             </section>
 

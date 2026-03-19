@@ -513,6 +513,46 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     }
     if (data.lastName === undefined || data.lastName === null) data.lastName = '';
 
+    // ─── Dynamic Required Field Validation ─────────────────────────────
+    // Check field config for the target division to enforce required fields
+    try {
+      const targetDivId = (req.isSuperAdmin && data.divisionId) ? data.divisionId : req.orgId;
+      const configOrg = await prisma.organization.findUnique({
+        where: { id: targetDivId },
+        select: { settings: true },
+      });
+      const settings = configOrg?.settings || {};
+      const divKey = `division_${targetDivId}`;
+      const fieldConfig = settings.fieldConfig?.[divKey] || settings.fieldConfig?.['default'] || {};
+
+      const missingFields = [];
+      // Map of config key to request data key
+      const fieldKeyMap = {
+        email: 'email', phone: 'phone', company: 'company', jobTitle: 'jobTitle',
+        source: 'source', budget: 'budget', productInterest: 'productInterest',
+        location: 'location', website: 'website', campaign: 'campaign',
+      };
+      for (const [configKey, dataKey] of Object.entries(fieldKeyMap)) {
+        if (fieldConfig[configKey]?.isRequired) {
+          const val = data[dataKey];
+          if (val === undefined || val === null || String(val).trim() === '') {
+            // Find the label from BUILT_IN_FIELDS or use the key
+            const builtIn = BUILT_IN_FIELDS.find(f => f.key === configKey);
+            missingFields.push(builtIn?.label || configKey);
+          }
+        }
+      }
+      if (missingFields.length > 0) {
+        return res.status(400).json({
+          error: `Required fields missing: ${missingFields.join(', ')}`,
+          missingFields,
+        });
+      }
+    } catch (configErr) {
+      // Don't block lead creation if field config check fails
+      console.warn('Field config validation warning:', configErr.message);
+    }
+
     // Determine target org: SUPER_ADMIN can target a division.
     // If SUPER_ADMIN doesn't specify a division, fall back to the first child
     // division instead of the GROUP org (which has no pipeline stages).
