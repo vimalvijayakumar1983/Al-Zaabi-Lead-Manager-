@@ -291,7 +291,7 @@ const BUILT_IN_FIELDS = [
 router.get('/field-config', async (req, res, next) => {
   try {
     const { divisionId } = req.query;
-    const orgId = req.organizationId;
+    const orgId = req.orgId;
 
     // Get org settings for field config
     const org = await prisma.organization.findUnique({
@@ -340,7 +340,7 @@ router.get('/field-config', async (req, res, next) => {
 router.put('/field-config', authorize('ADMIN'), async (req, res, next) => {
   try {
     const { divisionId, fields } = req.body;
-    const orgId = req.organizationId;
+    const orgId = req.orgId;
     const divKey = divisionId ? `division_${divisionId}` : 'default';
 
     const org = await prisma.organization.findUnique({
