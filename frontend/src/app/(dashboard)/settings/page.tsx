@@ -1346,11 +1346,29 @@ function CustomFieldsSection() {
   const [editingField, setEditingField] = useState<CustomField | null>(null);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'pipelineStages'>('builtin');
+  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'pipelineStages' | 'tags'>('builtin');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
   const [editingStatusKey, setEditingStatusKey] = useState<string | null>(null);
   const [statusUnsaved, setStatusUnsaved] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
+  // Tags
+  const [tags, setTags] = useState<any[]>([]);
+  const [loadingTags, setLoadingTags] = useState(false);
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#6366f1');
+  const [showAddTag, setShowAddTag] = useState(false);
+
+  const fetchTags = async () => {
+    if (!selectedDivisionId) return;
+    setLoadingTags(true);
+    try {
+      const data: any = await api.getTags(selectedDivisionId);
+      setTags(Array.isArray(data) ? data : []);
+    } catch { setTags([]); }
+    setLoadingTags(false);
+  };
+
   // Pipeline Stages
   const [pipelineStages, setPipelineStages] = useState<any[]>([]);
   const [loadingStages, setLoadingStages] = useState(false);
@@ -1436,6 +1454,7 @@ function CustomFieldsSection() {
 
   useEffect(() => {
     if (activeSection === 'pipelineStages') fetchPipelineStages();
+    if (activeSection === 'tags') fetchTags();
   }, [activeSection, fetchPipelineStages]);
 
   // ─── Computed stats ────────────────────────────────────────────────
@@ -1815,6 +1834,22 @@ function CustomFieldsSection() {
               activeSection === 'pipelineStages' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
             }`}>
               {pipelineStages.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveSection('tags')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'tags'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <Tag className="h-4 w-4" />
+            Tags
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'tags' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {tags.length}
             </span>
           </button>
         </div>
@@ -2290,6 +2325,168 @@ function CustomFieldsSection() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+            </>
+            )}
+          </div>
+        ) : activeSection === 'tags' ? (
+          /* ═══ TAGS TAB ════════════════════════════════════════════ */
+          <div>
+            {!selectedDivisionId ? (
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                  <Tag className="h-7 w-7 text-amber-500" />
+                </div>
+                <p className="text-sm font-medium text-gray-700">Select a Division</p>
+                <p className="text-xs text-gray-400 mt-1">Tags are managed per division. Please select a specific division from the Scope dropdown above.</p>
+              </div>
+            ) : (
+            <>
+            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+              <p className="text-xs text-gray-500">Manage tags for this division. Click to rename, pick colors to categorize.</p>
+              <button
+                onClick={() => { setShowAddTag(true); setNewTagName(''); setNewTagColor('#6366f1'); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Tag
+              </button>
+            </div>
+
+            {/* Add Tag Inline Form */}
+            {showAddTag && (
+              <div className="px-5 py-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center gap-3">
+                <div className="relative group">
+                  <div className="h-8 w-8 rounded-full border-2 border-white shadow-sm cursor-pointer" style={{ backgroundColor: newTagColor }} />
+                  <div className="absolute top-10 left-0 z-50 bg-white border border-gray-200 rounded-lg p-2 shadow-xl hidden group-hover:grid grid-cols-5 gap-1.5 w-[180px]">
+                    {['#ef4444','#f97316','#f59e0b','#eab308','#22c55e','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#ec4899','#f43f5e','#64748b','#1e293b','#0ea5e9'].map(c => (
+                      <button key={c} onClick={() => setNewTagColor(c)} className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${newTagColor === c ? 'border-gray-800 scale-110' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+                    ))}
+                  </div>
+                </div>
+                <input
+                  autoFocus
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && newTagName.trim()) {
+                      try {
+                        await api.createTag({ name: newTagName.trim(), color: newTagColor, organizationId: selectedDivisionId! });
+                        setShowAddTag(false);
+                        setNewTagName('');
+                        fetchTags();
+                      } catch (err: any) { alert(err.message); }
+                    }
+                    if (e.key === 'Escape') setShowAddTag(false);
+                  }}
+                  placeholder="Tag name... (Enter to save, Esc to cancel)"
+                  className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
+                />
+                <button
+                  onClick={async () => {
+                    if (!newTagName.trim()) return;
+                    try {
+                      await api.createTag({ name: newTagName.trim(), color: newTagColor, organizationId: selectedDivisionId! });
+                      setShowAddTag(false);
+                      setNewTagName('');
+                      fetchTags();
+                    } catch (err: any) { alert(err.message); }
+                  }}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700"
+                >
+                  Save
+                </button>
+                <button onClick={() => setShowAddTag(false)} className="px-3 py-1.5 bg-gray-100 text-gray-600 text-xs rounded-lg hover:bg-gray-200">
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Tags List */}
+            {loadingTags ? (
+              <div className="p-8 text-center">
+                <Loader2 className="h-5 w-5 animate-spin text-indigo-600 mx-auto" />
+              </div>
+            ) : tags.length === 0 ? (
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                  <Tag className="h-7 w-7 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-900 mb-1">No tags yet</p>
+                <p className="text-xs text-gray-500 mb-4">Create tags to categorize and filter leads in this division.</p>
+                <button
+                  onClick={() => { setShowAddTag(true); setNewTagName(''); }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create First Tag
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {tags.map((tag: any) => (
+                  <div key={tag.id} className="px-5 py-3 flex items-center gap-3 hover:bg-gray-50 group">
+                    {/* Color dot with hover picker */}
+                    <div className="relative group/color">
+                      <div className="h-8 w-8 rounded-full border-2 border-white shadow-sm cursor-pointer transition-transform hover:scale-110" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                      <div className="absolute top-10 left-0 z-50 bg-white border border-gray-200 rounded-lg p-2 shadow-xl hidden group-hover/color:grid grid-cols-5 gap-1.5 w-[180px]">
+                        {['#ef4444','#f97316','#f59e0b','#eab308','#22c55e','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#ec4899','#f43f5e','#64748b','#1e293b','#0ea5e9'].map(c => (
+                          <button key={c} onClick={async () => { try { await api.updateTag(tag.id, { color: c }); fetchTags(); } catch {} }} className={`h-7 w-7 rounded-full border-2 transition-transform hover:scale-110 ${tag.color === c ? 'border-gray-800 scale-110' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Name - inline edit */}
+                    {editingTagId === tag.id ? (
+                      <input
+                        autoFocus
+                        defaultValue={tag.name}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            const val = (e.target as HTMLInputElement).value.trim();
+                            if (val && val !== tag.name) {
+                              try { await api.updateTag(tag.id, { name: val }); fetchTags(); } catch (err: any) { alert(err.message); }
+                            }
+                            setEditingTagId(null);
+                          }
+                          if (e.key === 'Escape') setEditingTagId(null);
+                        }}
+                        onBlur={async (e) => {
+                          const val = e.target.value.trim();
+                          if (val && val !== tag.name) {
+                            try { await api.updateTag(tag.id, { name: val }); fetchTags(); } catch {}
+                          }
+                          setEditingTagId(null);
+                        }}
+                        className="flex-1 px-2 py-1 text-sm border border-indigo-300 rounded focus:ring-2 focus:ring-indigo-500 bg-white"
+                      />
+                    ) : (
+                      <div className="flex-1 flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900">{tag.name}</span>
+                        <button onClick={() => setEditingTagId(tag.id)} className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-indigo-600" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Preview chip */}
+                    <span className="px-3 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: (tag.color || '#6366f1') + '20', color: tag.color || '#6366f1', border: `1px solid ${(tag.color || '#6366f1')}40` }}>
+                      {tag.name}
+                    </span>
+
+                    {/* Delete */}
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Delete tag "${tag.name}"? It will be removed from all leads.`)) return;
+                        try { await api.deleteTag(tag.id); fetchTags(); } catch {}
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
             </>

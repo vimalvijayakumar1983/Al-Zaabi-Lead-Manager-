@@ -367,7 +367,7 @@ function LeadsContent() {
   // Auto-refresh when data changes (including the current user marking messages as read)
   useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
   useEffect(() => {
-    api.getLeadTags().then((data: any) => setAllTags(data || [])).catch(() => {});
+    api.getTags().then((data: any) => setAllTags(data || [])).catch(() => {});
     api.getPipelineStages().then((data: any) => setStages(data.stages || data || [])).catch(() => {});
   }, []);
 
@@ -1399,6 +1399,7 @@ function CreateLeadModal({
       location: '',
       website: '',
       campaign: '',
+      tags: [] as string[],
       assignedToId: currentUserId || null,
       ...(userRole === 'SUPER_ADMIN' && activeDivisionId ? { divisionId: activeDivisionId } : {}),
     };
@@ -1406,8 +1407,21 @@ function CreateLeadModal({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [availableTags, setAvailableTags] = useState<{id: string; name: string; color: string}[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [showTagDropdown, setShowTagDropdown] = useState(false);
   const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+
+  // Fetch available tags for the division
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    if (activeDivisionId) {
+      api.getTags(activeDivisionId).then((data: any) => setAvailableTags(Array.isArray(data) ? data : [])).catch(() => {});
+    } else {
+      api.getTags().then((data: any) => setAvailableTags(Array.isArray(data) ? data : [])).catch(() => {});
+    }
+  }, []);
 
   // Fetch field config to know which fields are required for this division
   useEffect(() => {
@@ -1921,6 +1935,81 @@ function CreateLeadModal({
               </section>
             )}
           </div>
+
+              {/* Tags Picker */}
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Tags</label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {((formData.tags as string[]) || []).map((tagName: string) => {
+                    const tagInfo = availableTags.find(t => t.name === tagName);
+                    const color = tagInfo?.color || '#6366f1';
+                    return (
+                      <span key={tagName} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: color + '20', color, border: `1px solid ${color}40` }}>
+                        {tagName}
+                        <button type="button" onClick={() => setFormData({ ...formData, tags: ((formData.tags as string[]) || []).filter((t: string) => t !== tagName) })} className="hover:bg-black/10 rounded-full p-0.5">
+                          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => { setTagInput(e.target.value); setShowTagDropdown(true); }}
+                    onFocus={() => setShowTagDropdown(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && tagInput.trim()) {
+                        e.preventDefault();
+                        const existing = (formData.tags as string[]) || [];
+                        if (!existing.includes(tagInput.trim())) {
+                          setFormData({ ...formData, tags: [...existing, tagInput.trim()] });
+                        }
+                        setTagInput('');
+                        setShowTagDropdown(false);
+                      }
+                      if (e.key === 'Escape') setShowTagDropdown(false);
+                    }}
+                    placeholder="Type to search or create tags..."
+                    className="input text-sm w-full"
+                  />
+                  {showTagDropdown && (
+                    <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-40 overflow-y-auto">
+                      {availableTags
+                        .filter(t => !((formData.tags as string[]) || []).includes(t.name))
+                        .filter(t => !tagInput || t.name.toLowerCase().includes(tagInput.toLowerCase()))
+                        .map(t => (
+                          <button key={t.id} type="button" onClick={() => {
+                            const existing = (formData.tags as string[]) || [];
+                            setFormData({ ...formData, tags: [...existing, t.name] });
+                            setTagInput('');
+                            setShowTagDropdown(false);
+                          }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50">
+                            <div className="h-3 w-3 rounded-full" style={{ backgroundColor: t.color }} />
+                            {t.name}
+                          </button>
+                        ))}
+                      {tagInput.trim() && !availableTags.some(t => t.name.toLowerCase() === tagInput.toLowerCase()) && (
+                        <button type="button" onClick={() => {
+                          const existing = (formData.tags as string[]) || [];
+                          if (!existing.includes(tagInput.trim())) {
+                            setFormData({ ...formData, tags: [...existing, tagInput.trim()] });
+                          }
+                          setTagInput('');
+                          setShowTagDropdown(false);
+                        }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-indigo-50 text-indigo-600 font-medium">
+                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                          Create &ldquo;{tagInput.trim()}&rdquo;
+                        </button>
+                      )}
+                      {availableTags.filter(t => !((formData.tags as string[]) || []).includes(t.name)).length === 0 && !tagInput && (
+                        <p className="px-3 py-3 text-xs text-gray-400 text-center">Type to create a new tag</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
 
           {/* Footer */}
           <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50">

@@ -444,6 +444,158 @@ router.get('/tags', async (req, res, next) => {
   }
 });
 
+// ─── Create Tag ─────────────────────────────────────────────────
+router.post('/tags', async (req, res, next) => {
+  try {
+    const { name, color, organizationId } = req.body;
+    if (!name || !organizationId) {
+      return res.status(400).json({ error: 'Name and organizationId are required' });
+    }
+    // Check org access
+    if (!req.orgIds.includes(organizationId)) {
+      return res.status(403).json({ error: 'Access denied to this division' });
+    }
+    // Check duplicate
+    const existing = await prisma.tag.findUnique({
+      where: { organizationId_name: { organizationId, name: name.trim() } },
+    });
+    if (existing) {
+      return res.status(409).json({ error: 'Tag already exists in this division' });
+    }
+    const tag = await prisma.tag.create({
+      data: { name: name.trim(), color: color || '#6366f1', organizationId },
+    });
+    res.status(201).json(tag);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Update Tag ─────────────────────────────────────────────────
+router.put('/tags/:id', async (req, res, next) => {
+  try {
+    const tag = await prisma.tag.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    
+    const { name, color } = req.body;
+    const updateData = {};
+    if (name !== undefined) {
+      // Check duplicate name in same org
+      const dup = await prisma.tag.findFirst({
+        where: { organizationId: tag.organizationId, name: name.trim(), id: { not: tag.id } },
+      });
+      if (dup) return res.status(409).json({ error: 'A tag with this name already exists' });
+      updateData.name = name.trim();
+    }
+    if (color !== undefined) updateData.color = color;
+    
+    const updated = await prisma.tag.update({
+      where: { id: tag.id },
+      data: updateData,
+    });
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Delete Tag ─────────────────────────────────────────────────
+router.delete('/tags/:id', async (req, res, next) => {
+  try {
+    const tag = await prisma.tag.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    
+    // Delete all lead-tag associations first, then the tag
+    await prisma.$transaction([
+      prisma.leadTag.deleteMany({ where: { tagId: tag.id } }),
+      prisma.contactTag.deleteMany({ where: { tagId: tag.id } }),
+      prisma.tag.delete({ where: { id: tag.id } }),
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Add Tags to Lead ───────────────────────────────────────────
+router.post('/:id/tags', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    
+    const { tagIds, tagNames } = req.body;
+    const results = [];
+    
+    // Add by tag IDs
+    if (tagIds && Array.isArray(tagIds)) {
+      for (const tagId of tagIds) {
+        try {
+          await prisma.leadTag.create({ data: { leadId: lead.id, tagId } });
+          results.push({ tagId, added: true });
+        } catch (e) {
+          // Already exists - skip
+          results.push({ tagId, added: false, reason: 'already assigned' });
+        }
+      }
+    }
+    
+    // Add by tag names (create-on-the-fly)
+    if (tagNames && Array.isArray(tagNames)) {
+      for (const name of tagNames) {
+        const tag = await prisma.tag.upsert({
+          where: { organizationId_name: { organizationId: lead.organizationId, name: name.trim() } },
+          create: { name: name.trim(), organizationId: lead.organizationId },
+          update: {},
+        });
+        try {
+          await prisma.leadTag.create({ data: { leadId: lead.id, tagId: tag.id } });
+          results.push({ tagId: tag.id, name: tag.name, added: true });
+        } catch (e) {
+          results.push({ tagId: tag.id, name: tag.name, added: false, reason: 'already assigned' });
+        }
+      }
+    }
+    
+    // Return updated lead with tags
+    const updated = await prisma.lead.findUnique({
+      where: { id: lead.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    res.json({ tags: updated.tags, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Remove Tag from Lead ───────────────────────────────────────
+router.delete('/:id/tags/:tagId', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    
+    await prisma.leadTag.delete({
+      where: { leadId_tagId: { leadId: lead.id, tagId: req.params.tagId } },
+    }).catch(() => {});
+    
+    // Return updated tags
+    const updated = await prisma.lead.findUnique({
+      where: { id: lead.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    res.json({ tags: updated.tags });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Get Lead by ID ──────────────────────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {
@@ -815,6 +967,21 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
         if (matchedStage && matchedStage.id !== existing.stageId) {
           updateData.stageId = matchedStage.id;
         }
+      }
+    }
+
+    // Handle tag updates if provided
+    if (tagNames && Array.isArray(tagNames)) {
+      // Remove all existing tags
+      await prisma.leadTag.deleteMany({ where: { leadId: existing.id } });
+      // Add new tags
+      for (const name of tagNames) {
+        const tag = await prisma.tag.upsert({
+          where: { organizationId_name: { organizationId: existing.organizationId, name: name.trim() } },
+          create: { name: name.trim(), organizationId: existing.organizationId },
+          update: {},
+        });
+        await prisma.leadTag.create({ data: { leadId: existing.id, tagId: tag.id } });
       }
     }
 

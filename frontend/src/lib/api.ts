@@ -122,8 +122,43 @@ class ApiClient {
     return this.request<any>(`/leads/search/global?q=${encodeURIComponent(q)}`);
   }
 
-  async getLeadTags() {
-    return this.request<any[]>('/leads/tags');
+  // ─── Tags ──────────────────────────────────────────────────────
+  async getTags(organizationId?: string) {
+    const params = organizationId ? `?organizationId=${organizationId}` : '';
+    return this.request<any[]>(`/leads/tags${params}`);
+  }
+
+  async createTag(data: { name: string; color?: string; organizationId: string }) {
+    return this.request<any>('/leads/tags', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTag(tagId: string, data: { name?: string; color?: string }) {
+    return this.request<any>(`/leads/tags/${tagId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTag(tagId: string) {
+    return this.request<any>(`/leads/tags/${tagId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async addLeadTags(leadId: string, data: { tagIds?: string[]; tagNames?: string[] }) {
+    return this.request<any>(`/leads/${leadId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async removeLeadTag(leadId: string, tagId: string) {
+    return this.request<any>(`/leads/${leadId}/tags/${tagId}`, {
+      method: 'DELETE',
+    });
   }
 
   async getFilterValues() {

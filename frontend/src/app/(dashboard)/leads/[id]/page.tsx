@@ -105,6 +105,10 @@ export default function LeadDetailPage() {
 
   const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
 
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const [availableTags, setAvailableTags] = useState<any[]>([]);
+  const [tagSearch, setTagSearch] = useState('');
+
   const getFieldLabel = (key: string, defaultLabel: string): string => {
     if (!fieldConfig) return defaultLabel;
     const f = fieldConfig.builtInFields?.find((b: any) => b.key === key);
@@ -175,6 +179,15 @@ export default function LeadDetailPage() {
       setPipelineStages([]);
     }
   }, []);
+
+  const fetchAvailableTags = useCallback(async () => {
+    const orgId = lead?.organizationId;
+    if (!orgId) return;
+    try {
+      const data: any = await api.getTags(orgId);
+      setAvailableTags(Array.isArray(data) ? data : []);
+    } catch { setAvailableTags([]); }
+  }, [lead?.organizationId]);
 
   // Fetch users for assignment panel
   useEffect(() => {
@@ -1002,22 +1015,129 @@ export default function LeadDetailPage() {
             </div>
           </div>
 
-          {/* Tags */}
-          {lead.tags && lead.tags.length > 0 && (
-            <div className="card p-4">
-              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
-                Tags
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {lead.tags.map((t) => (
-                  <span key={t.tag.id} className="badge px-3 py-1" style={{ backgroundColor: t.tag.color + '20', color: t.tag.color, border: `1px solid ${t.tag.color}40` }}>
-                    {t.tag.name}
-                  </span>
-                ))}
+          {/* Tags - Interactive Editor */}
+          <div className="card p-4">
+            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
+              Tags
+              <span className="text-xs font-normal text-gray-400 ml-1">({(lead.tags || []).length})</span>
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {(lead.tags || []).map((t: any) => (
+                <span key={t.tag.id} className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium group/tag" style={{ backgroundColor: t.tag.color + '20', color: t.tag.color, border: `1px solid ${t.tag.color}40` }}>
+                  {t.tag.name}
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await api.removeLeadTag(lead.id, t.tag.id);
+                        setLead({ ...lead, tags: lead.tags.filter((lt: any) => lt.tag.id !== t.tag.id) });
+                      } catch {}
+                    }}
+                    className="ml-0.5 hover:bg-black/10 rounded-full p-0.5 transition-colors"
+                    title="Remove tag"
+                  >
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </span>
+              ))}
+
+              {/* Add Tag Button / Picker */}
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setShowTagPicker(!showTagPicker);
+                    if (!showTagPicker) { fetchAvailableTags(); setTagSearch(''); }
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 border border-dashed border-gray-300 transition-colors"
+                >
+                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                  Add Tag
+                </button>
+
+                {showTagPicker && (
+                  <div className="absolute top-8 left-0 z-50 w-64 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                    {/* Search input */}
+                    <div className="p-2 border-b border-gray-100">
+                      <input
+                        autoFocus
+                        value={tagSearch}
+                        onChange={(e) => setTagSearch(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Escape') setShowTagPicker(false);
+                          if (e.key === 'Enter' && tagSearch.trim()) {
+                            // Create new tag and assign
+                            try {
+                              const result = await api.addLeadTags(lead.id, { tagNames: [tagSearch.trim()] });
+                              setLead({ ...lead, tags: result.tags });
+                              setTagSearch('');
+                              setShowTagPicker(false);
+                              fetchAvailableTags();
+                            } catch {}
+                          }
+                        }}
+                        placeholder="Search or create tag..."
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    {/* Available tags */}
+                    <div className="max-h-48 overflow-y-auto p-1">
+                      {availableTags
+                        .filter((t: any) => {
+                          const alreadyAssigned = (lead.tags || []).some((lt: any) => lt.tag.id === t.id);
+                          const matchesSearch = !tagSearch || t.name.toLowerCase().includes(tagSearch.toLowerCase());
+                          return !alreadyAssigned && matchesSearch;
+                        })
+                        .map((t: any) => (
+                          <button
+                            key={t.id}
+                            onClick={async () => {
+                              try {
+                                const result = await api.addLeadTags(lead.id, { tagIds: [t.id] });
+                                setLead({ ...lead, tags: result.tags });
+                              } catch {}
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 rounded-lg transition-colors"
+                          >
+                            <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#6366f1' }} />
+                            {t.name}
+                          </button>
+                        ))}
+
+                      {/* Create new tag option */}
+                      {tagSearch.trim() && !availableTags.some((t: any) => t.name.toLowerCase() === tagSearch.toLowerCase()) && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              const result = await api.addLeadTags(lead.id, { tagNames: [tagSearch.trim()] });
+                              setLead({ ...lead, tags: result.tags });
+                              setTagSearch('');
+                              setShowTagPicker(false);
+                              fetchAvailableTags();
+                            } catch {}
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-indigo-50 rounded-lg text-indigo-600 font-medium"
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                          Create &ldquo;{tagSearch.trim()}&rdquo;
+                        </button>
+                      )}
+
+                      {availableTags.filter((t: any) => !(lead.tags || []).some((lt: any) => lt.tag.id === t.id)).length === 0 && !tagSearch && (
+                        <p className="px-3 py-4 text-xs text-gray-400 text-center">All tags assigned. Type to create new.</p>
+                      )}
+                    </div>
+
+                    {/* Close on click outside */}
+                    <div className="px-3 py-2 border-t border-gray-100 bg-gray-50">
+                      <p className="text-[10px] text-gray-400 text-center">Enter to create • Esc to close</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-          )}
+          </div>
 
           {/* Assignment Panel */}
           <ReassignmentPanel
