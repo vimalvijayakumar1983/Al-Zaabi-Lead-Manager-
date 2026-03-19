@@ -1031,7 +1031,7 @@ export default function LeadDetailPage() {
                       e.stopPropagation();
                       try {
                         await api.removeLeadTag(lead.id, t.tag.id);
-                        setLead({ ...lead, tags: lead.tags.filter((lt: any) => lt.tag.id !== t.tag.id) });
+                        setLead({ ...lead, tags: (lead.tags || []).filter((lt: any) => lt.tag.id !== t.tag.id) });
                       } catch {}
                     }}
                     className="ml-0.5 hover:bg-black/10 rounded-full p-0.5 transition-colors"
