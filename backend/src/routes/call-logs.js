@@ -124,17 +124,21 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // ─── Check if notes are required for this disposition ─────────
-    await ensureDispositionSettings();
-    const orgId = lead.organizationId;
-    const dispRows = await prisma.$queryRawUnsafe(
-      `SELECT require_notes FROM disposition_settings WHERE organization_id = $1 AND disposition = $2`,
-      orgId, data.disposition
-    );
-
-    // Default: OTHER requires notes if no setting exists
-    const notesRequired = dispRows.length > 0
-      ? dispRows[0].require_notes
-      : data.disposition === 'OTHER';
+    let notesRequired = data.disposition === 'OTHER'; // Default
+    try {
+      await ensureDispositionSettings();
+      const orgId = lead.organizationId;
+      const dispRows = await prisma.$queryRawUnsafe(
+        `SELECT require_notes FROM disposition_settings WHERE organization_id = $1::uuid AND disposition = $2`,
+        orgId, data.disposition
+      );
+      if (dispRows && dispRows.length > 0) {
+        notesRequired = dispRows[0].require_notes === true;
+      }
+    } catch (settingsErr) {
+      logger.warn('Disposition settings check failed, using defaults:', settingsErr.message);
+      // Fall back to default: only OTHER requires notes
+    }
 
     if (notesRequired && (!data.notes || !data.notes.trim())) {
       return res.status(400).json({
