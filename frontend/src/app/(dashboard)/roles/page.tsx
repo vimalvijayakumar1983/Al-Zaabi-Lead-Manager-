@@ -448,12 +448,12 @@ function ToastContainer({ toasts, onDismiss }: { toasts: ToastMessage[]; onDismi
 
 function SkeletonStatCard() {
   return (
-    <div className="card p-5">
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
       <div className="flex items-center gap-4">
-        <div className="skeleton w-12 h-12 rounded-xl" />
+        <div className="bg-gray-200 animate-pulse w-12 h-12 rounded-xl" />
         <div className="flex-1 space-y-2">
-          <div className="skeleton h-7 w-16 rounded" />
-          <div className="skeleton h-4 w-24 rounded" />
+          <div className="bg-gray-200 animate-pulse h-7 w-16 rounded" />
+          <div className="bg-gray-200 animate-pulse h-4 w-24 rounded" />
         </div>
       </div>
     </div>
@@ -462,22 +462,22 @@ function SkeletonStatCard() {
 
 function SkeletonRoleCard() {
   return (
-    <div className="card p-5 space-y-4">
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 space-y-4">
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div className="skeleton w-10 h-10 rounded-lg" />
+          <div className="bg-gray-200 animate-pulse w-10 h-10 rounded-lg" />
           <div className="space-y-2">
-            <div className="skeleton h-5 w-32 rounded" />
-            <div className="skeleton h-3 w-48 rounded" />
+            <div className="bg-gray-200 animate-pulse h-5 w-32 rounded" />
+            <div className="bg-gray-200 animate-pulse h-3 w-48 rounded" />
           </div>
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <div className="skeleton h-6 w-20 rounded-full" />
-        <div className="skeleton h-6 w-16 rounded-full" />
+        <div className="bg-gray-200 animate-pulse h-6 w-20 rounded-full" />
+        <div className="bg-gray-200 animate-pulse h-6 w-16 rounded-full" />
       </div>
-      <div className="flex items-center gap-2 pt-2 border-t border-border-subtle">
-        <div className="skeleton h-8 w-full rounded" />
+      <div className="flex items-center gap-2 pt-2 border-t border-gray-200">
+        <div className="bg-gray-200 animate-pulse h-8 w-full rounded" />
       </div>
     </div>
   );
@@ -506,11 +506,11 @@ function PermToggle({
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!enabled)}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-brand-200 focus:ring-offset-2 ${
+      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:ring-offset-2 ${
         disabled
           ? 'cursor-not-allowed opacity-50'
           : 'cursor-pointer'
-      } ${enabled ? 'bg-brand-600' : 'bg-gray-200'}`}
+      } ${enabled ? 'bg-indigo-600' : 'bg-gray-200'}`}
     >
       <span
         className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
@@ -544,9 +544,9 @@ function ColorPicker({
 
   return (
     <div className="space-y-3">
-      <label className="block text-sm font-medium text-text-primary">
+      <label className="block text-sm font-medium text-gray-900">
         <div className="flex items-center gap-2 mb-2">
-          <Palette className="w-4 h-4 text-text-secondary" />
+          <Palette className="w-4 h-4 text-gray-600" />
           Role Color
         </div>
       </label>
@@ -573,18 +573,18 @@ function ColorPicker({
           onClick={() => setShowCustom(!showCustom)}
           className={`w-9 h-9 rounded-lg border-2 border-dashed flex items-center justify-center transition-all duration-150 ${
             showCustom
-              ? 'border-brand-600 bg-brand-50'
-              : 'border-border-subtle hover:border-gray-400'
+              ? 'border-indigo-600 bg-indigo-50'
+              : 'border-gray-200 hover:border-gray-400'
           }`}
           title="Custom color"
         >
-          <Plus className="w-4 h-4 text-text-secondary" />
+          <Plus className="w-4 h-4 text-gray-600" />
         </button>
       </div>
       {showCustom && (
         <div className="flex items-center gap-2 animate-fade-in">
-          <div className="flex items-center gap-2 bg-surface-secondary rounded-lg px-3 py-2 border border-border-subtle">
-            <Hash className="w-4 h-4 text-text-tertiary" />
+          <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+            <Hash className="w-4 h-4 text-gray-400" />
             <input
               type="text"
               value={customHex}
@@ -592,19 +592,19 @@ function ColorPicker({
                 setCustomHex(e.target.value)
               }
               placeholder="#3b82f6"
-              className="bg-transparent w-24 text-sm text-text-primary outline-none"
+              className="bg-transparent w-24 text-sm text-gray-900 outline-none"
               maxLength={7}
             />
           </div>
           <button
             type="button"
             onClick={handleCustomSubmit}
-            className="btn-primary px-3 py-2 text-sm"
+            className="bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-2 text-sm"
           >
             Apply
           </button>
           <div
-            className="w-9 h-9 rounded-lg border border-border-subtle"
+            className="w-9 h-9 rounded-lg border border-gray-200"
             style={{
               backgroundColor: /^#[0-9A-Fa-f]{6}$/.test(customHex)
                 ? customHex
@@ -632,9 +632,9 @@ function IconPicker({
 }) {
   return (
     <div className="space-y-3">
-      <label className="block text-sm font-medium text-text-primary">
+      <label className="block text-sm font-medium text-gray-900">
         <div className="flex items-center gap-2 mb-2">
-          <Star className="w-4 h-4 text-text-secondary" />
+          <Star className="w-4 h-4 text-gray-600" />
           Role Icon
         </div>
       </label>
@@ -650,7 +650,7 @@ function IconPicker({
               className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-150 ${
                 isSelected
                   ? 'ring-2 ring-offset-2 shadow-md scale-110'
-                  : 'hover:bg-surface-secondary hover:scale-105'
+                  : 'hover:bg-gray-50 hover:scale-105'
               }`}
               style={
                 isSelected
@@ -721,27 +721,27 @@ function PermissionModuleSection({
   ).length;
 
   return (
-    <div className="border border-border-subtle rounded-xl overflow-hidden transition-all duration-200">
+    <div className="border border-gray-200 rounded-xl overflow-hidden transition-all duration-200">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-surface-secondary hover:bg-surface-tertiary transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
       >
         <div className="flex items-center gap-3">
           <div
             className={`w-8 h-8 rounded-lg flex items-center justify-center ${
               someEnabled
-                ? 'bg-brand-50 text-brand-600'
-                : 'bg-gray-100 text-text-tertiary'
+                ? 'bg-indigo-50 text-indigo-600'
+                : 'bg-gray-100 text-gray-400'
             }`}
           >
             <ModIcon className="w-4 h-4" />
           </div>
           <div className="text-left">
-            <span className="text-sm font-semibold text-text-primary">
+            <span className="text-sm font-semibold text-gray-900">
               {module.label}
             </span>
-            <span className="ml-2 text-xs text-text-tertiary">
+            <span className="ml-2 text-xs text-gray-400">
               {enabledCount}/{permEntries.length}
             </span>
           </div>
@@ -761,9 +761,9 @@ function PermissionModuleSection({
             </div>
           )}
           {expanded ? (
-            <ChevronUp className="w-4 h-4 text-text-tertiary" />
+            <ChevronUp className="w-4 h-4 text-gray-400" />
           ) : (
-            <ChevronDown className="w-4 h-4 text-text-tertiary" />
+            <ChevronDown className="w-4 h-4 text-gray-400" />
           )}
         </div>
       </button>
@@ -776,7 +776,7 @@ function PermissionModuleSection({
               <div
                 key={permKey}
                 className={`flex items-center justify-between px-4 py-3 transition-colors ${
-                  isEnabled ? 'bg-brand-50/30' : 'bg-surface-primary'
+                  isEnabled ? 'bg-indigo-50/30' : 'bg-white'
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -786,8 +786,8 @@ function PermissionModuleSection({
                     <XCircle className="w-4 h-4 text-gray-300 flex-shrink-0" />
                   )}
                   <div>
-                    <p className="text-sm text-text-primary">{description}</p>
-                    <p className="text-xs text-text-tertiary font-mono">
+                    <p className="text-sm text-gray-900">{description}</p>
+                    <p className="text-xs text-gray-400 font-mono">
                       {moduleKey}.{permKey}
                     </p>
                   </div>
@@ -827,8 +827,8 @@ function ViewPermissionsDrawer({
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-lg bg-surface-primary shadow-2xl overflow-y-auto animate-fade-in">
-        <div className="sticky top-0 bg-surface-primary border-b border-border-subtle px-6 py-4 z-10">
+      <div className="relative w-full max-w-lg bg-white shadow-2xl overflow-y-auto animate-fade-in">
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 z-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
@@ -838,15 +838,15 @@ function ViewPermissionsDrawer({
                 <RIcon className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-text-primary">
+                <h3 className="text-lg font-semibold text-gray-900">
                   {role.name}
                 </h3>
-                <p className="text-sm text-text-secondary">Permissions (read-only)</p>
+                <p className="text-sm text-gray-600">Permissions (read-only)</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="btn-icon p-2 rounded-lg hover:bg-surface-secondary"
+              className="inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-50"
             >
               <X className="w-5 h-5" />
             </button>
@@ -895,16 +895,16 @@ function DeleteConfirmModal({
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onCancel}
       />
-      <div className="relative bg-surface-primary rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
         <div className="flex flex-col items-center text-center space-y-4">
           <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center">
             <AlertTriangle className="w-8 h-8 text-red-500" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-text-primary">
+            <h3 className="text-lg font-semibold text-gray-900">
               Delete &ldquo;{role.name}&rdquo;?
             </h3>
-            <p className="text-sm text-text-secondary mt-1">
+            <p className="text-sm text-gray-600 mt-1">
               This action cannot be undone. The role will be permanently removed.
             </p>
           </div>
@@ -930,7 +930,7 @@ function DeleteConfirmModal({
           <div className="flex items-center gap-3 w-full pt-2">
             <button
               onClick={onCancel}
-              className="btn-secondary flex-1 px-4 py-2.5 rounded-lg text-sm font-medium"
+              className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 flex-1 px-4 py-2.5 rounded-lg text-sm font-medium"
             >
               Cancel
             </button>
@@ -1000,7 +1000,7 @@ function CloneModal({
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onCancel}
       />
-      <div className="relative bg-surface-primary rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
         <div className="space-y-4">
           <div className="flex items-center gap-3">
             <div
@@ -1013,17 +1013,17 @@ function CloneModal({
               <Copy className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-text-primary">
+              <h3 className="text-lg font-semibold text-gray-900">
                 Clone &ldquo;{sourceRole.name}&rdquo;
               </h3>
-              <p className="text-sm text-text-secondary">
+              <p className="text-sm text-gray-600">
                 Create a new custom role based on this role&apos;s permissions
               </p>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-primary mb-1.5">
+            <label className="block text-sm font-medium text-gray-900 mb-1.5">
               New Role Name
             </label>
             <input
@@ -1032,7 +1032,7 @@ function CloneModal({
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setName(e.target.value)
               }
-              className="w-full px-3 py-2.5 bg-surface-secondary border border-border-subtle rounded-lg text-sm text-text-primary outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600 transition-all"
+              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 transition-all"
               placeholder="Enter role name"
               autoFocus
             />
@@ -1041,14 +1041,14 @@ function CloneModal({
           <div className="flex items-center gap-3 pt-2">
             <button
               onClick={onCancel}
-              className="btn-secondary flex-1 px-4 py-2.5 rounded-lg text-sm font-medium"
+              className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 flex-1 px-4 py-2.5 rounded-lg text-sm font-medium"
             >
               Cancel
             </button>
             <button
               onClick={() => onConfirm(name)}
               disabled={!name.trim() || isCloning}
-              className={`btn-primary flex-1 px-4 py-2.5 rounded-lg text-sm font-medium ${
+              className={`bg-indigo-600 text-white hover:bg-indigo-700 flex-1 px-4 py-2.5 rounded-lg text-sm font-medium ${
                 !name.trim() || isCloning ? 'opacity-50 cursor-not-allowed' : ''
               }`}
             >
@@ -1259,9 +1259,9 @@ function RoleFormModal({
         className="fixed inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onCancel}
       />
-      <div className="relative bg-surface-primary rounded-2xl shadow-2xl max-w-4xl w-full my-8 animate-fade-in flex flex-col max-h-[90vh]">
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-4xl w-full my-8 animate-fade-in flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle flex-shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-center gap-3">
             <div
               className="w-10 h-10 rounded-xl flex items-center justify-center"
@@ -1275,10 +1275,10 @@ function RoleFormModal({
               })}
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-text-primary">
+              <h2 className="text-lg font-semibold text-gray-900">
                 {isEditing ? 'Edit Role' : 'Create Custom Role'}
               </h2>
-              <p className="text-sm text-text-secondary">
+              <p className="text-sm text-gray-600">
                 {isEditing
                   ? `Modifying "${editingRole?.name}"`
                   : 'Define a new role with custom permissions'}
@@ -1293,7 +1293,7 @@ function RoleFormModal({
             )}
             <button
               onClick={onCancel}
-              className="btn-icon p-2 rounded-lg hover:bg-surface-secondary"
+              className="inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-50"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1301,7 +1301,7 @@ function RoleFormModal({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border-subtle px-6 flex-shrink-0">
+        <div className="flex border-b border-gray-200 px-6 flex-shrink-0">
           {tabs.map((tab) => {
             const TabIcon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -1312,8 +1312,8 @@ function RoleFormModal({
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
                   isActive
-                    ? 'border-brand-600 text-brand-600'
-                    : 'border-transparent text-text-secondary hover:text-text-primary hover:border-gray-300'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
                 }`}
               >
                 <TabIcon className="w-4 h-4" />
@@ -1322,8 +1322,8 @@ function RoleFormModal({
                   <span
                     className={`text-xs px-1.5 py-0.5 rounded-full ${
                       isActive
-                        ? 'bg-brand-50 text-brand-600'
-                        : 'bg-surface-secondary text-text-tertiary'
+                        ? 'bg-indigo-50 text-indigo-600'
+                        : 'bg-gray-50 text-gray-400'
                     }`}
                   >
                     {enabledCount}/{TOTAL_PERMISSIONS}
@@ -1341,9 +1341,9 @@ function RoleFormModal({
             <div className="space-y-6 animate-fade-in max-w-2xl">
               {/* Name */}
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">
+                <label className="block text-sm font-medium text-gray-900 mb-1.5">
                   <div className="flex items-center gap-2">
-                    <Type className="w-4 h-4 text-text-secondary" />
+                    <Type className="w-4 h-4 text-gray-600" />
                     Role Name <span className="text-red-500">*</span>
                   </div>
                 </label>
@@ -1353,20 +1353,20 @@ function RoleFormModal({
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                     handleFieldChange('name', e.target.value)
                   }
-                  className="w-full px-3 py-2.5 bg-surface-secondary border border-border-subtle rounded-lg text-sm text-text-primary outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600 transition-all"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 transition-all"
                   placeholder="e.g. Regional Manager"
                   maxLength={50}
                 />
-                <p className="text-xs text-text-tertiary mt-1">
+                <p className="text-xs text-gray-400 mt-1">
                   {form.name.length}/50 characters
                 </p>
               </div>
 
               {/* Description */}
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">
+                <label className="block text-sm font-medium text-gray-900 mb-1.5">
                   <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-text-secondary" />
+                    <FileText className="w-4 h-4 text-gray-600" />
                     Description
                   </div>
                 </label>
@@ -1376,11 +1376,11 @@ function RoleFormModal({
                     handleFieldChange('description', e.target.value)
                   }
                   rows={3}
-                  className="w-full px-3 py-2.5 bg-surface-secondary border border-border-subtle rounded-lg text-sm text-text-primary outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600 transition-all resize-none"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 transition-all resize-none"
                   placeholder="Describe what this role is for…"
                   maxLength={200}
                 />
-                <p className="text-xs text-text-tertiary mt-1">
+                <p className="text-xs text-gray-400 mt-1">
                   {form.description.length}/200 characters
                 </p>
               </div>
@@ -1400,16 +1400,16 @@ function RoleFormModal({
 
               {/* Base Role Level */}
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">
+                <label className="block text-sm font-medium text-gray-900 mb-1.5">
                   <div className="flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-text-secondary" />
+                    <Layers className="w-4 h-4 text-gray-600" />
                     Base Role Level
                   </div>
                 </label>
                 <select
                   value={form.baseRole}
                   onChange={handleBaseRoleChange}
-                  className="w-full px-3 py-2.5 bg-surface-secondary border border-border-subtle rounded-lg text-sm text-text-primary outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600 transition-all"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 transition-all"
                 >
                   {BASE_ROLE_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -1417,7 +1417,7 @@ function RoleFormModal({
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-text-tertiary mt-1">
+                <p className="text-xs text-gray-400 mt-1">
                   Determines the hierarchy level of this role in the organization.
                   Users with higher-level roles can manage those with lower levels.
                 </p>
@@ -1425,16 +1425,16 @@ function RoleFormModal({
 
               {/* Copy From */}
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">
+                <label className="block text-sm font-medium text-gray-900 mb-1.5">
                   <div className="flex items-center gap-2">
-                    <Copy className="w-4 h-4 text-text-secondary" />
+                    <Copy className="w-4 h-4 text-gray-600" />
                     Copy permissions from
                   </div>
                 </label>
                 <select
                   onChange={handleCopyFromRole}
                   defaultValue=""
-                  className="w-full px-3 py-2.5 bg-surface-secondary border border-border-subtle rounded-lg text-sm text-text-primary outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600 transition-all"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 transition-all"
                 >
                   <option value="">— Start from scratch —</option>
                   {allRoles.map((r) => (
@@ -1444,14 +1444,14 @@ function RoleFormModal({
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-text-tertiary mt-1">
+                <p className="text-xs text-gray-400 mt-1">
                   Pre-fill this role&apos;s permissions from an existing role
                 </p>
               </div>
 
               {/* Preview card */}
-              <div className="bg-surface-secondary rounded-xl border border-border-subtle p-4">
-                <p className="text-xs text-text-tertiary uppercase tracking-wider mb-3 font-semibold">
+              <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-3 font-semibold">
                   Preview
                 </p>
                 <div className="flex items-center gap-3">
@@ -1467,17 +1467,17 @@ function RoleFormModal({
                     })}
                   </div>
                   <div>
-                    <p className="font-semibold text-text-primary">
+                    <p className="font-semibold text-gray-900">
                       {form.name || 'Role Name'}
                     </p>
-                    <p className="text-sm text-text-secondary">
+                    <p className="text-sm text-gray-600">
                       {form.description || 'No description'}
                     </p>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs bg-surface-tertiary text-text-tertiary px-2 py-0.5 rounded-full">
+                      <span className="text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">
                         Level {form.level}
                       </span>
-                      <span className="text-xs bg-brand-50 text-brand-600 px-2 py-0.5 rounded-full">
+                      <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">
                         {enabledCount} permissions
                       </span>
                     </div>
@@ -1496,26 +1496,26 @@ function RoleFormModal({
                   <button
                     type="button"
                     onClick={handleSelectAllPermissions}
-                    className="btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg"
+                    className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-1.5 text-xs font-medium rounded-lg"
                   >
                     Select All
                   </button>
                   <button
                     type="button"
                     onClick={handleDeselectAllPermissions}
-                    className="btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg"
+                    className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-1.5 text-xs font-medium rounded-lg"
                   >
                     Deselect All
                   </button>
-                  <span className="text-sm text-text-secondary ml-2">
-                    <span className="font-semibold text-brand-600">
+                  <span className="text-sm text-gray-600 ml-2">
+                    <span className="font-semibold text-indigo-600">
                       {enabledCount}
                     </span>{' '}
                     of {TOTAL_PERMISSIONS} permissions enabled
                   </span>
                 </div>
                 <div className="relative w-full sm:w-64">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
                     value={permSearch}
@@ -1523,14 +1523,14 @@ function RoleFormModal({
                       setPermSearch(e.target.value)
                     }
                     placeholder="Search permissions…"
-                    className="w-full pl-9 pr-3 py-2 bg-surface-secondary border border-border-subtle rounded-lg text-sm text-text-primary outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600 transition-all"
+                    className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-600 transition-all"
                   />
                   {permSearch && (
                     <button
                       onClick={() => setPermSearch('')}
                       className="absolute right-3 top-1/2 -translate-y-1/2"
                     >
-                      <X className="w-4 h-4 text-text-tertiary hover:text-text-primary" />
+                      <X className="w-4 h-4 text-gray-400 hover:text-gray-900" />
                     </button>
                   )}
                 </div>
@@ -1539,7 +1539,7 @@ function RoleFormModal({
               {/* Progress bar */}
               <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
                 <div
-                  className="bg-brand-600 h-2 rounded-full transition-all duration-300"
+                  className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
                   style={{
                     width: `${(enabledCount / TOTAL_PERMISSIONS) * 100}%`,
                   }}
@@ -1571,29 +1571,29 @@ function RoleFormModal({
             <div className="space-y-6 animate-fade-in">
               {/* Summary card */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-surface-secondary rounded-xl border border-border-subtle p-4 text-center">
-                  <p className="text-2xl font-bold text-brand-600">
+                <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 text-center">
+                  <p className="text-2xl font-bold text-indigo-600">
                     {enabledCount}
                   </p>
-                  <p className="text-sm text-text-secondary">
+                  <p className="text-sm text-gray-600">
                     Permissions Enabled
                   </p>
                 </div>
-                <div className="bg-surface-secondary rounded-xl border border-border-subtle p-4 text-center">
-                  <p className="text-2xl font-bold text-text-primary">
+                <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 text-center">
+                  <p className="text-2xl font-bold text-gray-900">
                     {TOTAL_PERMISSIONS - enabledCount}
                   </p>
-                  <p className="text-sm text-text-secondary">
+                  <p className="text-sm text-gray-600">
                     Permissions Disabled
                   </p>
                 </div>
-                <div className="bg-surface-secondary rounded-xl border border-border-subtle p-4 text-center">
-                  <p className="text-2xl font-bold text-text-primary">
+                <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 text-center">
+                  <p className="text-2xl font-bold text-gray-900">
                     {Object.keys(PERMISSION_MODULES).filter((mk) =>
                       Object.values(form.permissions[mk] ?? {}).some(Boolean)
                     ).length}
                   </p>
-                  <p className="text-sm text-text-secondary">
+                  <p className="text-sm text-gray-600">
                     Modules with Access
                   </p>
                 </div>
@@ -1605,12 +1605,12 @@ function RoleFormModal({
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <ShieldCheck className="w-5 h-5 text-emerald-500" />
-                    <h4 className="font-semibold text-text-primary">
+                    <h4 className="font-semibold text-gray-900">
                       Can Do ({enabledCount})
                     </h4>
                   </div>
                   {previewData.canDo.length === 0 ? (
-                    <p className="text-sm text-text-tertiary italic">
+                    <p className="text-sm text-gray-400 italic">
                       No permissions enabled
                     </p>
                   ) : (
@@ -1644,12 +1644,12 @@ function RoleFormModal({
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <ShieldOff className="w-5 h-5 text-gray-400" />
-                    <h4 className="font-semibold text-text-primary">
+                    <h4 className="font-semibold text-gray-900">
                       Cannot Do ({TOTAL_PERMISSIONS - enabledCount})
                     </h4>
                   </div>
                   {previewData.cannotDo.length === 0 ? (
-                    <p className="text-sm text-text-tertiary italic">
+                    <p className="text-sm text-gray-400 italic">
                       All permissions are enabled
                     </p>
                   ) : (
@@ -1684,7 +1684,7 @@ function RoleFormModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-border-subtle bg-surface-secondary rounded-b-2xl flex-shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex-shrink-0">
           <div className="flex items-center gap-2">
             {activeTab !== 'basic' && (
               <button
@@ -1694,7 +1694,7 @@ function RoleFormModal({
                     activeTab === 'permissions' ? 'basic' : 'permissions'
                   )
                 }
-                className="btn-secondary px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2"
+                className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2"
               >
                 <ArrowLeft className="w-4 h-4" />
                 Back
@@ -1704,7 +1704,7 @@ function RoleFormModal({
           <div className="flex items-center gap-3">
             <button
               onClick={onCancel}
-              className="btn-secondary px-4 py-2.5 rounded-lg text-sm font-medium"
+              className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2.5 rounded-lg text-sm font-medium"
             >
               Cancel
             </button>
@@ -1716,7 +1716,7 @@ function RoleFormModal({
                     activeTab === 'basic' ? 'permissions' : 'preview'
                   )
                 }
-                className="btn-primary px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2"
+                className="bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2"
               >
                 Next
                 <ChevronRight className="w-4 h-4" />
@@ -1725,7 +1725,7 @@ function RoleFormModal({
               <button
                 onClick={handleSubmit}
                 disabled={!form.name.trim() || isSaving}
-                className={`btn-primary px-6 py-2.5 rounded-lg text-sm font-medium ${
+                className={`bg-indigo-600 text-white hover:bg-indigo-700 px-6 py-2.5 rounded-lg text-sm font-medium ${
                   !form.name.trim() || isSaving
                     ? 'opacity-50 cursor-not-allowed'
                     : ''
@@ -1790,7 +1790,7 @@ function RoleCard({
   const enabledPerms = countEnabledPermissions(role.permissions);
 
   return (
-    <div className="card p-5 hover:shadow-lg transition-all duration-200 animate-fade-in group">
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 hover:shadow-lg transition-all duration-200 animate-fade-in group">
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
@@ -1805,14 +1805,14 @@ function RoleCard({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="font-semibold text-text-primary text-sm">
+              <h3 className="font-semibold text-gray-900 text-sm">
                 {role.name}
               </h3>
               {isSystem && (
-                <span title="System role"><Lock className="w-3.5 h-3.5 text-text-tertiary" /></span>
+                <span title="System role"><Lock className="w-3.5 h-3.5 text-gray-400" /></span>
               )}
             </div>
-            <p className="text-xs text-text-secondary line-clamp-2 mt-0.5">
+            <p className="text-xs text-gray-600 line-clamp-2 mt-0.5">
               {role.description || 'No description'}
             </p>
           </div>
@@ -1821,15 +1821,15 @@ function RoleCard({
 
       {/* Badges */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className="inline-flex items-center gap-1 text-xs bg-surface-secondary text-text-secondary px-2 py-1 rounded-full">
+        <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-full">
           <Users className="w-3 h-3" />
           {role.userCount} user{role.userCount !== 1 ? 's' : ''}
         </span>
-        <span className="inline-flex items-center gap-1 text-xs bg-surface-secondary text-text-secondary px-2 py-1 rounded-full">
+        <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-full">
           <Layers className="w-3 h-3" />
           Level {role.level}
         </span>
-        <span className="inline-flex items-center gap-1 text-xs bg-brand-50 text-brand-600 px-2 py-1 rounded-full">
+        <span className="inline-flex items-center gap-1 text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded-full">
           <ShieldCheck className="w-3 h-3" />
           {enabledPerms} perms
         </span>
@@ -1837,23 +1837,23 @@ function RoleCard({
 
       {/* Date */}
       {role.createdAt && (
-        <p className="text-xs text-text-tertiary mb-3">
+        <p className="text-xs text-gray-400 mb-3">
           Created {formatDate(role.createdAt)}
         </p>
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-2 pt-3 border-t border-border-subtle">
+      <div className="flex items-center gap-2 pt-3 border-t border-gray-200">
         <button
           onClick={onViewPermissions}
-          className="btn-secondary flex-1 px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-surface-tertiary transition-colors"
+          className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 flex-1 px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100 transition-colors"
         >
           <Eye className="w-3.5 h-3.5" />
           Permissions
         </button>
         <button
           onClick={onClone}
-          className="btn-secondary px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-surface-tertiary transition-colors"
+          className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100 transition-colors"
           title="Clone role"
         >
           <Copy className="w-3.5 h-3.5" />
@@ -1861,7 +1861,7 @@ function RoleCard({
         {!isSystem && onEdit && (
           <button
             onClick={onEdit}
-            className="btn-secondary px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-surface-tertiary transition-colors"
+            className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100 transition-colors"
             title="Edit role"
           >
             <Pencil className="w-3.5 h-3.5" />
@@ -1897,19 +1897,19 @@ function RoleCard({
 function EmptyCustomRoles({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 animate-fade-in">
-      <div className="w-20 h-20 rounded-2xl bg-brand-50 flex items-center justify-center mb-4">
-        <Shield className="w-10 h-10 text-brand-600" />
+      <div className="w-20 h-20 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+        <Shield className="w-10 h-10 text-indigo-600" />
       </div>
-      <h3 className="text-lg font-semibold text-text-primary mb-1">
+      <h3 className="text-lg font-semibold text-gray-900 mb-1">
         No custom roles yet
       </h3>
-      <p className="text-sm text-text-secondary mb-6 text-center max-w-md">
+      <p className="text-sm text-gray-600 mb-6 text-center max-w-md">
         Custom roles let you define exactly what each team member can access.
         Create your first role to get started.
       </p>
       <button
         onClick={onCreate}
-        className="btn-primary px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2"
+        className="bg-indigo-600 text-white hover:bg-indigo-700 px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2"
       >
         <Plus className="w-4 h-4" />
         Create your first custom role
@@ -1934,15 +1934,15 @@ function ErrorState({
       <div className="w-20 h-20 rounded-2xl bg-red-50 flex items-center justify-center mb-4">
         <AlertTriangle className="w-10 h-10 text-red-500" />
       </div>
-      <h3 className="text-lg font-semibold text-text-primary mb-1">
+      <h3 className="text-lg font-semibold text-gray-900 mb-1">
         Something went wrong
       </h3>
-      <p className="text-sm text-text-secondary mb-6 text-center max-w-md">
+      <p className="text-sm text-gray-600 mb-6 text-center max-w-md">
         {message}
       </p>
       <button
         onClick={onRetry}
-        className="btn-primary px-5 py-2.5 rounded-lg text-sm font-medium"
+        className="bg-indigo-600 text-white hover:bg-indigo-700 px-5 py-2.5 rounded-lg text-sm font-medium"
       >
         Try Again
       </button>
@@ -2230,7 +2230,7 @@ export default function RolesPage() {
   // ─────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-surface-primary">
+    <div className="min-h-screen bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 animate-fade-in">
         {/* ── Header ── */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
@@ -2238,23 +2238,23 @@ export default function RolesPage() {
             <div className="flex items-center gap-3 mb-1">
               <a
                 href="/team"
-                className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary transition-colors"
+                className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 transition-colors"
               >
                 <ArrowLeft className="w-4 h-4" />
                 Back to Team
               </a>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-text-primary">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
               Roles & Permissions
             </h1>
-            <p className="text-sm text-text-secondary mt-1">
+            <p className="text-sm text-gray-600 mt-1">
               Manage access control across your organization
             </p>
           </div>
           {isSuperAdmin && (
             <button
               onClick={() => setShowCreateModal(true)}
-              className="btn-primary px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 self-start sm:self-auto"
+              className="bg-indigo-600 text-white hover:bg-indigo-700 px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 self-start sm:self-auto"
             >
               <Plus className="w-4 h-4" />
               Create Custom Role
@@ -2279,7 +2279,7 @@ export default function RolesPage() {
 
             {/* System Roles Skeleton */}
             <div className="mb-8">
-              <div className="skeleton h-7 w-40 rounded mb-4" />
+              <div className="bg-gray-200 animate-pulse h-7 w-40 rounded mb-4" />
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <SkeletonRoleCard key={i} />
@@ -2289,7 +2289,7 @@ export default function RolesPage() {
 
             {/* Custom Roles Skeleton */}
             <div>
-              <div className="skeleton h-7 w-40 rounded mb-4" />
+              <div className="bg-gray-200 animate-pulse h-7 w-40 rounded mb-4" />
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <SkeletonRoleCard key={i} />
@@ -2309,7 +2309,7 @@ export default function RolesPage() {
                 return (
                   <div
                     key={stat.label}
-                    className="card p-5 hover:shadow-md transition-shadow"
+                    className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 hover:shadow-md transition-shadow"
                   >
                     <div className="flex items-center gap-4">
                       <div
@@ -2321,10 +2321,10 @@ export default function RolesPage() {
                         />
                       </div>
                       <div>
-                        <p className="text-2xl font-bold text-text-primary">
+                        <p className="text-2xl font-bold text-gray-900">
                           {stat.value}
                         </p>
-                        <p className="text-sm text-text-secondary">
+                        <p className="text-sm text-gray-600">
                           {stat.label}
                         </p>
                       </div>
@@ -2338,16 +2338,16 @@ export default function RolesPage() {
             <section className="mb-10">
               <div className="flex items-center gap-3 mb-4">
                 <div className="flex items-center gap-2">
-                  <Lock className="w-5 h-5 text-text-tertiary" />
-                  <h2 className="text-lg font-semibold text-text-primary">
+                  <Lock className="w-5 h-5 text-gray-400" />
+                  <h2 className="text-lg font-semibold text-gray-900">
                     System Roles
                   </h2>
                 </div>
-                <span className="text-xs bg-surface-secondary text-text-tertiary px-2 py-0.5 rounded-full">
+                <span className="text-xs bg-gray-50 text-gray-400 px-2 py-0.5 rounded-full">
                   {systemRoles.length}
                 </span>
               </div>
-              <p className="text-sm text-text-secondary mb-4">
+              <p className="text-sm text-gray-600 mb-4">
                 These built-in roles cannot be modified. You can clone them to
                 create custom variants.
               </p>
@@ -2370,22 +2370,22 @@ export default function RolesPage() {
                   <div className="flex items-center gap-3 mb-0.5">
                     <div className="flex items-center gap-2">
                       <Star className="w-5 h-5 text-amber-500" />
-                      <h2 className="text-lg font-semibold text-text-primary">
+                      <h2 className="text-lg font-semibold text-gray-900">
                         Custom Roles
                       </h2>
                     </div>
-                    <span className="text-xs bg-surface-secondary text-text-tertiary px-2 py-0.5 rounded-full">
+                    <span className="text-xs bg-gray-50 text-gray-400 px-2 py-0.5 rounded-full">
                       {customRoles.length}
                     </span>
                   </div>
-                  <p className="text-sm text-text-secondary">
+                  <p className="text-sm text-gray-600">
                     Roles you&apos;ve created for your organization
                   </p>
                 </div>
                 {isSuperAdmin && customRoles.length > 0 && (
                   <button
                     onClick={() => setShowCreateModal(true)}
-                    className="btn-secondary px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                    className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
                   >
                     <Plus className="w-4 h-4" />
                     Add Role
