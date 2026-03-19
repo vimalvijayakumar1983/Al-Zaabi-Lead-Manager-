@@ -153,6 +153,11 @@ router.post('/move', validate(z.object({
     });
     if (!stage) return res.status(404).json({ error: 'Stage not found' });
 
+    // ── Guard: prevent cross-org stage assignment ──
+    if (stage.organizationId !== lead.organizationId) {
+      return res.status(400).json({ error: 'Cannot move lead to a stage in a different division' });
+    }
+
     // ── Smart status sync: map pipeline stage name → lead status ──
     let newStatus = mapStageToStatus(stage.name, stage.isWonStage, stage.isLostStage, lead.status);
 
