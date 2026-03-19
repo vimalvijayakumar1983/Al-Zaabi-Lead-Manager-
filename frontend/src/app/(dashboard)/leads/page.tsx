@@ -607,7 +607,10 @@ function LeadsContent() {
           case 'callCount': return String(l._count?.callLogs || 0);
           case 'lastCallOutcome': {
             const lco = (l as any).lastCallOutcome;
-            return lco ? (dispositionLabels[lco.disposition] || lco.disposition) : '';
+            if (!lco) return '';
+            const label = dispositionLabels[lco.disposition] || lco.disposition;
+            const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+            return dt ? `${label} (${dt})` : label;
           }
           case 'channels': {
             const ucc = l.unreadChannelCounts || {};
@@ -809,7 +812,7 @@ function LeadsContent() {
             </span>
             {lco.date && (
               <span className="text-[10px] text-gray-400">
-                {new Date(lco.date).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                {new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}
               </span>
             )}
           </div>
