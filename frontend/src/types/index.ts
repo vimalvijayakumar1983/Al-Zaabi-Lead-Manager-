@@ -263,7 +263,7 @@ export interface Attachment {
 }
 
 // ─── Custom Field ───────────────────────────────────────────────
-export type FieldType = 'TEXT' | 'NUMBER' | 'DATE' | 'SELECT' | 'MULTI_SELECT' | 'BOOLEAN' | 'URL' | 'EMAIL' | 'PHONE';
+export type FieldType = 'TEXT' | 'NUMBER' | 'DATE' | 'SELECT' | 'MULTI_SELECT' | 'BOOLEAN' | 'URL' | 'EMAIL' | 'PHONE' | 'TEXTAREA' | 'CURRENCY';
 
 export interface CustomField {
   id: string;
@@ -273,6 +273,29 @@ export interface CustomField {
   options?: string[];
   isRequired: boolean;
   order: number;
+  showInList: boolean;
+  showInDetail: boolean;
+  description?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  divisionId?: string | null;
+}
+
+export interface BuiltInField {
+  key: string;
+  label: string;
+  type: string;
+  locked?: boolean;
+  category: string;
+  showInList: boolean;
+  showInDetail: boolean;
+  order: number;
+  isBuiltIn: true;
+}
+
+export interface FieldConfigResponse {
+  builtInFields: BuiltInField[];
+  customFields: CustomField[];
 }
 
 // ─── Campaign (UPDATED - replaces existing Campaign interface) ────────────────

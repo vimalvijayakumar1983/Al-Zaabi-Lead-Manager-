@@ -708,6 +708,13 @@ model CustomField {
   options        Json?
   isRequired     Boolean   @default(false)
   order          Int       @default(0)
+  showInList     Boolean   @default(true)
+  showInDetail   Boolean   @default(true)
+  description    String?
+  placeholder    String?
+  defaultValue   String?
+
+  divisionId     String?
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -726,6 +733,8 @@ enum FieldType {
   URL
   EMAIL
   PHONE
+  TEXTAREA
+  CURRENCY
 }
 
 // ─── Automation Rules ────────────────────────────────────────────

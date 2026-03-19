@@ -88,11 +88,28 @@ export default function LeadDetailPage() {
   const [unreadCommsCount, setUnreadCommsCount] = useState(0);
   const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
 
+  const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
+
   useEffect(() => {
     // Scope custom fields to the lead's division when available
     const divisionId = lead?.organizationId;
     api.getCustomFields(divisionId || undefined).then(setCustomFields).catch(() => {});
   }, [lead?.organizationId]);
+
+  useEffect(() => {
+    const divisionId = lead?.organizationId;
+    if (!divisionId) return;
+    api.getFieldConfig(divisionId)
+      .then((data: any) => {
+        if (data && data.builtInFields) {
+          setFieldConfig(data);
+        }
+      })
+      .catch(() => {
+        setFieldConfig(null);
+      });
+  }, [lead?.organizationId]);
+
 
   // Pipeline stages are now fetched alongside the lead in the initial load
   // effect below to avoid a visible delay (waterfall). This effect only
@@ -493,6 +510,60 @@ export default function LeadDetailPage() {
     }
   };
 
+  // Built-in fields that are rendered in dedicated sections elsewhere on the page.
+  const FIELDS_SHOWN_ELSEWHERE = new Set([
+    'firstName', 'lastName',
+    'status',
+    'assignedTo',
+    'email', 'phone', 'location', 'website',
+    'score', 'conversionProb',
+    'createdAt', 'updatedAt',
+  ]);
+
+  const BUILT_IN_FIELD_RENDERER: Record<string, (lead: any) => string> = {
+    email: (l) => l.email || '-',
+    phone: (l) => l.phone || '-',
+    company: (l) => l.company || '-',
+    jobTitle: (l) => l.jobTitle || '-',
+    source: (l) => l.source ? l.source.replace(/_/g, ' ') : '-',
+    status: (l) => l.status ? l.status.replace(/_/g, ' ') : '-',
+    score: (l) => l.score !== undefined && l.score !== null ? String(l.score) : '-',
+    budget: (l) => l.budget ? `AED ${Number(l.budget).toLocaleString()}` : '-',
+    productInterest: (l) => l.productInterest || '-',
+    campaign: (l) => l.campaign || '-',
+    location: (l) => l.location || '-',
+    website: (l) => l.website || '-',
+    conversionProb: (l) => l.conversionProb != null ? `${Math.round(l.conversionProb * 100)}%` : '-',
+    stage: (l) => l.stage?.name || '-',
+    stageId: (l) => l.stage?.name || '-',
+    tags: (l) => Array.isArray(l.tags) && l.tags.length > 0 ? l.tags.join(', ') : '-',
+    assignedTo: (l) => l.assignedTo ? `${l.assignedTo.firstName || ''} ${l.assignedTo.lastName || ''}`.trim() || '-' : '-',
+    createdAt: (l) => l.createdAt ? new Date(l.createdAt).toLocaleString() : '-',
+    updatedAt: (l) => l.updatedAt ? new Date(l.updatedAt).toLocaleString() : '-',
+  };
+
+  function renderCustomFieldValue(cf: any, lead: any): string {
+    const cd = (lead.customData || {}) as Record<string, unknown>;
+    const val = cd[cf.name];
+    if (val === undefined || val === null || val === '') return '-';
+    switch (cf.type) {
+      case 'BOOLEAN': return val ? 'Yes' : 'No';
+      case 'MULTI_SELECT': return Array.isArray(val) ? val.join(', ') : String(val);
+      case 'DATE': return new Date(String(val)).toLocaleDateString();
+      case 'CURRENCY': return `AED ${Number(val).toLocaleString()}`;
+      case 'URL': return String(val);
+      default: return String(val);
+    }
+  }
+
+  const DETAIL_CATEGORIES = [
+    { key: 'contact',  label: 'Contact' },
+    { key: 'lead',     label: 'Lead Info' },
+    { key: 'business', label: 'Business' },
+    { key: 'system',   label: 'System' },
+  ];
+
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -652,8 +723,8 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {/* Lead Details */}
-          <div className="card p-4 space-y-3">
+          {/* Lead Details — dynamically rendered from field config */}
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 space-y-3">
             <h3 className="font-semibold text-gray-900 flex items-center gap-1.5">
               <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               Lead Details
@@ -699,6 +770,10 @@ export default function LeadDetailPage() {
                       <input type="number" className="input text-sm" required={cf.isRequired}
                         value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
                     )}
+                    {cf.type === 'CURRENCY' && (
+                      <input type="number" className="input text-sm" required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
+                    )}
                     {cf.type === 'DATE' && (
                       <input type="date" className="input text-sm" required={cf.isRequired}
                         value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
@@ -707,7 +782,7 @@ export default function LeadDetailPage() {
                       <select className="input text-sm" required={cf.isRequired}
                         value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })}>
                         <option value="">Select...</option>
-                        {(cf.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                        {(cf.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
                       </select>
                     )}
                     {cf.type === 'BOOLEAN' && (
@@ -725,8 +800,12 @@ export default function LeadDetailPage() {
                         }
                       }}>
                         <option value="">Add option...</option>
-                        {(cf.options || []).filter(o => !((customEditValues[cf.name] as string[]) || []).includes(o)).map(o => <option key={o} value={o}>{o}</option>)}
+                        {(cf.options || []).filter((o: string) => !((customEditValues[cf.name] as string[]) || []).includes(o)).map((o: string) => <option key={o} value={o}>{o}</option>)}
                       </select>
+                    )}
+                    {cf.type === 'TEXTAREA' && (
+                      <textarea className="input text-sm" rows={3} required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
                     )}
                   </div>
                 ))}
@@ -738,26 +817,69 @@ export default function LeadDetailPage() {
                 </div>
               </div>
             ) : (
-              <>
-                <InfoRow label="Source" value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
-                <InfoRow label="Campaign" value={lead.campaign || '-'} />
-                <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
-                <InfoRow label="Budget" value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
-                <InfoRow label="Stage" value={lead.stage?.name || '-'} />
-                {/* Custom fields */}
-                {customFields.map(cf => {
-                  const cd = (lead.customData || {}) as Record<string, unknown>;
-                  const val = cd[cf.name];
-                  let display = '-';
-                  if (val !== undefined && val !== null && val !== '') {
-                    if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
-                    else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
-                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
-                    else display = String(val);
-                  }
-                  return <InfoRow key={cf.id} label={cf.label} value={display} />;
-                })}
-              </>
+              fieldConfig ? (
+                <>
+                  {DETAIL_CATEGORIES.map(cat => {
+                    const fields = fieldConfig.builtInFields
+                      .filter((f: any) => f.category === cat.key && f.showInDetail && !FIELDS_SHOWN_ELSEWHERE.has(f.key))
+                      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+                    if (fields.length === 0) return null;
+                    return (
+                      <div key={cat.key}>
+                        <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mt-2 mb-0.5">{cat.label}</p>
+                        {fields.map((field: any) => (
+                          <InfoRow
+                            key={field.key}
+                            label={field.label}
+                            value={(BUILT_IN_FIELD_RENDERER[field.key] || (() => '-'))(lead)}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {/* Dynamic custom fields */}
+                  {(() => {
+                    const visibleCF = fieldConfig.customFields
+                      .filter((cf: any) => cf.showInDetail !== false)
+                      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+                    if (visibleCF.length === 0) return null;
+                    return (
+                      <div>
+                        <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mt-2 mb-0.5">Custom Fields</p>
+                        {visibleCF.map((cf: any) => (
+                          <InfoRow
+                            key={cf.id || cf.name}
+                            label={cf.label}
+                            value={renderCustomFieldValue(cf, lead)}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                /* Fallback: original hardcoded fields when field config API is unavailable */
+                <>
+                  <InfoRow label="Source" value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
+                  <InfoRow label="Campaign" value={lead.campaign || '-'} />
+                  <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
+                  <InfoRow label="Budget" value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
+                  <InfoRow label="Stage" value={lead.stage?.name || '-'} />
+                  {/* Custom fields (fallback) */}
+                  {customFields.map(cf => {
+                    const cd = (lead.customData || {}) as Record<string, unknown>;
+                    const val = cd[cf.name];
+                    let display = '-';
+                    if (val !== undefined && val !== null && val !== '') {
+                      if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
+                      else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
+                      else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
+                      else display = String(val);
+                    }
+                    return <InfoRow key={cf.id} label={cf.label} value={display} />;
+                  })}
+                </>
+              )
             )}
           </div>
 

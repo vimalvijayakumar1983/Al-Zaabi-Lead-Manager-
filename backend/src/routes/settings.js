@@ -262,6 +262,105 @@ router.delete('/account', validate(z.object({
   }
 });
 
+// ─── Field Configuration (Built-in + Custom fields visibility) ──────
+
+const BUILT_IN_FIELDS = [
+  { key: 'firstName', label: 'First Name', type: 'TEXT', locked: true, category: 'contact' },
+  { key: 'lastName', label: 'Last Name', type: 'TEXT', locked: true, category: 'contact' },
+  { key: 'email', label: 'Email', type: 'EMAIL', category: 'contact' },
+  { key: 'phone', label: 'Phone', type: 'PHONE', category: 'contact' },
+  { key: 'company', label: 'Company', type: 'TEXT', category: 'contact' },
+  { key: 'jobTitle', label: 'Job Title', type: 'TEXT', category: 'contact' },
+  { key: 'source', label: 'Source', type: 'SELECT', category: 'lead' },
+  { key: 'status', label: 'Status', type: 'SELECT', locked: true, category: 'lead' },
+  { key: 'score', label: 'Score', type: 'NUMBER', category: 'lead' },
+  { key: 'budget', label: 'Budget', type: 'CURRENCY', category: 'business' },
+  { key: 'productInterest', label: 'Product Interest', type: 'TEXT', category: 'business' },
+  { key: 'campaign', label: 'Campaign', type: 'TEXT', category: 'business' },
+  { key: 'location', label: 'Location', type: 'TEXT', category: 'contact' },
+  { key: 'website', label: 'Website', type: 'URL', category: 'contact' },
+  { key: 'conversionProb', label: 'Conversion %', type: 'NUMBER', category: 'lead' },
+  { key: 'stage', label: 'Pipeline Stage', type: 'SELECT', category: 'lead' },
+  { key: 'assignedTo', label: 'Assigned To', type: 'TEXT', locked: true, category: 'lead' },
+  { key: 'tags', label: 'Tags', type: 'MULTI_SELECT', category: 'lead' },
+  { key: 'createdAt', label: 'Created Date', type: 'DATE', category: 'system' },
+  { key: 'updatedAt', label: 'Updated Date', type: 'DATE', category: 'system' },
+];
+
+// GET /field-config — Get field configuration for a division
+router.get('/field-config', async (req, res, next) => {
+  try {
+    const { divisionId } = req.query;
+    const orgId = req.organizationId;
+
+    // Get org settings for field config
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+
+    const settings = (org?.settings || {});
+    const divKey = divisionId ? `division_${divisionId}` : 'default';
+    const fieldConfig = settings.fieldConfig?.[divKey] || {};
+
+    // Merge built-in fields with saved config
+    const builtInFields = BUILT_IN_FIELDS.map((f, idx) => ({
+      ...f,
+      showInList: fieldConfig[f.key]?.showInList ?? true,
+      showInDetail: fieldConfig[f.key]?.showInDetail ?? true,
+      order: fieldConfig[f.key]?.order ?? idx,
+      isBuiltIn: true,
+    }));
+
+    // Get custom fields for this org (optionally filtered by division)
+    if (divisionId) {
+      const customFields = await prisma.customField.findMany({
+        where: {
+          organizationId: orgId,
+          OR: [
+            { divisionId: null },
+            { divisionId },
+          ],
+        },
+        orderBy: { order: 'asc' },
+      });
+      return res.json({ builtInFields, customFields });
+    }
+
+    const customFields = await prisma.customField.findMany({
+      where: { organizationId: orgId },
+      orderBy: { order: 'asc' },
+    });
+
+    res.json({ builtInFields, customFields });
+  } catch (err) { next(err); }
+});
+
+// PUT /field-config — Save built-in field visibility per division
+router.put('/field-config', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const { divisionId, fields } = req.body;
+    const orgId = req.organizationId;
+    const divKey = divisionId ? `division_${divisionId}` : 'default';
+
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+
+    const settings = (org?.settings || {});
+    if (!settings.fieldConfig) settings.fieldConfig = {};
+    settings.fieldConfig[divKey] = fields;
+
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: { settings },
+    });
+
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
 // ─── Custom Fields ─────────────────────────────────────────────
 
 // List custom fields
@@ -298,13 +397,18 @@ router.get('/custom-fields', async (req, res, next) => {
 // Create custom field
 router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
   label: z.string().min(1).max(100),
-  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']),
+  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE', 'TEXTAREA', 'CURRENCY']),
   options: z.array(z.string()).optional(),
   isRequired: z.boolean().optional(),
   divisionId: z.string().uuid().optional().nullable(),
+  showInList: z.boolean().optional(),
+  showInDetail: z.boolean().optional(),
+  description: z.string().max(500).optional().nullable(),
+  placeholder: z.string().max(200).optional().nullable(),
+  defaultValue: z.string().max(500).optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const { label, type, options, isRequired, divisionId } = req.validated;
+    const { label, type, options, isRequired, divisionId, showInList, showInDetail, description, placeholder, defaultValue } = req.validated;
     const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
 
     // Generate name from label (e.g. "Company Size" -> "companySize")
@@ -328,6 +432,12 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
         options: (type === 'SELECT' || type === 'MULTI_SELECT') ? (options || []) : null,
         isRequired: isRequired || false,
         order: (maxOrder._max.order ?? -1) + 1,
+        showInList: showInList ?? true,
+        showInDetail: showInDetail ?? true,
+        description: description || null,
+        placeholder: placeholder || null,
+        defaultValue: defaultValue || null,
+        divisionId: divisionId || null,
         organizationId: targetOrgId,
       },
     });
@@ -344,9 +454,15 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
 // Update custom field
 router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
   label: z.string().min(1).max(100).optional(),
-  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']).optional(),
+  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE', 'TEXTAREA', 'CURRENCY']).optional(),
   options: z.array(z.string()).optional().nullable(),
   isRequired: z.boolean().optional(),
+  showInList: z.boolean().optional(),
+  showInDetail: z.boolean().optional(),
+  description: z.string().max(500).optional().nullable(),
+  placeholder: z.string().max(200).optional().nullable(),
+  defaultValue: z.string().max(500).optional().nullable(),
+  divisionId: z.string().uuid().optional().nullable(),
 })), async (req, res, next) => {
   try {
     const existing = await prisma.customField.findFirst({

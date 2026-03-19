@@ -3,7 +3,8 @@ import type {
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
   ApiKey, WidgetConfig, Contact, ContactStats, Deal,
-  AppNotification, NotificationPreferences
+  AppNotification, NotificationPreferences,
+  BuiltInField, CustomField
 } from '@/types';
 
 // Always use same-origin /api path — Next.js API route proxies to backend server-side
@@ -732,12 +733,34 @@ class ApiClient {
     return this.request<any[]>(`/settings/custom-fields${q}`);
   }
 
-  async createCustomField(data: { label: string; type: string; options?: string[]; isRequired?: boolean }) {
-    return this.request<any>('/settings/custom-fields', { method: 'POST', body: JSON.stringify(data) });
+  async createCustomField(data: {
+    label: string;
+    type: string;
+    options?: string[];
+    isRequired?: boolean;
+    showInList?: boolean;
+    showInDetail?: boolean;
+    description?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    divisionId?: string | null;
+  }) {
+    return this.request<CustomField>('/settings/custom-fields', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateCustomField(id: string, data: { label?: string; type?: string; options?: string[] | null; isRequired?: boolean }) {
-    return this.request<any>(`/settings/custom-fields/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  async updateCustomField(id: string, data: {
+    label?: string;
+    type?: string;
+    options?: string[] | null;
+    isRequired?: boolean;
+    showInList?: boolean;
+    showInDetail?: boolean;
+    description?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    divisionId?: string | null;
+  }) {
+    return this.request<CustomField>(`/settings/custom-fields/${id}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async reorderCustomFields(fieldIds: string[]) {
@@ -746,6 +769,19 @@ class ApiClient {
 
   async deleteCustomField(id: string) {
     return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
+  }
+
+  // Field Configuration (built-in field visibility + custom fields)
+  async getFieldConfig(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[] }>(`/settings/field-config${q}`);
+  }
+
+  async saveFieldConfig(divisionId: string | null, fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }>) {
+    return this.request<{ success: boolean }>('/settings/field-config', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, fields }),
+    });
   }
 
   // ─── Email Settings ──────────────────────────────────────────────

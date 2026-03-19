@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import type { CustomField, FieldType, Organization } from '@/types';
+import type { CustomField, FieldType, Organization, BuiltInField } from '@/types';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
@@ -12,6 +12,7 @@ import {
   AtSign, Palette, ChevronDown, Image, Save, Sparkles,
   Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
   Download, RefreshCw, Inbox, Server,
+  Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
 } from 'lucide-react';
 
 type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
@@ -1175,163 +1176,860 @@ const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.Componen
   PHONE: { label: 'Phone', icon: Phone, color: 'bg-pink-100 text-pink-700' },
 };
 
+/* ─── Field Type Configuration ──────────────────────────────────────── */
+
+const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.ComponentType<{ className?: string }>; color: string; description: string }> = {
+  TEXT:         { label: 'Text',         icon: Type,       color: 'bg-gray-100 text-gray-700',    description: 'Short text input' },
+  TEXTAREA:    { label: 'Long Text',    icon: FileText,   color: 'bg-gray-100 text-gray-600',    description: 'Multi-line text area' },
+  NUMBER:      { label: 'Number',       icon: Hash,       color: 'bg-blue-100 text-blue-700',    description: 'Numeric value' },
+  CURRENCY:    { label: 'Currency',     icon: DollarSign, color: 'bg-emerald-100 text-emerald-700', description: 'Monetary amount' },
+  DATE:        { label: 'Date',         icon: Calendar,   color: 'bg-purple-100 text-purple-700', description: 'Date picker' },
+  SELECT:      { label: 'Dropdown',     icon: List,       color: 'bg-amber-100 text-amber-700',  description: 'Single choice dropdown' },
+  MULTI_SELECT:{ label: 'Multi-Select', icon: List,       color: 'bg-orange-100 text-orange-700', description: 'Multiple choice tags' },
+  BOOLEAN:     { label: 'Yes/No',       icon: ToggleLeft, color: 'bg-green-100 text-green-700',  description: 'Toggle switch' },
+  URL:         { label: 'URL',          icon: Link2,      color: 'bg-cyan-100 text-cyan-700',    description: 'Website URL' },
+  EMAIL:       { label: 'Email',        icon: AtSign,     color: 'bg-indigo-100 text-indigo-700', description: 'Email address' },
+  PHONE:       { label: 'Phone',        icon: Phone,      color: 'bg-pink-100 text-pink-700',    description: 'Phone number' },
+};
+
+/* ─── Built-in Field Definitions (fallback if API unavailable) ──────── */
+
+const BUILTIN_FIELD_CATEGORIES = [
+  { key: 'contact',  label: 'Contact Info', icon: Users,     emoji: '📋' },
+  { key: 'lead',     label: 'Lead Info',    icon: BarChart3, emoji: '🎯' },
+  { key: 'business', label: 'Business',     icon: Briefcase, emoji: '💼' },
+  { key: 'system',   label: 'System',       icon: Clock,     emoji: '⚙️' },
+];
+
+const DEFAULT_BUILTIN_FIELDS: BuiltInField[] = [
+  // Contact Info
+  { key: 'firstName',      label: 'First Name',      type: 'text',    category: 'contact',  locked: true,  showInList: true,  showInDetail: true, order: 1,  isBuiltIn: true },
+  { key: 'lastName',       label: 'Last Name',       type: 'text',    category: 'contact',  locked: true,  showInList: true,  showInDetail: true, order: 2,  isBuiltIn: true },
+  { key: 'email',          label: 'Email',            type: 'email',   category: 'contact',  locked: false, showInList: true,  showInDetail: true, order: 3,  isBuiltIn: true },
+  { key: 'phone',          label: 'Phone',            type: 'phone',   category: 'contact',  locked: false, showInList: true,  showInDetail: true, order: 4,  isBuiltIn: true },
+  { key: 'company',        label: 'Company',          type: 'text',    category: 'contact',  locked: false, showInList: true,  showInDetail: true, order: 5,  isBuiltIn: true },
+  { key: 'jobTitle',       label: 'Job Title',        type: 'text',    category: 'contact',  locked: false, showInList: false, showInDetail: true, order: 6,  isBuiltIn: true },
+  { key: 'location',       label: 'Location',         type: 'text',    category: 'contact',  locked: false, showInList: false, showInDetail: true, order: 7,  isBuiltIn: true },
+  { key: 'website',        label: 'Website',          type: 'url',     category: 'contact',  locked: false, showInList: false, showInDetail: true, order: 8,  isBuiltIn: true },
+  // Lead Info
+  { key: 'source',         label: 'Source',           type: 'select',  category: 'lead',     locked: false, showInList: true,  showInDetail: true, order: 9,  isBuiltIn: true },
+  { key: 'status',         label: 'Status',           type: 'select',  category: 'lead',     locked: true,  showInList: true,  showInDetail: true, order: 10, isBuiltIn: true },
+  { key: 'score',          label: 'Score',            type: 'number',  category: 'lead',     locked: false, showInList: true,  showInDetail: true, order: 11, isBuiltIn: true },
+  { key: 'stageId',        label: 'Pipeline Stage',   type: 'select',  category: 'lead',     locked: false, showInList: false, showInDetail: true, order: 12, isBuiltIn: true },
+  { key: 'assignedTo',     label: 'Assigned To',      type: 'user',    category: 'lead',     locked: true,  showInList: true,  showInDetail: true, order: 13, isBuiltIn: true },
+  { key: 'tags',           label: 'Tags',             type: 'tags',    category: 'lead',     locked: false, showInList: false, showInDetail: true, order: 14, isBuiltIn: true },
+  { key: 'conversionProb', label: 'Conversion %',     type: 'number',  category: 'lead',     locked: false, showInList: false, showInDetail: true, order: 15, isBuiltIn: true },
+  // Business
+  { key: 'budget',         label: 'Budget',           type: 'currency', category: 'business', locked: false, showInList: false, showInDetail: true, order: 16, isBuiltIn: true },
+  { key: 'productInterest', label: 'Product Interest', type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, order: 17, isBuiltIn: true },
+  { key: 'campaign',       label: 'Campaign',         type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, order: 18, isBuiltIn: true },
+  // System
+  { key: 'createdAt',      label: 'Created Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, order: 19, isBuiltIn: true },
+  { key: 'updatedAt',      label: 'Updated Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, order: 20, isBuiltIn: true },
+];
+
+/* ─── Helper: Toggle Switch ─────────────────────────────────────────── */
+
+function FieldToggle({ checked, onChange, disabled, size = 'sm' }: {
+  checked: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+  size?: 'sm' | 'md';
+}) {
+  const sizeClasses = size === 'md'
+    ? 'h-6 w-11'
+    : 'h-5 w-9';
+  const dotClasses = size === 'md'
+    ? 'h-4 w-4'
+    : 'h-3.5 w-3.5';
+  const translateChecked = size === 'md' ? 'translate-x-6' : 'translate-x-[18px]';
+
+  return (
+    <button
+      type="button"
+      onClick={disabled ? undefined : onChange}
+      disabled={disabled}
+      className={`relative inline-flex ${sizeClasses} items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+        disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+      } ${checked ? 'bg-indigo-600' : 'bg-gray-200'}`}
+    >
+      <span
+        className={`inline-block ${dotClasses} transform rounded-full bg-white shadow-sm transition-transform duration-200 ${
+          checked ? translateChecked : 'translate-x-1'
+        }`}
+      />
+    </button>
+  );
+}
+
+/* ─── Helper: Stat Card ─────────────────────────────────────────────── */
+
+function StatCard({ icon: Icon, label, value, color }: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-3">
+      <div className={`h-10 w-10 rounded-lg ${color} flex items-center justify-center flex-shrink-0`}>
+        <Icon className="h-5 w-5" />
+      </div>
+      <div>
+        <p className="text-2xl font-bold text-gray-900">{value}</p>
+        <p className="text-xs text-gray-500">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Helper: Type Badge ────────────────────────────────────────────── */
+
+function TypeBadge({ type, small }: { type: string; small?: boolean }) {
+  const config = FIELD_TYPE_CONFIG[type as FieldType];
+  if (!config) {
+    return (
+      <span className={`inline-flex items-center gap-1 ${small ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-xs'} rounded-md font-medium bg-gray-100 text-gray-600`}>
+        {type}
+      </span>
+    );
+  }
+  const Icon = config.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 ${small ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-xs'} rounded-md font-medium ${config.color}`}>
+      <Icon className={small ? 'h-2.5 w-2.5' : 'h-3 w-3'} />
+      {config.label}
+    </span>
+  );
+}
+
+/* ─── Helper: Division Badge ────────────────────────────────────────── */
+
+function DivisionBadge({ divisionId, divisions }: { divisionId?: string | null; divisions: Organization[] }) {
+  if (!divisionId) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600">
+        <Globe className="h-2.5 w-2.5" />
+        Global
+      </span>
+    );
+  }
+  const div = divisions.find(d => d.id === divisionId);
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700">
+      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: div?.primaryColor || '#6366f1' }} />
+      {div?.name || 'Division'}
+    </span>
+  );
+}
+
+/* ─── Helper: Search Input ──────────────────────────────────────────── */
+
+function SearchInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <div className="relative">
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder || 'Search fields...'}
+        className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+      />
+      {value && (
+        <button onClick={() => onChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-gray-100">
+          <X className="h-3.5 w-3.5 text-gray-400" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MAIN: CustomFieldsSection
+   ═══════════════════════════════════════════════════════════════════════ */
+
 function CustomFieldsSection() {
-  const [fields, setFields] = useState<CustomField[]>([]);
+  // ─── State ─────────────────────────────────────────────────────────
+  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
+  const [builtInFields, setBuiltInFields] = useState<BuiltInField[]>([]);
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingField, setEditingField] = useState<CustomField | null>(null);
+  const [unsavedChanges, setUnsavedChanges] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [activeSection, setActiveSection] = useState<'builtin' | 'custom'>('builtin');
+  const [searchQuery, setSearchQuery] = useState('');
   const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [divDropdownOpen, setDivDropdownOpen] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const fetchFields = async () => {
+  const divDropdownRef = useRef<HTMLDivElement>(null);
+
+  // ─── Fetch divisions on mount ──────────────────────────────────────
+  useEffect(() => {
+    api.getDivisions()
+      .then(divs => setDivisions(divs))
+      .catch(() => {});
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (divDropdownRef.current && !divDropdownRef.current.contains(e.target as Node)) {
+        setDivDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // ─── Auto-dismiss toast ────────────────────────────────────────────
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // ─── Fetch field config ────────────────────────────────────────────
+  const fetchFieldConfig = useCallback(async () => {
+    setLoading(true);
     try {
-      const data = await api.getCustomFields();
-      setFields(data);
-    } catch { /* ignore */ }
+      const data = await api.getFieldConfig(selectedDivisionId || undefined);
+      setBuiltInFields(data.builtInFields || DEFAULT_BUILTIN_FIELDS);
+      setCustomFields(data.customFields || []);
+    } catch {
+      // Fallback: fetch custom fields only
+      try {
+        const cfs = await api.getCustomFields(selectedDivisionId || undefined);
+        setCustomFields(cfs || []);
+        setBuiltInFields(DEFAULT_BUILTIN_FIELDS);
+      } catch {
+        setBuiltInFields(DEFAULT_BUILTIN_FIELDS);
+        setCustomFields([]);
+      }
+    }
+    setUnsavedChanges(false);
     setLoading(false);
+  }, [selectedDivisionId]);
+
+  useEffect(() => { fetchFieldConfig(); }, [fetchFieldConfig]);
+
+  // ─── Computed stats ────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const allFields = [
+      ...builtInFields.map(f => ({ showInList: f.showInList, showInDetail: f.showInDetail })),
+      ...customFields.map(f => ({ showInList: f.showInList, showInDetail: f.showInDetail })),
+    ];
+    return {
+      total: allFields.length,
+      inList: allFields.filter(f => f.showInList).length,
+      inDetail: allFields.filter(f => f.showInDetail).length,
+      custom: customFields.length,
+    };
+  }, [builtInFields, customFields]);
+
+  // ─── Built-in field toggle ─────────────────────────────────────────
+  const toggleBuiltIn = (key: string, prop: 'showInList' | 'showInDetail') => {
+    setBuiltInFields(prev => prev.map(f => {
+      if (f.key !== key || f.locked) return f;
+      return { ...f, [prop]: !f[prop] };
+    }));
+    setUnsavedChanges(true);
   };
 
-  useEffect(() => { fetchFields(); }, []);
+  // ─── Save built-in field config ────────────────────────────────────
+  const saveBuiltInConfig = async () => {
+    setSaving(true);
+    try {
+      const fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }> = {};
+      builtInFields.forEach(f => {
+        fields[f.key] = { showInList: f.showInList, showInDetail: f.showInDetail, order: f.order };
+      });
+      await api.saveFieldConfig(selectedDivisionId || null, fields);
+      setUnsavedChanges(false);
+      setToast({ type: 'success', message: 'Field configuration saved successfully' });
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to save configuration' });
+    }
+    setSaving(false);
+  };
 
-  const handleDelete = async (field: CustomField) => {
-    if (!confirm(`Delete custom field "${field.label}"? This will remove all data stored in this field from all leads.`)) return;
+  // ─── Custom field actions ──────────────────────────────────────────
+  const handleDeleteCustomField = async (field: CustomField) => {
+    if (!confirm(`Delete custom field "${field.label}"?\n\nThis will permanently remove all data stored in this field from all leads.`)) return;
     try {
       await api.deleteCustomField(field.id);
-      fetchFields();
+      setToast({ type: 'success', message: `Field "${field.label}" deleted` });
+      fetchFieldConfig();
     } catch (err: any) {
-      alert(err.message);
+      setToast({ type: 'error', message: err.message });
     }
   };
 
+  // ─── Custom field drag reorder ─────────────────────────────────────
   const handleDragStart = (idx: number) => setDragIdx(idx);
 
   const handleDragOver = (e: React.DragEvent, idx: number) => {
     e.preventDefault();
     if (dragIdx === null || dragIdx === idx) return;
-    const items = [...fields];
+    const items = [...customFields];
     const dragged = items.splice(dragIdx, 1)[0];
     items.splice(idx, 0, dragged);
-    setFields(items);
+    setCustomFields(items);
     setDragIdx(idx);
   };
 
   const handleDragEnd = async () => {
     setDragIdx(null);
     try {
-      await api.reorderCustomFields(fields.map(f => f.id));
+      await api.reorderCustomFields(customFields.map(f => f.id));
     } catch { /* ignore */ }
   };
 
+  // ─── Filter helpers ────────────────────────────────────────────────
+  const filteredBuiltInFields = useMemo(() => {
+    if (!searchQuery.trim()) return builtInFields;
+    const q = searchQuery.toLowerCase();
+    return builtInFields.filter(f =>
+      f.label.toLowerCase().includes(q) || f.key.toLowerCase().includes(q) || f.category.toLowerCase().includes(q)
+    );
+  }, [builtInFields, searchQuery]);
+
+  const filteredCustomFields = useMemo(() => {
+    if (!searchQuery.trim()) return customFields;
+    const q = searchQuery.toLowerCase();
+    return customFields.filter(f =>
+      f.label.toLowerCase().includes(q) || f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q)
+    );
+  }, [customFields, searchQuery]);
+
+  const groupedBuiltInFields = useMemo(() => {
+    const groups: Record<string, BuiltInField[]> = {};
+    filteredBuiltInFields.forEach(f => {
+      if (!groups[f.category]) groups[f.category] = [];
+      groups[f.category].push(f);
+    });
+    return groups;
+  }, [filteredBuiltInFields]);
+
+  // ─── Division selector label ───────────────────────────────────────
+  const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
+  const divisionLabel = selectedDivision ? selectedDivision.name : 'All Divisions / Group Level';
+
+  // ─── Render ────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <SectionHeader title="Custom Fields" description="Add custom columns to your leads table. These fields appear in lead details, table view, and import mapping." />
-        <button onClick={() => { setEditingField(null); setShowModal(true); }} className="btn-primary gap-1.5 text-sm">
+      {/* ── Toast Notification ────────────────────────────────────── */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-[60] flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium animate-fade-in ${
+          toast.type === 'success'
+            ? 'bg-white border-green-200 text-green-800'
+            : 'bg-white border-red-200 text-red-800'
+        }`}>
+          {toast.type === 'success'
+            ? <CheckCircle2 className="h-4 w-4 text-green-500" />
+            : <AlertTriangle className="h-4 w-4 text-red-500" />
+          }
+          {toast.message}
+          <button onClick={() => setToast(null)} className="ml-2 p-0.5 rounded hover:bg-gray-100">
+            <X className="h-3.5 w-3.5 text-gray-400" />
+          </button>
+        </div>
+      )}
+
+      {/* ── Header ────────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Field Manager</h2>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Control which fields appear in your Lead List and Lead Detail views. Create custom fields scoped to divisions.
+          </p>
+        </div>
+        <button
+          onClick={() => { setEditingField(null); setActiveSection('custom'); setShowModal(true); }}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors shadow-sm flex-shrink-0"
+        >
           <Plus className="h-4 w-4" />
-          Add Field
+          Add Custom Field
         </button>
       </div>
 
-      {loading ? (
-        <div className="card p-8 text-center">
-          <div className="animate-spin h-6 w-6 border-2 border-brand-600 border-t-transparent rounded-full mx-auto" />
+      {/* ── Stats Bar ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard icon={Layers}      label="Total Fields"     value={stats.total}    color="bg-gray-100 text-gray-600" />
+        <StatCard icon={LayoutGrid}  label="In List View"     value={stats.inList}   color="bg-blue-100 text-blue-600" />
+        <StatCard icon={Eye}         label="In Detail View"   value={stats.inDetail} color="bg-purple-100 text-purple-600" />
+        <StatCard icon={SlidersHorizontal} label="Custom Fields" value={stats.custom} color="bg-indigo-100 text-indigo-600" />
+      </div>
+
+      {/* ── Division Selector Bar ─────────────────────────────────── */}
+      <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 text-sm text-gray-500">
+          <Building2 className="h-4 w-4" />
+          <span className="font-medium">Scope:</span>
         </div>
-      ) : fields.length === 0 ? (
-        <div className="card p-8 text-center">
-          <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
-            <Columns3 className="h-6 w-6 text-gray-400" />
-          </div>
-          <p className="text-sm font-medium text-gray-900 mb-1">No custom fields yet</p>
-          <p className="text-xs text-gray-500 mb-4">Create custom fields to track additional lead information specific to your business.</p>
-          <button onClick={() => { setEditingField(null); setShowModal(true); }} className="btn-primary text-sm gap-1.5">
-            <Plus className="h-4 w-4" />
-            Create First Field
+        <div className="relative" ref={divDropdownRef}>
+          <button
+            onClick={() => setDivDropdownOpen(!divDropdownOpen)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            {selectedDivision && (
+              <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: selectedDivision.primaryColor || '#6366f1' }} />
+            )}
+            {!selectedDivision && <Globe className="h-3.5 w-3.5 text-gray-400" />}
+            {divisionLabel}
+            <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${divDropdownOpen ? 'rotate-180' : ''}`} />
           </button>
-        </div>
-      ) : (
-        <div className="card overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-            <div className="grid grid-cols-12 gap-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-              <div className="col-span-1" />
-              <div className="col-span-4">Field Label</div>
-              <div className="col-span-2">Type</div>
-              <div className="col-span-2">Required</div>
-              <div className="col-span-3 text-right">Actions</div>
-            </div>
-          </div>
-          <div className="divide-y divide-gray-100">
-            {fields.map((field, idx) => {
-              const typeConfig = FIELD_TYPE_CONFIG[field.type];
-              const TypeIcon = typeConfig.icon;
-              return (
-                <div
-                  key={field.id}
-                  draggable
-                  onDragStart={() => handleDragStart(idx)}
-                  onDragOver={(e) => handleDragOver(e, idx)}
-                  onDragEnd={handleDragEnd}
-                  className={`grid grid-cols-12 gap-3 items-center px-4 py-3 transition-colors ${
-                    dragIdx === idx ? 'bg-brand-50' : 'hover:bg-gray-50'
+          {divDropdownOpen && (
+            <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 max-h-64 overflow-y-auto">
+              <button
+                onClick={() => { setSelectedDivisionId(''); setDivDropdownOpen(false); }}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
+                  !selectedDivisionId ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700'
+                }`}
+              >
+                <Globe className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                All Divisions / Group Level
+                {!selectedDivisionId && <Check className="h-3.5 w-3.5 ml-auto text-indigo-600" />}
+              </button>
+              {divisions.length > 0 && <div className="border-t border-gray-100 my-1" />}
+              {divisions.map(div => (
+                <button
+                  key={div.id}
+                  onClick={() => { setSelectedDivisionId(div.id); setDivDropdownOpen(false); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
+                    selectedDivisionId === div.id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700'
                   }`}
                 >
-                  <div className="col-span-1">
-                    <GripVertical className="h-4 w-4 text-gray-300 cursor-grab active:cursor-grabbing" />
+                  <span className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: div.primaryColor || '#6366f1' }} />
+                  <span className="truncate">{div.name}</span>
+                  {div._count && (
+                    <span className="ml-auto text-[10px] text-gray-400">{div._count.leads} leads</span>
+                  )}
+                  {selectedDivisionId === div.id && <Check className="h-3.5 w-3.5 ml-auto text-indigo-600 flex-shrink-0" />}
+                </button>
+              ))}
+              {divisions.length === 0 && (
+                <p className="px-3 py-2 text-xs text-gray-400">No divisions found</p>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex-1" />
+        <div className="w-56">
+          <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search fields..." />
+        </div>
+      </div>
+
+      {/* ── Section Tabs ──────────────────────────────────────────── */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => setActiveSection('builtin')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'builtin'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <Settings2 className="h-4 w-4" />
+            Built-in Fields
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'builtin' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {builtInFields.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveSection('custom')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'custom'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Custom Fields
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'custom' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {customFields.length}
+            </span>
+          </button>
+        </div>
+
+        {/* ── Loading State ──────────────────────────────────────── */}
+        {loading ? (
+          <div className="p-12 text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-indigo-600 mx-auto mb-3" />
+            <p className="text-sm text-gray-500">Loading field configuration…</p>
+          </div>
+        ) : activeSection === 'builtin' ? (
+          /* ═══ BUILT-IN FIELDS TAB ═══════════════════════════════ */
+          <div>
+            {/* Column headers */}
+            <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50">
+              <div className="grid grid-cols-12 gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                <div className="col-span-5">Field</div>
+                <div className="col-span-2">Type</div>
+                <div className="col-span-2 text-center">Show in List</div>
+                <div className="col-span-2 text-center">Show in Detail</div>
+                <div className="col-span-1 text-center">Status</div>
+              </div>
+            </div>
+
+            {/* Grouped fields */}
+            {BUILTIN_FIELD_CATEGORIES.map(cat => {
+              const catFields = groupedBuiltInFields[cat.key];
+              if (!catFields || catFields.length === 0) return null;
+
+              return (
+                <div key={cat.key}>
+                  {/* Category header */}
+                  <div className="px-5 py-2 bg-gray-50/70 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{cat.emoji}</span>
+                      <span className="text-xs font-semibold text-gray-600 uppercase tracking-wider">{cat.label}</span>
+                      <span className="text-[10px] text-gray-400">({catFields.length})</span>
+                    </div>
                   </div>
-                  <div className="col-span-4">
-                    <p className="text-sm font-medium text-gray-900">{field.label}</p>
-                    <p className="text-xs text-gray-400 font-mono">{field.name}</p>
-                  </div>
-                  <div className="col-span-2">
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${typeConfig.color}`}>
-                      <TypeIcon className="h-3 w-3" />
-                      {typeConfig.label}
-                    </span>
-                  </div>
-                  <div className="col-span-2">
-                    {field.isRequired ? (
-                      <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded">Required</span>
-                    ) : (
-                      <span className="text-xs text-gray-400">Optional</span>
-                    )}
-                  </div>
-                  <div className="col-span-3 flex items-center justify-end gap-1">
-                    {field.options && field.options.length > 0 && (
-                      <span className="text-xs text-gray-400 mr-2">{(field.options as string[]).length} options</span>
-                    )}
-                    <button onClick={() => { setEditingField(field); setShowModal(true); }}
-                      className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="Edit">
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button onClick={() => handleDelete(field)}
-                      className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Delete">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
+
+                  {/* Field rows */}
+                  {catFields.map((field, idx) => (
+                    <div
+                      key={field.key}
+                      className={`grid grid-cols-12 gap-2 items-center px-5 py-2.5 border-b border-gray-100 transition-colors ${
+                        idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'
+                      } hover:bg-indigo-50/30`}
+                    >
+                      {/* Field name */}
+                      <div className="col-span-5 flex items-center gap-2.5">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{field.label}</p>
+                          <p className="text-[10px] text-gray-400 font-mono">{field.key}</p>
+                        </div>
+                      </div>
+
+                      {/* Type */}
+                      <div className="col-span-2">
+                        <TypeBadge type={field.type} small />
+                      </div>
+
+                      {/* Show in List toggle */}
+                      <div className="col-span-2 flex justify-center">
+                        {field.locked ? (
+                          <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                            <Lock className="h-3 w-3" />
+                            Always
+                          </div>
+                        ) : (
+                          <FieldToggle
+                            checked={field.showInList}
+                            onChange={() => toggleBuiltIn(field.key, 'showInList')}
+                          />
+                        )}
+                      </div>
+
+                      {/* Show in Detail toggle */}
+                      <div className="col-span-2 flex justify-center">
+                        {field.locked ? (
+                          <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                            <Lock className="h-3 w-3" />
+                            Always
+                          </div>
+                        ) : (
+                          <FieldToggle
+                            checked={field.showInDetail}
+                            onChange={() => toggleBuiltIn(field.key, 'showInDetail')}
+                          />
+                        )}
+                      </div>
+
+                      {/* Status */}
+                      <div className="col-span-1 flex justify-center">
+                        {field.locked ? (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-600">
+                            <Lock className="h-2.5 w-2.5" />
+                            Locked
+                          </span>
+                        ) : (
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            field.showInList || field.showInDetail
+                              ? 'bg-green-50 text-green-600'
+                              : 'bg-gray-100 text-gray-400'
+                          }`}>
+                            {field.showInList || field.showInDetail ? 'Visible' : 'Hidden'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               );
             })}
+
+            {filteredBuiltInFields.length === 0 && searchQuery && (
+              <div className="p-8 text-center">
+                <Search className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">No built-in fields match "{searchQuery}"</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ═══ CUSTOM FIELDS TAB ═════════════════════════════════ */
+          <div>
+            {filteredCustomFields.length === 0 && !searchQuery ? (
+              /* Empty state */
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                  <Columns3 className="h-7 w-7 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-900 mb-1">No custom fields yet</p>
+                <p className="text-xs text-gray-500 mb-5 max-w-xs mx-auto">
+                  Create custom fields to track additional information specific to your business. Fields can be scoped to specific divisions.
+                </p>
+                <button
+                  onClick={() => { setEditingField(null); setShowModal(true); }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create First Field
+                </button>
+              </div>
+            ) : filteredCustomFields.length === 0 && searchQuery ? (
+              <div className="p-8 text-center">
+                <Search className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">No custom fields match "{searchQuery}"</p>
+              </div>
+            ) : (
+              <>
+                {/* Column headers */}
+                <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50">
+                  <div className="grid grid-cols-12 gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    <div className="col-span-1" />
+                    <div className="col-span-3">Field</div>
+                    <div className="col-span-1">Type</div>
+                    <div className="col-span-1 text-center">Required</div>
+                    <div className="col-span-1 text-center">List</div>
+                    <div className="col-span-1 text-center">Detail</div>
+                    <div className="col-span-2 text-center">Division</div>
+                    <div className="col-span-2 text-right">Actions</div>
+                  </div>
+                </div>
+
+                {/* Custom field rows */}
+                <div className="divide-y divide-gray-100">
+                  {filteredCustomFields.map((field, idx) => {
+                    const typeConfig = FIELD_TYPE_CONFIG[field.type];
+                    return (
+                      <div
+                        key={field.id}
+                        draggable
+                        onDragStart={() => handleDragStart(idx)}
+                        onDragOver={(e) => handleDragOver(e, idx)}
+                        onDragEnd={handleDragEnd}
+                        className={`grid grid-cols-12 gap-2 items-center px-5 py-2.5 transition-colors ${
+                          dragIdx === idx ? 'bg-indigo-50 ring-1 ring-indigo-200' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'
+                        } hover:bg-indigo-50/30`}
+                      >
+                        {/* Drag handle */}
+                        <div className="col-span-1 flex justify-center">
+                          <GripVertical className="h-4 w-4 text-gray-300 cursor-grab active:cursor-grabbing" />
+                        </div>
+
+                        {/* Field info */}
+                        <div className="col-span-3">
+                          <p className="text-sm font-medium text-gray-900">{field.label}</p>
+                          <p className="text-[10px] text-gray-400 font-mono">{field.name}</p>
+                          {field.description && (
+                            <p className="text-[10px] text-gray-400 mt-0.5 truncate">{field.description}</p>
+                          )}
+                        </div>
+
+                        {/* Type */}
+                        <div className="col-span-1">
+                          <TypeBadge type={field.type} small />
+                        </div>
+
+                        {/* Required */}
+                        <div className="col-span-1 flex justify-center">
+                          {field.isRequired ? (
+                            <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                              Required
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-gray-400">Optional</span>
+                          )}
+                        </div>
+
+                        {/* Show in List */}
+                        <div className="col-span-1 flex justify-center">
+                          <FieldToggle
+                            checked={field.showInList}
+                            onChange={async () => {
+                              try {
+                                await api.updateCustomField(field.id, { showInList: !field.showInList });
+                                setCustomFields(prev => prev.map(f =>
+                                  f.id === field.id ? { ...f, showInList: !f.showInList } : f
+                                ));
+                              } catch { /* ignore */ }
+                            }}
+                          />
+                        </div>
+
+                        {/* Show in Detail */}
+                        <div className="col-span-1 flex justify-center">
+                          <FieldToggle
+                            checked={field.showInDetail}
+                            onChange={async () => {
+                              try {
+                                await api.updateCustomField(field.id, { showInDetail: !field.showInDetail });
+                                setCustomFields(prev => prev.map(f =>
+                                  f.id === field.id ? { ...f, showInDetail: !f.showInDetail } : f
+                                ));
+                              } catch { /* ignore */ }
+                            }}
+                          />
+                        </div>
+
+                        {/* Division */}
+                        <div className="col-span-2 flex justify-center">
+                          <DivisionBadge divisionId={field.divisionId} divisions={divisions} />
+                        </div>
+
+                        {/* Actions */}
+                        <div className="col-span-2 flex items-center justify-end gap-1">
+                          {field.options && field.options.length > 0 && (
+                            <span className="text-[10px] text-gray-400 mr-1">{field.options.length} opts</span>
+                          )}
+                          <button
+                            onClick={() => { setEditingField(field); setShowModal(true); }}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                            title="Edit"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCustomField(field)}
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Add button at bottom */}
+                <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+                  <button
+                    onClick={() => { setEditingField(null); setShowModal(true); }}
+                    className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 transition-colors"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Another Field
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Save Bar (sticky when built-in fields have unsaved changes) ── */}
+      {unsavedChanges && activeSection === 'builtin' && (
+        <div className="sticky bottom-4 z-10">
+          <div className="bg-white border border-indigo-200 rounded-xl shadow-lg px-5 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <p className="text-sm font-medium text-gray-900">You have unsaved changes to built-in field visibility</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fetchFieldConfig()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Discard
+              </button>
+              <button
+                onClick={saveBuiltInConfig}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-60"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-3.5 w-3.5" />
+                    Save Configuration
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
+      {/* ── Create/Edit Modal ─────────────────────────────────────── */}
       {showModal && (
         <CustomFieldModal
           field={editingField}
+          divisions={divisions}
+          selectedDivisionId={selectedDivisionId}
           onClose={() => { setShowModal(false); setEditingField(null); }}
-          onSaved={() => { setShowModal(false); setEditingField(null); fetchFields(); }}
+          onSaved={() => {
+            setShowModal(false);
+            setEditingField(null);
+            fetchFieldConfig();
+            setToast({ type: 'success', message: editingField ? 'Field updated successfully' : 'Custom field created' });
+          }}
         />
       )}
     </div>
   );
 }
 
-function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | null; onClose: () => void; onSaved: () => void }) {
+/* ═══════════════════════════════════════════════════════════════════════
+   MODAL: CustomFieldModal (Enhanced)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function CustomFieldModal({
+  field,
+  divisions,
+  selectedDivisionId,
+  onClose,
+  onSaved,
+}: {
+  field: CustomField | null;
+  divisions: Organization[];
+  selectedDivisionId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const [label, setLabel] = useState(field?.label || '');
   const [type, setType] = useState<FieldType>(field?.type || 'TEXT');
   const [isRequired, setIsRequired] = useState(field?.isRequired || false);
+  const [showInList, setShowInList] = useState(field?.showInList ?? true);
+  const [showInDetail, setShowInDetail] = useState(field?.showInDetail ?? true);
+  const [description, setDescription] = useState(field?.description || '');
+  const [placeholder, setPlaceholder] = useState(field?.placeholder || '');
+  const [defaultValue, setDefaultValue] = useState(field?.defaultValue || '');
+  const [divisionId, setDivisionId] = useState<string>(field?.divisionId || selectedDivisionId || '');
   const [options, setOptions] = useState<string[]>((field?.options as string[]) || []);
   const [newOption, setNewOption] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(
+    !!(field?.description || field?.placeholder || field?.defaultValue)
+  );
 
   const isSelect = type === 'SELECT' || type === 'MULTI_SELECT';
 
@@ -1350,15 +2048,30 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!label.trim()) { setError('Label is required'); return; }
-    if (isSelect && options.length === 0) { setError('Add at least one option'); return; }
+    if (isSelect && options.length === 0) { setError('Add at least one option for dropdown fields'); return; }
 
     setSaving(true);
     setError('');
     try {
+      const payload: any = {
+        label,
+        type,
+        options: isSelect ? options : undefined,
+        isRequired,
+        showInList,
+        showInDetail,
+        description: description || undefined,
+        placeholder: placeholder || undefined,
+        defaultValue: defaultValue || undefined,
+        divisionId: divisionId || null,
+      };
+
       if (field) {
-        await api.updateCustomField(field.id, { label, type, options: isSelect ? options : null, isRequired });
+        // For update, set null options if not select
+        if (!isSelect) payload.options = null;
+        await api.updateCustomField(field.id, payload);
       } else {
-        await api.createCustomField({ label, type, options: isSelect ? options : undefined, isRequired });
+        await api.createCustomField(payload);
       }
       onSaved();
     } catch (err: any) {
@@ -1369,117 +2082,355 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-lg max-h-[85vh] overflow-y-auto animate-fade-in">
-        <div className="flex items-center justify-between p-5 border-b">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-white border border-gray-200 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col animate-fade-in">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">{field ? 'Edit' : 'Create'} Custom Field</h2>
-            <p className="text-xs text-gray-500 mt-0.5">This field will appear in lead forms, table, and details</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {field ? 'Update field properties and visibility settings' : 'This field will appear in lead forms, table, and details'}
+            </p>
           </div>
-          <button onClick={onClose} className="btn-icon"><X className="h-5 w-5" /></button>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Field Label */}
-          <div>
-            <label className="label">Field Label *</label>
-            <input className="input" value={label} onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Company Size, Industry, Contract Value" autoFocus />
-          </div>
-
-          {/* Field Type */}
-          <div>
-            <label className="label">Field Type *</label>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {(Object.entries(FIELD_TYPE_CONFIG) as [FieldType, typeof FIELD_TYPE_CONFIG[FieldType]][]).map(([key, config]) => {
-                const Icon = config.icon;
-                return (
-                  <button
-                    key={key} type="button"
-                    onClick={() => setType(key)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
-                      type === key ? 'border-brand-300 bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                    }`}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {config.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Options for SELECT / MULTI_SELECT */}
-          {isSelect && (
+        {/* Body */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+          <div className="p-5 space-y-5">
+            {/* Field Label */}
             <div>
-              <label className="label">Options *</label>
-              <div className="space-y-2">
-                {options.map((opt, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="flex-1 text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">{opt}</span>
-                    <button type="button" onClick={() => removeOption(idx)}
-                      className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Field Label <span className="text-red-500">*</span></label>
+              <input
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="e.g. Company Size, Industry, Contract Value"
+                autoFocus
+              />
+            </div>
+
+            {/* Division Scope */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Division Scope</label>
+              <select
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                value={divisionId}
+                onChange={(e) => setDivisionId(e.target.value)}
+              >
+                <option value="">All Divisions (Global)</option>
+                {divisions.map(div => (
+                  <option key={div.id} value={div.id}>{div.name}</option>
                 ))}
-                <div className="flex items-center gap-2">
-                  <input className="input flex-1" value={newOption} onChange={(e) => setNewOption(e.target.value)}
-                    placeholder="Type option and press Enter" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOption(); } }} />
-                  <button type="button" onClick={addOption} className="btn-secondary text-sm">Add</button>
-                </div>
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">
+                Global fields are visible across all divisions. Division-scoped fields only appear within that division.
+              </p>
+            </div>
+
+            {/* Field Type */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Field Type <span className="text-red-500">*</span></label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {(Object.entries(FIELD_TYPE_CONFIG) as [FieldType, typeof FIELD_TYPE_CONFIG[FieldType]][]).map(([key, config]) => {
+                  const Icon = config.icon;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setType(key)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                        type === key
+                          ? 'border-indigo-300 bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200'
+                          : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                      <span className="truncate">{config.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          )}
 
-          {/* Required toggle */}
-          <div className="flex items-center justify-between py-2">
-            <div>
-              <p className="text-sm font-medium text-gray-900">Required field</p>
-              <p className="text-xs text-gray-500">Require this field when creating or importing leads</p>
+            {/* Options for SELECT / MULTI_SELECT */}
+            {isSelect && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Options <span className="text-red-500">*</span></label>
+                <div className="space-y-2">
+                  {options.map((opt, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className="flex-1 text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-gray-900">{opt}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeOption(idx)}
+                        className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      value={newOption}
+                      onChange={(e) => setNewOption(e.target.value)}
+                      placeholder="Type option and press Enter"
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOption(); } }}
+                    />
+                    <button
+                      type="button"
+                      onClick={addOption}
+                      className="px-3 py-2 text-sm font-medium rounded-lg bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Visibility & Required Toggles */}
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Visibility & Validation</p>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Show in List View</p>
+                  <p className="text-[11px] text-gray-500">Display as a column in the leads table</p>
+                </div>
+                <FieldToggle checked={showInList} onChange={() => setShowInList(!showInList)} size="md" />
+              </div>
+
+              <div className="border-t border-gray-200" />
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Show in Detail View</p>
+                  <p className="text-[11px] text-gray-500">Display on the lead detail page</p>
+                </div>
+                <FieldToggle checked={showInDetail} onChange={() => setShowInDetail(!showInDetail)} size="md" />
+              </div>
+
+              <div className="border-t border-gray-200" />
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Required Field</p>
+                  <p className="text-[11px] text-gray-500">Require this field when creating or importing leads</p>
+                </div>
+                <FieldToggle checked={isRequired} onChange={() => setIsRequired(!isRequired)} size="md" />
+              </div>
             </div>
-            <ToggleSwitch checked={isRequired} onChange={() => setIsRequired(!isRequired)} />
-          </div>
 
-          {/* Preview */}
-          <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Preview</p>
+            {/* Advanced Options (collapsible) */}
             <div>
-              <label className="label">{label || 'Field Label'}{isRequired ? ' *' : ''}</label>
-              {type === 'TEXT' && <input className="input" placeholder="Enter text..." disabled />}
-              {type === 'NUMBER' && <input className="input" type="number" placeholder="0" disabled />}
-              {type === 'DATE' && <input className="input" type="date" disabled />}
-              {type === 'URL' && <input className="input" placeholder="https://..." disabled />}
-              {type === 'EMAIL' && <input className="input" placeholder="email@example.com" disabled />}
-              {type === 'PHONE' && <input className="input" placeholder="+1 (555) 000-0000" disabled />}
-              {type === 'BOOLEAN' && (
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-1.5 text-sm"><input type="radio" disabled /> Yes</label>
-                  <label className="flex items-center gap-1.5 text-sm"><input type="radio" disabled /> No</label>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
+                Advanced Options
+              </button>
+
+              {showAdvanced && (
+                <div className="mt-3 space-y-3 pl-5 border-l-2 border-gray-200">
+                  {/* Description */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Help Text / Description</label>
+                    <input
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="Brief description shown to users"
+                    />
+                  </div>
+
+                  {/* Placeholder */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Placeholder Text</label>
+                    <input
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      value={placeholder}
+                      onChange={(e) => setPlaceholder(e.target.value)}
+                      placeholder="Text shown when field is empty"
+                    />
+                  </div>
+
+                  {/* Default Value */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Default Value</label>
+                    <input
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      value={defaultValue}
+                      onChange={(e) => setDefaultValue(e.target.value)}
+                      placeholder="Auto-filled value for new leads"
+                    />
+                  </div>
                 </div>
               )}
-              {type === 'SELECT' && (
-                <select className="input" disabled>
-                  <option>Select...</option>
-                  {options.map((o, i) => <option key={i}>{o}</option>)}
-                </select>
-              )}
-              {type === 'MULTI_SELECT' && (
-                <div className="flex gap-1 flex-wrap">
-                  {options.length > 0 ? options.map((o, i) => (
-                    <span key={i} className="inline-flex items-center gap-1 bg-brand-100 text-brand-700 text-xs font-medium px-2 py-0.5 rounded-full">{o}</span>
-                  )) : <span className="text-xs text-gray-400">No options yet</span>}
-                </div>
-              )}
             </div>
+
+            {/* Preview */}
+            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Live Preview</p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {label || 'Field Label'}{isRequired ? ' *' : ''}
+                </label>
+                {description && (
+                  <p className="text-[11px] text-gray-400 mb-1.5">{description}</p>
+                )}
+                {type === 'TEXT' && (
+                  <input
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                    placeholder={placeholder || 'Enter text...'}
+                    defaultValue={defaultValue}
+                    disabled
+                  />
+                )}
+                {type === 'TEXTAREA' && (
+                  <textarea
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 resize-none"
+                    placeholder={placeholder || 'Enter long text...'}
+                    defaultValue={defaultValue}
+                    rows={3}
+                    disabled
+                  />
+                )}
+                {type === 'NUMBER' && (
+                  <input
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                    type="number"
+                    placeholder={placeholder || '0'}
+                    defaultValue={defaultValue}
+                    disabled
+                  />
+                )}
+                {type === 'CURRENCY' && (
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
+                    <input
+                      className="w-full pl-7 pr-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                      type="number"
+                      placeholder={placeholder || '0.00'}
+                      defaultValue={defaultValue}
+                      disabled
+                    />
+                  </div>
+                )}
+                {type === 'DATE' && (
+                  <input
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                    type="date"
+                    disabled
+                  />
+                )}
+                {type === 'URL' && (
+                  <input
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                    placeholder={placeholder || 'https://...'}
+                    defaultValue={defaultValue}
+                    disabled
+                  />
+                )}
+                {type === 'EMAIL' && (
+                  <input
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                    placeholder={placeholder || 'email@example.com'}
+                    defaultValue={defaultValue}
+                    disabled
+                  />
+                )}
+                {type === 'PHONE' && (
+                  <input
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                    placeholder={placeholder || '+1 (555) 000-0000'}
+                    defaultValue={defaultValue}
+                    disabled
+                  />
+                )}
+                {type === 'BOOLEAN' && (
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                      <input type="radio" name="preview-bool" disabled className="text-indigo-600" /> Yes
+                    </label>
+                    <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                      <input type="radio" name="preview-bool" disabled className="text-indigo-600" /> No
+                    </label>
+                  </div>
+                )}
+                {type === 'SELECT' && (
+                  <select
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900"
+                    disabled
+                  >
+                    <option>{placeholder || 'Select...'}</option>
+                    {options.map((o, i) => <option key={i}>{o}</option>)}
+                  </select>
+                )}
+                {type === 'MULTI_SELECT' && (
+                  <div className="flex gap-1.5 flex-wrap min-h-[32px] items-center">
+                    {options.length > 0 ? options.map((o, i) => (
+                      <span
+                        key={i}
+                        className="inline-flex items-center gap-1 bg-indigo-100 text-indigo-700 text-xs font-medium px-2 py-0.5 rounded-full"
+                      >
+                        {o}
+                      </span>
+                    )) : (
+                      <span className="text-xs text-gray-400">No options yet</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-500" />
+                {error}
+              </div>
+            )}
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
-
-          <div className="flex justify-end gap-2 pt-2 border-t">
-            <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={saving} className="btn-primary gap-1.5">
-              {saving ? 'Saving...' : field ? 'Update Field' : 'Create Field'}
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-200 bg-gray-50">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-60"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Saving…
+                </>
+              ) : field ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Update Field
+                </>
+              ) : (
+                <>
+                  <Plus className="h-3.5 w-3.5" />
+                  Create Field
+                </>
+              )}
             </button>
           </div>
         </form>
@@ -1488,7 +2439,7 @@ function CustomFieldModal({ field, onClose, onSaved }: { field: CustomField | nu
   );
 }
 
-/* ─── Division Selector for Email Settings ───────────────────────── */
+export { CustomFieldsSection, CustomFieldModal, FIELD_TYPE_CONFIG };
 function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivisionId: string; onSelect: (id: string) => void }) {
   const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
