@@ -160,6 +160,24 @@ interface CannedResponse {
   category: string;
 }
 
+// ─── Name Display Helpers ────────────────────────────────────────────
+
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Main Component ─────────────────────────────────────────────────
 
 export default function InboxPage() {
@@ -1005,14 +1023,14 @@ function InboxContent() {
                 className="h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm"
                 style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
               >
-                {leadInfo?.firstName?.charAt(0) || '?'}
+                {getDisplayInitials(leadInfo?.firstName, leadInfo?.lastName)}
               </div>
 
               {/* Contact info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-semibold text-text-primary truncate">
-                    {leadInfo ? `${leadInfo.firstName} ${leadInfo.lastName}`.trim() : 'Loading...'}
+                    {leadInfo ? getDisplayName(leadInfo.firstName, leadInfo.lastName) : 'Loading...'}
                   </h3>
                   {/* Status badge with dropdown */}
                   {leadInfo && (
@@ -1160,12 +1178,12 @@ function InboxContent() {
                                 {/* Sender name */}
                                 {isOutbound && msg.user && (
                                   <p className="text-xs font-semibold text-indigo-700 mb-0.5">
-                                    {msg.user.firstName} {msg.user.lastName}
+                                    {getDisplayName(msg.user.firstName, msg.user.lastName)}
                                   </p>
                                 )}
                                 {!isOutbound && (
                                   <p className="text-xs font-semibold text-teal-700 mb-0.5">
-                                    {leadInfo?.firstName} {leadInfo?.lastName}
+                                    {getDisplayName(leadInfo?.firstName, leadInfo?.lastName)}
                                   </p>
                                 )}
 
@@ -1481,10 +1499,10 @@ function InboxContent() {
                     className="h-16 w-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-3 shadow-md"
                     style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
                   >
-                    {leadInfo.firstName.charAt(0)}
+                    {getDisplayInitials(leadInfo.firstName, leadInfo.lastName)}
                   </div>
                   <p className="text-sm font-bold text-text-primary">
-                    {leadInfo.firstName} {leadInfo.lastName}
+                    {getDisplayName(leadInfo.firstName, leadInfo.lastName)}
                   </p>
                   {leadInfo.jobTitle && (
                     <p className="text-xs text-text-tertiary mt-0.5">{leadInfo.jobTitle}</p>
@@ -1602,12 +1620,12 @@ function InboxContent() {
                   {leadInfo.assignedTo && (
                     <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-brand-50/50">
                       <div className="h-6 w-6 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-2xs font-bold">
-                        {leadInfo.assignedTo.firstName.charAt(0)}
+                        {getDisplayInitials(leadInfo.assignedTo.firstName, leadInfo.assignedTo.lastName)}
                       </div>
                       <div>
                         <p className="text-2xs text-text-tertiary">Assigned to</p>
                         <p className="text-xs font-medium text-text-primary">
-                          {leadInfo.assignedTo.firstName} {leadInfo.assignedTo.lastName}
+                          {getDisplayName(leadInfo.assignedTo.firstName, leadInfo.assignedTo.lastName)}
                         </p>
                       </div>
                     </div>
@@ -1669,7 +1687,7 @@ function InboxContent() {
                         <p className="text-xs text-text-primary whitespace-pre-wrap">{note.content}</p>
                         <div className="flex items-center gap-2 mt-2 text-2xs text-amber-700">
                           <span className="font-medium">
-                            {note.user?.firstName} {note.user?.lastName}
+                            {getDisplayName(note.user?.firstName, note.user?.lastName)}
                           </span>
                           <span>&middot;</span>
                           <span>{new Date(note.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>

@@ -111,8 +111,20 @@ function formatAED(value: number): string {
   return `AED ${value.toLocaleString()}`;
 }
 
-function getInitials(firstName: string, lastName: string): string {
-  return `${firstName?.charAt(0) || ''}${lastName?.charAt(0) || ''}`.toUpperCase();
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
 }
 
 // ─── Modal Wrapper ──────────────────────────────────────────────────
@@ -990,7 +1002,7 @@ export default function DivisionsPage() {
     if (localSearch) {
       filtered = filtered.filter(
         (u) =>
-          `${u.firstName} ${u.lastName}`.toLowerCase().includes(localSearch) ||
+          getDisplayName(u.firstName, u.lastName).toLowerCase().includes(localSearch) ||
           u.email.toLowerCase().includes(localSearch)
       );
     }
@@ -1013,7 +1025,7 @@ export default function DivisionsPage() {
       let cmp = 0;
       switch (sortKeyVal) {
         case 'name':
-          cmp = `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
+          cmp = getDisplayName(a.firstName, a.lastName).localeCompare(getDisplayName(b.firstName, b.lastName));
           break;
         case 'email':
           cmp = a.email.localeCompare(b.email);
@@ -1739,12 +1751,12 @@ export default function DivisionsPage() {
                                       <img src={u.avatar} alt="" className="h-8 w-8 rounded-full object-cover border border-border-subtle" />
                                     ) : (
                                       <div className="h-8 w-8 rounded-full bg-brand-100 text-brand-700 flex items-center justify-center text-xs font-bold">
-                                        {getInitials(u.firstName, u.lastName)}
+                                        {getDisplayInitials(u.firstName, u.lastName)}
                                       </div>
                                     )}
                                     <div className="min-w-0">
                                       <p className="text-sm font-medium text-text-primary truncate">
-                                        {u.firstName} {u.lastName}
+                                        {getDisplayName(u.firstName, u.lastName)}
                                       </p>
                                     </div>
                                   </div>
@@ -2451,7 +2463,7 @@ export default function DivisionsPage() {
             <p className="text-sm text-text-secondary">
               Change role for{' '}
               <strong className="text-text-primary">
-                {editRoleUser.user.firstName} {editRoleUser.user.lastName}
+                {getDisplayName(editRoleUser.user.firstName, editRoleUser.user.lastName)}
               </strong>
             </p>
           )}
@@ -2504,7 +2516,7 @@ export default function DivisionsPage() {
             <p className="text-sm text-text-secondary">
               Reset password for{' '}
               <strong className="text-text-primary">
-                {resetPwUser.user.firstName} {resetPwUser.user.lastName}
+                {getDisplayName(resetPwUser.user.firstName, resetPwUser.user.lastName)}
               </strong>
               <br />
               <span className="text-xs text-text-tertiary">{resetPwUser.user.email}</span>
@@ -2568,7 +2580,7 @@ export default function DivisionsPage() {
               <p className="text-sm text-text-secondary mb-1">
                 Transfer{' '}
                 <strong className="text-text-primary">
-                  {transferUser.user.firstName} {transferUser.user.lastName}
+                  {getDisplayName(transferUser.user.firstName, transferUser.user.lastName)}
                 </strong>{' '}
                 to another division:
               </p>

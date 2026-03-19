@@ -157,6 +157,22 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`;
 }
 
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Components ─────────────────────────────────────────────────────
 
 function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' | 'md' }) {
@@ -843,7 +859,7 @@ export default function DashboardPage() {
           <div className="divide-y divide-border-subtle">
             {recentLeads.slice(0, 6).map((lead: any) => {
               const colors = statusColors[lead.status] || statusColors.NEW;
-              const initials = `${(lead.firstName || '?')[0]}${(lead.lastName || '?')[0]}`;
+              const initials = getDisplayInitials(lead.firstName, lead.lastName);
               return (
                 <Link key={lead.id} href={`/leads/${lead.id}`}
                   className="flex items-center gap-3 px-6 py-3 hover:bg-surface-secondary transition-colors group">
@@ -852,7 +868,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-text-primary truncate group-hover:text-brand-700 transition-colors">
-                      {lead.firstName || ''} {lead.lastName || ''}
+                      {getDisplayName(lead.firstName, lead.lastName)}
                     </p>
                     <p className="text-2xs text-text-tertiary truncate">{lead.company || lead.email || 'No details'}</p>
                   </div>
@@ -903,7 +919,7 @@ export default function DashboardPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-text-primary truncate">{task.title || 'Untitled task'}</p>
                     <p className="text-2xs text-text-tertiary truncate">
-                      {task.lead ? `${task.lead.firstName || ''} ${task.lead.lastName || ''}`.trim() : 'No lead'} &middot; {(task.type || 'TASK').replace(/_/g, ' ')}
+                      {task.lead ? getDisplayName(task.lead.firstName, task.lead.lastName) : 'No lead'} &middot; {(task.type || 'TASK').replace(/_/g, ' ')}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -946,12 +962,12 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-text-primary leading-snug">
-                      <span className="font-medium">{act.user ? `${act.user.firstName} ${act.user.lastName}` : 'System'}</span>
+                      <span className="font-medium">{act.user ? getDisplayName(act.user.firstName, act.user.lastName) : 'System'}</span>
                       <span className="text-text-secondary"> {act.description?.toLowerCase() || act.type.replace(/_/g, ' ').toLowerCase()}</span>
                     </p>
                     {act.lead && (
                       <Link href={`/leads/${act.lead.id}`} className="text-2xs text-brand-600 hover:text-brand-700 font-medium">
-                        {act.lead.firstName} {act.lead.lastName}
+                        {getDisplayName(act.lead.firstName, act.lead.lastName)}
                       </Link>
                     )}
                     <p className="text-2xs text-text-tertiary mt-0.5">{timeAgo(act.createdAt)}</p>

@@ -17,6 +17,23 @@ import {
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
 
+// ─── Name display helpers ───────────────────────────────────────────
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Config ────────────────────────────────────────────────────────
 const roleConfig: Record<string, { bg: string; text: string; ring: string; icon: React.ComponentType<{ className?: string }>; label: string; description: string }> = {
   SUPER_ADMIN: { bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-600/10', icon: Sparkles, label: 'Super Admin', description: 'Full access across all divisions, group-level management' },
@@ -219,7 +236,7 @@ export default function TeamPage() {
     let result = users.filter((u) => {
       // Search (name, email, phone)
       const matchesSearch = searchQuery === '' ||
-        `${u.firstName} ${u.lastName} ${u.email} ${u.phone || ''}`.toLowerCase().includes(searchQuery.toLowerCase());
+        `${getDisplayName(u.firstName, u.lastName)} ${u.email} ${u.phone || ''}`.toLowerCase().includes(searchQuery.toLowerCase());
 
       // Role (multi-select)
       const matchesRole = roleFilters.length === 0 || roleFilters.includes(u.role);
@@ -272,7 +289,7 @@ export default function TeamPage() {
       let cmp = 0;
       switch (sortField) {
         case 'name':
-          cmp = `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
+          cmp = getDisplayName(a.firstName, a.lastName).localeCompare(getDisplayName(b.firstName, b.lastName));
           break;
         case 'leads':
           cmp = (b._count?.assignedLeads || 0) - (a._count?.assignedLeads || 0);
@@ -441,7 +458,7 @@ export default function TeamPage() {
 
   // ─── Handlers ──────────────────────────────────────────────
   const handleDeactivate = async (user: User) => {
-    if (!confirm(`Deactivate ${user.firstName} ${user.lastName}? They will lose access immediately.`)) return;
+    if (!confirm(`Deactivate ${getDisplayName(user.firstName, user.lastName)}? They will lose access immediately.`)) return;
     try {
       await api.deactivateUser(user.id);
       fetchUsers();
@@ -469,7 +486,7 @@ export default function TeamPage() {
     setDeleteLoading(true);
     try {
       await api.deleteUserPermanently(deleteConfirmUser.id, deleteReassignTo || undefined);
-      alert(`${deleteConfirmUser.firstName} ${deleteConfirmUser.lastName} permanently deleted`);
+      alert(`${getDisplayName(deleteConfirmUser.firstName, deleteConfirmUser.lastName)} permanently deleted`);
       setDeleteConfirmUser(null);
       setDeleteReassignTo('');
       fetchUsers();
@@ -1153,7 +1170,7 @@ export default function TeamPage() {
                       <div className="flex items-center gap-3">
                         <div className="relative flex-shrink-0">
                           <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-semibold text-white shadow-soft">
-                            {user.firstName[0]}{user.lastName[0]}
+                            {getDisplayInitials(user.firstName, user.lastName)}
                           </div>
                           <div className={`absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-white ${
                             user.isActive ? 'bg-emerald-500' : 'bg-gray-300'
@@ -1161,7 +1178,7 @@ export default function TeamPage() {
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-text-primary truncate">
-                            {user.firstName} {user.lastName}
+                            {getDisplayName(user.firstName, user.lastName)}
                             {isCurrentUser && <span className="text-2xs text-text-tertiary ml-1 font-normal">(you)</span>}
                           </p>
                           <p className="text-2xs text-text-tertiary truncate">{user.email}</p>
@@ -1490,7 +1507,7 @@ export default function TeamPage() {
             <div className="px-6 py-4 space-y-4">
               <div className="bg-gray-50 rounded-lg p-3">
                 <p className="text-sm font-medium text-gray-900">
-                  {deleteConfirmUser.firstName} {deleteConfirmUser.lastName}
+                  {getDisplayName(deleteConfirmUser.firstName, deleteConfirmUser.lastName)}
                 </p>
                 <p className="text-xs text-gray-500">{deleteConfirmUser.email}</p>
                 <p className="text-xs text-gray-500 mt-1">Role: {deleteConfirmUser.role}</p>
@@ -1522,7 +1539,7 @@ export default function TeamPage() {
                         .filter((u) => u.id !== deleteConfirmUser.id && u.isActive)
                         .map((u) => (
                           <option key={u.id} value={u.id}>
-                            {u.firstName} {u.lastName} ({roleConfig[u.role]?.label || u.role})
+                            {getDisplayName(u.firstName, u.lastName)} ({roleConfig[u.role]?.label || u.role})
                           </option>
                         ));
                     }
@@ -1545,7 +1562,7 @@ export default function TeamPage() {
                       // Single division — no need for optgroup header
                       return divisionGroups[0].users.map((u) => (
                         <option key={u.id} value={u.id}>
-                          {u.firstName} {u.lastName} ({roleConfig[u.role]?.label || u.role})
+                          {getDisplayName(u.firstName, u.lastName)} ({roleConfig[u.role]?.label || u.role})
                         </option>
                       ));
                     }
@@ -1553,7 +1570,7 @@ export default function TeamPage() {
                       <optgroup key={g.division.id} label={g.division.name}>
                         {g.users.map((u) => (
                           <option key={`${g.division.id}-${u.id}`} value={u.id}>
-                            {u.firstName} {u.lastName} ({roleConfig[u.role]?.label || u.role})
+                            {getDisplayName(u.firstName, u.lastName)} ({roleConfig[u.role]?.label || u.role})
                           </option>
                         ))}
                       </optgroup>
@@ -1878,10 +1895,10 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
             <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-secondary">
               <div className="h-12 w-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-soft">
-                {form.firstName[0]}{form.lastName[0]}
+                {getDisplayInitials(form.firstName, form.lastName)}
               </div>
               <div>
-                <p className="font-semibold text-text-primary">{form.firstName} {form.lastName}</p>
+                <p className="font-semibold text-text-primary">{getDisplayName(form.firstName, form.lastName)}</p>
                 <p className="text-sm text-text-secondary">{user.email}</p>
               </div>
             </div>
@@ -2065,7 +2082,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Reset Password</h2>
-            <p className="text-2xs text-text-tertiary mt-0.5">{user.firstName} {user.lastName} ({user.email})</p>
+            <p className="text-2xs text-text-tertiary mt-0.5">{getDisplayName(user.firstName, user.lastName)} ({user.email})</p>
           </div>
           <button onClick={onClose} className="btn-icon"><X className="h-4 w-4" /></button>
         </div>
@@ -2084,7 +2101,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
             <div className="p-3 rounded-lg bg-amber-50 ring-1 ring-amber-200">
               <div className="flex gap-2">
                 <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-amber-800">This will immediately change the password for <strong>{user.firstName} {user.lastName}</strong>. They will need to use the new password on their next login.</p>
+                <p className="text-sm text-amber-800">This will immediately change the password for <strong>{getDisplayName(user.firstName, user.lastName)}</strong>. They will need to use the new password on their next login.</p>
               </div>
             </div>
 
@@ -2463,7 +2480,7 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Manage Division Access</h2>
-              <p className="text-sm text-text-secondary">{user.firstName} {user.lastName} · {user.email}</p>
+              <p className="text-sm text-text-secondary">{getDisplayName(user.firstName, user.lastName)} · {user.email}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-surface-tertiary rounded-lg transition-colors">

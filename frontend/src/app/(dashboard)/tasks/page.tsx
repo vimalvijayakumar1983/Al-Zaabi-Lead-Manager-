@@ -114,6 +114,22 @@ function isOverdue(task: Task): boolean {
   return new Date(task.dueAt) < new Date() && task.status !== 'COMPLETED';
 }
 
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Filter Badge ───────────────────────────────────────────────────
 function FilterBadge({ label, color, onRemove }: { label: string; color?: string; onRemove: () => void }) {
   const colorClasses = color || 'bg-brand-50 text-brand-700 ring-brand-200';
@@ -391,7 +407,7 @@ export default function TasksPage() {
       const q = leadSearch.toLowerCase();
       result = result.filter((t) => {
         if (!t.lead) return false;
-        const name = `${t.lead.firstName || ''} ${t.lead.lastName || ''}`.toLowerCase();
+        const name = getDisplayName(t.lead.firstName, t.lead.lastName).toLowerCase();
         return name.includes(q);
       });
     }
@@ -403,7 +419,7 @@ export default function TasksPage() {
         (t) =>
           t.title.toLowerCase().includes(q) ||
           (t.description && t.description.toLowerCase().includes(q)) ||
-          (t.lead && `${t.lead.firstName || ''} ${t.lead.lastName || ''}`.toLowerCase().includes(q))
+          (t.lead && getDisplayName(t.lead.firstName, t.lead.lastName).toLowerCase().includes(q))
       );
     }
 
@@ -744,7 +760,7 @@ export default function TasksPage() {
                   <option value="UNASSIGNED">Unassigned</option>
                   {teamMembers.map((u: any) => (
                     <option key={u.id} value={u.id}>
-                      {u.firstName} {u.lastName}
+                      {getDisplayName(u.firstName, u.lastName)}
                     </option>
                   ))}
                 </select>
@@ -842,7 +858,7 @@ export default function TasksPage() {
                 label={`Assignee: ${
                   assigneeFilter === 'ME' ? 'Me' :
                   assigneeFilter === 'UNASSIGNED' ? 'Unassigned' :
-                  teamMembers.find((u: any) => u.id === assigneeFilter)?.firstName || assigneeFilter
+                  (() => { const u = teamMembers.find((u: any) => u.id === assigneeFilter); return u ? getDisplayName(u.firstName, u.lastName) : assigneeFilter; })()
                 }`}
                 onRemove={() => setAssigneeFilter('ALL')}
               />
@@ -971,12 +987,12 @@ export default function TasksPage() {
                     {task.lead && (
                       <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
                         <User2 className="h-3 w-3" />
-                        {task.lead.firstName} {task.lead.lastName}
+                        {getDisplayName(task.lead.firstName, task.lead.lastName)}
                       </span>
                     )}
                     {task.assignee && (
                       <span className="text-xs text-text-tertiary">
-                        &middot; {task.assignee.firstName}
+                        &middot; {getDisplayName(task.assignee.firstName, task.assignee.lastName)}
                       </span>
                     )}
                     {status && (
@@ -1072,13 +1088,13 @@ export default function TasksPage() {
                   {task.lead && (
                     <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                       <Target className="h-3 w-3 flex-shrink-0" />
-                      <span className="truncate">{task.lead.firstName} {task.lead.lastName}</span>
+                      <span className="truncate">{getDisplayName(task.lead.firstName, task.lead.lastName)}</span>
                     </div>
                   )}
                   {task.assignee && (
                     <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                       <User2 className="h-3 w-3 flex-shrink-0" />
-                      <span>{task.assignee.firstName} {task.assignee.lastName}</span>
+                      <span>{getDisplayName(task.assignee.firstName, task.assignee.lastName)}</span>
                     </div>
                   )}
                 </div>
@@ -1218,7 +1234,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               <option value="">Select team member...</option>
               {users.map((u: any) => (
                 <option key={u.id} value={u.id}>
-                  {u.firstName} {u.lastName}
+                  {getDisplayName(u.firstName, u.lastName)}
                 </option>
               ))}
             </select>

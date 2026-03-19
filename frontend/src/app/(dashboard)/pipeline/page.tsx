@@ -61,6 +61,22 @@ const priorityConfig = {
   cold: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-200', icon: Snowflake, label: 'Cold' },
 };
 
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Main Component ────────────────────────────────────────────────
 export default function PipelinePage() {
   const { user: currentUser } = useAuthStore();
@@ -483,7 +499,7 @@ export default function PipelinePage() {
                 <option value="me">Me</option>
                 <option value="unassigned">Unassigned</option>
                 {teamMembers.map(u => (
-                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                  <option key={u.id} value={u.id}>{getDisplayName(u.firstName, u.lastName)}</option>
                 ))}
               </select>
 
@@ -734,11 +750,11 @@ export default function PipelinePage() {
                         <Link href={`/leads/${lead.id}`}>
                           <div className="flex items-center gap-2.5 mb-2">
                             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white shadow-xs flex-shrink-0">
-                              {(lead.firstName || '?')[0]}{(lead.lastName || '')[0]}
+                              {getDisplayInitials(lead.firstName, lead.lastName)}
                             </div>
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-text-primary truncate group-hover:text-brand-700 transition-colors">
-                                {lead.firstName} {lead.lastName}
+                                {getDisplayName(lead.firstName, lead.lastName)}
                               </p>
                               <p className="text-xs text-text-tertiary truncate">
                                 {lead.company || lead.email || '-'}
@@ -784,9 +800,9 @@ export default function PipelinePage() {
                           {lead.assignedTo && (
                             <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-border-subtle">
                               <div className="h-5 w-5 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center text-[9px] font-semibold text-white">
-                                {(lead.assignedTo.firstName || '?')[0]}{(lead.assignedTo.lastName || '')[0]}
+                                {getDisplayInitials(lead.assignedTo.firstName, lead.assignedTo.lastName)}
                               </div>
-                              <span className="text-2xs text-text-tertiary">{lead.assignedTo.firstName} {lead.assignedTo.lastName}</span>
+                              <span className="text-2xs text-text-tertiary">{getDisplayName(lead.assignedTo.firstName, lead.assignedTo.lastName)}</span>
                             </div>
                           )}
                         </Link>
@@ -849,10 +865,10 @@ export default function PipelinePage() {
                             <td className="table-cell">
                               <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
                                 <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white flex-shrink-0">
-                                  {(lead.firstName || '?')[0]}{(lead.lastName || '')[0]}
+                                  {getDisplayInitials(lead.firstName, lead.lastName)}
                                 </div>
                                 <div>
-                                  <p className="text-sm font-medium text-text-primary group-hover:text-brand-700">{lead.firstName} {lead.lastName}</p>
+                                  <p className="text-sm font-medium text-text-primary group-hover:text-brand-700">{getDisplayName(lead.firstName, lead.lastName)}</p>
                                   <p className="text-2xs text-text-tertiary">{lead.email}</p>
                                 </div>
                               </Link>
@@ -872,7 +888,7 @@ export default function PipelinePage() {
                               </span>
                             </td>
                             <td className="table-cell hidden lg:table-cell text-sm text-text-secondary">
-                              {lead.assignedTo ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}` : '—'}
+                              {lead.assignedTo ? getDisplayName(lead.assignedTo.firstName, lead.assignedTo.lastName) : '—'}
                             </td>
                             <td className="table-cell hidden lg:table-cell text-2xs text-text-tertiary">
                               {lead.createdAt ? (

@@ -16,6 +16,24 @@ import {
 import { RefreshButton } from '@/components/RefreshButton';
 import { ContactColumnManager, loadContactColumns, saveContactColumns, type ContactColumnDef } from './components/column-config';
 
+// ─── Name Helpers ────────────────────────────────────────────────
+
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Constants ───────────────────────────────────────────────────
 
 type ViewMode = 'table' | 'cards' | 'kanban';
@@ -463,11 +481,11 @@ export default function ContactsPage() {
                           return <td key={col.id} className="px-3 py-3">
                             <div className="flex items-center gap-2.5">
                               <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                                {contact.firstName[0]}{contact.lastName[0]}
+                                {getDisplayInitials(contact.firstName, contact.lastName)}
                               </div>
                               <div className="min-w-0">
                                 <p className="text-sm font-medium text-text-primary truncate">
-                                  {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
+                                  {contact.salutation ? `${contact.salutation} ` : ''}{getDisplayName(contact.firstName, contact.lastName)}
                                 </p>
                                 {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
                               </div>
@@ -515,7 +533,7 @@ export default function ContactsPage() {
                         case 'owner':
                           return <td key={col.id} className="px-3 py-3">
                             {contact.owner && (
-                              <span className="text-xs text-text-secondary">{contact.owner.firstName} {contact.owner.lastName[0]}.</span>
+                              <span className="text-xs text-text-secondary">{getDisplayName(contact.owner.firstName, contact.owner.lastName)}</span>
                             )}
                           </td>;
                         case 'score':
@@ -611,11 +629,11 @@ export default function ContactsPage() {
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                            {contact.firstName[0]}{contact.lastName[0]}
+                            {getDisplayInitials(contact.firstName, contact.lastName)}
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-text-primary truncate">
-                              {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
+                              {contact.salutation ? `${contact.salutation} ` : ''}{getDisplayName(contact.firstName, contact.lastName)}
                             </p>
                             {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
                           </div>
@@ -697,10 +715,10 @@ export default function ContactsPage() {
                           <div key={contact.id} className="card p-3 hover:shadow-md transition-shadow cursor-pointer" onClick={() => router.push(`/contacts/${contact.id}`)}>
                             <div className="flex items-center gap-2 mb-2">
                               <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                                {contact.firstName[0]}{contact.lastName[0]}
+                                {getDisplayInitials(contact.firstName, contact.lastName)}
                               </div>
                               <div className="min-w-0 flex-1">
-                                <p className="text-xs font-semibold text-text-primary truncate">{contact.firstName} {contact.lastName}</p>
+                                <p className="text-xs font-semibold text-text-primary truncate">{getDisplayName(contact.firstName, contact.lastName)}</p>
                                 {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
                               </div>
                             </div>
