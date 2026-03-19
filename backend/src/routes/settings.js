@@ -300,7 +300,8 @@ router.get('/field-config', async (req, res, next) => {
 
     const settings = (org?.settings || {});
     const divKey = divisionId ? `division_${divisionId}` : 'default';
-    const fieldConfig = settings.fieldConfig?.[divKey] || {};
+    // Cascade: division-specific → group-level defaults → empty
+    const fieldConfig = settings.fieldConfig?.[divKey] || settings.fieldConfig?.['default'] || {};
 
     // Merge built-in fields with saved config
     const builtInFields = BUILT_IN_FIELDS.map((f, idx) => ({
