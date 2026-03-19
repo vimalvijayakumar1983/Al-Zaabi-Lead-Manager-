@@ -850,9 +850,17 @@ function LeadsContent() {
   // ─── Render ─────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <>
+    <style jsx global>{`
+      .leads-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+      .leads-scroll::-webkit-scrollbar-track { background: transparent; }
+      .leads-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+      .leads-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      .leads-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+    `}</style>
+    <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-shrink-0 pt-4 px-1">
         <div>
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Leads</h1>
           <p className="text-text-secondary mt-0.5 text-sm">{pagination.total} leads total</p>
@@ -872,7 +880,7 @@ function LeadsContent() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
           <StatCard label="Total" value={stats.overview.totalLeads} color="brand" />
           <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
           <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
@@ -893,7 +901,7 @@ function LeadsContent() {
       )}
 
       {/* Main Layout: Sidebar + Content */}
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-1 min-h-0">
         {/* View Sidebar */}
         {showViewSidebar && (
           <ViewSidebar
@@ -909,9 +917,9 @@ function LeadsContent() {
         )}
 
         {/* Content Area */}
-        <div className="flex-1 min-w-0 space-y-3">
+        <div className="flex-1 min-w-0 flex flex-col gap-3">
           {/* Toolbar */}
-          <div className="card p-3">
+          <div className="card p-3 flex-shrink-0">
             <div className="flex flex-wrap items-center gap-2">
               {/* Toggle Sidebar */}
               <button onClick={() => setShowViewSidebar(!showViewSidebar)}
@@ -1027,10 +1035,10 @@ function LeadsContent() {
 
           {/* ═══════════════════ TABLE VIEW ═══════════════════ */}
           {viewMode === 'table' && (
-            <div className="card overflow-hidden">
-              <div className="overflow-x-auto">
+            <div className="card overflow-hidden flex-1 min-h-0 flex flex-col">
+              <div className="flex-1 min-h-0 overflow-auto leads-scroll">
                 <table className="min-w-full">
-                  <thead>
+                  <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#e5e7eb]">
                     <tr className="border-b border-border">
                       {visibleColumns.map((col) => (
                         <th key={col.id} className={`table-header px-4 py-3 text-left ${col.width || ''} ${col.sortable ? 'cursor-pointer hover:text-text-secondary select-none' : ''}`}
@@ -1089,13 +1097,15 @@ function LeadsContent() {
                   </tbody>
                 </table>
               </div>
-              <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
+              <div className="flex-shrink-0 border-t border-gray-200">
+                <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
+              </div>
             </div>
           )}
 
           {/* ═══════════════════ CARD VIEW ═══════════════════ */}
           {viewMode === 'cards' && (
-            <div>
+            <div className="flex-1 min-h-0 overflow-auto leads-scroll">
               {loading ? (
                 <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" /></div>
               ) : error ? (
@@ -1228,6 +1238,7 @@ function LeadsContent() {
       {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} />}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
+    </>
   );
 }
 
