@@ -1807,7 +1807,7 @@ function RoleCard({
                 {role.name}
               </h3>
               {isSystem && (
-                <Lock className="w-3.5 h-3.5 text-text-tertiary" title="System role" />
+                <span title="System role"><Lock className="w-3.5 h-3.5 text-text-tertiary" /></span>
               )}
             </div>
             <p className="text-xs text-text-secondary line-clamp-2 mt-0.5">
