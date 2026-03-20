@@ -117,6 +117,7 @@ const DISPOSITION_LABELS = {
   APPOINTMENT_BOOKED: 'Appointment Booked',
   INTERESTED: 'Interested - Send Info',
   NOT_INTERESTED: 'Not Interested',
+  ALREADY_COMPLETED_SERVICES: 'Already Completed Services',
   NO_ANSWER: 'No Answer',
   VOICEMAIL_LEFT: 'Voicemail Left',
   WRONG_NUMBER: 'Wrong Number',
@@ -154,6 +155,10 @@ const NOT_INTERESTED_REASON_LABELS = {
   NOT_DECISION_MAKER: 'Not decision maker',
   OTHER: 'Other',
 };
+const COMPLETED_SERVICE_LOCATION_LABELS = {
+  INSIDE_CENTER: 'Inside Center',
+  OUTSIDE_CENTER: 'Outside Center',
+};
 
 // Auto-actions by disposition type
 const DISPOSITION_AUTO_ACTIONS = {
@@ -178,7 +183,7 @@ const callLogSchema = z.object({
   disposition: z.enum([
     'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN',
     'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED',
-    'NOT_INTERESTED', 'NO_ANSWER', 'VOICEMAIL_LEFT', 'WRONG_NUMBER',
+    'NOT_INTERESTED', 'ALREADY_COMPLETED_SERVICES', 'NO_ANSWER', 'VOICEMAIL_LEFT', 'WRONG_NUMBER',
     'BUSY', 'GATEKEEPER', 'FOLLOW_UP_EMAIL', 'QUALIFIED',
     'PROPOSAL_REQUESTED', 'DO_NOT_CALL', 'OTHER',
   ]),
@@ -194,6 +199,7 @@ const callLogSchema = z.object({
     'CHOSE_COMPETITOR', 'NO_LONGER_NEEDED', 'NOT_DECISION_MAKER', 'OTHER',
   ]).optional().nullable(),
   notInterestedOtherText: z.string().optional().nullable(),
+  completedServiceLocation: z.enum(['INSIDE_CENTER', 'OUTSIDE_CENTER']).optional().nullable(),
   createFollowUp: z.boolean().optional().default(true),
 });
 
@@ -292,6 +298,18 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       return res.status(400).json({
         error: 'Not interested reason can only be used when outcome is "Not Interested".',
         field: 'notInterestedReason',
+      });
+    }
+    if (data.disposition === 'ALREADY_COMPLETED_SERVICES' && !data.completedServiceLocation) {
+      return res.status(400).json({
+        error: 'Please select where the service was completed (inside or outside center).',
+        field: 'completedServiceLocation',
+      });
+    }
+    if (data.disposition !== 'ALREADY_COMPLETED_SERVICES' && data.completedServiceLocation) {
+      return res.status(400).json({
+        error: 'Completion location can only be used when outcome is "Already Completed Services".',
+        field: 'completedServiceLocation',
       });
     }
 
@@ -398,6 +416,10 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         callMetadata.notInterestedOtherText = data.notInterestedOtherText.trim();
       }
     }
+    if (data.disposition === 'ALREADY_COMPLETED_SERVICES') {
+      callMetadata.completedServiceLocation = data.completedServiceLocation;
+      callMetadata.completedServiceLocationLabel = COMPLETED_SERVICE_LOCATION_LABELS[data.completedServiceLocation] || data.completedServiceLocation;
+    }
 
     const callLog = await prisma.callLog.create({
       data: {
@@ -428,6 +450,8 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         body: data.notes || `Call logged: ${DISPOSITION_LABELS[data.disposition]}${
           data.disposition === 'NOT_INTERESTED' && data.notInterestedReason
             ? ` (${NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason})`
+            : data.disposition === 'ALREADY_COMPLETED_SERVICES' && data.completedServiceLocation
+              ? ` (${COMPLETED_SERVICE_LOCATION_LABELS[data.completedServiceLocation] || data.completedServiceLocation})`
             : ''
         }`,
         metadata: {
@@ -440,6 +464,10 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
             ? (NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason)
             : null,
           notInterestedOtherText: data.notInterestedOtherText?.trim() || null,
+          completedServiceLocation: data.completedServiceLocation || null,
+          completedServiceLocationLabel: data.completedServiceLocation
+            ? (COMPLETED_SERVICE_LOCATION_LABELS[data.completedServiceLocation] || data.completedServiceLocation)
+            : null,
         },
       },
     });
@@ -462,6 +490,10 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
             ? (NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason)
             : null,
           notInterestedOtherText: data.notInterestedOtherText?.trim() || null,
+          completedServiceLocation: data.completedServiceLocation || null,
+          completedServiceLocationLabel: data.completedServiceLocation
+            ? (COMPLETED_SERVICE_LOCATION_LABELS[data.completedServiceLocation] || data.completedServiceLocation)
+            : null,
         },
       },
     });

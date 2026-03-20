@@ -448,6 +448,7 @@ enum CallDisposition {
   APPOINTMENT_BOOKED // Appointment confirmed
   INTERESTED        // Customer showed interest, send info
   NOT_INTERESTED    // Customer not interested
+  ALREADY_COMPLETED_SERVICES // Service already completed; track inside vs outside center
   NO_ANSWER         // No one picked up
   VOICEMAIL_LEFT    // Left voicemail
   WRONG_NUMBER      // Wrong contact number

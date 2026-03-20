@@ -325,6 +325,11 @@ class ApiClient {
     return this.request<any>(`/analytics/not-interested-reasons?${q}`);
   }
 
+  async getCompletedServicesLocationAnalytics(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/completed-services-locations?${q}`);
+  }
+
   async getScoreDistribution(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any>(`/analytics/score-distribution${q}`);

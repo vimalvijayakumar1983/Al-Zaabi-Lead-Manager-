@@ -104,6 +104,7 @@ const callOutcomeOptions = [
   { value: 'BUSY', label: 'Line Busy', icon: '📞', group: 'Retry' },
   { value: 'GATEKEEPER', label: 'Reached Gatekeeper', icon: '🚧', group: 'Retry' },
   { value: 'NOT_INTERESTED', label: 'Not Interested', icon: '👎', group: 'Closed' },
+  { value: 'ALREADY_COMPLETED_SERVICES', label: 'Already Completed Services', icon: '🏁', group: 'Closed' },
   { value: 'WRONG_NUMBER', label: 'Wrong Number', icon: '❌', group: 'Closed' },
   { value: 'DO_NOT_CALL', label: 'Do Not Call', icon: '🚫', group: 'Closed' },
   { value: 'OTHER', label: 'Other', icon: '📝', group: 'Other' },

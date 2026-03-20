@@ -48,6 +48,7 @@ const dispositionLabels: Record<string, string> = {
   FOLLOW_UP_EMAIL: 'Follow-up Email', NO_ANSWER: 'No Answer',
   VOICEMAIL_LEFT: 'Voicemail Left', BUSY: 'Line Busy',
   GATEKEEPER: 'Reached Gatekeeper', NOT_INTERESTED: 'Not Interested',
+  ALREADY_COMPLETED_SERVICES: 'Already Completed Services',
   WRONG_NUMBER: 'Wrong Number', DO_NOT_CALL: 'Do Not Call', OTHER: 'Other',
 };
 
@@ -57,6 +58,7 @@ const dispositionColor = (d: string): string => {
   if (['CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN', 'FOLLOW_UP_EMAIL'].includes(d)) return 'text-blue-600';
   if (['NO_ANSWER', 'VOICEMAIL_LEFT', 'BUSY', 'GATEKEEPER'].includes(d)) return 'text-amber-600';
   if (['NOT_INTERESTED', 'WRONG_NUMBER', 'DO_NOT_CALL'].includes(d)) return 'text-red-600';
+  if (d === 'ALREADY_COMPLETED_SERVICES') return 'text-emerald-600';
   return 'text-gray-500';
 };
 

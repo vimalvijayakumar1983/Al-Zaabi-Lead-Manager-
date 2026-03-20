@@ -76,6 +76,11 @@ const NOT_INTERESTED_REASON_LABELS = {
   OTHER: 'Other',
   UNSPECIFIED: 'Unspecified',
 };
+const COMPLETED_SERVICE_LOCATION_LABELS = {
+  INSIDE_CENTER: 'Inside Center',
+  OUTSIDE_CENTER: 'Outside Center',
+  UNSPECIFIED: 'Unspecified',
+};
 
 // ─── Dashboard Overview ──────────────────────────────────────────
 router.get('/dashboard', async (req, res, next) => {
@@ -531,6 +536,73 @@ router.get('/not-interested-reasons', async (req, res, next) => {
       totalNotInterested,
       captureRate: totalNotInterested > 0 ? Math.round((captured / totalNotInterested) * 10000) / 100 : 0,
       reasons,
+      bySource,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Already Completed Services Location Analytics ─────────────────
+router.get('/completed-services-locations', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const orgFilter = getOrgFilter(req, divisionId);
+    const { start } = getPeriodDates(period);
+
+    const callWhere = req.isRestrictedRole
+      ? {
+          createdAt: { gte: start },
+          disposition: 'ALREADY_COMPLETED_SERVICES',
+          lead: { assignedToId: req.user.id, isArchived: false },
+        }
+      : {
+          createdAt: { gte: start },
+          disposition: 'ALREADY_COMPLETED_SERVICES',
+          lead: { organizationId: orgFilter, isArchived: false },
+        };
+
+    const callLogs = await prisma.callLog.findMany({
+      where: callWhere,
+      select: {
+        metadata: true,
+        lead: { select: { source: true } },
+      },
+    });
+
+    const locationCounts = {};
+    const sourceCounts = {};
+    let captured = 0;
+
+    for (const log of callLogs) {
+      const md = (typeof log.metadata === 'object' && log.metadata !== null) ? log.metadata : {};
+      const locationKey = md.completedServiceLocation;
+      const normalizedLocation = COMPLETED_SERVICE_LOCATION_LABELS[locationKey] ? locationKey : 'UNSPECIFIED';
+      locationCounts[normalizedLocation] = (locationCounts[normalizedLocation] || 0) + 1;
+      if (normalizedLocation !== 'UNSPECIFIED') captured++;
+
+      const source = log.lead?.source || 'UNKNOWN';
+      sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+    }
+
+    const totalCompletedServices = callLogs.length;
+    const locations = Object.entries(locationCounts)
+      .map(([location, count]) => ({
+        location,
+        label: COMPLETED_SERVICE_LOCATION_LABELS[location] || location,
+        count,
+        percent: totalCompletedServices > 0 ? Math.round((count / totalCompletedServices) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const bySource = Object.entries(sourceCounts)
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      totalCompletedServices,
+      captureRate: totalCompletedServices > 0 ? Math.round((captured / totalCompletedServices) * 10000) / 100 : 0,
+      locations,
       bySource,
     });
   } catch (err) {

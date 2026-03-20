@@ -1423,6 +1423,7 @@ export default function LeadDetailPage() {
                         APPOINTMENT_BOOKED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
                         INTERESTED: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
                         NOT_INTERESTED: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+                        ALREADY_COMPLETED_SERVICES: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
                         NO_ANSWER: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
                         VOICEMAIL_LEFT: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
                         WRONG_NUMBER: { bg: 'bg-red-50', text: 'text-red-600', border: 'border-red-200' },
@@ -1440,7 +1441,7 @@ export default function LeadDetailPage() {
                         CALL_AGAIN: 'Call Again (Anytime)', WILL_CALL_US_AGAIN: 'Will Call Us Again',
                         MEETING_ARRANGED: 'Meeting Arranged',
                         APPOINTMENT_BOOKED: 'Appointment Booked', INTERESTED: 'Interested',
-                        NOT_INTERESTED: 'Not Interested', NO_ANSWER: 'No Answer',
+                        NOT_INTERESTED: 'Not Interested', ALREADY_COMPLETED_SERVICES: 'Already Completed Services', NO_ANSWER: 'No Answer',
                         VOICEMAIL_LEFT: 'Voicemail Left', WRONG_NUMBER: 'Wrong Number',
                         BUSY: 'Line Busy', GATEKEEPER: 'Reached Gatekeeper',
                         FOLLOW_UP_EMAIL: 'Follow-up Email', QUALIFIED: 'Lead Qualified',
@@ -1469,6 +1470,9 @@ export default function LeadDetailPage() {
                             )}
                             {log.metadata?.notInterestedOtherText && (
                               <span>Detail: {String(log.metadata.notInterestedOtherText)}</span>
+                            )}
+                            {log.metadata?.completedServiceLocationLabel && (
+                              <span>Completed: {String(log.metadata.completedServiceLocationLabel)}</span>
                             )}
                             {log.meetingDate && <span>Meeting: {new Date(log.meetingDate).toLocaleString()}</span>}
                             {log.appointmentDate && <span>Appointment: {new Date(log.appointmentDate).toLocaleString()}</span>}
@@ -2368,6 +2372,7 @@ const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: 
   { value: 'BUSY', label: 'Line Busy', group: 'Retry', icon: '📞' },
   { value: 'GATEKEEPER', label: 'Reached Gatekeeper', group: 'Retry', icon: '🚧' },
   { value: 'NOT_INTERESTED', label: 'Not Interested', group: 'Closed', icon: '👎' },
+  { value: 'ALREADY_COMPLETED_SERVICES', label: 'Already Completed Services', group: 'Closed', icon: '🏁', description: 'Service already completed; track where it was done' },
   { value: 'WRONG_NUMBER', label: 'Wrong Number', group: 'Closed', icon: '❌' },
   { value: 'DO_NOT_CALL', label: 'Do Not Call', group: 'Closed', icon: '🚫' },
   { value: 'OTHER', label: 'Other', group: 'Other', icon: '📝' },
@@ -2391,6 +2396,10 @@ const NOT_INTERESTED_REASON_OPTIONS = [
   { value: 'NOT_DECISION_MAKER', label: 'Not decision maker' },
   { value: 'OTHER', label: 'Other (specify)' },
 ];
+const COMPLETED_SERVICE_LOCATION_OPTIONS = [
+  { value: 'INSIDE_CENTER', label: 'Inside Center' },
+  { value: 'OUTSIDE_CENTER', label: 'Outside Center' },
+];
 
 function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string }) {
   const [form, setForm] = useState({
@@ -2403,6 +2412,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
     expectedCallbackWindow: '',
     notInterestedReason: '',
     notInterestedOtherText: '',
+    completedServiceLocation: '',
     createFollowUp: true,
   });
   const [submitting, setSubmitting] = useState(false);
@@ -2426,6 +2436,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
   const isCallLater = selectedDisposition === 'CALL_LATER';
   const isWillCallUsAgain = selectedDisposition === 'WILL_CALL_US_AGAIN';
   const isNotInterested = selectedDisposition === 'NOT_INTERESTED';
+  const isAlreadyCompletedServices = selectedDisposition === 'ALREADY_COMPLETED_SERVICES';
   const showCallback = isCallLater || selectedDisposition === 'CALL_AGAIN' || selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
   const callbackDateRequired = isCallLater; // CALL_LATER = mandatory date/time
   const callbackDateMissing = callbackDateRequired && !form.callbackDate;
@@ -2433,6 +2444,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
   const notInterestedOtherMissing = isNotInterested
     && form.notInterestedReason === 'OTHER'
     && !form.notInterestedOtherText.trim();
+  const completedServiceLocationMissing = isAlreadyCompletedServices && !form.completedServiceLocation;
   const showMeeting = selectedDisposition === 'MEETING_ARRANGED';
   const showAppointment = selectedDisposition === 'APPOINTMENT_BOOKED';
 
@@ -2441,7 +2453,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
     if (!form.disposition) return;
     if (notesRequired && notesEmpty) return; // Block submit if notes required but empty
     if (callbackDateMissing) return; // Block submit if CALL_LATER without date/time
-    if (notInterestedReasonMissing || notInterestedOtherMissing) return;
+    if (notInterestedReasonMissing || notInterestedOtherMissing || completedServiceLocationMissing) return;
     setSubmitting(true);
     try {
       const durationSeconds = form.duration ? parseInt(form.duration) * 60 : null;
@@ -2455,6 +2467,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
         expectedCallbackWindow: form.expectedCallbackWindow || null,
         notInterestedReason: form.notInterestedReason || null,
         notInterestedOtherText: form.notInterestedOtherText?.trim() || null,
+        completedServiceLocation: form.completedServiceLocation || null,
         createFollowUp: form.createFollowUp,
       });
     } finally {
@@ -2489,6 +2502,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
                     expectedCallbackWindow: opt.value === 'WILL_CALL_US_AGAIN' ? prev.expectedCallbackWindow : '',
                     notInterestedReason: opt.value === 'NOT_INTERESTED' ? prev.notInterestedReason : '',
                     notInterestedOtherText: opt.value === 'NOT_INTERESTED' ? prev.notInterestedOtherText : '',
+                    completedServiceLocation: opt.value === 'ALREADY_COMPLETED_SERVICES' ? prev.completedServiceLocation : '',
                   }))}
                   className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-all ${
                     form.disposition === opt.value
@@ -2594,6 +2608,27 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             </div>
           )}
 
+          {isAlreadyCompletedServices && (
+            <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+              <label className="label mb-0">
+                Service Completed Where? <span className="text-red-500 font-semibold">*</span>
+              </label>
+              <select
+                className={`input ${completedServiceLocationMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                value={form.completedServiceLocation}
+                onChange={(e) => setForm({ ...form, completedServiceLocation: e.target.value })}
+              >
+                <option value="">Select completion location...</option>
+                {COMPLETED_SERVICE_LOCATION_OPTIONS.map((location) => (
+                  <option key={location.value} value={location.value}>{location.label}</option>
+                ))}
+              </select>
+              {completedServiceLocationMissing && (
+                <p className="text-xs text-red-500">Please select whether it was completed inside or outside the center.</p>
+              )}
+            </div>
+          )}
+
           {showMeeting && (
             <div>
               <label className="label">Meeting Date & Time *</label>
@@ -2672,7 +2707,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button
               type="submit"
-              disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || callbackDateMissing || notInterestedReasonMissing || notInterestedOtherMissing}
+              disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || callbackDateMissing || notInterestedReasonMissing || notInterestedOtherMissing || completedServiceLocationMissing}
               className="btn-primary gap-1.5"
             >
               {submitting ? (

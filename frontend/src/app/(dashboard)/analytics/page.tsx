@@ -421,6 +421,7 @@ export default function AnalyticsPage() {
   const [scoreDistrib, setScoreDistrib] = useState<any[]>([]);
   const [divisionComp, setDivisionComp] = useState<any[]>([]);
   const [notInterestedReasons, setNotInterestedReasons] = useState<any>(null);
+  const [completedServicesLocations, setCompletedServicesLocations] = useState<any>(null);
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -444,7 +445,7 @@ export default function AnalyticsPage() {
     else setRefreshing(true);
     try {
       const p = periodRef.current;
-      const [ov, fn, tr, tm, src, cam, act, sd, nir] = await Promise.allSettled([
+      const [ov, fn, tr, tm, src, cam, act, sd, nir, csl] = await Promise.allSettled([
         api.getAnalyticsOverview(p, divId),
         api.getFunnel(divId),
         api.getTrends(p, divId),
@@ -454,6 +455,7 @@ export default function AnalyticsPage() {
         api.getActivitiesAnalytics(p, divId),
         api.getScoreDistribution(divId),
         api.getNotInterestedReasonAnalytics(p, divId),
+        api.getCompletedServicesLocationAnalytics(p, divId),
       ]);
 
       if (ov.status === 'fulfilled') setOverview(ov.value);
@@ -465,6 +467,7 @@ export default function AnalyticsPage() {
       if (act.status === 'fulfilled') setActivities(act.value);
       if (sd.status === 'fulfilled') setScoreDistrib(Array.isArray(sd.value) ? sd.value : []);
       if (nir.status === 'fulfilled') setNotInterestedReasons(nir.value);
+      if (csl.status === 'fulfilled') setCompletedServicesLocations(csl.value);
 
       if (isSuperAdmin && !divId) {
         api.getDivisionComparison().then(d => setDivisionComp(Array.isArray(d) ? d : [])).catch(() => {});
@@ -711,6 +714,60 @@ export default function AnalyticsPage() {
                     <span className="text-xs text-text-secondary w-48 truncate">{item.label}</span>
                     <div className="flex-1 h-2 bg-surface-tertiary rounded-full overflow-hidden">
                       <div className="h-full bg-red-400 rounded-full" style={{ width: `${width}%` }} />
+                    </div>
+                    <span className="text-xs font-semibold text-text-primary w-16 text-right tabular-nums">
+                      {item.count} ({item.percent}%)
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Already Completed Services Locations */}
+      <div className="card p-5">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-text-primary">Already Completed Services Analysis</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Track whether services were completed inside or outside the center</p>
+          </div>
+          <button
+            onClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
+            className="text-xs text-brand-600 hover:text-brand-700 inline-flex items-center gap-1"
+          >
+            View leads
+            <ExternalLink className="h-3 w-3" />
+          </button>
+        </div>
+
+        {(completedServicesLocations?.totalCompletedServices || 0) === 0 ? (
+          <div className="empty-state py-6">
+            <p className="text-sm text-text-tertiary">No "Already Completed Services" calls in this period.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-xs text-text-tertiary">Total Completed-Service Calls</p>
+                <p className="text-lg font-semibold text-text-primary tabular-nums">{fmt(completedServicesLocations.totalCompletedServices || 0)}</p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-xs text-text-tertiary">Location Capture Rate</p>
+                <p className="text-lg font-semibold text-emerald-600 tabular-nums">{fmt(completedServicesLocations.captureRate || 0, 'percent')}</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {(completedServicesLocations.locations || []).slice(0, 4).map((item: any) => {
+                const maxCount = Math.max(...(completedServicesLocations.locations || []).map((x: any) => x.count), 1);
+                const width = (item.count / maxCount) * 100;
+                return (
+                  <div key={item.location} className="flex items-center gap-3">
+                    <span className="text-xs text-text-secondary w-48 truncate">{item.label}</span>
+                    <div className="flex-1 h-2 bg-surface-tertiary rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${width}%` }} />
                     </div>
                     <span className="text-xs font-semibold text-text-primary w-16 text-right tabular-nums">
                       {item.count} ({item.percent}%)
