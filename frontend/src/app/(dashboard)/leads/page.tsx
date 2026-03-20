@@ -672,7 +672,7 @@ function LeadsContent() {
           case 'company': return l.company || '';
           case 'jobTitle': return l.jobTitle || '';
           case 'status': return (l as any).stage?.name || l.status;
-          case 'source': return (l as any).sourceDetail ? `${l.source} (${(l as any).sourceDetail})` : l.source;
+          case 'source': return l.sourceDetail ? `${l.source} (${l.sourceDetail})` : l.source;
           case 'score': return (l.score ?? 0).toString();
           case 'budget': return l.budget?.toString() || '';
           case 'location': return l.location || '';
@@ -822,7 +822,7 @@ function LeadsContent() {
         );
       }
       case 'source':
-        return <span className="text-sm text-gray-700">{sourceLabels[lead.source] || lead.source}{(lead as any).sourceDetail ? ` (${(lead as any).sourceDetail})` : ''}</span>;
+        return <span className="text-sm text-gray-700">{sourceLabels[lead.source] || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}</span>;
       case 'score':
         const score = lead.score ?? 0;
         return (
@@ -1397,7 +1397,7 @@ function LeadsContent() {
                             </div>
                             <span className="text-xs font-semibold tabular-nums" style={{ color: (lead.score ?? 0) >= 70 ? '#16a34a' : (lead.score ?? 0) >= 40 ? '#d97706' : '#dc2626' }}>{lead.score ?? 0}</span>
                           </div>
-                          <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}{(lead as any).sourceDetail ? ` (${(lead as any).sourceDetail})` : ''}</span>
+                          <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}</span>
                           {lead._count?.callLogs ? (
                             <span className="inline-flex items-center gap-1 text-xs text-gray-500">
                               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -106,6 +106,7 @@ export interface Lead {
   company?: string;
   jobTitle?: string;
   source: LeadSource;
+  sourceDetail?: string;
   status: LeadStatus;
   score: number;
   budget?: number;
