@@ -585,7 +585,7 @@ router.get('/dashboard-full', async (req, res, next) => {
       : { lead: { organizationId: orgFilter, isArchived: false } };
     const periodCallWhere = { ...callLogOrgWhere, createdAt: { gte: start } };
 
-    const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT'];
+    const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
 
     const [totalCalls, notReachedCalls] = await Promise.all([
       prisma.callLog.count({ where: periodCallWhere }),
