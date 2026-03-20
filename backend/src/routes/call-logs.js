@@ -142,6 +142,18 @@ const EXPECTED_CALLBACK_WINDOW_LABELS = {
   WITHIN_7_DAYS: 'Within 7 days',
   WITHIN_14_DAYS: 'Within 14 days',
 };
+const NOT_INTERESTED_REASON_LABELS = {
+  HIGH_PRICE: 'Price too high',
+  BUDGET_NOT_AVAILABLE: 'Budget not available',
+  INSURANCE_NOT_COVERED: 'Insurance/finance not covered',
+  NOT_INTERESTED_IN_SERVICE: 'Not interested in service',
+  SERVICE_MISMATCH: 'Service does not match need',
+  BAD_TIMING: 'Timing not right',
+  CHOSE_COMPETITOR: 'Chose competitor',
+  NO_LONGER_NEEDED: 'No longer required',
+  NOT_DECISION_MAKER: 'Not decision maker',
+  OTHER: 'Other',
+};
 
 // Auto-actions by disposition type
 const DISPOSITION_AUTO_ACTIONS = {
@@ -176,6 +188,12 @@ const callLogSchema = z.object({
   meetingDate: z.string().datetime({ offset: true }).optional().nullable(),
   appointmentDate: z.string().datetime({ offset: true }).optional().nullable(),
   expectedCallbackWindow: z.enum(['WITHIN_24_HOURS', 'WITHIN_3_DAYS', 'WITHIN_7_DAYS', 'WITHIN_14_DAYS']).optional().nullable(),
+  notInterestedReason: z.enum([
+    'HIGH_PRICE', 'BUDGET_NOT_AVAILABLE', 'INSURANCE_NOT_COVERED',
+    'NOT_INTERESTED_IN_SERVICE', 'SERVICE_MISMATCH', 'BAD_TIMING',
+    'CHOSE_COMPETITOR', 'NO_LONGER_NEEDED', 'NOT_DECISION_MAKER', 'OTHER',
+  ]).optional().nullable(),
+  notInterestedOtherText: z.string().optional().nullable(),
   createFollowUp: z.boolean().optional().default(true),
 });
 
@@ -254,6 +272,26 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       return res.status(400).json({
         error: 'Expected callback window can only be set for "Will Call Us Again".',
         field: 'expectedCallbackWindow',
+      });
+    }
+    if (data.disposition === 'NOT_INTERESTED') {
+      if (!data.notInterestedReason) {
+        return res.status(400).json({
+          error: 'Please select why the lead is not interested.',
+          field: 'notInterestedReason',
+        });
+      }
+      if (data.notInterestedReason === 'OTHER' && (!data.notInterestedOtherText || !data.notInterestedOtherText.trim())) {
+        return res.status(400).json({
+          error: 'Please describe the "Other" reason for not interested.',
+          field: 'notInterestedOtherText',
+        });
+      }
+    }
+    if (data.disposition !== 'NOT_INTERESTED' && (data.notInterestedReason || data.notInterestedOtherText)) {
+      return res.status(400).json({
+        error: 'Not interested reason can only be used when outcome is "Not Interested".',
+        field: 'notInterestedReason',
       });
     }
 
@@ -353,6 +391,13 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
     if (data.disposition === 'WILL_CALL_US_AGAIN') {
       callMetadata.softEngagementLoop = true;
     }
+    if (data.disposition === 'NOT_INTERESTED') {
+      callMetadata.notInterestedReason = data.notInterestedReason;
+      callMetadata.notInterestedReasonLabel = NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason;
+      if (data.notInterestedOtherText && data.notInterestedOtherText.trim()) {
+        callMetadata.notInterestedOtherText = data.notInterestedOtherText.trim();
+      }
+    }
 
     const callLog = await prisma.callLog.create({
       data: {
@@ -380,12 +425,21 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         channel: 'PHONE',
         direction: 'OUTBOUND',
         subject: DISPOSITION_LABELS[data.disposition],
-        body: data.notes || `Call logged: ${DISPOSITION_LABELS[data.disposition]}`,
+        body: data.notes || `Call logged: ${DISPOSITION_LABELS[data.disposition]}${
+          data.disposition === 'NOT_INTERESTED' && data.notInterestedReason
+            ? ` (${NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason})`
+            : ''
+        }`,
         metadata: {
           callLogId: callLog.id,
           disposition: data.disposition,
           duration: data.duration,
           expectedCallbackWindow: data.expectedCallbackWindow || null,
+          notInterestedReason: data.notInterestedReason || null,
+          notInterestedReasonLabel: data.notInterestedReason
+            ? (NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason)
+            : null,
+          notInterestedOtherText: data.notInterestedOtherText?.trim() || null,
         },
       },
     });
@@ -403,6 +457,11 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
           duration: data.duration,
           followUpTaskId,
           expectedCallbackWindow: data.expectedCallbackWindow || null,
+          notInterestedReason: data.notInterestedReason || null,
+          notInterestedReasonLabel: data.notInterestedReason
+            ? (NOT_INTERESTED_REASON_LABELS[data.notInterestedReason] || data.notInterestedReason)
+            : null,
+          notInterestedOtherText: data.notInterestedOtherText?.trim() || null,
         },
       },
     });

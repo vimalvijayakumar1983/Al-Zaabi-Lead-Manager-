@@ -1464,6 +1464,12 @@ export default function LeadDetailPage() {
                             {log.metadata?.expectedCallbackWindowLabel && (
                               <span>Expected callback: {String(log.metadata.expectedCallbackWindowLabel)}</span>
                             )}
+                            {log.metadata?.notInterestedReasonLabel && (
+                              <span>Reason: {String(log.metadata.notInterestedReasonLabel)}</span>
+                            )}
+                            {log.metadata?.notInterestedOtherText && (
+                              <span>Detail: {String(log.metadata.notInterestedOtherText)}</span>
+                            )}
                             {log.meetingDate && <span>Meeting: {new Date(log.meetingDate).toLocaleString()}</span>}
                             {log.appointmentDate && <span>Appointment: {new Date(log.appointmentDate).toLocaleString()}</span>}
                             {log.followUpTaskId && (
@@ -2373,6 +2379,18 @@ const EXPECTED_CALLBACK_WINDOW_OPTIONS = [
   { value: 'WITHIN_7_DAYS', label: 'Within 7 days' },
   { value: 'WITHIN_14_DAYS', label: 'Within 14 days' },
 ];
+const NOT_INTERESTED_REASON_OPTIONS = [
+  { value: 'HIGH_PRICE', label: 'Price too high' },
+  { value: 'BUDGET_NOT_AVAILABLE', label: 'Budget not available' },
+  { value: 'INSURANCE_NOT_COVERED', label: 'Insurance/finance not covered' },
+  { value: 'NOT_INTERESTED_IN_SERVICE', label: 'Not interested in service' },
+  { value: 'SERVICE_MISMATCH', label: 'Service does not match need' },
+  { value: 'BAD_TIMING', label: 'Timing not right' },
+  { value: 'CHOSE_COMPETITOR', label: 'Chose competitor' },
+  { value: 'NO_LONGER_NEEDED', label: 'No longer required' },
+  { value: 'NOT_DECISION_MAKER', label: 'Not decision maker' },
+  { value: 'OTHER', label: 'Other (specify)' },
+];
 
 function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string }) {
   const [form, setForm] = useState({
@@ -2383,6 +2401,8 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
     meetingDate: '',
     appointmentDate: '',
     expectedCallbackWindow: '',
+    notInterestedReason: '',
+    notInterestedOtherText: '',
     createFollowUp: true,
   });
   const [submitting, setSubmitting] = useState(false);
@@ -2405,9 +2425,14 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
   const notesEmpty = !form.notes || !form.notes.trim();
   const isCallLater = selectedDisposition === 'CALL_LATER';
   const isWillCallUsAgain = selectedDisposition === 'WILL_CALL_US_AGAIN';
+  const isNotInterested = selectedDisposition === 'NOT_INTERESTED';
   const showCallback = isCallLater || selectedDisposition === 'CALL_AGAIN' || selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
   const callbackDateRequired = isCallLater; // CALL_LATER = mandatory date/time
   const callbackDateMissing = callbackDateRequired && !form.callbackDate;
+  const notInterestedReasonMissing = isNotInterested && !form.notInterestedReason;
+  const notInterestedOtherMissing = isNotInterested
+    && form.notInterestedReason === 'OTHER'
+    && !form.notInterestedOtherText.trim();
   const showMeeting = selectedDisposition === 'MEETING_ARRANGED';
   const showAppointment = selectedDisposition === 'APPOINTMENT_BOOKED';
 
@@ -2416,6 +2441,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
     if (!form.disposition) return;
     if (notesRequired && notesEmpty) return; // Block submit if notes required but empty
     if (callbackDateMissing) return; // Block submit if CALL_LATER without date/time
+    if (notInterestedReasonMissing || notInterestedOtherMissing) return;
     setSubmitting(true);
     try {
       const durationSeconds = form.duration ? parseInt(form.duration) * 60 : null;
@@ -2427,6 +2453,8 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
         meetingDate: form.meetingDate ? new Date(form.meetingDate).toISOString() : null,
         appointmentDate: form.appointmentDate ? new Date(form.appointmentDate).toISOString() : null,
         expectedCallbackWindow: form.expectedCallbackWindow || null,
+        notInterestedReason: form.notInterestedReason || null,
+        notInterestedOtherText: form.notInterestedOtherText?.trim() || null,
         createFollowUp: form.createFollowUp,
       });
     } finally {
@@ -2459,6 +2487,8 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
                     ...prev,
                     disposition: opt.value,
                     expectedCallbackWindow: opt.value === 'WILL_CALL_US_AGAIN' ? prev.expectedCallbackWindow : '',
+                    notInterestedReason: opt.value === 'NOT_INTERESTED' ? prev.notInterestedReason : '',
+                    notInterestedOtherText: opt.value === 'NOT_INTERESTED' ? prev.notInterestedOtherText : '',
                   }))}
                   className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-all ${
                     form.disposition === opt.value
@@ -2523,6 +2553,44 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
               <p className="text-xs text-indigo-700">
                 No urgent callback is forced. If there is no inbound reply within this window, the system creates a low-priority soft follow-up task.
               </p>
+            </div>
+          )}
+
+          {isNotInterested && (
+            <div className="space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
+              <label className="label mb-0">
+                Reason for Not Interested <span className="text-red-500 font-semibold">*</span>
+              </label>
+              <select
+                className={`input ${notInterestedReasonMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                value={form.notInterestedReason}
+                onChange={(e) => setForm((prev) => ({ ...prev, notInterestedReason: e.target.value, notInterestedOtherText: e.target.value === 'OTHER' ? prev.notInterestedOtherText : '' }))}
+              >
+                <option value="">Select reason...</option>
+                {NOT_INTERESTED_REASON_OPTIONS.map((reason) => (
+                  <option key={reason.value} value={reason.value}>{reason.label}</option>
+                ))}
+              </select>
+              {notInterestedReasonMissing && (
+                <p className="text-xs text-red-500">Please select why this lead is not interested.</p>
+              )}
+
+              {form.notInterestedReason === 'OTHER' && (
+                <div className="space-y-1">
+                  <label className="label mb-0">
+                    Specify Other Reason <span className="text-red-500 font-semibold">*</span>
+                  </label>
+                  <input
+                    className={`input ${notInterestedOtherMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                    value={form.notInterestedOtherText}
+                    onChange={(e) => setForm({ ...form, notInterestedOtherText: e.target.value })}
+                    placeholder="e.g. already signed annual contract elsewhere"
+                  />
+                  {notInterestedOtherMissing && (
+                    <p className="text-xs text-red-500">Please provide the other reason.</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2602,7 +2670,11 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
 
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || callbackDateMissing} className="btn-primary gap-1.5">
+            <button
+              type="submit"
+              disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || callbackDateMissing || notInterestedReasonMissing || notInterestedOtherMissing}
+              className="btn-primary gap-1.5"
+            >
               {submitting ? (
                 <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Saving...</>
               ) : (

@@ -63,6 +63,20 @@ function pctChange(cur, prev) {
   return Math.round(((cur - prev) / prev) * 100);
 }
 
+const NOT_INTERESTED_REASON_LABELS = {
+  HIGH_PRICE: 'Price too high',
+  BUDGET_NOT_AVAILABLE: 'Budget not available',
+  INSURANCE_NOT_COVERED: 'Insurance/finance not covered',
+  NOT_INTERESTED_IN_SERVICE: 'Not interested in service',
+  SERVICE_MISMATCH: 'Service does not match need',
+  BAD_TIMING: 'Timing not right',
+  CHOSE_COMPETITOR: 'Chose competitor',
+  NO_LONGER_NEEDED: 'No longer required',
+  NOT_DECISION_MAKER: 'Not decision maker',
+  OTHER: 'Other',
+  UNSPECIFIED: 'Unspecified',
+};
+
 // ─── Dashboard Overview ──────────────────────────────────────────
 router.get('/dashboard', async (req, res, next) => {
   try {
@@ -455,6 +469,73 @@ router.get('/activities', async (req, res, next) => {
       totalActivities: allActivities.length,
     });
   } catch (err) { next(err); }
+});
+
+// ─── Not Interested Reason Analytics ──────────────────────────────
+router.get('/not-interested-reasons', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const orgFilter = getOrgFilter(req, divisionId);
+    const { start } = getPeriodDates(period);
+
+    const callWhere = req.isRestrictedRole
+      ? {
+          createdAt: { gte: start },
+          disposition: 'NOT_INTERESTED',
+          lead: { assignedToId: req.user.id, isArchived: false },
+        }
+      : {
+          createdAt: { gte: start },
+          disposition: 'NOT_INTERESTED',
+          lead: { organizationId: orgFilter, isArchived: false },
+        };
+
+    const callLogs = await prisma.callLog.findMany({
+      where: callWhere,
+      select: {
+        metadata: true,
+        lead: { select: { source: true } },
+      },
+    });
+
+    const reasonCounts = {};
+    const sourceCounts = {};
+    let captured = 0;
+
+    for (const log of callLogs) {
+      const md = (typeof log.metadata === 'object' && log.metadata !== null) ? log.metadata : {};
+      const reasonKey = md.notInterestedReason;
+      const normalizedReason = NOT_INTERESTED_REASON_LABELS[reasonKey] ? reasonKey : 'UNSPECIFIED';
+      reasonCounts[normalizedReason] = (reasonCounts[normalizedReason] || 0) + 1;
+      if (normalizedReason !== 'UNSPECIFIED') captured++;
+
+      const source = log.lead?.source || 'UNKNOWN';
+      sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+    }
+
+    const totalNotInterested = callLogs.length;
+    const reasons = Object.entries(reasonCounts)
+      .map(([reason, count]) => ({
+        reason,
+        label: NOT_INTERESTED_REASON_LABELS[reason] || reason,
+        count,
+        percent: totalNotInterested > 0 ? Math.round((count / totalNotInterested) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const bySource = Object.entries(sourceCounts)
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      totalNotInterested,
+      captureRate: totalNotInterested > 0 ? Math.round((captured / totalNotInterested) * 10000) / 100 : 0,
+      reasons,
+      bySource,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ─── Lead Score Distribution ──────────────────────────────────────

@@ -320,6 +320,11 @@ class ApiClient {
     return this.request<any>(`/analytics/activities?${q}`);
   }
 
+  async getNotInterestedReasonAnalytics(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/not-interested-reasons?${q}`);
+  }
+
   async getScoreDistribution(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any>(`/analytics/score-distribution${q}`);
