@@ -51,7 +51,7 @@ async function checkTaskReminders() {
           gt: now,
           lte: dueSoonThreshold,
         },
-        assigneeId: { not: null },
+        NOT: { assigneeId: null },
       },
       include: {
         assignee: { select: { id: true, firstName: true, lastName: true, organizationId: true } },
@@ -93,7 +93,7 @@ async function checkTaskReminders() {
       where: {
         status: { in: ['PENDING', 'IN_PROGRESS'] },
         dueAt: { lt: now },
-        assigneeId: { not: null },
+        NOT: { assigneeId: null },
       },
       include: {
         assignee: { select: { id: true, firstName: true, lastName: true, organizationId: true } },
