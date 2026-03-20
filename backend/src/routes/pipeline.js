@@ -5,6 +5,8 @@ const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { executeAutomations } = require('../services/automationEngine');
+const { rescoreAndPersist } = require('../utils/leadScoring');
+const { broadcastDataChange } = require('../websocket/server');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -211,7 +213,20 @@ router.post('/move', validate(z.object({
       return result;
     });
 
-    res.json(updated);
+    // Keep score and conversion probability in sync with stage movement.
+    let responseLead = updated;
+    try {
+      const rescored = await rescoreAndPersist(updated.id);
+      responseLead = {
+        ...updated,
+        score: rescored.score,
+        conversionProb: rescored.conversionProb,
+      };
+    } catch (_) {
+      // Non-blocking: if rescore fails, stage move still succeeds.
+    }
+
+    res.json(responseLead);
 
     // ── Fire-and-forget notification — notify lead owner ──
     if (stageId !== lead.stageId && lead.assignedToId && lead.assignedToId !== req.user.id) {
@@ -235,6 +250,9 @@ router.post('/move', validate(z.object({
         previousData: lead,
       }).catch(() => {});
     }
+
+    // Notify all subscribers to refresh lead data (including score widgets).
+    broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: updated.id }).catch(() => {});
   } catch (err) {
     next(err);
   }

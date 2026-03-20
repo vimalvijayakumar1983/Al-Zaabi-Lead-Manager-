@@ -721,13 +721,17 @@ router.get('/:id', async (req, res, next) => {
       } catch { /* non-critical */ }
     }
 
-    // Calculate full score breakdown for display
+    // Calculate full score breakdown for display and return fresh values
     let scoreBreakdown = null;
+    let freshScore = lead.score;
+    let freshConversionProb = lead.conversionProb;
     try {
       const scoreResult = await calculateFullScore(lead.id);
       scoreBreakdown = scoreResult.breakdown;
+      freshScore = scoreResult.score;
+      freshConversionProb = scoreResult.conversionProb;
       // If score has drifted, silently update it
-      if (scoreResult.score !== lead.score) {
+      if (scoreResult.score !== lead.score || scoreResult.conversionProb !== lead.conversionProb) {
         await prisma.lead.update({
           where: { id: lead.id },
           data: { score: scoreResult.score, conversionProb: scoreResult.conversionProb },
@@ -737,6 +741,8 @@ router.get('/:id', async (req, res, next) => {
 
     res.json({
       ...lead,
+      score: freshScore,
+      conversionProb: freshConversionProb,
       unreadCommunications: unreadCount,
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
       doNotCallByUser,
