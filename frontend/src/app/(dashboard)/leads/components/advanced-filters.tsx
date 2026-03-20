@@ -217,6 +217,12 @@ function CalendarIcon() {
 function PhoneOutcomeIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>;
 }
+function CallCountIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 3h6m-3-3v6" /></svg>;
+}
+function ValueIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+}
 function BoltIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>;
 }
@@ -278,8 +284,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     statusPipeline: true,
     callOutcome: false,
+    callActivity: false,
     assignmentContact: false,
-    scoreBudget: false,
+    scoreValue: false,
     textSearch: false,
     tags: false,
     dateRange: false,
@@ -319,8 +326,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   const sectionCounts = {
     statusPipeline: [local.status, local.stageId, local.source, local.divisionId].filter(Boolean).length,
     callOutcome: local.callOutcome ? parseMulti(local.callOutcome).length : 0,
+    callActivity: [local.minCallCount, local.maxCallCount].filter(Boolean).length,
     assignmentContact: [local.assignedToId, local.hasEmail, local.hasPhone].filter(Boolean).length,
-    scoreBudget: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
+    scoreValue: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
     textSearch: [local.company, local.jobTitle, local.location, local.campaign, local.productInterest].filter(Boolean).length,
     tags: local.tags ? 1 : 0,
     dateRange: [local.dateFrom, local.dateTo].filter(Boolean).length,
@@ -538,9 +546,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         <button
           onClick={() => applyQuickFilter({ budgetMin: '50000' })}
           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition-colors"
-          title="Leads with budget ≥ 50,000 AED"
+          title="Leads with value ≥ 50,000 AED"
         >
-          High Value (≥50K AED)
+          💰 Value ≥50K AED
         </button>
         {/* New enhanced presets */}
         <button
@@ -566,6 +574,27 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
           title="Leads with no activity for 30+ days (created before 30 days ago with status NEW or CONTACTED)"
         >
           Stale Leads (30+ days)
+        </button>
+        <button
+          onClick={() => applyQuickFilter({ minCallCount: '0', maxCallCount: '0' })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors"
+          title="Leads that have never been called"
+        >
+          🔇 Never Called
+        </button>
+        <button
+          onClick={() => applyQuickFilter({ minCallCount: '5' })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors"
+          title="Leads called 5 or more times"
+        >
+          🔥 Called 5+ Times
+        </button>
+        <button
+          onClick={() => applyQuickFilter({ budgetMin: '100000' })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+          title="Leads with value ≥ 100,000 AED"
+        >
+          💰 High Value (≥100K)
         </button>
         <button
           onClick={() => applyQuickFilter({ dateFrom: daysAgo(7) })}
@@ -688,6 +717,83 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         )}
       </div>
 
+      {/* Section: Call Activity (Call Count) */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader title="Call Activity" icon={<CallCountIcon />} count={sectionCounts.callActivity} open={openSections.callActivity} onToggle={() => toggleSection('callActivity')} />
+        {openSections.callActivity && (
+          <div className="p-4 space-y-3">
+            {/* Smart presets — color-coded to match table badges */}
+            <div>
+              <label className="label mb-1.5">Quick Presets</label>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '0', maxCallCount: '0' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '0' && local.maxCallCount === '0'
+                      ? 'bg-gray-200 text-gray-800 border-gray-400 ring-2 ring-gray-300'
+                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-gray-300 text-gray-700 text-[10px] font-bold">0</span>
+                  Never Called
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '1', maxCallCount: '2' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '1' && local.maxCallCount === '2'
+                      ? 'bg-blue-100 text-blue-800 border-blue-400 ring-2 ring-blue-300'
+                      : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-200 text-blue-700 text-[10px] font-bold">1-2</span>
+                  Low Touch
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '3', maxCallCount: '5' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '3' && local.maxCallCount === '5'
+                      ? 'bg-amber-100 text-amber-800 border-amber-400 ring-2 ring-amber-300'
+                      : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-amber-200 text-amber-700 text-[10px] font-bold">3-5</span>
+                  Moderate
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '6', maxCallCount: '' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '6' && local.maxCallCount === ''
+                      ? 'bg-red-100 text-red-800 border-red-400 ring-2 ring-red-300'
+                      : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-red-200 text-red-700 text-[10px] font-bold">6+</span>
+                  High Touch
+                </button>
+              </div>
+            </div>
+            {/* Custom range */}
+            <div>
+              <label className="label mb-1">Custom Range</label>
+              <div className="flex items-center gap-2">
+                <input type="number" className="input" placeholder="Min calls" min={0} value={local.minCallCount} onChange={(e) => setLocal({ ...local, minCallCount: e.target.value })} />
+                <span className="text-gray-400 text-sm">to</span>
+                <input type="number" className="input" placeholder="Max calls" min={0} value={local.maxCallCount} onChange={(e) => setLocal({ ...local, maxCallCount: e.target.value })} />
+              </div>
+            </div>
+            {/* Clear */}
+            {(local.minCallCount || local.maxCallCount) && (
+              <button
+                onClick={() => setLocal({ ...local, minCallCount: '', maxCallCount: '' })}
+                className="text-xs text-gray-500 hover:text-gray-700"
+              >
+                Clear call activity filter
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Section 2: Assignment & Contact */}
       <div className="border border-gray-200 rounded-lg overflow-hidden">
         <SectionHeader title="Assignment & Contact" icon={<UserIcon />} count={sectionCounts.assignmentContact} open={openSections.assignmentContact} onToggle={() => toggleSection('assignmentContact')} />
@@ -719,33 +825,96 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         )}
       </div>
 
-      {/* Section 3: Score & Budget */}
+      {/* Section 3: Score & Value */}
       <div className="border border-gray-200 rounded-lg overflow-hidden">
-        <SectionHeader title="Score & Budget" icon={<ChartIcon />} count={sectionCounts.scoreBudget} open={openSections.scoreBudget} onToggle={() => toggleSection('scoreBudget')} />
-        {openSections.scoreBudget && (
-          <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <SectionHeader title="Score & Value" icon={<ValueIcon />} count={sectionCounts.scoreValue} open={openSections.scoreValue} onToggle={() => toggleSection('scoreValue')} />
+        {openSections.scoreValue && (
+          <div className="p-4 space-y-4">
+            {/* Lead Value / Associated Value */}
             <div>
-              <label className="label">Score Range</label>
-              <div className="flex items-center gap-2">
-                <input type="number" className="input" placeholder="Min" min={0} max={100} value={local.minScore} onChange={(e) => setLocal({ ...local, minScore: e.target.value })} />
-                <span className="text-gray-400">-</span>
-                <input type="number" className="input" placeholder="Max" min={0} max={100} value={local.maxScore} onChange={(e) => setLocal({ ...local, maxScore: e.target.value })} />
+              <label className="label mb-1.5">Lead Value (AED)</label>
+              {/* Value presets */}
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '', budgetMax: '0' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMax === '0' && !local.budgetMin
+                      ? 'bg-gray-200 text-gray-800 border-gray-400 ring-2 ring-gray-300'
+                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  No Value
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '1', budgetMax: '25000' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '1' && local.budgetMax === '25000'
+                      ? 'bg-blue-100 text-blue-800 border-blue-400 ring-2 ring-blue-300'
+                      : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  &lt; 25K
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '25000', budgetMax: '100000' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '25000' && local.budgetMax === '100000'
+                      ? 'bg-amber-100 text-amber-800 border-amber-400 ring-2 ring-amber-300'
+                      : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  25K – 100K
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '100000', budgetMax: '' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '100000' && !local.budgetMax
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-400 ring-2 ring-emerald-300'
+                      : 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  💰 100K+
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '500000', budgetMax: '' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '500000' && !local.budgetMax
+                      ? 'bg-purple-100 text-purple-800 border-purple-400 ring-2 ring-purple-300'
+                      : 'bg-purple-50 text-purple-600 border-purple-200 hover:bg-purple-100'
+                  }`}
+                >
+                  💎 500K+
+                </button>
               </div>
-            </div>
-            <div>
-              <label className="label">Budget Range (AED)</label>
+              {/* Custom range */}
               <div className="flex items-center gap-2">
-                <input type="number" className="input" placeholder="Min" min={0} value={local.budgetMin} onChange={(e) => setLocal({ ...local, budgetMin: e.target.value })} />
-                <span className="text-gray-400">-</span>
-                <input type="number" className="input" placeholder="Max" min={0} value={local.budgetMax} onChange={(e) => setLocal({ ...local, budgetMax: e.target.value })} />
+                <input type="number" className="input" placeholder="Min AED" min={0} value={local.budgetMin} onChange={(e) => setLocal({ ...local, budgetMin: e.target.value })} />
+                <span className="text-gray-400 text-sm">to</span>
+                <input type="number" className="input" placeholder="Max AED" min={0} value={local.budgetMax} onChange={(e) => setLocal({ ...local, budgetMax: e.target.value })} />
               </div>
+              {(local.budgetMin || local.budgetMax) && (
+                <button onClick={() => setLocal({ ...local, budgetMin: '', budgetMax: '' })} className="text-xs text-gray-500 hover:text-gray-700 mt-1">
+                  Clear value filter
+                </button>
+              )}
             </div>
-            <div>
-              <label className="label">Conversion % Range</label>
-              <div className="flex items-center gap-2">
-                <input type="number" className="input" placeholder="Min %" min={0} max={100} value={local.conversionMin} onChange={(e) => setLocal({ ...local, conversionMin: e.target.value })} />
-                <span className="text-gray-400">-</span>
-                <input type="number" className="input" placeholder="Max %" min={0} max={100} value={local.conversionMax} onChange={(e) => setLocal({ ...local, conversionMax: e.target.value })} />
+            {/* Score Range */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Score Range</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" className="input" placeholder="Min" min={0} max={100} value={local.minScore} onChange={(e) => setLocal({ ...local, minScore: e.target.value })} />
+                  <span className="text-gray-400">-</span>
+                  <input type="number" className="input" placeholder="Max" min={0} max={100} value={local.maxScore} onChange={(e) => setLocal({ ...local, maxScore: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="label">Conversion % Range</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" className="input" placeholder="Min %" min={0} max={100} value={local.conversionMin} onChange={(e) => setLocal({ ...local, conversionMin: e.target.value })} />
+                  <span className="text-gray-400">-</span>
+                  <input type="number" className="input" placeholder="Max %" min={0} max={100} value={local.conversionMax} onChange={(e) => setLocal({ ...local, conversionMax: e.target.value })} />
+                </div>
               </div>
             </div>
           </div>
@@ -921,8 +1090,10 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
   if (filters.location) badges.push({ key: 'location', label: `Location: ${filters.location}` });
   if (filters.campaign) badges.push({ key: 'campaign', label: `Campaign: ${filters.campaign}` });
   if (filters.productInterest) badges.push({ key: 'productInterest', label: `Product: ${filters.productInterest}` });
-  if (filters.budgetMin) badges.push({ key: 'budgetMin', label: `Budget >= ${filters.budgetMin} AED` });
-  if (filters.budgetMax) badges.push({ key: 'budgetMax', label: `Budget <= ${filters.budgetMax} AED` });
+  if (filters.budgetMin) badges.push({ key: 'budgetMin', label: `Value ≥ ${Number(filters.budgetMin).toLocaleString()} AED` });
+  if (filters.budgetMax) badges.push({ key: 'budgetMax', label: `Value ≤ ${Number(filters.budgetMax).toLocaleString()} AED` });
+  if (filters.minCallCount) badges.push({ key: 'minCallCount', label: filters.minCallCount === '0' && filters.maxCallCount === '0' ? 'Never Called' : `Calls ≥ ${filters.minCallCount}` });
+  if (filters.maxCallCount && !(filters.minCallCount === '0' && filters.maxCallCount === '0')) badges.push({ key: 'maxCallCount', label: `Calls ≤ ${filters.maxCallCount}` });
   if (filters.tags) badges.push({ key: 'tags', label: `Tags: ${filters.tags}` });
   if (filters.hasEmail) badges.push({ key: 'hasEmail', label: `Has Email: ${filters.hasEmail === 'true' ? 'Yes' : 'No'}` });
   if (filters.hasPhone) badges.push({ key: 'hasPhone', label: `Has Phone: ${filters.hasPhone === 'true' ? 'Yes' : 'No'}` });
