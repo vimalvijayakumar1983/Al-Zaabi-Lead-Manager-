@@ -190,25 +190,53 @@ function LeadsContent() {
 
   // ─── State ──────────────────────────────────────────────────────
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 1 });
+  const [pagination, setPagination] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('leads-view-state');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.page) return { total: 0, page: parsed.page, limit: 20, totalPages: 1 };
+        }
+      } catch { /* ignore */ }
+    }
+    return { total: 0, page: 1, limit: 20, totalPages: 1 };
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // ─── Restore view state from sessionStorage (survives lead detail navigation) ──
+  const restoredViewState = useRef<{
+    filters?: FilterState; sortBy?: string; sortOrder?: 'asc' | 'desc';
+    viewMode?: ViewMode; page?: number; activeViewId?: string;
+  } | null>((() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const saved = sessionStorage.getItem('leads-view-state');
+      if (saved) return JSON.parse(saved);
+    } catch { /* ignore */ }
+    return null;
+  })());
+
   const [filters, setFilters] = useState<FilterState>(() => {
-    // Initialize filters from URL params (for drill-down from analytics)
+    // URL params take priority (for drill-down from analytics)
     const initial = { ...emptyFilters };
     const paramKeys: (keyof FilterState)[] = [
       'status', 'source', 'assignedToId', 'stageId', 'campaign',
       'minScore', 'maxScore', 'search', 'company', 'location',
     ];
+    let hasUrlParams = false;
     for (const key of paramKeys) {
       const val = searchParams.get(key);
-      if (val) initial[key] = val;
+      if (val) { initial[key] = val; hasUrlParams = true; }
     }
+    if (hasUrlParams) return initial;
+    // Restore from session if available
+    if (restoredViewState.current?.filters) return { ...emptyFilters, ...restoredViewState.current.filters };
     return initial;
   });
-  const [sortBy, setSortBy] = useState('updatedAt');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const [sortBy, setSortBy] = useState(() => restoredViewState.current?.sortBy || 'updatedAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() => restoredViewState.current?.sortOrder || 'desc');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => restoredViewState.current?.viewMode || 'table');
   const [showForm, setShowForm] = useState(false);
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
@@ -390,9 +418,10 @@ function LeadsContent() {
         setCustomViews(serverViews);
         setViewsLoaded(true);
         
-        // 3. Restore active view filters
+        // 3. Restore active view filters (skip if already restored from sessionStorage)
         const savedViewId = loadActiveViewId();
-        if (savedViewId && savedViewId !== 'all') {
+        const hasSessionState = restoredViewState.current !== null;
+        if (savedViewId && savedViewId !== 'all' && !hasSessionState) {
           const allViews = [...SYSTEM_VIEWS, ...serverViews];
           const view = allViews.find(v => v.id === savedViewId);
           if (view) {
@@ -451,6 +480,21 @@ function LeadsContent() {
       sessionStorage.setItem('lead-navigation', JSON.stringify(navData));
     } catch (_) { /* sessionStorage unavailable */ }
   }, [leads, activeViewId, customViews, pagination]);
+
+  // ─── Persist view state to sessionStorage (survives lead detail navigation) ──
+  useEffect(() => {
+    try {
+      const viewState = {
+        filters,
+        sortBy,
+        sortOrder,
+        viewMode,
+        page: pagination.page,
+        activeViewId,
+      };
+      sessionStorage.setItem('leads-view-state', JSON.stringify(viewState));
+    } catch { /* sessionStorage unavailable */ }
+  }, [filters, sortBy, sortOrder, viewMode, pagination.page, activeViewId]);
 
   // Fetch field config to get custom labels for column headers
   useEffect(() => {
