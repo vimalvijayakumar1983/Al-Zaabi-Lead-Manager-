@@ -719,100 +719,87 @@ export default function LeadDetailPage() {
 
   return (
     <div className="flex flex-col -m-3 sm:-m-4 md:-m-6 overflow-hidden" style={{ height: 'calc(100dvh - 3.5rem)' }}>
-      {/* ═══ FROZEN TOP ZONE — Nav + Header + Stage stays pinned ═══ */}
-      <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 pt-3 pb-4 border-b border-gray-200/50 space-y-4 bg-white" style={{ boxShadow: '0 1px 3px 0 rgba(0,0,0,0.04)' }}>
-      {/* ═══ Lead Navigation Bar ═══ */}
-      {navData && navData.leadIds.length > 1 && currentNavIndex >= 0 && (
-        <div className="card px-4 py-2.5 bg-gradient-to-r from-slate-50 via-white to-slate-50 border border-gray-200/80 shadow-sm">
-          <div className="flex items-center justify-between">
-            {/* Left: Prev/Next arrows + position */}
-            <div className="flex items-center gap-2">
+      {/* ═══ FROZEN TOP BAR — Compact one-line nav + identification ═══ */}
+      <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 py-2 border-b border-gray-200 bg-white" style={{ boxShadow: '0 1px 2px 0 rgba(0,0,0,0.03)' }}>
+        <div className="flex items-center justify-between gap-2">
+          {/* Left: Back + Lead identity */}
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <button onClick={() => router.back()} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+            </button>
+            <div className="flex-shrink-0 h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[10px] font-semibold text-white">
+              {getLeadInitials(lead)}
+            </div>
+            <h1 className="text-sm font-bold text-gray-900 truncate">{getLeadDisplayName(lead)}</h1>
+            <span className="hidden sm:inline text-xs text-gray-400 truncate">{lead.company || ''}</span>
+            <span className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${lead.doNotCall ? statusColors.DO_NOT_CALL : statusColors[lead.status]}`}>
+              {lead.doNotCall ? '🚫 DNC' : lead.status.replace(/_/g, ' ')}
+            </span>
+          </div>
+
+          {/* Center: Navigation arrows + position (if navigating from list) */}
+          {navData && navData.leadIds.length > 1 && currentNavIndex >= 0 && (
+            <div className="flex items-center gap-1">
               <button
                 onClick={goToPrevious}
                 disabled={!hasPrev}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                  hasPrev
-                    ? 'text-gray-700 hover:bg-gray-100 hover:text-brand-600 active:scale-95'
-                    : 'text-gray-300 cursor-not-allowed'
-                }`}
+                className={`p-1 rounded transition-colors ${hasPrev ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-200 cursor-not-allowed'}`}
+                title="Previous lead (Alt+←)"
               >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                <span className="hidden sm:inline">Previous</span>
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
               </button>
-
-              <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-brand-50/60 border border-brand-100">
-                <svg className="h-3.5 w-3.5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                </svg>
-                <span className="text-sm font-medium text-brand-700">{navData.viewName}</span>
-                <span className="text-brand-300">•</span>
-                <span className="text-sm font-semibold text-brand-600 tabular-nums">
-                  {globalPosition} <span className="font-normal text-brand-400">of</span> {navData.totalInView}
-                </span>
-              </div>
-
+              <span className="text-xs text-gray-500 whitespace-nowrap">
+                <span className="font-bold text-brand-600">{currentNavIndex + 1}</span>
+                <span className="text-gray-400">/{navData.leadIds.length}</span>
+                {navData.viewName && <span className="hidden md:inline text-gray-400"> · {navData.viewName}</span>}
+              </span>
               <button
                 onClick={goToNext}
                 disabled={!hasNext}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                  hasNext
-                    ? 'text-gray-700 hover:bg-gray-100 hover:text-brand-600 active:scale-95'
-                    : 'text-gray-300 cursor-not-allowed'
-                }`}
+                className={`p-1 rounded transition-colors ${hasNext ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-200 cursor-not-allowed'}`}
+                title="Next lead (Alt+→)"
               >
-                <span className="hidden sm:inline">Next</span>
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
               </button>
-            </div>
-
-            {/* Center: Progress bar */}
-            <div className="hidden md:flex items-center gap-2.5">
-              <div className="w-28 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-500 ease-out"
-                  style={{
-                    width: `${navData.leadIds.length > 0 ? (visitedCount / navData.leadIds.length) * 100 : 0}%`,
-                    background: visitedCount === navData.leadIds.length
-                      ? 'linear-gradient(90deg, #22c55e, #16a34a)'
-                      : 'linear-gradient(90deg, #6366f1, #8b5cf6)',
-                  }}
-                />
+              {/* Progress dots */}
+              <div className="hidden lg:flex items-center gap-1 ml-1">
+                <div className="w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${visitedCountRef.current >= navData.leadIds.length ? 'bg-green-500' : 'bg-brand-500'}`}
+                    style={{ width: `${Math.min(100, (visitedCountRef.current / navData.leadIds.length) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-gray-400">{visitedCountRef.current}/{navData.leadIds.length}</span>
               </div>
-              <span className="text-xs font-medium text-gray-500 tabular-nums whitespace-nowrap">
-                {visitedCount === navData.leadIds.length ? (
-                  <span className="text-green-600">✓ All {visitedCount} visited</span>
-                ) : (
-                  <>{visitedCount}/{navData.leadIds.length} visited</>
-                )}
-              </span>
             </div>
+          )}
 
-            {/* Right: Keyboard shortcuts + Quick Next */}
-            <div className="flex items-center gap-3">
-              <div className="hidden lg:flex items-center gap-1.5 text-[10px] text-gray-400">
-                <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono">Alt+←</kbd>
-                <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono">Alt+→</kbd>
-                <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono">Alt+S</kbd>
-              </div>
-              {hasNext && !isEditing && (
-                <button
-                  onClick={goToNext}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 active:scale-95 transition-all shadow-sm"
-                >
-                  Next Lead
-                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                </button>
-              )}
-            </div>
+          {/* Right: Quick actions */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {!isEditing && (
+              <button onClick={startEditing} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors" title="Edit lead">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+              </button>
+            )}
+            <button onClick={handleDelete} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Archive lead">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </button>
+            {hasNext && !isEditing && navData && navData.leadIds.length > 1 && (
+              <button
+                onClick={goToNext}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white bg-brand-600 hover:bg-brand-700 active:scale-95 transition-all"
+              >
+                Next
+                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </button>
+            )}
           </div>
         </div>
-      )}
+      </div>
+      {/* ← end frozen top bar */}
+
+      {/* ═══ SCROLLABLE CONTENT ZONE — everything else scrolls ═══ */}
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-6 py-4 space-y-4">
 
       {/* DNC Warning Banner */}
       {lead.doNotCall && (
@@ -854,9 +841,6 @@ export default function LeadDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
-          <button onClick={() => router.back()} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-          </button>
           <div className="h-14 w-14 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-md">
             {getLeadInitials(lead)}
           </div>
@@ -869,20 +853,10 @@ export default function LeadDetailPage() {
           <span className={`badge text-sm px-3 py-1.5 border ${lead.doNotCall ? statusColors.DO_NOT_CALL : statusColors[lead.status]}`}>
             {lead.doNotCall ? '🚫 DO NOT CALL' : lead.status.replace(/_/g, ' ')}
           </span>
-          {!isEditing && (
-            <button onClick={startEditing} className="btn-secondary text-xs gap-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-              Edit
-            </button>
-          )}
-          <button onClick={handleDelete} className="btn-secondary text-xs text-red-600 hover:text-red-700 gap-1.5">
-            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-            Archive
-          </button>
         </div>
       </div>
 
-      {/* Stage Progress Bar — driven by division's custom pipeline stages */}
+      {/* Stage Progress Bar */}
       {mainStages.length > 0 ? (
         <div className="card p-4">
           <div className="flex items-center justify-between">
@@ -934,11 +908,7 @@ export default function LeadDetailPage() {
           )}
         </div>
       ) : null}
-      </div>
-      {/* ← end frozen top zone */}
 
-      {/* ═══ SCROLLABLE CONTENT ZONE — only this area scrolls ═══ */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-6 py-4 space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Lead Info */}
         <div className="lg:col-span-1 space-y-4">
