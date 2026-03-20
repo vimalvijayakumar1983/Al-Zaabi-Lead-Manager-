@@ -2063,33 +2063,57 @@ function CreateTaskModal({
   onSubmit: (data: any) => void;
   divisionId?: string;
 }) {
+  const addToast = useNotificationStore((s) => s.addToast);
+  const TYPE_LABELS: Record<string, string> = {
+    FOLLOW_UP_CALL: 'Follow-up Call',
+    MEETING: 'Meeting',
+    EMAIL: 'Email',
+    WHATSAPP: 'WhatsApp',
+    DEMO: 'Demo',
+    PROPOSAL: 'Proposal',
+    OTHER: 'Other',
+  };
+
+  const toLocalInputValue = (date: Date) => {
+    const tzOffsetMs = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  };
+
+  const combineDateAndTimeToISO = (date?: string, time?: string) => {
+    if (!date || !time) return null;
+    const dt = new Date(`${date}T${time}`);
+    if (Number.isNaN(dt.getTime())) return null;
+    return dt.toISOString();
+  };
+
+  const formatDateTime = (dateStr: string) =>
+    new Date(dateStr).toLocaleString('en-AE', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
   const [form, setForm] = useState({
     title: '',
     description: '',
     type: 'FOLLOW_UP_CALL',
     priority: 'MEDIUM',
-    dueAt: (() => {
-      const d = new Date(Date.now() + 86400000);
-      d.setSeconds(0, 0);
-      const tzOffsetMs = d.getTimezoneOffset() * 60000;
-      return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
-    })(),
+    dueAt: toLocalInputValue(new Date(Date.now() + 24 * 60 * 60 * 1000)),
     assigneeId: '',
     reminderDate: '',
     reminderTime: '',
+    isRecurring: false,
+    recurRule: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
-  const [fullUsers, setFullUsers] = useState<User[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
   const [meId, setMeId] = useState('');
 
   useEffect(() => {
     Promise.all([api.getUsers(divisionId), api.getMe()]).then(([userList, me]) => {
       setUsers(Array.isArray(userList) ? userList : []);
-      setFullUsers(Array.isArray(userList) ? userList : []);
-      setCurrentUserId(me?.id || '');
       if (me?.id) {
         setMeId(me.id);
         setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
@@ -2097,21 +2121,72 @@ function CreateTaskModal({
     }).catch(() => {});
   }, [divisionId]);
 
+  const dueAtDate = form.dueAt ? new Date(form.dueAt) : null;
+  const dueAtValid = !!dueAtDate && !Number.isNaN(dueAtDate.getTime());
+  const reminderIso = combineDateAndTimeToISO(form.reminderDate, form.reminderTime);
+  const selectedAssignee = users.find((u) => u.id === form.assigneeId);
+
+  const setDuePreset = (minutesFromNow: number) => {
+    const d = new Date(Date.now() + minutesFromNow * 60_000);
+    setForm((prev) => ({ ...prev, dueAt: toLocalInputValue(d) }));
+  };
+
+  const setReminderBeforeDue = (minutesBeforeDue: number) => {
+    if (!dueAtValid || !dueAtDate) {
+      addToast({ type: 'info', title: 'Set due date first', message: 'Choose due date/time before applying reminder presets.' });
+      return;
+    }
+    const r = new Date(dueAtDate.getTime() - minutesBeforeDue * 60_000);
+    const local = toLocalInputValue(r);
+    setForm((prev) => ({ ...prev, reminderDate: local.split('T')[0] || '', reminderTime: local.split('T')[1] || '' }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     try {
+      if (!form.title.trim() || form.title.trim().length < 3) {
+        addToast({ type: 'error', title: 'Invalid title', message: 'Please enter at least 3 characters.' });
+        return;
+      }
+      if (!form.assigneeId) {
+        addToast({ type: 'error', title: 'Assignee required', message: 'Select a division member to assign this task.' });
+        return;
+      }
+      if (!dueAtValid || !dueAtDate) {
+        addToast({ type: 'error', title: 'Invalid due date', message: 'Please set a valid due date and time.' });
+        return;
+      }
+      if (dueAtDate < new Date()) {
+        addToast({ type: 'error', title: 'Invalid due date', message: 'Due date cannot be in the past.' });
+        return;
+      }
+      if ((form.reminderDate || form.reminderTime) && !reminderIso) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Please provide both reminder date and time.' });
+        return;
+      }
+      if (reminderIso && new Date(reminderIso) > dueAtDate) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be after due date.' });
+        return;
+      }
+      if (form.isRecurring && !form.recurRule) {
+        addToast({ type: 'error', title: 'Recurrence missing', message: 'Choose recurrence pattern or disable recurring.' });
+        return;
+      }
+
       const payload: any = {
-        title: form.title,
-        description: form.description,
+        title: form.title.trim(),
+        description: form.description.trim(),
         type: form.type,
         priority: form.priority,
         assigneeId: form.assigneeId,
-        dueAt: new Date(form.dueAt).toISOString(),
+        dueAt: dueAtDate.toISOString(),
         divisionId,
+        isRecurring: form.isRecurring,
+        recurRule: form.isRecurring ? form.recurRule : null,
       };
-      if (form.reminderDate && form.reminderTime) {
-        payload.reminder = new Date(`${form.reminderDate}T${form.reminderTime}:00`).toISOString();
+      if (reminderIso) {
+        payload.reminder = reminderIso;
       }
       await onSubmit(payload);
     } finally {
@@ -2121,15 +2196,38 @@ function CreateTaskModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-lg">
+      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b">
-          <h2 className="text-lg font-semibold text-gray-900">Create Task</h2>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Create Smart Task</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Feature-rich task composer for this lead.</p>
+          </div>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400"><svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-5">
+          {divisionId && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              Division-scoped assignment is enabled. Only users from this lead&apos;s division are shown.
+            </div>
+          )}
+
+          <div>
+            <label className="label">Quick Start</label>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, type: 'FOLLOW_UP_CALL', priority: 'MEDIUM', title: p.title || 'Follow-up call' }))}>Follow-up</button>
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, type: 'MEETING', priority: 'HIGH', title: p.title || 'Client meeting' }))}>Meeting</button>
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, type: 'PROPOSAL', priority: 'HIGH', title: p.title || 'Send proposal' }))}>Proposal</button>
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50" onClick={() => setForm((p) => ({ ...p, priority: 'URGENT', title: p.title || 'Urgent follow-up' }))}>Urgent</button>
+            </div>
+          </div>
+
           <div>
             <label className="label">Title *</label>
             <input className="input" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Follow up on proposal" />
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-[11px] text-gray-500">Action-oriented titles improve clarity and execution.</p>
+              <p className="text-[11px] text-gray-500">{form.title.length}/120</p>
+            </div>
           </div>
           <div>
             <label className="label">Description</label>
@@ -2140,7 +2238,7 @@ function CreateTaskModal({
               <label className="label">Type</label>
               <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'].map((t) => (
-                  <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+                  <option key={t} value={t}>{TYPE_LABELS[t] || t.replace(/_/g, ' ')}</option>
                 ))}
               </select>
             </div>
@@ -2178,6 +2276,12 @@ function CreateTaskModal({
           <div>
             <label className="label">Due Date & Time *</label>
             <input type="datetime-local" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(60)}>In 1 hour</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(180)}>In 3 hours</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(24 * 60)}>Tomorrow</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(2 * 24 * 60)}>In 2 days</button>
+            </div>
           </div>
           <div>
             <label className="label">Reminder</label>
@@ -2185,8 +2289,42 @@ function CreateTaskModal({
               <input type="date" className="input" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })} placeholder="Date" />
               <input type="time" className="input" value={form.reminderTime} onChange={(e) => setForm({ ...form, reminderTime: e.target.value })} placeholder="Time" />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Set a date and time to be reminded about this task</p>
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setReminderBeforeDue(15)}>15 min before</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setReminderBeforeDue(60)}>1 hour before</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setReminderBeforeDue(24 * 60)}>1 day before</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, reminderDate: '', reminderTime: '' }))}>Clear</button>
+            </div>
           </div>
+
+          <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded"
+                checked={form.isRecurring}
+                onChange={(e) => setForm((p) => ({ ...p, isRecurring: e.target.checked, recurRule: e.target.checked ? p.recurRule || 'weekly' : '' }))}
+              />
+              Recurring task
+            </label>
+            {form.isRecurring && (
+              <select className="input" value={form.recurRule} onChange={(e) => setForm((p) => ({ ...p, recurRule: e.target.value }))}>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600 space-y-1">
+            <p className="font-medium text-gray-800">Live summary</p>
+            <p>Type: {TYPE_LABELS[form.type] || form.type.replace(/_/g, ' ')} • Priority: {form.priority}</p>
+            <p>Due: {dueAtValid && dueAtDate ? formatDateTime(dueAtDate.toISOString()) : 'Not set'}</p>
+            <p>Reminder: {reminderIso ? formatDateTime(reminderIso) : 'No reminder'}</p>
+            <p>Assignee: {selectedAssignee ? `${selectedAssignee.firstName} ${selectedAssignee.lastName}` : 'Not selected'}</p>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={submitting} className="btn-primary">
