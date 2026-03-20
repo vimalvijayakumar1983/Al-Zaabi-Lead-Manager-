@@ -51,7 +51,6 @@ async function checkTaskReminders() {
           gt: now,
           lte: dueSoonThreshold,
         },
-        NOT: { assigneeId: null },
       },
       include: {
         assignee: { select: { id: true, firstName: true, lastName: true, organizationId: true } },
@@ -96,7 +95,6 @@ async function checkTaskReminders() {
           gt: new Date(now.getTime() - 2 * 60 * 1000), // within last 2 min (to catch on this poll cycle)
           lte: now,
         },
-        NOT: { assigneeId: null },
       },
       include: {
         assignee: { select: { id: true, firstName: true, lastName: true, organizationId: true } },
@@ -137,7 +135,6 @@ async function checkTaskReminders() {
       where: {
         status: { in: ['PENDING', 'IN_PROGRESS'] },
         dueAt: { lt: now },
-        NOT: { assigneeId: null },
       },
       include: {
         assignee: { select: { id: true, firstName: true, lastName: true, organizationId: true } },
