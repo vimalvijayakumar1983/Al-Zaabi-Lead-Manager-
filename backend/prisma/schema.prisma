@@ -443,6 +443,7 @@ enum CallDisposition {
   CALLBACK          // Customer asked to call back later (legacy — use CALL_LATER / CALL_AGAIN)
   CALL_LATER        // Client requested call at a specific date/time (mandatory schedule)
   CALL_AGAIN        // Call again anytime — no specific schedule required
+  WILL_CALL_US_AGAIN // Client said they will call back; place in soft engagement loop
   MEETING_ARRANGED  // Meeting has been scheduled
   APPOINTMENT_BOOKED // Appointment confirmed
   INTERESTED        // Customer showed interest, send info

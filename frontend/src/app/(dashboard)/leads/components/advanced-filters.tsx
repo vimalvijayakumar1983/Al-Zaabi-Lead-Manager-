@@ -90,6 +90,9 @@ const sourceOptions = [
 
 const callOutcomeOptions = [
   { value: 'CALLBACK', label: 'Call Back Requested', icon: '🔄', group: 'Follow-up' },
+  { value: 'CALL_LATER', label: 'Call Later (Scheduled)', icon: '🕐', group: 'Follow-up' },
+  { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', icon: '☎️', group: 'Follow-up' },
+  { value: 'WILL_CALL_US_AGAIN', label: 'Will Call Us Again', icon: '🤝', group: 'Follow-up' },
   { value: 'MEETING_ARRANGED', label: 'Meeting Arranged', icon: '📅', group: 'Positive' },
   { value: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', icon: '✅', group: 'Positive' },
   { value: 'INTERESTED', label: 'Interested - Send Info', icon: '👍', group: 'Positive' },

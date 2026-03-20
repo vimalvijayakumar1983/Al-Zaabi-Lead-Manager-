@@ -40,7 +40,9 @@ const sourceLabels: Record<string, string> = {
 
 // ─── Call disposition labels for display ────
 const dispositionLabels: Record<string, string> = {
-  CALLBACK: 'Call Back Requested', MEETING_ARRANGED: 'Meeting Arranged',
+  CALLBACK: 'Call Back Requested', CALL_LATER: 'Call Later (Scheduled)',
+  CALL_AGAIN: 'Call Again (Anytime)', WILL_CALL_US_AGAIN: 'Will Call Us Again',
+  MEETING_ARRANGED: 'Meeting Arranged',
   APPOINTMENT_BOOKED: 'Appointment Booked', INTERESTED: 'Interested',
   QUALIFIED: 'Lead Qualified', PROPOSAL_REQUESTED: 'Proposal Requested',
   FOLLOW_UP_EMAIL: 'Follow-up Email', NO_ANSWER: 'No Answer',
@@ -52,7 +54,7 @@ const dispositionLabels: Record<string, string> = {
 // Color-coded outcome groups
 const dispositionColor = (d: string): string => {
   if (['MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED', 'QUALIFIED', 'PROPOSAL_REQUESTED'].includes(d)) return 'text-green-600';
-  if (['CALLBACK', 'FOLLOW_UP_EMAIL'].includes(d)) return 'text-blue-600';
+  if (['CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN', 'FOLLOW_UP_EMAIL'].includes(d)) return 'text-blue-600';
   if (['NO_ANSWER', 'VOICEMAIL_LEFT', 'BUSY', 'GATEKEEPER'].includes(d)) return 'text-amber-600';
   if (['NOT_INTERESTED', 'WRONG_NUMBER', 'DO_NOT_CALL'].includes(d)) return 'text-red-600';
   return 'text-gray-500';
