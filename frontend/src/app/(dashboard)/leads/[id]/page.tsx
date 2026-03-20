@@ -128,7 +128,7 @@ export default function LeadDetailPage() {
       const visited = visitedRaw ? new Set<string>(JSON.parse(visitedRaw)) : new Set<string>();
       visited.add(id);
       setVisitedIds(visited);
-      sessionStorage.setItem('lead-nav-visited', JSON.stringify([...visited]));
+      sessionStorage.setItem('lead-nav-visited', JSON.stringify(Array.from(visited)));
     } catch (_) { /* sessionStorage unavailable */ }
   }, [id]);
 
