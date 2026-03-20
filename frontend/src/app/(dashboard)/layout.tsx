@@ -281,6 +281,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         onMobileClose={() => setMobileMenuOpen(false)}
       />
       <CommandPalette />
+      <NotificationCenter
+        isOpen={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        anchorRef={bellRef}
+      />
 
       {/* Main content area */}
       <main className="transition-all duration-300 ease-smooth lg:pl-[var(--sidebar-width)]">
@@ -335,11 +340,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </span>
               )}
             </button>
-            <NotificationCenter
-              isOpen={notifOpen}
-              onClose={() => setNotifOpen(false)}
-              anchorRef={bellRef}
-            />
             <button className="btn-icon hidden sm:inline-flex" title="Help">
               <HelpCircle className="h-4.5 w-4.5" />
             </button>
