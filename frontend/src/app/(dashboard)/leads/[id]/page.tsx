@@ -718,9 +718,9 @@ export default function LeadDetailPage() {
   const isOnLostStage = lostStage && lead.stageId === lostStage.id;
 
   return (
-    <div>
-      {/* ═══ STICKY TOP ZONE — Nav + Header + Stage stays frozen ═══ */}
-      <div className="sticky top-14 z-10 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 pt-1 pb-4 backdrop-blur-sm border-b border-gray-200/50 space-y-4" style={{ backgroundColor: 'rgba(248, 250, 252, 0.95)', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.04)' }}>
+    <div className="flex flex-col -m-3 sm:-m-4 md:-m-6 overflow-hidden" style={{ height: 'calc(100dvh - 3.5rem)' }}>
+      {/* ═══ FROZEN TOP ZONE — Nav + Header + Stage stays pinned ═══ */}
+      <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 pt-3 pb-4 border-b border-gray-200/50 space-y-4 bg-white" style={{ boxShadow: '0 1px 3px 0 rgba(0,0,0,0.04)' }}>
       {/* ═══ Lead Navigation Bar ═══ */}
       {navData && navData.leadIds.length > 1 && currentNavIndex >= 0 && (
         <div className="card px-4 py-2.5 bg-gradient-to-r from-slate-50 via-white to-slate-50 border border-gray-200/80 shadow-sm">
@@ -935,10 +935,10 @@ export default function LeadDetailPage() {
         </div>
       ) : null}
       </div>
-      {/* ← end sticky top zone */}
+      {/* ← end frozen top zone */}
 
-      {/* ═══ SCROLLABLE CONTENT ZONE ═══ */}
-      <div className="mt-6 space-y-6">
+      {/* ═══ SCROLLABLE CONTENT ZONE — only this area scrolls ═══ */}
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-6 py-4 space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Lead Info */}
         <div className="lg:col-span-1 space-y-4">
@@ -1789,10 +1789,10 @@ export default function LeadDetailPage() {
       </div>
       {/* ← end scrollable content zone */}
 
-      {/* ═══ STICKY BOTTOM ZONE — Preview Strip stays frozen ═══ */}
+      {/* ═══ FROZEN BOTTOM ZONE — Preview Strip stays pinned ═══ */}
       {/* ═══ Mini Lead Preview Strip — Coming Up Next ═══ */}
       {navData && nextLeadPreviews.length > 0 && currentNavIndex >= 0 && (
-        <div className="sticky bottom-0 z-10 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 backdrop-blur-sm border-t border-gray-200/50" style={{ backgroundColor: 'rgba(248, 250, 252, 0.95)' }}>
+        <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 py-2 border-t border-gray-200/50 bg-white">
         <div className="card p-3 bg-gradient-to-r from-gray-50/80 to-white border border-gray-200/60">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
