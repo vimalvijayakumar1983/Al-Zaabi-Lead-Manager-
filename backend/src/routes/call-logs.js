@@ -21,6 +21,69 @@ function getDisplayName(obj) {
   return `${fn} ${ln}`;
 }
 
+// ─── Sync pipeline stage when status changes (mirrors leads.js logic) ──
+const STATUS_TO_KEYWORDS = {
+  NEW:           ['new', 'untouched', 'fresh', 'incoming', 'inquiry'],
+  CONTACTED:     ['contact', 'touched', 'follow', 'reach', 'called', 'engaged', 'assessment'],
+  QUALIFIED:     ['qualif', 'interested', 'hot', 'warm', 'ready'],
+  PROPOSAL_SENT: ['proposal', 'quote', 'offer', 'sent'],
+  WON:           ['won', 'converted', 'signed', 'closed won', 'completed', 'confirmed'],
+  LOST:          ['lost', 'dead', 'rejected', 'disqualif', 'closed lost', 'cancelled'],
+};
+
+async function syncPipelineStage(leadId, orgId, newStatus, currentStageId, userId) {
+  try {
+    const keywords = STATUS_TO_KEYWORDS[newStatus] || [];
+    if (keywords.length === 0) return null;
+
+    const orgStages = await prisma.pipelineStage.findMany({
+      where: { organizationId: orgId },
+      orderBy: { order: 'asc' },
+    });
+
+    // Find best matching stage by keyword
+    let matchedStage = null;
+    for (const stage of orgStages) {
+      const sName = stage.name.toLowerCase();
+      if (keywords.some(kw => sName.includes(kw))) {
+        matchedStage = stage;
+        break;
+      }
+    }
+
+    // Also check isWonStage / isLostStage flags
+    if (!matchedStage && newStatus === 'WON') {
+      matchedStage = orgStages.find(s => s.isWonStage);
+    }
+    if (!matchedStage && newStatus === 'LOST') {
+      matchedStage = orgStages.find(s => s.isLostStage);
+    }
+
+    if (matchedStage && matchedStage.id !== currentStageId) {
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { stageId: matchedStage.id },
+      });
+
+      await prisma.leadActivity.create({
+        data: {
+          leadId,
+          userId,
+          type: 'STAGE_CHANGE',
+          description: `Pipeline stage synced to "${matchedStage.name}" (status changed to ${newStatus})`,
+          metadata: { oldStageId: currentStageId, newStageId: matchedStage.id, trigger: 'status_pipeline_sync' },
+        },
+      });
+
+      return matchedStage;
+    }
+    return null;
+  } catch (err) {
+    logger.warn('Pipeline stage sync failed:', err.message);
+    return null;
+  }
+}
+
 // ─── Ensure disposition_settings table exists ────────────────────
 let dispositionSettingsReady = false;
 async function ensureDispositionSettings() {
@@ -199,6 +262,9 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
           metadata: { oldStatus, newStatus: autoAction.statusChange, trigger: 'call_disposition' },
         },
       });
+
+      // Sync pipeline stage to match new status
+      await syncPipelineStage(data.leadId, lead.organizationId, autoAction.statusChange, lead.stageId, req.user.id);
     }
 
     // Mark first response — logging a call counts as attending to the lead
@@ -209,8 +275,8 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       });
     }
 
-    // Update lead status to CONTACTED if still NEW
-    if (lead.status === 'NEW') {
+    // Update lead status to CONTACTED if still NEW (and no disposition auto-action already changed it)
+    if (lead.status === 'NEW' && !autoAction?.statusChange) {
       await prisma.lead.update({
         where: { id: data.leadId },
         data: { status: 'CONTACTED' },
@@ -225,6 +291,9 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
           metadata: { oldStatus: 'NEW', newStatus: 'CONTACTED', trigger: 'call_log' },
         },
       });
+
+      // Sync pipeline stage to match CONTACTED status
+      await syncPipelineStage(data.leadId, lead.organizationId, 'CONTACTED', lead.stageId, req.user.id);
     }
 
     // Create the call log record
