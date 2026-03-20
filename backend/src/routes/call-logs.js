@@ -112,6 +112,7 @@ const DISPOSITION_LABELS = {
   CALLBACK: 'Call Back Requested',
   CALL_LATER: 'Call Later (Scheduled)',
   CALL_AGAIN: 'Call Again (Anytime)',
+  WILL_CALL_US_AGAIN: 'Will Call Us Again (Soft Loop)',
   MEETING_ARRANGED: 'Meeting Arranged',
   APPOINTMENT_BOOKED: 'Appointment Booked',
   INTERESTED: 'Interested - Send Info',
@@ -128,11 +129,26 @@ const DISPOSITION_LABELS = {
   OTHER: 'Other',
 };
 
+const SOFT_ENGAGEMENT_TAG_NAME = 'Awaiting Client Callback';
+const EXPECTED_CALLBACK_WINDOW_DAYS = {
+  WITHIN_24_HOURS: 1,
+  WITHIN_3_DAYS: 3,
+  WITHIN_7_DAYS: 7,
+  WITHIN_14_DAYS: 14,
+};
+const EXPECTED_CALLBACK_WINDOW_LABELS = {
+  WITHIN_24_HOURS: 'Within 24 hours',
+  WITHIN_3_DAYS: 'Within 3 days',
+  WITHIN_7_DAYS: 'Within 7 days',
+  WITHIN_14_DAYS: 'Within 14 days',
+};
+
 // Auto-actions by disposition type
 const DISPOSITION_AUTO_ACTIONS = {
   CALLBACK: { taskType: 'FOLLOW_UP_CALL', taskTitle: 'Call back', priority: 'HIGH' },
   CALL_LATER: { taskType: 'FOLLOW_UP_CALL', taskTitle: 'Scheduled call back', priority: 'HIGH' },
   CALL_AGAIN: { taskType: 'FOLLOW_UP_CALL', taskTitle: 'Call again', priority: 'MEDIUM' },
+  WILL_CALL_US_AGAIN: { softEngagement: true },
   MEETING_ARRANGED: { taskType: 'MEETING', taskTitle: 'Scheduled meeting', priority: 'HIGH', statusChange: 'QUALIFIED' },
   APPOINTMENT_BOOKED: { taskType: 'MEETING', taskTitle: 'Appointment', priority: 'HIGH', statusChange: 'QUALIFIED' },
   INTERESTED: { taskType: 'EMAIL', taskTitle: 'Send information to interested lead', priority: 'MEDIUM' },
@@ -148,7 +164,7 @@ const DISPOSITION_AUTO_ACTIONS = {
 const callLogSchema = z.object({
   leadId: z.string().uuid(),
   disposition: z.enum([
-    'CALLBACK', 'CALL_LATER', 'CALL_AGAIN',
+    'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN',
     'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED',
     'NOT_INTERESTED', 'NO_ANSWER', 'VOICEMAIL_LEFT', 'WRONG_NUMBER',
     'BUSY', 'GATEKEEPER', 'FOLLOW_UP_EMAIL', 'QUALIFIED',
@@ -159,6 +175,7 @@ const callLogSchema = z.object({
   callbackDate: z.string().datetime({ offset: true }).optional().nullable(),
   meetingDate: z.string().datetime({ offset: true }).optional().nullable(),
   appointmentDate: z.string().datetime({ offset: true }).optional().nullable(),
+  expectedCallbackWindow: z.enum(['WITHIN_24_HOURS', 'WITHIN_3_DAYS', 'WITHIN_7_DAYS', 'WITHIN_14_DAYS']).optional().nullable(),
   createFollowUp: z.boolean().optional().default(true),
 });
 
@@ -232,6 +249,12 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
           field: 'callbackDate',
         });
       }
+    }
+    if (data.disposition !== 'WILL_CALL_US_AGAIN' && data.expectedCallbackWindow) {
+      return res.status(400).json({
+        error: 'Expected callback window can only be set for "Will Call Us Again".',
+        field: 'expectedCallbackWindow',
+      });
     }
 
     const autoAction = DISPOSITION_AUTO_ACTIONS[data.disposition];
@@ -321,6 +344,16 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
     }
 
     // Create the call log record
+    const callMetadata = {};
+    if (data.expectedCallbackWindow) {
+      callMetadata.expectedCallbackWindow = data.expectedCallbackWindow;
+      callMetadata.expectedCallbackWindowLabel = EXPECTED_CALLBACK_WINDOW_LABELS[data.expectedCallbackWindow];
+      callMetadata.inactivityGraceDays = EXPECTED_CALLBACK_WINDOW_DAYS[data.expectedCallbackWindow];
+    }
+    if (data.disposition === 'WILL_CALL_US_AGAIN') {
+      callMetadata.softEngagementLoop = true;
+    }
+
     const callLog = await prisma.callLog.create({
       data: {
         leadId: data.leadId,
@@ -332,7 +365,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         meetingDate: data.meetingDate ? new Date(data.meetingDate) : null,
         appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : null,
         followUpTaskId,
-        metadata: {},
+        metadata: callMetadata,
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -352,6 +385,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
           callLogId: callLog.id,
           disposition: data.disposition,
           duration: data.duration,
+          expectedCallbackWindow: data.expectedCallbackWindow || null,
         },
       },
     });
@@ -368,6 +402,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
           disposition: data.disposition,
           duration: data.duration,
           followUpTaskId,
+          expectedCallbackWindow: data.expectedCallbackWindow || null,
         },
       },
     });
@@ -395,6 +430,56 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         logger.info(`Lead ${data.leadId} marked as Do Not Call by user ${req.user.id}`);
       } catch (dncErr) {
         logger.warn('Failed to auto-flag DNC lead:', dncErr.message);
+      }
+    }
+
+    // ── Soft engagement loop: classify as awaiting client callback ──
+    if (data.disposition === 'WILL_CALL_US_AGAIN') {
+      try {
+        const tag = await prisma.tag.upsert({
+          where: {
+            organizationId_name: {
+              organizationId: lead.organizationId,
+              name: SOFT_ENGAGEMENT_TAG_NAME,
+            },
+          },
+          update: {},
+          create: {
+            organizationId: lead.organizationId,
+            name: SOFT_ENGAGEMENT_TAG_NAME,
+            color: '#6366f1',
+          },
+        });
+
+        await prisma.leadTag.upsert({
+          where: {
+            leadId_tagId: {
+              leadId: data.leadId,
+              tagId: tag.id,
+            },
+          },
+          update: {},
+          create: {
+            leadId: data.leadId,
+            tagId: tag.id,
+          },
+        });
+
+        await prisma.leadActivity.create({
+          data: {
+            leadId: data.leadId,
+            userId: req.user.id,
+            type: 'CUSTOM',
+            description: `Soft engagement enabled: "${SOFT_ENGAGEMENT_TAG_NAME}"${data.expectedCallbackWindow ? ` (${EXPECTED_CALLBACK_WINDOW_LABELS[data.expectedCallbackWindow]})` : ''}`,
+            metadata: {
+              trigger: 'call_disposition',
+              disposition: 'WILL_CALL_US_AGAIN',
+              expectedCallbackWindow: data.expectedCallbackWindow || null,
+            },
+          },
+        });
+      } catch (softErr) {
+        logger.warn('Failed to apply soft engagement loop tagging:', softErr.message);
       }
     }
 
