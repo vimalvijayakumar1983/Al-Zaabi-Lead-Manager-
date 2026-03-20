@@ -653,7 +653,7 @@ export default function LeadDetailPage() {
     phone: (l) => formatPhone(l.phone) || '-',
     company: (l) => l.company || '-',
     jobTitle: (l) => l.jobTitle || '-',
-    source: (l) => l.source ? l.source.replace(/_/g, ' ') : '-',
+    source: (l) => l.source ? `${l.source.replace(/_/g, ' ')}${l.sourceDetail ? ` (${l.sourceDetail})` : ''}` : '-',
     status: (l) => l.status ? l.status.replace(/_/g, ' ') : '-',
     score: (l) => l.score !== undefined && l.score !== null ? String(l.score) : '-',
     budget: (l) => l.budget ? `AED ${Number(l.budget).toLocaleString()}` : '-',
@@ -1079,7 +1079,7 @@ export default function LeadDetailPage() {
               ) : (
                 /* Fallback: original hardcoded fields when field config API is unavailable */
                 <>
-                  <InfoRow label={getFieldLabel('source', 'Source')} value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
+                  <InfoRow label={getFieldLabel('source', 'Source')} value={lead.source ? `${lead.source.replace(/_/g, ' ')}${lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}` : '-'} />
                   <InfoRow label={getFieldLabel('campaign', 'Campaign')} value={lead.campaign || '-'} />
                   <InfoRow label={getFieldLabel('productInterest', 'Product Interest')} value={lead.productInterest || '-'} />
                   <InfoRow label={getFieldLabel('budget', 'Budget')} value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />

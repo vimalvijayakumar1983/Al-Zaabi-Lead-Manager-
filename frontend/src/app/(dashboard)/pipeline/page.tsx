@@ -803,7 +803,7 @@ export default function PipelinePage() {
                             )}
                             {lead.source && (
                               <span className="text-2xs px-1.5 py-0.5 rounded-md bg-surface-secondary text-text-secondary font-medium">
-                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source}
+                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}
                               </span>
                             )}
                           </div>
@@ -908,7 +908,7 @@ export default function PipelinePage() {
                             <td className="table-cell hidden md:table-cell text-sm text-text-secondary">{lead.company || '—'}</td>
                             <td className="table-cell hidden md:table-cell">
                               <span className="text-2xs px-1.5 py-0.5 rounded-md bg-surface-secondary text-text-secondary font-medium">
-                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source || '—'}
+                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source || '—'}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}
                               </span>
                             </td>
                             <td className="table-cell text-right hidden md:table-cell text-sm font-medium text-text-primary">

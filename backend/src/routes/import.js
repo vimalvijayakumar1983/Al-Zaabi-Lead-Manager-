@@ -367,7 +367,10 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
 
           // Type coercion
           if (mapped.budget) mapped.budget = parseFloat(mapped.budget) || null;
+          // Preserve the original source text the user entered (e.g. "internal segmentation")
+          const rawSourceText = mapped.source ? mapped.source.trim() : null;
           if (mapped.source && !LEAD_FIELDS.find(f => f.key === 'source').options.includes(mapped.source.toUpperCase())) {
+            mapped.sourceDetail = rawSourceText;
             mapped.source = defaultSource || 'CSV_IMPORT';
           } else if (mapped.source) {
             mapped.source = mapped.source.toUpperCase();
@@ -461,6 +464,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             company: mapped.company || null,
             jobTitle: mapped.jobTitle || null,
             source: mapped.source || defaultSource || 'CSV_IMPORT',
+            sourceDetail: mapped.sourceDetail || null,
             status: mapped.status || defaultStatus || 'NEW',
             budget: mapped.budget || null,
             productInterest: mapped.productInterest || null,
@@ -1134,7 +1138,7 @@ router.get('/export/:module', authorize('ADMIN', 'MANAGER'), async (req, res, ne
         const cd = typeof l.customData === 'object' && l.customData ? l.customData : {};
         return [
           [l.firstName, l.lastName].filter(Boolean).join(' '), l.email || '', l.phone || '',
-          l.company || '', l.jobTitle || '', l.source, l.status,
+          l.company || '', l.jobTitle || '', l.sourceDetail ? `${l.source} (${l.sourceDetail})` : l.source, l.status,
           l.score, l.budget ? parseFloat(l.budget) : '',
           l.productInterest || '', l.location || '', l.campaign || '',
           l.website || '', l.stage?.name || '',
