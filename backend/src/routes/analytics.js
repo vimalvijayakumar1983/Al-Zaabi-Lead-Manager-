@@ -579,6 +579,22 @@ router.get('/dashboard-full', async (req, res, next) => {
       prisma.lead.count({ where: { ...lw, slaStatus: 'BREACHED' } }).catch(() => 0),
     ]);
 
+    // ── Reachability Ratio (call logs) ──
+    const callLogOrgWhere = req.isRestrictedRole
+      ? { userId: req.user.id }
+      : { lead: { organizationId: orgFilter, isArchived: false } };
+    const periodCallWhere = { ...callLogOrgWhere, createdAt: { gte: start } };
+
+    const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT'];
+
+    const [totalCalls, notReachedCalls] = await Promise.all([
+      prisma.callLog.count({ where: periodCallWhere }),
+      prisma.callLog.count({ where: { ...periodCallWhere, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+    ]);
+
+    const reachedCalls = totalCalls - notReachedCalls;
+    const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
+
     // ── Fetch team users separately (avoids spread/destructuring issues) ──
     let teamUsers = [];
     if (!req.isRestrictedRole) {
@@ -700,6 +716,10 @@ router.get('/dashboard-full', async (req, res, next) => {
         overdueTasks,
         slaAtRisk: slaAtRisk || 0,
         slaBreached: slaBreached || 0,
+        reachabilityRatio,
+        totalCalls,
+        reachedCalls,
+        notReachedCalls,
       },
       leadsByStatus: leadsByStatus.map(s => ({ status: s.status, count: s._count.status || s._count._all || s._count })),
       leadsBySource: leadsBySource.map(s => ({ source: s.source, count: s._count.source || s._count._all || s._count })).sort((a, b) => b.count - a.count),

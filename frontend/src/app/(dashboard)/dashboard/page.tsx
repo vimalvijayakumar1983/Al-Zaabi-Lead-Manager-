@@ -16,7 +16,7 @@ import {
   MoreHorizontal, ChevronRight, Sparkles, Building2, BarChart3,
   ChevronDown, Target, Activity, AlertTriangle, Zap, Award,
   DollarSign, ArrowRight, Flame, CheckCircle2, CircleDot,
-  Timer, FileText, Phone, Mail, Eye, Shield,
+  Timer, FileText, Phone, PhoneCall, Mail, Eye, Shield,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
 
@@ -55,6 +55,10 @@ interface DashboardFullData {
     overdueTasks: number;
     slaAtRisk: number;
     slaBreached: number;
+    reachabilityRatio: number;
+    totalCalls: number;
+    reachedCalls: number;
+    notReachedCalls: number;
   };
   leadsByStatus: { status: string; count: number }[];
   leadsBySource: { source: string; count: number }[];
@@ -376,6 +380,7 @@ export default function DashboardPage() {
     { label: 'Pipeline', value: fmt(k.pipelineValue, 'currency'), icon: Banknote, color: 'amber', change: k.pipelineValueChange },
     { label: 'Won Revenue', value: fmt(k.wonRevenue, 'currency'), icon: DollarSign, color: 'emerald', change: null },
     { label: 'Activities', value: fmt(k.activities), icon: Activity, color: 'purple', change: k.activitiesChange },
+    { label: 'Reachability', value: k.totalCalls > 0 ? `${k.reachabilityRatio}%` : 'N/A', icon: PhoneCall, color: k.reachabilityRatio >= 75 ? 'emerald' : k.reachabilityRatio >= 50 ? 'amber' : 'red', change: null, subtitle: k.totalCalls > 0 ? `${k.reachedCalls}/${k.totalCalls} calls` : 'No calls yet' },
   ];
 
   const colorMap: Record<string, { iconBg: string; iconText: string }> = {
