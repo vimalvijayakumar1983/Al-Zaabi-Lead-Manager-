@@ -106,6 +106,53 @@ export default function LeadDetailPage() {
 
   const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
 
+  // ─── Lead Navigation System ────────────────────────────────────────
+  type LeadPreview = { id: string; name: string; status: string; company: string; callCount: number };
+  type NavData = { leadIds: string[]; leadPreviews: LeadPreview[]; viewName: string; totalInView: number; currentPage: number; pageSize: number; timestamp: number };
+  const [navData, setNavData] = useState<NavData | null>(null);
+  const [visitedIds, setVisitedIds] = useState<Set<string>>(new Set());
+
+  // Read navigation data from sessionStorage (set by leads list page)
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('lead-navigation');
+      if (raw) {
+        const data = JSON.parse(raw) as NavData;
+        // Only use if less than 30 minutes old
+        if (Date.now() - data.timestamp < 30 * 60 * 1000) {
+          setNavData(data);
+        }
+      }
+      // Track visited leads
+      const visitedRaw = sessionStorage.getItem('lead-nav-visited');
+      const visited = visitedRaw ? new Set<string>(JSON.parse(visitedRaw)) : new Set<string>();
+      visited.add(id);
+      setVisitedIds(visited);
+      sessionStorage.setItem('lead-nav-visited', JSON.stringify([...visited]));
+    } catch (_) { /* sessionStorage unavailable */ }
+  }, [id]);
+
+  const currentNavIndex = navData ? navData.leadIds.indexOf(id) : -1;
+  const hasPrev = navData !== null && currentNavIndex > 0;
+  const hasNext = navData !== null && currentNavIndex >= 0 && currentNavIndex < navData.leadIds.length - 1;
+  const globalPosition = navData ? (navData.currentPage - 1) * navData.pageSize + currentNavIndex + 1 : 0;
+  const visitedCount = navData ? navData.leadIds.filter(lid => visitedIds.has(lid)).length : 0;
+
+  const goToPrevious = useCallback(() => {
+    if (hasPrev && navData) router.push(`/leads/${navData.leadIds[currentNavIndex - 1]}`);
+  }, [hasPrev, navData, currentNavIndex, router]);
+
+  const goToNext = useCallback(() => {
+    if (hasNext && navData) router.push(`/leads/${navData.leadIds[currentNavIndex + 1]}`);
+  }, [hasNext, navData, currentNavIndex, router]);
+
+  const nextLeadPreviews = navData && currentNavIndex >= 0
+    ? navData.leadPreviews.slice(currentNavIndex + 1, currentNavIndex + 4)
+    : [];
+
+  // Keyboard shortcuts ref (actual handler defined after handleSaveAndNext)
+  const saveAndNextRef = useRef<() => void>(null);
+
   const getFieldLabel = (key: string, defaultLabel: string): string => {
     if (!fieldConfig) return defaultLabel;
     const f = fieldConfig.builtInFields?.find((b: any) => b.key === key);
@@ -281,8 +328,8 @@ export default function LeadDetailPage() {
     setIsEditing(true);
   };
 
-  const handleSaveEdit = async () => {
-    if (!lead) return;
+  const handleSaveEdit = async (): Promise<boolean> => {
+    if (!lead) return false;
     setSaving(true);
     try {
       const data: any = { ...editForm };
@@ -325,12 +372,47 @@ export default function LeadDetailPage() {
       await api.updateLead(lead.id, data);
       setIsEditing(false);
       await refreshLead();
+      return true;
     } catch (err: any) {
       alert(err.message);
+      return false;
     } finally {
       setSaving(false);
     }
   };
+
+  // Save & Next: save edits then jump to next lead in the queue
+  const handleSaveAndNext = async () => {
+    const success = await handleSaveEdit();
+    if (success && hasNext && navData) {
+      router.push(`/leads/${navData.leadIds[currentNavIndex + 1]}`);
+    }
+  };
+
+  // Keep ref in sync for keyboard handler
+  saveAndNextRef.current = handleSaveAndNext;
+
+  // ─── Keyboard Shortcuts (Alt+← Alt+→ Alt+S) ──────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't trigger in input/textarea/contenteditable
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
+
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goToPrevious();
+      } else if (e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault();
+        goToNext();
+      } else if (e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        if (isEditing && saveAndNextRef.current) saveAndNextRef.current();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [goToPrevious, goToNext, isEditing]);
 
   const handleCreateTask = async (taskData: any) => {
     try {
@@ -637,6 +719,99 @@ export default function LeadDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* ═══ Lead Navigation Bar ═══ */}
+      {navData && navData.leadIds.length > 1 && currentNavIndex >= 0 && (
+        <div className="card px-4 py-2.5 bg-gradient-to-r from-slate-50 via-white to-slate-50 border border-gray-200/80 shadow-sm">
+          <div className="flex items-center justify-between">
+            {/* Left: Prev/Next arrows + position */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={goToPrevious}
+                disabled={!hasPrev}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  hasPrev
+                    ? 'text-gray-700 hover:bg-gray-100 hover:text-brand-600 active:scale-95'
+                    : 'text-gray-300 cursor-not-allowed'
+                }`}
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span className="hidden sm:inline">Previous</span>
+              </button>
+
+              <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-brand-50/60 border border-brand-100">
+                <svg className="h-3.5 w-3.5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+                <span className="text-sm font-medium text-brand-700">{navData.viewName}</span>
+                <span className="text-brand-300">•</span>
+                <span className="text-sm font-semibold text-brand-600 tabular-nums">
+                  {globalPosition} <span className="font-normal text-brand-400">of</span> {navData.totalInView}
+                </span>
+              </div>
+
+              <button
+                onClick={goToNext}
+                disabled={!hasNext}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  hasNext
+                    ? 'text-gray-700 hover:bg-gray-100 hover:text-brand-600 active:scale-95'
+                    : 'text-gray-300 cursor-not-allowed'
+                }`}
+              >
+                <span className="hidden sm:inline">Next</span>
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Center: Progress bar */}
+            <div className="hidden md:flex items-center gap-2.5">
+              <div className="w-28 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-500 ease-out"
+                  style={{
+                    width: `${navData.leadIds.length > 0 ? (visitedCount / navData.leadIds.length) * 100 : 0}%`,
+                    background: visitedCount === navData.leadIds.length
+                      ? 'linear-gradient(90deg, #22c55e, #16a34a)'
+                      : 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+                  }}
+                />
+              </div>
+              <span className="text-xs font-medium text-gray-500 tabular-nums whitespace-nowrap">
+                {visitedCount === navData.leadIds.length ? (
+                  <span className="text-green-600">✓ All {visitedCount} visited</span>
+                ) : (
+                  <>{visitedCount}/{navData.leadIds.length} visited</>
+                )}
+              </span>
+            </div>
+
+            {/* Right: Keyboard shortcuts + Quick Next */}
+            <div className="flex items-center gap-3">
+              <div className="hidden lg:flex items-center gap-1.5 text-[10px] text-gray-400">
+                <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono">Alt+←</kbd>
+                <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono">Alt+→</kbd>
+                <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono">Alt+S</kbd>
+              </div>
+              {hasNext && !isEditing && (
+                <button
+                  onClick={goToNext}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 active:scale-95 transition-all shadow-sm"
+                >
+                  Next Lead
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* DNC Warning Banner */}
       {lead.doNotCall && (
         <div className="flex items-center justify-between p-4 rounded-xl bg-red-50 border-2 border-red-300">
@@ -897,6 +1072,19 @@ export default function LeadDetailPage() {
                   <button onClick={handleSaveEdit} disabled={saving} className="btn-primary text-xs flex-1">
                     {saving ? 'Saving...' : 'Save Changes'}
                   </button>
+                  {hasNext && (
+                    <button
+                      onClick={handleSaveAndNext}
+                      disabled={saving}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold flex-1 px-3 py-2 rounded-lg text-white bg-green-600 hover:bg-green-700 active:scale-[0.98] transition-all shadow-sm disabled:opacity-50"
+                    >
+                      {saving ? (
+                        <><svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Saving...</>
+                      ) : (
+                        <>Save & Next <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></>
+                      )}
+                    </button>
+                  )}
                   <button onClick={() => setIsEditing(false)} className="btn-secondary text-xs">Cancel</button>
                 </div>
               </div>
@@ -1594,6 +1782,65 @@ export default function LeadDetailPage() {
       </div>
 
       {/* Create Task Modal */}
+      {/* ═══ Mini Lead Preview Strip — Coming Up Next ═══ */}
+      {navData && nextLeadPreviews.length > 0 && currentNavIndex >= 0 && (
+        <div className="card p-3 bg-gradient-to-r from-gray-50/80 to-white border border-gray-200/60">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+              Coming Up Next
+            </p>
+            <span className="text-[10px] text-gray-400">Click to jump</span>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-1">
+            {nextLeadPreviews.map((preview, i) => (
+              <button
+                key={preview.id}
+                onClick={() => router.push(`/leads/${preview.id}`)}
+                className="flex-shrink-0 w-48 rounded-xl p-3 bg-white border border-gray-200 hover:border-brand-300 hover:shadow-md transition-all text-left group active:scale-[0.98]"
+              >
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">
+                    {preview.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() || '?'}
+                  </div>
+                  <span className="text-sm font-semibold text-gray-900 truncate group-hover:text-brand-600 transition-colors">
+                    {preview.name}
+                  </span>
+                </div>
+                {preview.company && (
+                  <p className="text-xs text-gray-500 truncate mb-1.5">{preview.company}</p>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                    preview.status === 'NEW' ? 'bg-indigo-50 text-indigo-700' :
+                    preview.status === 'CONTACTED' ? 'bg-blue-50 text-blue-700' :
+                    preview.status === 'QUALIFIED' ? 'bg-cyan-50 text-cyan-700' :
+                    preview.status === 'WON' ? 'bg-green-50 text-green-700' :
+                    preview.status === 'LOST' ? 'bg-red-50 text-red-700' :
+                    'bg-gray-50 text-gray-600'
+                  }`}>
+                    {preview.status.replace(/_/g, ' ')}
+                  </span>
+                  <span className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                    preview.callCount === 0 ? 'bg-gray-100 text-gray-500' :
+                    preview.callCount <= 2 ? 'bg-blue-50 text-blue-600' :
+                    preview.callCount <= 5 ? 'bg-amber-50 text-amber-600' :
+                    'bg-red-50 text-red-600'
+                  }`}>
+                    📞 {preview.callCount}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-400 mt-1.5 font-medium">
+                  +{i + 1} {i === 0 ? 'next' : i === 1 ? 'after' : 'later'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {showTaskModal && <CreateTaskModal onClose={() => setShowTaskModal(false)} onSubmit={handleCreateTask} />}
 
       {/* Log Call Modal */}

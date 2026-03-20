@@ -422,6 +422,36 @@ function LeadsContent() {
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
 
+  // ─── Store lead navigation data for detail page ← → navigation ─────
+  useEffect(() => {
+    if (leads.length === 0) return;
+    try {
+      const viewName = (() => {
+        const sys = SYSTEM_VIEWS.find(v => v.id === activeViewId);
+        if (sys) return sys.name;
+        const custom = customViews.find(v => v.id === activeViewId);
+        if (custom) return custom.name;
+        return 'All Leads';
+      })();
+      const navData = {
+        leadIds: leads.map(l => l.id),
+        leadPreviews: leads.map(l => ({
+          id: l.id,
+          name: getDisplayName(l),
+          status: l.status,
+          company: l.company || '',
+          callCount: (l as any)._count?.callLogs || (l as any).callCount || 0,
+        })),
+        viewName,
+        totalInView: pagination.total,
+        currentPage: pagination.page,
+        pageSize: pagination.limit,
+        timestamp: Date.now(),
+      };
+      sessionStorage.setItem('lead-navigation', JSON.stringify(navData));
+    } catch (_) { /* sessionStorage unavailable */ }
+  }, [leads, activeViewId, customViews, pagination]);
+
   // Fetch field config to get custom labels for column headers
   useEffect(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
