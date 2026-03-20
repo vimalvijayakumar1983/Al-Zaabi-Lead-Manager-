@@ -190,8 +190,10 @@ export interface Task {
   priority: Priority;
   status: TaskStatus;
   dueAt: string;
+  reminder?: string | null;
   completedAt?: string;
   isRecurring: boolean;
+  recurRule?: string | null;
   leadId?: string;
   lead?: Pick<Lead, 'id' | 'firstName' | 'lastName'>;
   assigneeId?: string;
