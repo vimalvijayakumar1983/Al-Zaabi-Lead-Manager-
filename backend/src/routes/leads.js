@@ -1003,24 +1003,9 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     const { tags: tagNames, ...updateData } = data;
 
-    // Recalculate score using full multi-dimensional engine
-    // Scores profile + engagement + source + recency - penalties
-    const scoreResult = await calculateFullScore(existing.id);
-    if (scoreResult.breakdown) {
-      // Re-score with merged data for profile changes not yet saved
-      const merged = { ...existing, ...updateData };
-      const profileDelta = (merged.email && !existing.email ? 4 : 0)
-        + (merged.phone && !existing.phone ? 4 : 0)
-        + (merged.company && !existing.company ? 3 : 0);
-      updateData.score = Math.min(scoreResult.score + profileDelta, 100);
-      updateData.conversionProb = scoreResult.conversionProb;
-    } else {
-      // Fallback to basic scoring
-      const merged = { ...existing, ...updateData };
-      const activityCount = await prisma.leadActivity.count({ where: { leadId: existing.id } });
-      updateData.score = calculateLeadScore(merged, activityCount);
-      updateData.conversionProb = predictConversion(updateData.score, updateData.status || existing.status);
-    }
+    // Score will be recalculated AFTER save via rescoreAndPersist
+    // so the new pipeline position, status, and profile data are all captured.
+    // We skip pre-save scoring to avoid stale pipeline position issues.
 
     // Handle won/lost timestamps
     if (updateData.status === 'WON' && existing.status !== 'WON') {
@@ -1177,6 +1162,15 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     });
 
     res.json(lead);
+
+    // ── Fire-and-forget rescore with SAVED data ──
+    // This ensures pipeline position, status, and profile changes
+    // are all reflected in the score. Score updates are persisted
+    // asynchronously — the response has the lead data, next view
+    // shows the accurate score.
+    rescoreAndPersist(lead.id).catch(err =>
+      logger.error('Post-update rescore failed:', err.message)
+    );
 
     // ── Fire-and-forget notifications ──
     const leadName = getDisplayName(lead);
