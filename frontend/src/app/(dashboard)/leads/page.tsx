@@ -27,6 +27,7 @@ const statusColors: Record<string, string> = {
   NEGOTIATION: 'bg-orange-100 text-orange-800',
   WON: 'bg-green-100 text-green-800',
   LOST: 'bg-red-100 text-red-800',
+  DO_NOT_CALL: 'bg-red-900 text-white',
 };
 
 const sourceLabels: Record<string, string> = {
@@ -723,6 +724,10 @@ function LeadsContent() {
             placeholder="Add title" displayClassName="text-sm text-gray-700" />
         );
       case 'status': {
+        // DNC leads show static "DO NOT CALL" badge - not editable
+        if ((lead as any).doNotCall) {
+          return <span className={`badge ${statusColors.DO_NOT_CALL}`}>🚫 DO NOT CALL</span>;
+        }
         // Show pipeline stage name (e.g., "Proposal Sent") instead of status enum ("QUALIFIED")
         const useStages = stages.length > 0;
         const stageOpts = useStages
@@ -738,7 +743,7 @@ function LeadsContent() {
               }
             }}
             type="select" options={stageOpts}
-            displayClassName={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`} />
+            displayClassName={`badge ${(lead as any).doNotCall ? statusColors.DO_NOT_CALL : (statusColors[lead.status] || 'bg-gray-100 text-gray-800')}`} />
         );
       }
       case 'source':
@@ -1297,7 +1302,7 @@ function LeadsContent() {
                               <p className="text-xs text-gray-500">{lead.company || 'No company'}</p>
                             </div>
                           </div>
-                          <span className={`badge ${statusColors[lead.status] || 'bg-gray-100 text-gray-800'}`}>{(lead as any).stage?.name || getStatusLabel(lead.status || 'NEW')}</span>
+                          <span className={`badge ${(lead as any).doNotCall ? statusColors.DO_NOT_CALL : (statusColors[lead.status] || 'bg-gray-100 text-gray-800')}`}>{(lead as any).doNotCall ? '🚫 DO NOT CALL' : ((lead as any).stage?.name || getStatusLabel(lead.status || 'NEW'))}</span>
                         </div>
                         <div className="space-y-1.5 text-sm">
                           {lead.email && <p className="text-gray-600 truncate flex items-center gap-1.5"><svg className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8" /></svg>{lead.email}</p>}

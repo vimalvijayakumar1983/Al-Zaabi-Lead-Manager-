@@ -17,6 +17,7 @@ const statusColors: Record<string, string> = {
   NEGOTIATION: 'bg-orange-100 text-orange-800 border-orange-200',
   WON: 'bg-green-100 text-green-800 border-green-200',
   LOST: 'bg-red-100 text-red-800 border-red-200',
+  DO_NOT_CALL: 'bg-red-900 text-white border-red-900',
 };
 
 const activityIcons: Record<string, { icon: string; color: string }> = {
@@ -688,7 +689,9 @@ export default function LeadDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`badge text-sm px-3 py-1.5 border ${statusColors[lead.status]}`}>{lead.status.replace(/_/g, ' ')}</span>
+          <span className={`badge text-sm px-3 py-1.5 border ${lead.doNotCall ? statusColors.DO_NOT_CALL : statusColors[lead.status]}`}>
+            {lead.doNotCall ? '🚫 DO NOT CALL' : lead.status.replace(/_/g, ' ')}
+          </span>
           {!isEditing && (
             <button onClick={startEditing} className="btn-secondary text-xs gap-1.5">
               <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
