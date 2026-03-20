@@ -79,16 +79,30 @@ router.get('/stats', async (req, res, next) => {
 
 // ─── List Tasks ──────────────────────────────────────────────────
 router.get('/', validateQuery(paginationSchema.extend({
+  search: z.string().optional(),
   status: z.string().optional(),
+  statuses: z.string().optional(),
   priority: z.string().optional(),
+  priorities: z.string().optional(),
   assigneeId: z.string().optional(),
   leadId: z.string().optional(),
   overdue: z.coerce.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, status, priority, assigneeId, leadId, overdue } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, assigneeId, leadId, overdue } = req.validatedQuery;
 
     const where = {};
+    const allowedStatuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+    const allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+
+    const parsedStatuses = (statuses || '')
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter((s) => allowedStatuses.includes(s));
+    const parsedPriorities = (priorities || '')
+      .split(',')
+      .map((p) => p.trim().toUpperCase())
+      .filter((p) => allowedPriorities.includes(p));
 
     // Scope to org via assignee's organization
     if (leadId) {
@@ -103,11 +117,50 @@ router.get('/', validateQuery(paginationSchema.extend({
       // Default: show tasks for users in the accessible orgs
       where.assignee = { organizationId: { in: req.orgIds } };
     }
-    if (status) where.status = status;
-    if (priority) where.priority = priority;
+
+    if (parsedStatuses.length > 1) {
+      where.status = { in: parsedStatuses };
+    } else if (parsedStatuses.length === 1) {
+      where.status = parsedStatuses[0];
+    } else if (status && allowedStatuses.includes(String(status).toUpperCase())) {
+      where.status = String(status).toUpperCase();
+    }
+
+    if (parsedPriorities.length > 1) {
+      where.priority = { in: parsedPriorities };
+    } else if (parsedPriorities.length === 1) {
+      where.priority = parsedPriorities[0];
+    } else if (priority && allowedPriorities.includes(String(priority).toUpperCase())) {
+      where.priority = String(priority).toUpperCase();
+    }
+
+    if (search?.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+        {
+          lead: {
+            OR: [
+              { firstName: { contains: q, mode: 'insensitive' } },
+              { lastName: { contains: q, mode: 'insensitive' } },
+            ],
+          },
+        },
+      ];
+    }
+
     if (overdue) {
       where.dueAt = { lt: new Date() };
-      where.status = { in: ['PENDING', 'IN_PROGRESS'] };
+      const dueStatuses = ['PENDING', 'IN_PROGRESS'];
+      if (typeof where.status === 'string') {
+        where.status = dueStatuses.includes(where.status) ? where.status : { in: [] };
+      } else if (where.status?.in && Array.isArray(where.status.in)) {
+        const intersected = where.status.in.filter((s) => dueStatuses.includes(s));
+        where.status = { in: intersected };
+      } else {
+        where.status = { in: dueStatuses };
+      }
     }
 
     const [tasks, total] = await Promise.all([
