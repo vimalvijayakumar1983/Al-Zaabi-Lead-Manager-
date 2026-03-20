@@ -771,8 +771,23 @@ class ApiClient {
     return this.request<any[]>(`/call-logs/lead/${leadId}`);
   }
 
-  async getDispositions() {
-    return this.request<any[]>('/call-logs/dispositions');
+  async getDispositions(params?: { leadId?: string; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.leadId) q.set('leadId', params.leadId);
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    return this.request<any[]>(`/call-logs/dispositions${q.toString() ? `?${q.toString()}` : ''}`);
+  }
+
+  async getDispositionStudio(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ divisionId: string; dispositions: any[] }>(`/call-logs/dispositions/studio${q}`);
+  }
+
+  async updateDispositionStudio(dispositions: any[], divisionId?: string) {
+    return this.request<{ divisionId: string; dispositions: any[] }>(
+      '/call-logs/dispositions/studio',
+      { method: 'PUT', body: JSON.stringify({ dispositions, divisionId }) }
+    );
   }
 
   async getDispositionSettings() {

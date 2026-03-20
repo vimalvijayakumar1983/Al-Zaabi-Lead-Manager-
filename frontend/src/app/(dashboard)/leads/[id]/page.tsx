@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
+import { LogCallModalDynamic } from '../components/log-call-modal';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useNotificationStore } from '@/store/notificationStore';
 
@@ -1453,7 +1454,9 @@ export default function LeadDetailPage() {
                           <div className="flex items-start justify-between">
                             <div className="flex items-center gap-2">
                               <svg className={`h-5 w-5 ${style.text}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-                              <span className={`text-sm font-semibold ${style.text}`}>{dispositionLabel[log.disposition] || log.disposition}</span>
+                              <span className={`text-sm font-semibold ${style.text}`}>
+                                {String((log.metadata as any)?.dispositionLabel || dispositionLabel[log.disposition] || log.disposition)}
+                              </span>
                             </div>
                             <span className="text-xs text-gray-500">{new Date(log.createdAt).toLocaleString()}</span>
                           </div>
@@ -1797,7 +1800,7 @@ export default function LeadDetailPage() {
       )}
 
       {/* Log Call Modal */}
-      {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={getLeadDisplayName(lead)} />}
+      {showCallLogModal && <LogCallModalDynamic onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={getLeadDisplayName(lead)} leadId={lead.id} />}
 
       {/* Log Communication Modal */}
       {showCommModal && <LogCommModal onClose={() => setShowCommModal(false)} onSubmit={handleLogComm} leadEmail={lead.email} />}
@@ -2378,96 +2381,107 @@ const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: 
   { value: 'OTHER', label: 'Other', group: 'Other', icon: '📝' },
 ];
 
-const EXPECTED_CALLBACK_WINDOW_OPTIONS = [
-  { value: 'WITHIN_24_HOURS', label: 'Within 24 hours' },
-  { value: 'WITHIN_3_DAYS', label: 'Within 3 days' },
-  { value: 'WITHIN_7_DAYS', label: 'Within 7 days' },
-  { value: 'WITHIN_14_DAYS', label: 'Within 14 days' },
-];
-const NOT_INTERESTED_REASON_OPTIONS = [
-  { value: 'HIGH_PRICE', label: 'Price too high' },
-  { value: 'BUDGET_NOT_AVAILABLE', label: 'Budget not available' },
-  { value: 'INSURANCE_NOT_COVERED', label: 'Insurance/finance not covered' },
-  { value: 'NOT_INTERESTED_IN_SERVICE', label: 'Not interested in service' },
-  { value: 'SERVICE_MISMATCH', label: 'Service does not match need' },
-  { value: 'BAD_TIMING', label: 'Timing not right' },
-  { value: 'CHOSE_COMPETITOR', label: 'Chose competitor' },
-  { value: 'NO_LONGER_NEEDED', label: 'No longer required' },
-  { value: 'NOT_DECISION_MAKER', label: 'Not decision maker' },
-  { value: 'OTHER', label: 'Other (specify)' },
-];
-const COMPLETED_SERVICE_LOCATION_OPTIONS = [
-  { value: 'INSIDE_CENTER', label: 'Inside Center' },
-  { value: 'OUTSIDE_CENTER', label: 'Outside Center' },
-];
+const FALLBACK_DISPOSITION_FIELDS: Record<string, any[]> = {
+  CALL_LATER: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: true, validation: { futureOnly: true } }],
+  CALL_AGAIN: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  CALLBACK: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  NO_ANSWER: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  VOICEMAIL_LEFT: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  BUSY: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  GATEKEEPER: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  MEETING_ARRANGED: [{ key: 'meetingDate', label: 'Meeting Date & Time', type: 'datetime', required: true }],
+  APPOINTMENT_BOOKED: [{ key: 'appointmentDate', label: 'Appointment Date & Time', type: 'datetime', required: true }],
+};
 
-function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string }) {
+function fallbackDispositions() {
+  return DISPOSITION_OPTIONS.map((opt, idx) => ({
+    value: opt.value,
+    label: opt.label,
+    group: opt.group,
+    icon: opt.icon,
+    description: opt.description || '',
+    requireNotes: opt.value === 'OTHER',
+    fields: FALLBACK_DISPOSITION_FIELDS[opt.value] || [],
+    sortOrder: (idx + 1) * 10,
+  }));
+}
+
+function isFieldVisible(field: any, values: Record<string, any>) {
+  if (!field?.showWhen?.fieldKey) return true;
+  return values[field.showWhen.fieldKey] === field.showWhen.equals;
+}
+
+function isMissing(value: any) {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+function LogCallModal({ onClose, onSubmit, leadName, leadId }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string; leadId: string }) {
   const [form, setForm] = useState({
     disposition: '',
     notes: '',
     duration: '',
-    callbackDate: '',
-    meetingDate: '',
-    appointmentDate: '',
-    expectedCallbackWindow: '',
-    notInterestedReason: '',
-    notInterestedOtherText: '',
-    completedServiceLocation: '',
+    dynamicFieldValues: {} as Record<string, any>,
     createFollowUp: true,
   });
+  const [catalog, setCatalog] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [dispositionSettings, setDispositionSettings] = useState<Record<string, boolean>>({});
 
-  // Fetch disposition settings (which outcomes require notes)
   useEffect(() => {
-    api.getDispositionSettings().then((settings: any[]) => {
-      const map: Record<string, boolean> = {};
-      settings.forEach((s: any) => { map[s.disposition] = s.requireNotes; });
-      setDispositionSettings(map);
-    }).catch(() => {
-      // Default: OTHER requires notes
-      setDispositionSettings({ OTHER: true });
-    });
-  }, []);
+    api.getDispositions({ leadId })
+      .then((rows) => {
+        const normalized = Array.isArray(rows) ? rows.map((row: any) => ({
+          value: row.value,
+          label: row.label,
+          group: row.group || 'Other',
+          icon: row.icon || '📝',
+          description: row.description || '',
+          requireNotes: row.requireNotes === true,
+          fields: Array.isArray(row.fields) ? row.fields : [],
+          sortOrder: Number(row.sortOrder || 0),
+        })) : [];
+        setCatalog(normalized.length > 0 ? normalized : fallbackDispositions());
+      })
+      .catch(() => setCatalog(fallbackDispositions()));
+  }, [leadId]);
 
   const selectedDisposition = form.disposition;
-  const notesRequired = selectedDisposition ? (dispositionSettings[selectedDisposition] ?? selectedDisposition === 'OTHER') : false;
+  const selectedDefinition = catalog.find((item) => item.value === selectedDisposition);
+  const notesRequired = selectedDefinition ? selectedDefinition.requireNotes : selectedDisposition === 'OTHER';
   const notesEmpty = !form.notes || !form.notes.trim();
-  const isCallLater = selectedDisposition === 'CALL_LATER';
-  const isWillCallUsAgain = selectedDisposition === 'WILL_CALL_US_AGAIN';
-  const isNotInterested = selectedDisposition === 'NOT_INTERESTED';
-  const isAlreadyCompletedServices = selectedDisposition === 'ALREADY_COMPLETED_SERVICES';
-  const showCallback = isCallLater || selectedDisposition === 'CALL_AGAIN' || selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
-  const callbackDateRequired = isCallLater; // CALL_LATER = mandatory date/time
-  const callbackDateMissing = callbackDateRequired && !form.callbackDate;
-  const notInterestedReasonMissing = isNotInterested && !form.notInterestedReason;
-  const notInterestedOtherMissing = isNotInterested
-    && form.notInterestedReason === 'OTHER'
-    && !form.notInterestedOtherText.trim();
-  const completedServiceLocationMissing = isAlreadyCompletedServices && !form.completedServiceLocation;
-  const showMeeting = selectedDisposition === 'MEETING_ARRANGED';
-  const showAppointment = selectedDisposition === 'APPOINTMENT_BOOKED';
+  const visibleFields = (selectedDefinition?.fields || []).filter((field: any) => isFieldVisible(field, form.dynamicFieldValues));
+  const requiredFieldErrors = visibleFields
+    .filter((field: any) => field.required)
+    .filter((field: any) => isMissing(form.dynamicFieldValues[field.key]));
+  const datetimeFutureError = visibleFields.find((field: any) => {
+    if (field.type !== 'datetime' || field?.validation?.futureOnly !== true) return false;
+    const raw = form.dynamicFieldValues[field.key];
+    if (!raw) return false;
+    const parsed = new Date(String(raw));
+    return Number.isNaN(parsed.getTime()) || parsed <= new Date();
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.disposition) return;
-    if (notesRequired && notesEmpty) return; // Block submit if notes required but empty
-    if (callbackDateMissing) return; // Block submit if CALL_LATER without date/time
-    if (notInterestedReasonMissing || notInterestedOtherMissing || completedServiceLocationMissing) return;
+    if (notesRequired && notesEmpty) return;
+    if (requiredFieldErrors.length > 0 || datetimeFutureError) return;
     setSubmitting(true);
     try {
       const durationSeconds = form.duration ? parseInt(form.duration) * 60 : null;
+      const values = form.dynamicFieldValues || {};
+      const toIsoOrNull = (raw: any) => (raw ? new Date(String(raw)).toISOString() : null);
       await onSubmit({
         disposition: form.disposition,
         notes: form.notes || null,
         duration: durationSeconds,
-        callbackDate: form.callbackDate ? new Date(form.callbackDate).toISOString() : null,
-        meetingDate: form.meetingDate ? new Date(form.meetingDate).toISOString() : null,
-        appointmentDate: form.appointmentDate ? new Date(form.appointmentDate).toISOString() : null,
-        expectedCallbackWindow: form.expectedCallbackWindow || null,
-        notInterestedReason: form.notInterestedReason || null,
-        notInterestedOtherText: form.notInterestedOtherText?.trim() || null,
-        completedServiceLocation: form.completedServiceLocation || null,
+        callbackDate: toIsoOrNull(values.callbackDate),
+        meetingDate: toIsoOrNull(values.meetingDate),
+        appointmentDate: toIsoOrNull(values.appointmentDate),
+        expectedCallbackWindow: values.expectedCallbackWindow || null,
+        notInterestedReason: values.notInterestedReason || null,
+        notInterestedOtherText: values.notInterestedOtherText?.trim?.() || null,
+        completedServiceLocation: values.completedServiceLocation || null,
+        dynamicFieldValues: values,
         createFollowUp: form.createFollowUp,
       });
     } finally {
@@ -2487,23 +2501,16 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
+
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Disposition Selection */}
           <div>
             <label className="label">Call Outcome *</label>
             <div className="grid grid-cols-2 gap-2 mt-1">
-              {DISPOSITION_OPTIONS.map((opt) => (
+              {catalog.map((opt: any) => (
                 <button
                   key={opt.value}
                   type="button"
-                  onClick={() => setForm((prev) => ({
-                    ...prev,
-                    disposition: opt.value,
-                    expectedCallbackWindow: opt.value === 'WILL_CALL_US_AGAIN' ? prev.expectedCallbackWindow : '',
-                    notInterestedReason: opt.value === 'NOT_INTERESTED' ? prev.notInterestedReason : '',
-                    notInterestedOtherText: opt.value === 'NOT_INTERESTED' ? prev.notInterestedOtherText : '',
-                    completedServiceLocation: opt.value === 'ALREADY_COMPLETED_SERVICES' ? prev.completedServiceLocation : '',
-                  }))}
+                  onClick={() => setForm((prev) => ({ ...prev, disposition: opt.value, dynamicFieldValues: {} }))}
                   className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-all ${
                     form.disposition === opt.value
                       ? 'border-brand-500 bg-brand-50 text-brand-700 ring-1 ring-brand-500'
@@ -2520,142 +2527,52 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             </div>
           </div>
 
-          {/* Conditional date fields */}
-          {showCallback && (
-            <div>
-              <label className="label">
-                Callback Date & Time {callbackDateRequired && <span className="text-red-500 font-semibold">*</span>}
-              </label>
-              <input
-                type="datetime-local"
-                className={`input ${callbackDateMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
-                value={form.callbackDate}
-                onChange={(e) => setForm({ ...form, callbackDate: e.target.value })}
-                required={callbackDateRequired}
-                min={new Date().toISOString().slice(0, 16)}
-              />
-              {isCallLater ? (
-                <p className={`text-xs mt-1 ${callbackDateMissing ? 'text-red-500 font-medium' : 'text-amber-600'}`}>
-                  {callbackDateMissing ? (
-                    <span className="flex items-center gap-1">
-                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                      Required — the client requested a specific time. Ask them exactly when.
-                    </span>
-                  ) : (
-                    'A pop-up reminder will appear at this time. If you are unavailable, another agent will be notified.'
-                  )}
-                </p>
-              ) : (
-                <p className="text-xs text-gray-400 mt-1">Optional — when should we call back?</p>
+          {selectedDefinition && visibleFields.length > 0 && (
+            <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3">
+              <p className="text-xs font-medium text-brand-700">Disposition Fields</p>
+              {visibleFields.map((field: any) => {
+                const value = form.dynamicFieldValues[field.key] ?? '';
+                const missing = field.required && isMissing(value);
+                return (
+                  <div key={field.key} className="space-y-1">
+                    <label className="label mb-0">{field.label}{field.required ? ' *' : ''}</label>
+                    {field.type === 'select' ? (
+                      <select
+                        className={`input ${missing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                        value={String(value || '')}
+                        onChange={(e) => setForm((prev) => ({
+                          ...prev,
+                          dynamicFieldValues: { ...prev.dynamicFieldValues, [field.key]: e.target.value },
+                        }))}
+                      >
+                        <option value="">Select...</option>
+                        {(field.options || []).map((option: any) => (
+                          <option key={option.value} value={option.value}>{option.label || option.value}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'}
+                        className={`input ${missing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                        value={String(value || '')}
+                        placeholder={field.placeholder || ''}
+                        min={field.type === 'datetime' && field?.validation?.futureOnly ? new Date().toISOString().slice(0, 16) : undefined}
+                        onChange={(e) => setForm((prev) => ({
+                          ...prev,
+                          dynamicFieldValues: { ...prev.dynamicFieldValues, [field.key]: e.target.value },
+                        }))}
+                      />
+                    )}
+                    {missing && <p className="text-xs text-red-500">{field.label} is required.</p>}
+                  </div>
+                );
+              })}
+              {datetimeFutureError && (
+                <p className="text-xs text-red-500">{datetimeFutureError.label} must be in the future.</p>
               )}
             </div>
           )}
 
-          {isWillCallUsAgain && (
-            <div className="space-y-2 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
-              <label className="label mb-0">Expected Callback Window (optional)</label>
-              <select
-                className="input"
-                value={form.expectedCallbackWindow}
-                onChange={(e) => setForm({ ...form, expectedCallbackWindow: e.target.value })}
-              >
-                <option value="">Not sure yet</option>
-                {EXPECTED_CALLBACK_WINDOW_OPTIONS.map((window) => (
-                  <option key={window.value} value={window.value}>{window.label}</option>
-                ))}
-              </select>
-              <p className="text-xs text-indigo-700">
-                No urgent callback is forced. If there is no inbound reply within this window, the system creates a low-priority soft follow-up task.
-              </p>
-            </div>
-          )}
-
-          {isNotInterested && (
-            <div className="space-y-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
-              <label className="label mb-0">
-                Reason for Not Interested <span className="text-red-500 font-semibold">*</span>
-              </label>
-              <select
-                className={`input ${notInterestedReasonMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
-                value={form.notInterestedReason}
-                onChange={(e) => setForm((prev) => ({ ...prev, notInterestedReason: e.target.value, notInterestedOtherText: e.target.value === 'OTHER' ? prev.notInterestedOtherText : '' }))}
-              >
-                <option value="">Select reason...</option>
-                {NOT_INTERESTED_REASON_OPTIONS.map((reason) => (
-                  <option key={reason.value} value={reason.value}>{reason.label}</option>
-                ))}
-              </select>
-              {notInterestedReasonMissing && (
-                <p className="text-xs text-red-500">Please select why this lead is not interested.</p>
-              )}
-
-              {form.notInterestedReason === 'OTHER' && (
-                <div className="space-y-1">
-                  <label className="label mb-0">
-                    Specify Other Reason <span className="text-red-500 font-semibold">*</span>
-                  </label>
-                  <input
-                    className={`input ${notInterestedOtherMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
-                    value={form.notInterestedOtherText}
-                    onChange={(e) => setForm({ ...form, notInterestedOtherText: e.target.value })}
-                    placeholder="e.g. already signed annual contract elsewhere"
-                  />
-                  {notInterestedOtherMissing && (
-                    <p className="text-xs text-red-500">Please provide the other reason.</p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {isAlreadyCompletedServices && (
-            <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
-              <label className="label mb-0">
-                Service Completed Where? <span className="text-red-500 font-semibold">*</span>
-              </label>
-              <select
-                className={`input ${completedServiceLocationMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
-                value={form.completedServiceLocation}
-                onChange={(e) => setForm({ ...form, completedServiceLocation: e.target.value })}
-              >
-                <option value="">Select completion location...</option>
-                {COMPLETED_SERVICE_LOCATION_OPTIONS.map((location) => (
-                  <option key={location.value} value={location.value}>{location.label}</option>
-                ))}
-              </select>
-              {completedServiceLocationMissing && (
-                <p className="text-xs text-red-500">Please select whether it was completed inside or outside the center.</p>
-              )}
-            </div>
-          )}
-
-          {showMeeting && (
-            <div>
-              <label className="label">Meeting Date & Time *</label>
-              <input
-                type="datetime-local"
-                className="input"
-                required
-                value={form.meetingDate}
-                onChange={(e) => setForm({ ...form, meetingDate: e.target.value })}
-              />
-            </div>
-          )}
-
-          {showAppointment && (
-            <div>
-              <label className="label">Appointment Date & Time *</label>
-              <input
-                type="datetime-local"
-                className="input"
-                required
-                value={form.appointmentDate}
-                onChange={(e) => setForm({ ...form, appointmentDate: e.target.value })}
-              />
-            </div>
-          )}
-
-          {/* Call Duration */}
           <div>
             <label className="label">Call Duration (minutes)</label>
             <input
@@ -2668,7 +2585,6 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             />
           </div>
 
-          {/* Notes */}
           <div>
             <label className="label">
               Call Notes {notesRequired && <span className="text-red-500 font-semibold">*</span>}
@@ -2682,14 +2598,10 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
               required={notesRequired}
             />
             {notesRequired && notesEmpty && (
-              <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                Notes are mandatory for this call outcome. Please describe what happened.
-              </p>
+              <p className="text-xs text-red-500 mt-1">Notes are mandatory for this call outcome.</p>
             )}
           </div>
 
-          {/* Auto Follow-up */}
           <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-3">
             <input
               type="checkbox"
@@ -2707,7 +2619,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button
               type="submit"
-              disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || callbackDateMissing || notInterestedReasonMissing || notInterestedOtherMissing || completedServiceLocationMissing}
+              disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || requiredFieldErrors.length > 0 || !!datetimeFutureError}
               className="btn-primary gap-1.5"
             >
               {submitting ? (

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import type { CustomField, FieldType, Organization, BuiltInField } from '@/types';
+import { CallDispositionStudioSection } from './call-disposition-studio';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
@@ -94,7 +95,7 @@ export default function SettingsPage() {
           )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
           {activeTab === 'pipelineStages' && isAdmin && <PipelineStagesSection />}
-          {activeTab === 'callDispositions' && isAdmin && <CallDispositionsSection />}
+          {activeTab === 'callDispositions' && isAdmin && <CallDispositionStudioSection />}
           {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
           {activeTab === 'emailTemplates' && isAdmin && <EmailTemplatesSection />}
           {activeTab === 'notifications' && <NotificationsSection />}

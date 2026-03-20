@@ -16,6 +16,14 @@ const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 const router = Router();
 router.use(authenticate, orgScope);
 
+const BUILTIN_CALL_OUTCOMES = new Set([
+  'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN',
+  'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED',
+  'NOT_INTERESTED', 'ALREADY_COMPLETED_SERVICES', 'NO_ANSWER',
+  'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'BUSY', 'GATEKEEPER',
+  'FOLLOW_UP_EMAIL', 'QUALIFIED', 'PROPOSAL_REQUESTED', 'DO_NOT_CALL', 'OTHER',
+]);
+
 // Smart name display — deduplicates when firstName and lastName are identical
 function getDisplayName(obj) {
   const fn = (obj?.firstName || '').trim();
@@ -240,7 +248,25 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     if (callOutcome) {
       const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
       if (outcomes.length > 0) {
-        where.callLogs = { some: { disposition: outcomes.length === 1 ? outcomes[0] : { in: outcomes } } };
+        const builtinOutcomes = outcomes.filter(o => BUILTIN_CALL_OUTCOMES.has(o));
+        const customOutcomes = outcomes.filter(o => !builtinOutcomes.includes(o));
+        const callOutcomeOr = [];
+        if (builtinOutcomes.length > 0) {
+          callOutcomeOr.push({
+            disposition: builtinOutcomes.length === 1 ? builtinOutcomes[0] : { in: builtinOutcomes },
+          });
+        }
+        if (customOutcomes.length > 0) {
+          callOutcomeOr.push({
+            OR: customOutcomes.map((key) => ({
+              disposition: 'OTHER',
+              metadata: { path: ['dispositionKey'], equals: key },
+            })),
+          });
+        }
+        if (callOutcomeOr.length > 0) {
+          where.callLogs = { some: callOutcomeOr.length === 1 ? callOutcomeOr[0] : { OR: callOutcomeOr } };
+        }
       }
     }
     // Custom field filtering (JSON encoded)
@@ -321,11 +347,14 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         where: { leadId: { in: leadIds } },
         orderBy: { createdAt: 'desc' },
         distinct: ['leadId'],
-        select: { leadId: true, disposition: true, notes: true, createdAt: true },
+        select: { leadId: true, disposition: true, notes: true, createdAt: true, metadata: true },
       });
       for (const cl of lastCallLogs) {
+        const md = (typeof cl.metadata === 'object' && cl.metadata !== null) ? cl.metadata : {};
         lastCallOutcomeMap[cl.leadId] = {
           disposition: cl.disposition,
+          dispositionKey: md.dispositionKey || null,
+          dispositionLabel: md.dispositionLabel || null,
           notes: cl.notes,
           date: cl.createdAt,
         };

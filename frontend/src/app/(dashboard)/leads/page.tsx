@@ -741,7 +741,7 @@ function LeadsContent() {
           case 'lastCallOutcome': {
             const lco = (l as any).lastCallOutcome;
             if (!lco) return '';
-            const label = dispositionLabels[lco.disposition] || lco.disposition;
+            const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
             const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
             return dt ? `${label} (${dt})` : label;
           }
@@ -945,10 +945,11 @@ function LeadsContent() {
       case 'lastCallOutcome': {
         const lco = (lead as any).lastCallOutcome;
         if (!lco) return <span className="text-xs text-gray-400">-</span>;
+        const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
         return (
           <div className="flex flex-col">
             <span className={`text-xs font-medium ${dispositionColor(lco.disposition)}`}>
-              {dispositionLabels[lco.disposition] || lco.disposition}
+              {label}
             </span>
             {lco.date && (
               <span className="text-[10px] text-gray-400">
@@ -1462,7 +1463,7 @@ function LeadsContent() {
                               {lead._count.callLogs} calls
                               {(lead as any).lastCallOutcome && (
                                 <span className={`ml-1 ${dispositionColor((lead as any).lastCallOutcome.disposition)}`}>
-                                  · {dispositionLabels[(lead as any).lastCallOutcome.disposition] || (lead as any).lastCallOutcome.disposition}
+                                  · {(lead as any).lastCallOutcome.dispositionLabel || dispositionLabels[(lead as any).lastCallOutcome.disposition] || (lead as any).lastCallOutcome.disposition}
                                 </span>
                               )}
                             </span>
