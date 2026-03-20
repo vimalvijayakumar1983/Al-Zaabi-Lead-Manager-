@@ -1,0 +1,3 @@
+-- AlterEnum: Add CALL_LATER and CALL_AGAIN to CallDisposition
+ALTER TYPE "CallDisposition" ADD VALUE IF NOT EXISTS 'CALL_LATER';
+ALTER TYPE "CallDisposition" ADD VALUE IF NOT EXISTS 'CALL_AGAIN';

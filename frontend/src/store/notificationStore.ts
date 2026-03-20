@@ -34,7 +34,9 @@ const getToastType = (notificationType: NotificationType): Toast['type'] => {
   if (
     notificationType === 'TASK_OVERDUE' ||
     notificationType === 'TASK_DUE_SOON' ||
-    notificationType === 'CAMPAIGN_BUDGET_ALERT'
+    notificationType === 'CAMPAIGN_BUDGET_ALERT' ||
+    notificationType === 'CALLBACK_REMINDER' ||
+    notificationType === 'CALLBACK_REMINDER_HANDOFF'
   ) {
     return 'warning';
   }
@@ -260,11 +262,13 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
             }));
 
             // Show a toast for real-time notifications
+            // Callback reminders get a longer display (15s) so agents don't miss them
+            const isCallbackReminder = notification.type === 'CALLBACK_REMINDER' || notification.type === 'CALLBACK_REMINDER_HANDOFF';
             get().addToast({
               type: getToastType(notification.type),
               title: notification.title,
               message: notification.message,
-              duration: 5000,
+              duration: isCallbackReminder ? 15000 : 5000,
               entityType: notification.entityType,
               entityId: notification.entityId,
             });

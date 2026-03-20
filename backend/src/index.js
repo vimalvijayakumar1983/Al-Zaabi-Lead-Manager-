@@ -11,6 +11,7 @@ const { setupWebSocket } = require('./websocket/server');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const { startSLAMonitor, stopSLAMonitor } = require('./services/slaMonitor');
 const { startTimeBasedScheduler, stopTimeBasedScheduler } = require('./services/timeBasedAutomationScheduler');
+const { startCallbackReminderScheduler, stopCallbackReminderScheduler } = require('./services/callbackReminderScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -149,6 +150,9 @@ server.listen(PORT, () => {
 
   // Start the time-based automation scheduler
   startTimeBasedScheduler();
+
+  // Start the callback reminder scheduler (Call Later pop-ups)
+  startCallbackReminderScheduler();
 });
 
 // Graceful shutdown
@@ -156,6 +160,7 @@ const shutdown = async () => {
   logger.info('Shutting down gracefully...');
   stopSLAMonitor();
   stopTimeBasedScheduler();
+  stopCallbackReminderScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

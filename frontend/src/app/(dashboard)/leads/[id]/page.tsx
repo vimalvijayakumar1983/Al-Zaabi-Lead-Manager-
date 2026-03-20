@@ -2171,8 +2171,9 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
 
 // ─── Log Call Modal ──────────────────────────────────────────────
 
-const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: string }[] = [
-  { value: 'CALLBACK', label: 'Call Back Requested', group: 'Follow-up', icon: '🔄' },
+const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: string; description?: string }[] = [
+  { value: 'CALL_LATER', label: 'Call Later (Scheduled)', group: 'Follow-up', icon: '🕐', description: 'Client requested a specific date & time' },
+  { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', group: 'Follow-up', icon: '🔄', description: 'Follow up anytime — no specific schedule' },
   { value: 'MEETING_ARRANGED', label: 'Meeting Arranged', group: 'Positive', icon: '📅' },
   { value: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', group: 'Positive', icon: '✅' },
   { value: 'INTERESTED', label: 'Interested - Send Info', group: 'Positive', icon: '👍' },
@@ -2217,7 +2218,10 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
   const selectedDisposition = form.disposition;
   const notesRequired = selectedDisposition ? (dispositionSettings[selectedDisposition] ?? selectedDisposition === 'OTHER') : false;
   const notesEmpty = !form.notes || !form.notes.trim();
-  const showCallback = selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
+  const isCallLater = selectedDisposition === 'CALL_LATER';
+  const showCallback = isCallLater || selectedDisposition === 'CALL_AGAIN' || selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
+  const callbackDateRequired = isCallLater; // CALL_LATER = mandatory date/time
+  const callbackDateMissing = callbackDateRequired && !form.callbackDate;
   const showMeeting = selectedDisposition === 'MEETING_ARRANGED';
   const showAppointment = selectedDisposition === 'APPOINTMENT_BOOKED';
 
@@ -2225,6 +2229,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
     e.preventDefault();
     if (!form.disposition) return;
     if (notesRequired && notesEmpty) return; // Block submit if notes required but empty
+    if (callbackDateMissing) return; // Block submit if CALL_LATER without date/time
     setSubmitting(true);
     try {
       const durationSeconds = form.duration ? parseInt(form.duration) * 60 : null;
@@ -2271,7 +2276,10 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
                   }`}
                 >
                   <span className="text-base">{opt.icon}</span>
-                  <span className="font-medium leading-tight">{opt.label}</span>
+                  <div>
+                    <span className="font-medium leading-tight">{opt.label}</span>
+                    {opt.description && <p className="text-[10px] text-gray-400 leading-tight mt-0.5">{opt.description}</p>}
+                  </div>
                 </button>
               ))}
             </div>
@@ -2280,14 +2288,31 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
           {/* Conditional date fields */}
           {showCallback && (
             <div>
-              <label className="label">Callback Date & Time</label>
+              <label className="label">
+                Callback Date & Time {callbackDateRequired && <span className="text-red-500 font-semibold">*</span>}
+              </label>
               <input
                 type="datetime-local"
-                className="input"
+                className={`input ${callbackDateMissing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
                 value={form.callbackDate}
                 onChange={(e) => setForm({ ...form, callbackDate: e.target.value })}
+                required={callbackDateRequired}
+                min={new Date().toISOString().slice(0, 16)}
               />
-              <p className="text-xs text-gray-400 mt-1">When should we call back?</p>
+              {isCallLater ? (
+                <p className={`text-xs mt-1 ${callbackDateMissing ? 'text-red-500 font-medium' : 'text-amber-600'}`}>
+                  {callbackDateMissing ? (
+                    <span className="flex items-center gap-1">
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      Required — the client requested a specific time. Ask them exactly when.
+                    </span>
+                  ) : (
+                    'A pop-up reminder will appear at this time. If you are unavailable, another agent will be notified.'
+                  )}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400 mt-1">Optional — when should we call back?</p>
+              )}
             </div>
           )}
 
@@ -2367,7 +2392,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
 
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={submitting || !form.disposition || (notesRequired && notesEmpty)} className="btn-primary gap-1.5">
+            <button type="submit" disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || callbackDateMissing} className="btn-primary gap-1.5">
               {submitting ? (
                 <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Saving...</>
               ) : (

@@ -110,6 +110,8 @@ async function ensureDispositionSettings() {
 // ─── Disposition labels for display ──────────────────────────────
 const DISPOSITION_LABELS = {
   CALLBACK: 'Call Back Requested',
+  CALL_LATER: 'Call Later (Scheduled)',
+  CALL_AGAIN: 'Call Again (Anytime)',
   MEETING_ARRANGED: 'Meeting Arranged',
   APPOINTMENT_BOOKED: 'Appointment Booked',
   INTERESTED: 'Interested - Send Info',
@@ -129,6 +131,8 @@ const DISPOSITION_LABELS = {
 // Auto-actions by disposition type
 const DISPOSITION_AUTO_ACTIONS = {
   CALLBACK: { taskType: 'FOLLOW_UP_CALL', taskTitle: 'Call back', priority: 'HIGH' },
+  CALL_LATER: { taskType: 'FOLLOW_UP_CALL', taskTitle: 'Scheduled call back', priority: 'HIGH' },
+  CALL_AGAIN: { taskType: 'FOLLOW_UP_CALL', taskTitle: 'Call again', priority: 'MEDIUM' },
   MEETING_ARRANGED: { taskType: 'MEETING', taskTitle: 'Scheduled meeting', priority: 'HIGH', statusChange: 'QUALIFIED' },
   APPOINTMENT_BOOKED: { taskType: 'MEETING', taskTitle: 'Appointment', priority: 'HIGH', statusChange: 'QUALIFIED' },
   INTERESTED: { taskType: 'EMAIL', taskTitle: 'Send information to interested lead', priority: 'MEDIUM' },
@@ -144,7 +148,8 @@ const DISPOSITION_AUTO_ACTIONS = {
 const callLogSchema = z.object({
   leadId: z.string().uuid(),
   disposition: z.enum([
-    'CALLBACK', 'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED',
+    'CALLBACK', 'CALL_LATER', 'CALL_AGAIN',
+    'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED',
     'NOT_INTERESTED', 'NO_ANSWER', 'VOICEMAIL_LEFT', 'WRONG_NUMBER',
     'BUSY', 'GATEKEEPER', 'FOLLOW_UP_EMAIL', 'QUALIFIED',
     'PROPOSAL_REQUESTED', 'DO_NOT_CALL', 'OTHER',
@@ -209,6 +214,24 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         error: `Notes are required when call outcome is "${DISPOSITION_LABELS[data.disposition] || data.disposition}". Please describe the outcome.`,
         field: 'notes',
       });
+    }
+
+    // ─── CALL_LATER requires a specific callback date & time ──────
+    if (data.disposition === 'CALL_LATER') {
+      if (!data.callbackDate) {
+        return res.status(400).json({
+          error: 'A specific date and time is required for "Call Later". The client requested a scheduled callback — please enter exactly when to call.',
+          field: 'callbackDate',
+        });
+      }
+      // Ensure the scheduled time is in the future
+      const scheduledTime = new Date(data.callbackDate);
+      if (scheduledTime <= new Date()) {
+        return res.status(400).json({
+          error: 'The scheduled callback date/time must be in the future.',
+          field: 'callbackDate',
+        });
+      }
     }
 
     const autoAction = DISPOSITION_AUTO_ACTIONS[data.disposition];

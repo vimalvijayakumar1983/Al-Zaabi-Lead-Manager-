@@ -616,6 +616,8 @@ export type NotificationType =
   | 'IMPORT_FAILED'
   | 'AUTOMATION_TRIGGERED'
   | 'AUTOMATION_ERROR'
+  | 'CALLBACK_REMINDER'
+  | 'CALLBACK_REMINDER_HANDOFF'
   | 'SYSTEM_ANNOUNCEMENT';
 
 export interface AppNotification {

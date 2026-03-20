@@ -440,7 +440,9 @@ model CallLog {
 }
 
 enum CallDisposition {
-  CALLBACK          // Customer asked to call back later
+  CALLBACK          // Customer asked to call back later (legacy — use CALL_LATER / CALL_AGAIN)
+  CALL_LATER        // Client requested call at a specific date/time (mandatory schedule)
+  CALL_AGAIN        // Call again anytime — no specific schedule required
   MEETING_ARRANGED  // Meeting has been scheduled
   APPOINTMENT_BOOKED // Appointment confirmed
   INTERESTED        // Customer showed interest, send info
