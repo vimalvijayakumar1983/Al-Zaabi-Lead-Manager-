@@ -31,6 +31,7 @@ const taskSchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
   dueAt: z.string().datetime(),
   leadId: z.string().uuid().optional().nullable(),
+  divisionId: z.string().uuid().optional().nullable(),
   assigneeId: z.string().uuid(),
   isRecurring: z.boolean().optional(),
   recurRule: z.string().optional().nullable(),
@@ -84,12 +85,13 @@ router.get('/', validateQuery(paginationSchema.extend({
   statuses: z.string().optional(),
   priority: z.string().optional(),
   priorities: z.string().optional(),
+  divisionId: z.string().optional(),
   assigneeId: z.string().optional(),
   leadId: z.string().optional(),
   overdue: z.coerce.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, assigneeId, leadId, overdue } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, divisionId, assigneeId, leadId, overdue } = req.validatedQuery;
 
     const where = {};
     const allowedStatuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
@@ -113,6 +115,11 @@ router.get('/', validateQuery(paginationSchema.extend({
       where.assigneeId = req.user.id;
     } else if (assigneeId) {
       where.assigneeId = assigneeId;
+      if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
+        where.assignee = { organizationId: divisionId };
+      }
+    } else if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
+      where.assignee = { organizationId: divisionId };
     } else {
       // Default: show tasks for users in the accessible orgs
       where.assignee = { organizationId: { in: req.orgIds } };
@@ -187,12 +194,45 @@ router.get('/', validateQuery(paginationSchema.extend({
 router.post('/', validate(taskSchema), async (req, res, next) => {
   try {
     const data = req.validated;
+    const { divisionId, ...taskData } = data;
+
+    let targetDivisionId = null;
+    if (taskData.leadId) {
+      const lead = await prisma.lead.findFirst({
+        where: { id: taskData.leadId, organizationId: { in: req.orgIds } },
+        select: { id: true, organizationId: true },
+      });
+      if (!lead) return res.status(404).json({ error: 'Lead not found' });
+      targetDivisionId = lead.organizationId;
+      if (divisionId && divisionId !== targetDivisionId) {
+        return res.status(400).json({ error: 'Task division must match lead division' });
+      }
+    } else if (divisionId) {
+      if (!req.orgIds.includes(divisionId)) {
+        return res.status(403).json({ error: 'Invalid division scope' });
+      }
+      targetDivisionId = divisionId;
+    } else if (!req.isSuperAdmin) {
+      targetDivisionId = req.user.organizationId;
+    }
+
+    const assignee = await prisma.user.findUnique({
+      where: { id: taskData.assigneeId },
+      select: { id: true, organizationId: true, isActive: true },
+    });
+    if (!assignee || !assignee.isActive || !req.orgIds.includes(assignee.organizationId)) {
+      return res.status(400).json({ error: 'Invalid assignee for your accessible divisions' });
+    }
+    if (targetDivisionId && assignee.organizationId !== targetDivisionId) {
+      return res.status(400).json({ error: 'Assignee must belong to the selected division' });
+    }
+    targetDivisionId = targetDivisionId || assignee.organizationId;
 
     const task = await prisma.task.create({
       data: {
-        ...data,
-        dueAt: new Date(data.dueAt),
-        reminder: data.reminder ? new Date(data.reminder) : null,
+        ...taskData,
+        dueAt: new Date(taskData.dueAt),
+        reminder: taskData.reminder ? new Date(taskData.reminder) : null,
         createdById: req.user.id,
       },
       include: {
@@ -201,45 +241,45 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
       },
     });
 
-    if (data.leadId) {
+    if (taskData.leadId) {
       await prisma.leadActivity.create({
         data: {
-          leadId: data.leadId,
+          leadId: taskData.leadId,
           userId: req.user.id,
           type: 'TASK_CREATED',
-          description: `Task created: ${data.title}`,
+          description: `Task created: ${taskData.title}`,
         },
       });
     }
 
-    notifyUser(data.assigneeId, {
-      type: data.assigneeId === req.user.id ? 'task_created' : 'task_assigned',
+    notifyUser(taskData.assigneeId, {
+      type: taskData.assigneeId === req.user.id ? 'task_created' : 'task_assigned',
       task: { id: task.id, title: task.title },
     });
 
     res.status(201).json(task);
 
     // ── Fire-and-forget notification ──
-    if (data.assigneeId) {
-      const isSelfAssigned = data.assigneeId === req.user.id;
+    if (taskData.assigneeId) {
+      const isSelfAssigned = taskData.assigneeId === req.user.id;
       createNotification({
         type: NOTIFICATION_TYPES.TASK_ASSIGNED,
         title: isSelfAssigned ? 'Task Created' : 'New Task Assigned',
         message: isSelfAssigned
           ? `You created a new task: ${task.title}`
           : `${getDisplayName(req.user)} assigned you task: ${task.title}`,
-        userId: data.assigneeId,
+        userId: taskData.assigneeId,
         actorId: req.user.id,
         entityType: 'task',
         entityId: task.id,
-        organizationId: req.user.organizationId,
+        organizationId: targetDivisionId,
       }).catch(() => {});
     }
 
-    broadcastDataChange(req.user.organizationId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
+    broadcastDataChange(targetDivisionId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
 
     // Trigger immediate reminder check so notifications fire without waiting for next poll cycle
-    if (data.reminder || data.dueAt) {
+    if (taskData.reminder || taskData.dueAt) {
       checkTaskReminders().catch(() => {});
     }
   } catch (err) {
@@ -253,16 +293,51 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
     // Verify task belongs to accessible orgs via assignee
     const existing = await prisma.task.findFirst({
       where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+      include: {
+        lead: { select: { organizationId: true } },
+        assignee: { select: { organizationId: true } },
+      },
     });
     if (!existing) return res.status(404).json({ error: 'Task not found' });
 
     const data = req.validated;
-    if (data.dueAt) data.dueAt = new Date(data.dueAt);
-    if (data.reminder) data.reminder = new Date(data.reminder);
+    const { divisionId, ...updateData } = data;
+    let targetDivisionId = existing.lead?.organizationId || existing.assignee?.organizationId || null;
+
+    if (updateData.leadId) {
+      const lead = await prisma.lead.findFirst({
+        where: { id: updateData.leadId, organizationId: { in: req.orgIds } },
+        select: { id: true, organizationId: true },
+      });
+      if (!lead) return res.status(404).json({ error: 'Lead not found' });
+      targetDivisionId = lead.organizationId;
+    }
+    if (divisionId) {
+      if (!req.orgIds.includes(divisionId)) return res.status(403).json({ error: 'Invalid division scope' });
+      targetDivisionId = divisionId;
+    }
+
+    if (updateData.assigneeId) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: updateData.assigneeId },
+        select: { id: true, organizationId: true, isActive: true },
+      });
+      if (!assignee || !assignee.isActive || !req.orgIds.includes(assignee.organizationId)) {
+        return res.status(400).json({ error: 'Invalid assignee for your accessible divisions' });
+      }
+      if (targetDivisionId && assignee.organizationId !== targetDivisionId) {
+        return res.status(400).json({ error: 'Assignee must belong to the same division as the task' });
+      }
+    } else if (targetDivisionId && existing.assignee?.organizationId && existing.assignee.organizationId !== targetDivisionId) {
+      return res.status(400).json({ error: 'Current assignee is outside the selected division. Reassign first.' });
+    }
+
+    if (updateData.dueAt) updateData.dueAt = new Date(updateData.dueAt);
+    if (updateData.reminder) updateData.reminder = new Date(updateData.reminder);
 
     const task = await prisma.task.update({
       where: { id: req.params.id },
-      data,
+      data: updateData,
       include: {
         lead: { select: { id: true, firstName: true, lastName: true } },
         assignee: { select: { id: true, firstName: true, lastName: true } },
@@ -270,10 +345,10 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
     });
     res.json(task);
 
-    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+    broadcastDataChange(targetDivisionId || req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
 
     // Trigger immediate reminder check when due date or reminder is changed
-    if (data.reminder || data.dueAt) {
+    if (updateData.reminder || updateData.dueAt) {
       checkTaskReminders().catch(() => {});
     }
   } catch (err) {
@@ -342,11 +417,36 @@ router.patch('/bulk', validate(z.object({
     // Verify tasks belong to accessible orgs
     const accessibleTasks = await prisma.task.findMany({
       where: { id: { in: taskIds }, assignee: { organizationId: { in: req.orgIds } } },
-      select: { id: true },
+      select: {
+        id: true,
+        assignee: { select: { organizationId: true } },
+        lead: { select: { organizationId: true } },
+      },
     });
     const accessibleIds = accessibleTasks.map(t => t.id);
 
     if (accessibleIds.length === 0) return res.status(404).json({ error: 'No accessible tasks found' });
+
+    if (updateData.assigneeId) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: updateData.assigneeId },
+        select: { id: true, organizationId: true, isActive: true },
+      });
+      if (!assignee || !assignee.isActive || !req.orgIds.includes(assignee.organizationId)) {
+        return res.status(400).json({ error: 'Invalid assignee for your accessible divisions' });
+      }
+
+      const mismatched = accessibleTasks.filter((task) => {
+        const taskDivisionId = task.lead?.organizationId || task.assignee?.organizationId;
+        return taskDivisionId && taskDivisionId !== assignee.organizationId;
+      });
+      if (mismatched.length > 0) {
+        return res.status(400).json({
+          error: 'Assignee must belong to the same division as selected task(s)',
+          mismatchedTaskCount: mismatched.length,
+        });
+      }
+    }
 
     if (shouldDelete) {
       await prisma.task.deleteMany({ where: { id: { in: accessibleIds } } });
