@@ -22,6 +22,22 @@ interface KanbanViewProps {
   customFields?: CustomField[];
 }
 
+function getDisplayName(lead: { firstName?: string | null; lastName?: string | null }) {
+  const first = (lead.firstName || '').trim();
+  const last = (lead.lastName || '').trim();
+  if (first && last && first.toLowerCase() === last.toLowerCase()) return first;
+  if (first && last && first.toLowerCase().includes(last.toLowerCase())) return first;
+  if (first && last && last.toLowerCase().includes(first.toLowerCase())) return last;
+  return [first, last].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(lead: { firstName?: string | null; lastName?: string | null }) {
+  const name = getDisplayName(lead);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 export function KanbanView({ leads, onStatusChange, customFields = [] }: KanbanViewProps) {
   const [draggedLead, setDraggedLead] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -124,10 +140,10 @@ export function KanbanView({ leads, onStatusChange, customFields = [] }: KanbanV
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[10px] font-medium text-white">
-                          {lead.firstName[0]}{lead.lastName[0]}
+                          {getDisplayInitials(lead)}
                         </div>
                         <div>
-                          <p className="text-sm font-medium text-gray-900 leading-tight">{lead.firstName} {lead.lastName}</p>
+                          <p className="text-sm font-medium text-gray-900 leading-tight">{getDisplayName(lead)}</p>
                           {lead.company && <p className="text-[11px] text-gray-500">{lead.company}</p>}
                         </div>
                       </div>
