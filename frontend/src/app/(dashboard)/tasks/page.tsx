@@ -1470,6 +1470,7 @@ export default function TasksPage() {
 // ═══════════════════════════════════════════════════════════════════
 function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const addToast = useNotificationStore((s) => s.addToast);
+  const { user: currentUser } = useAuthStore();
   const [form, setForm] = useState({
     title: '',
     type: 'FOLLOW_UP_CALL',
@@ -1477,37 +1478,113 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
     dueAt: '',
     assigneeId: '',
     description: '',
+    isRecurring: false,
+    recurRule: '',
   });
   const [reminderDate, setReminderDate] = useState('');
   const [reminderTime, setReminderTime] = useState('');
   const [users, setUsers] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveAndCreateAnother, setSaveAndCreateAnother] = useState(false);
 
   useEffect(() => {
     api.getUsers().then(setUsers).catch(() => {});
   }, []);
 
+  const dueAtDate = useMemo(() => {
+    if (!form.dueAt) return null;
+    const parsed = new Date(form.dueAt);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, [form.dueAt]);
+
+  const reminderIso = useMemo(
+    () => combineDateAndTimeToISO(reminderDate, reminderTime),
+    [reminderDate, reminderTime]
+  );
+
+  const applyDuePreset = (minutesFromNow: number) => {
+    const dt = new Date(Date.now() + minutesFromNow * 60_000);
+    setForm((prev) => ({ ...prev, dueAt: toDateTimeLocalValue(dt.toISOString()) }));
+  };
+
+  const applyReminderBeforeDue = (minutesBeforeDue: number) => {
+    if (!dueAtDate) {
+      addToast({
+        type: 'info',
+        title: 'Set due date first',
+        message: 'Please set due date/time before applying reminder presets.',
+      });
+      return;
+    }
+    const reminderDt = new Date(dueAtDate.getTime() - minutesBeforeDue * 60_000);
+    setReminderDate(toDateTimeLocalValue(reminderDt.toISOString()).split('T')[0] || '');
+    setReminderTime(toDateTimeLocalValue(reminderDt.toISOString()).split('T')[1] || '');
+  };
+
+  const selectedAssignee = users.find((u: any) => u.id === form.assigneeId);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      const reminder = combineDateAndTimeToISO(reminderDate, reminderTime);
+      if (!form.title.trim() || form.title.trim().length < 3) {
+        addToast({ type: 'error', title: 'Invalid title', message: 'Please enter at least 3 characters.' });
+        return;
+      }
+      if (!form.assigneeId) {
+        addToast({ type: 'error', title: 'Assignee required', message: 'Please assign this task to a team member.' });
+        return;
+      }
+      if (!dueAtDate) {
+        addToast({ type: 'error', title: 'Due date required', message: 'Please set a valid due date and time.' });
+        return;
+      }
+      if (dueAtDate < new Date()) {
+        addToast({ type: 'error', title: 'Invalid due date', message: 'Due date cannot be in the past.' });
+        return;
+      }
+      if (form.isRecurring && !form.recurRule) {
+        addToast({ type: 'error', title: 'Recurrence missing', message: 'Select a recurrence pattern or turn off recurrence.' });
+        return;
+      }
+      const reminder = reminderIso;
       if ((reminderDate || reminderTime) && !reminder) {
         addToast({ type: 'error', title: 'Invalid reminder', message: 'Please provide both reminder date and time.' });
         return;
       }
-      if (reminder && new Date(reminder) > new Date(form.dueAt)) {
+      if (reminder && new Date(reminder) > dueAtDate) {
         addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be after the task due date.' });
         return;
       }
+      if (reminder && new Date(reminder) < new Date()) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be in the past.' });
+        return;
+      }
+
       await api.createTask({
         ...form,
-        dueAt: new Date(form.dueAt).toISOString(),
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        dueAt: dueAtDate.toISOString(),
         reminder,
+        recurRule: form.isRecurring ? form.recurRule : null,
       });
-      addToast({ type: 'success', title: 'Task Created', message: 'New task has been created successfully' });
-      onClose();
+      addToast({ type: 'success', title: 'Task Created', message: 'New task has been created successfully.' });
       onCreated();
+      if (saveAndCreateAnother) {
+        setForm((prev) => ({
+          ...prev,
+          title: '',
+          dueAt: '',
+          description: '',
+          isRecurring: false,
+          recurRule: '',
+        }));
+        setReminderDate('');
+        setReminderTime('');
+      } else {
+        onClose();
+      }
     } catch (err: any) {
       addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to create task' });
     } finally {
@@ -1518,14 +1595,52 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
   return (
     <div className="modal">
       <div className="overlay" onClick={onClose} />
-      <div className="modal-panel w-full max-w-md relative z-50">
+      <div className="modal-panel w-full max-w-2xl relative z-50">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
-          <h2 className="text-lg font-semibold text-text-primary">New Task</h2>
+          <div>
+            <h2 className="text-xl font-semibold text-text-primary">Create Smart Task</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Capture details once. Schedule right. Never miss a follow-up.</p>
+          </div>
           <button onClick={onClose} className="btn-icon">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
+          <div>
+            <label className="label">Quick Start</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle text-xs font-medium hover:bg-surface-secondary"
+                onClick={() => setForm((prev) => ({ ...prev, type: 'FOLLOW_UP_CALL', priority: 'MEDIUM', title: prev.title || 'Follow-up call' }))}
+              >
+                Follow-up
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle text-xs font-medium hover:bg-surface-secondary"
+                onClick={() => setForm((prev) => ({ ...prev, type: 'MEETING', priority: 'HIGH', title: prev.title || 'Client meeting' }))}
+              >
+                Meeting
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle text-xs font-medium hover:bg-surface-secondary"
+                onClick={() => setForm((prev) => ({ ...prev, type: 'PROPOSAL', priority: 'HIGH', title: prev.title || 'Send proposal' }))}
+              >
+                Proposal
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50"
+                onClick={() => setForm((prev) => ({ ...prev, priority: 'URGENT', title: prev.title || 'Urgent follow-up' }))}
+              >
+                Urgent
+              </button>
+            </div>
+          </div>
+
           <div>
             <label className="label">Title *</label>
             <input
@@ -1535,7 +1650,12 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="Follow up with client"
             />
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-[11px] text-text-tertiary">Use action-focused titles (e.g., &quot;Call client for final quote&quot;).</p>
+              <p className="text-[11px] text-text-tertiary">{form.title.length}/120</p>
+            </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Type</label>
@@ -1566,6 +1686,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               </select>
             </div>
           </div>
+
           <div>
             <label className="label">Due Date & Time *</label>
             <input
@@ -1575,7 +1696,14 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               value={form.dueAt}
               onChange={(e) => setForm({ ...form, dueAt: e.target.value })}
             />
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(60)}>In 1 hour</button>
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(180)}>In 3 hours</button>
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(24 * 60)}>Tomorrow</button>
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(2 * 24 * 60)}>In 2 days</button>
+            </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Reminder Date</label>
@@ -1596,6 +1724,23 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               />
             </div>
           </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyReminderBeforeDue(15)}>15 min before</button>
+            <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyReminderBeforeDue(60)}>1 hour before</button>
+            <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyReminderBeforeDue(24 * 60)}>1 day before</button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-surface-secondary"
+              onClick={() => {
+                setReminderDate('');
+                setReminderTime('');
+              }}
+            >
+              Clear reminder
+            </button>
+          </div>
+
           <div>
             <label className="label">Assign To *</label>
             <select
@@ -1611,18 +1756,71 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
                 </option>
               ))}
             </select>
+            {currentUser && (
+              <button
+                type="button"
+                onClick={() => setForm((prev) => ({ ...prev, assigneeId: currentUser.id }))}
+                className="mt-2 text-xs text-brand-600 hover:text-brand-700 font-medium"
+              >
+                Assign to me
+              </button>
+            )}
           </div>
+
+          <div className="rounded-lg border border-border-subtle p-3 space-y-2">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-text-primary">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                checked={form.isRecurring}
+                onChange={(e) => setForm((prev) => ({ ...prev, isRecurring: e.target.checked, recurRule: e.target.checked ? prev.recurRule || 'weekly' : '' }))}
+              />
+              Recurring task
+            </label>
+            {form.isRecurring && (
+              <select
+                className="input"
+                value={form.recurRule}
+                onChange={(e) => setForm((prev) => ({ ...prev, recurRule: e.target.value }))}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            )}
+          </div>
+
           <div>
             <label className="label">Description</label>
             <textarea
               className="input"
-              rows={2}
+              rows={3}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="Optional notes..."
             />
           </div>
-          <div className="flex justify-end gap-2 pt-2">
+
+          <div className="rounded-lg bg-surface-secondary/60 border border-border-subtle px-3 py-2 text-xs text-text-secondary space-y-1">
+            <p className="font-medium text-text-primary">Live summary</p>
+            <p>Type: {TYPE_LABELS[form.type] || form.type.replace(/_/g, ' ')} • Priority: {priorityConfig[form.priority]?.label || form.priority}</p>
+            <p>Due: {dueAtDate ? formatDateTime(dueAtDate.toISOString()) : 'Not set'}</p>
+            <p>Reminder: {reminderIso ? formatDateTime(reminderIso) : 'No reminder'}</p>
+            <p>Assignee: {selectedAssignee ? getDisplayName(selectedAssignee.firstName, selectedAssignee.lastName) : 'Not selected'}</p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
+            <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                checked={saveAndCreateAnother}
+                onChange={(e) => setSaveAndCreateAnother(e.target.checked)}
+              />
+              Save and create another
+            </label>
+            <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="btn-secondary">
               Cancel
             </button>
@@ -1635,6 +1833,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
                 'Create Task'
               )}
             </button>
+            </div>
           </div>
         </form>
       </div>
