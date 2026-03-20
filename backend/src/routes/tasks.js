@@ -6,6 +6,7 @@ const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { checkTaskReminders } = require('../services/taskReminderScheduler');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -183,6 +184,11 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
     }
 
     broadcastDataChange(req.user.organizationId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
+
+    // Trigger immediate reminder check so notifications fire without waiting for next poll cycle
+    if (data.reminder || data.dueAt) {
+      checkTaskReminders().catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
@@ -212,6 +218,11 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
     res.json(task);
 
     broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+
+    // Trigger immediate reminder check when due date or reminder is changed
+    if (data.reminder || data.dueAt) {
+      checkTaskReminders().catch(() => {});
+    }
   } catch (err) {
     next(err);
   }

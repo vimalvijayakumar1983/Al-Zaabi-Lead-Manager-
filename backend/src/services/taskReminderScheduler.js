@@ -6,7 +6,7 @@
  *
  * ── How It Works ────────────────────────────────────────────────────
  *
- *  1. Runs every 2 minutes
+ *  1. Runs every 30 seconds
  *  2. Finds tasks that are due within the next 30 minutes (TASK_DUE_SOON)
  *  3. Finds tasks that are past their due date (TASK_OVERDUE)
  *  4. Sends notifications only once per task per type (tracked via metadata)
@@ -19,8 +19,8 @@ const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 const { createNotification, NOTIFICATION_TYPES } = require('./notificationService');
 
-// Check every 2 minutes
-const TASK_CHECK_INTERVAL = 2 * 60 * 1000;
+// Check every 30 seconds for near-instant reminder delivery
+const TASK_CHECK_INTERVAL = 30 * 1000;
 
 // Due-soon threshold: notify when task is due within 30 minutes
 const DUE_SOON_MINUTES = 30;
@@ -92,7 +92,7 @@ async function checkTaskReminders() {
       where: {
         status: { in: ['PENDING', 'IN_PROGRESS'] },
         reminder: {
-          gt: new Date(now.getTime() - 2 * 60 * 1000), // within last 2 min (to catch on this poll cycle)
+          gt: new Date(now.getTime() - 60 * 1000), // within last 60s (to catch on this poll cycle)
           lte: now,
         },
       },
