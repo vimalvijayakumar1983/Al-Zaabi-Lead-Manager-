@@ -934,7 +934,8 @@ export default function LeadDetailPage() {
           )}
         </div>
       ) : null}
-      </div>{/* ← end sticky top zone */}
+      </div>
+      {/* ← end sticky top zone */}
 
       {/* ═══ SCROLLABLE CONTENT ZONE ═══ */}
       <div className="mt-6 space-y-6">
@@ -1785,7 +1786,8 @@ export default function LeadDetailPage() {
           </div>
         </div>
       </div>
-      </div>{/* ← end scrollable content zone */}
+      </div>
+      {/* ← end scrollable content zone */}
 
       {/* ═══ STICKY BOTTOM ZONE — Preview Strip stays frozen ═══ */}
       {/* ═══ Mini Lead Preview Strip — Coming Up Next ═══ */}
@@ -1846,7 +1848,7 @@ export default function LeadDetailPage() {
             ))}
           </div>
         </div>
-        </div>{/* ← end sticky bottom inner card wrapper */}
+        </div>
       )}
 
       {showTaskModal && <CreateTaskModal onClose={() => setShowTaskModal(false)} onSubmit={handleCreateTask} />}
