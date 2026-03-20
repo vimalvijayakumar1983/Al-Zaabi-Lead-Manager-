@@ -394,7 +394,37 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       slaInfo: getLeadSLAInfo(lead, orgSettings),
     }));
 
-    res.json(paginatedResponse(enrichedLeads, total, page, limit));
+    // Terminal normalization for immediate UI consistency:
+    // WON => 100 / 1.00, LOST => 0 / 0.00
+    const wonNeedsCorrection = [];
+    const lostNeedsCorrection = [];
+    const normalizedLeads = enrichedLeads.map((lead) => {
+      if (lead.status === 'WON') {
+        if (lead.score !== 100 || lead.conversionProb !== 1) wonNeedsCorrection.push(lead.id);
+        return { ...lead, score: 100, conversionProb: 1 };
+      }
+      if (lead.status === 'LOST') {
+        if ((lead.score || 0) !== 0 || (lead.conversionProb || 0) !== 0) lostNeedsCorrection.push(lead.id);
+        return { ...lead, score: 0, conversionProb: 0 };
+      }
+      return lead;
+    });
+
+    res.json(paginatedResponse(normalizedLeads, total, page, limit));
+
+    // Background self-heal for legacy rows with stale terminal scores.
+    if (wonNeedsCorrection.length > 0) {
+      prisma.lead.updateMany({
+        where: { id: { in: wonNeedsCorrection }, organizationId: { in: req.orgIds }, status: 'WON' },
+        data: { score: 100, conversionProb: 1 },
+      }).catch(() => {});
+    }
+    if (lostNeedsCorrection.length > 0) {
+      prisma.lead.updateMany({
+        where: { id: { in: lostNeedsCorrection }, organizationId: { in: req.orgIds }, status: 'LOST' },
+        data: { score: 0, conversionProb: 0 },
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
