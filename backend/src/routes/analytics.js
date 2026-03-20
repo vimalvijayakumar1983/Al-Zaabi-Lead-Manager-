@@ -189,15 +189,16 @@ router.get('/funnel', async (req, res, next) => {
       },
     });
 
-    // Aggregate stages by name + order across orgs (Super Admin sees multiple orgs)
+    // Aggregate stages by name across orgs (Super Admin sees multiple divisions)
     const aggregated = new Map();
     for (const s of stages) {
-      const key = `${s.order}-${s.name}`;
+      const key = s.name;
       if (aggregated.has(key)) {
         const existing = aggregated.get(key);
         existing.count += s._count.leads;
         existing.value += s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0);
         existing.stageIds.push(s.id);
+        if (s.order < existing.order) { existing.order = s.order; existing.color = s.color; }
       } else {
         aggregated.set(key, {
           name: s.name,
@@ -621,14 +622,15 @@ router.get('/dashboard-full', async (req, res, next) => {
     }
     const trends = Object.values(trendMap).sort((a, b) => a.date.localeCompare(b.date));
 
-    // ── Process funnel ──
+    // ── Process funnel (aggregate by name to avoid duplicates across divisions) ──
     const funnelMap = new Map();
     for (const s of stages) {
-      const key = `${s.order}-${s.name}`;
+      const key = s.name;
       if (funnelMap.has(key)) {
         const existing = funnelMap.get(key);
         existing.count += s._count.leads;
         existing.value += s.leads.reduce((sum, l) => sum + Number(l.budget || 0), 0);
+        if (s.order < existing.order) { existing.order = s.order; existing.color = s.color; }
       } else {
         funnelMap.set(key, {
           name: s.name, color: s.color, order: s.order,
