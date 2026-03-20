@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { prisma } = require('../config/database');
-const { auth } = require('../middleware/auth');
+const { authenticate, orgScope } = require('../middleware/auth');
 
 // ─── GET /api/saved-views — List views visible to current user ──────────
-router.get('/', auth, async (req, res) => {
+router.get('/', authenticate, orgScope, async (req, res) => {
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
@@ -44,7 +44,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // ─── POST /api/saved-views — Create a new view ─────────────────────────
-router.post('/', auth, async (req, res) => {
+router.post('/', authenticate, orgScope, async (req, res) => {
   try {
     const userId = req.user.id;
     const organizationId = req.user.organizationId;
@@ -87,7 +87,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // ─── PUT /api/saved-views/:id — Update a view ──────────────────────────
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', authenticate, orgScope, async (req, res) => {
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
@@ -137,7 +137,7 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // ─── DELETE /api/saved-views/:id — Delete a view ────────────────────────
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', authenticate, orgScope, async (req, res) => {
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
@@ -163,7 +163,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // ─── POST /api/saved-views/migrate — Bulk migrate localStorage views ────
-router.post('/migrate', auth, async (req, res) => {
+router.post('/migrate', authenticate, orgScope, async (req, res) => {
   try {
     const userId = req.user.id;
     const organizationId = req.user.organizationId;
