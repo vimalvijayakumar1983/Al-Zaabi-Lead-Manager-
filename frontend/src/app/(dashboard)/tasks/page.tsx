@@ -1011,83 +1011,19 @@ export default function TasksPage() {
 
       {/* ═══ Bulk Actions ═════════════════════════════════════════════ */}
       {filteredTasks.length > 0 && (
-        <div className="card px-4 py-3 flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <label className="inline-flex items-center gap-2 text-sm text-text-secondary">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
-                checked={allVisibleSelected}
-                onChange={toggleSelectAllVisible}
-              />
-              Select all in view
-            </label>
-            <span className="text-xs text-text-tertiary">
-              {selectedTaskIds.length > 0 ? `${selectedTaskIds.length} selected` : 'No tasks selected'}
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => handleBulkAction({ status: 'COMPLETED' }, 'Selected tasks marked as completed')}
-              disabled={!selectedTaskIds.length || bulkBusy}
-              className="btn-secondary text-sm disabled:opacity-50"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Complete
-            </button>
-            <button
-              onClick={() => handleBulkAction({ status: 'IN_PROGRESS' }, 'Selected tasks moved to in progress')}
-              disabled={!selectedTaskIds.length || bulkBusy}
-              className="btn-secondary text-sm disabled:opacity-50"
-            >
-              In Progress
-            </button>
-            <select
-              className="input py-1.5 text-sm min-w-[140px]"
-              disabled={!selectedTaskIds.length || bulkBusy}
-              defaultValue=""
-              onChange={(e) => {
-                if (!e.target.value) return;
-                handleBulkAction({ priority: e.target.value }, `Priority changed to ${priorityConfig[e.target.value]?.label || e.target.value}`);
-                e.currentTarget.value = '';
-              }}
-            >
-              <option value="">Set Priority</option>
-              {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
-                <option key={p} value={p}>{priorityConfig[p]?.label || p}</option>
-              ))}
-            </select>
-            <select
-              className="input py-1.5 text-sm min-w-[180px]"
-              disabled={!selectedTaskIds.length || bulkBusy}
-              defaultValue=""
-              onChange={(e) => {
-                if (!e.target.value) return;
-                handleBulkAction({ assigneeId: e.target.value }, 'Selected tasks reassigned');
-                e.currentTarget.value = '';
-              }}
-            >
-              <option value="">Reassign To</option>
-              {teamMembers.map((u: any) => (
-                <option key={u.id} value={u.id}>
-                  {getDisplayName(u.firstName, u.lastName)}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => {
-                if (window.confirm(`Delete ${selectedTaskIds.length} selected tasks? This cannot be undone.`)) {
-                  handleBulkAction({ delete: true }, `${selectedTaskIds.length} tasks deleted`);
-                }
-              }}
-              disabled={!selectedTaskIds.length || bulkBusy}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete
-            </button>
-          </div>
+        <div className="rounded-lg border border-border-subtle bg-white/75 backdrop-blur px-3 py-2 flex items-center justify-between gap-3">
+          <label className="inline-flex items-center gap-2 text-xs sm:text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAllVisible}
+            />
+            Select all in view
+          </label>
+          <span className="text-[11px] sm:text-xs text-text-tertiary">
+            {selectedTaskIds.length > 0 ? `${selectedTaskIds.length} selected` : 'Select tasks to enable bulk actions'}
+          </span>
         </div>
       )}
 
@@ -1423,6 +1359,92 @@ export default function TasksPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ═══ Compact Floating Bulk Toolbar ═════════════════════════════ */}
+      {selectedTaskIds.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-5xl">
+          <div className="rounded-2xl border border-border-subtle bg-white/95 backdrop-blur-xl shadow-xl">
+            <div className="px-2.5 py-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-brand-50 text-brand-700 text-xs font-semibold">
+                {selectedTaskIds.length} selected
+              </span>
+              <button
+                onClick={() => setSelectedTaskIds([])}
+                className="h-8 px-2 rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary text-xs inline-flex items-center gap-1"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </button>
+              <div className="h-6 w-px bg-border-subtle hidden sm:block" />
+              <button
+                onClick={() => handleBulkAction({ status: 'COMPLETED' }, 'Selected tasks marked as completed')}
+                disabled={bulkBusy}
+                className="h-8 px-2.5 rounded-lg border border-border-subtle text-xs font-medium text-text-primary hover:bg-surface-secondary disabled:opacity-50 inline-flex items-center gap-1"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Complete
+              </button>
+              <button
+                onClick={() => handleBulkAction({ status: 'IN_PROGRESS' }, 'Selected tasks moved to in progress')}
+                disabled={bulkBusy}
+                className="h-8 px-2.5 rounded-lg border border-border-subtle text-xs font-medium text-text-primary hover:bg-surface-secondary disabled:opacity-50"
+              >
+                In Progress
+              </button>
+              <select
+                className="h-8 rounded-lg border border-border-subtle px-2 text-xs bg-white min-w-[110px]"
+                disabled={bulkBusy}
+                defaultValue=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  handleBulkAction({ priority: e.target.value }, `Priority changed to ${priorityConfig[e.target.value]?.label || e.target.value}`);
+                  e.currentTarget.value = '';
+                }}
+              >
+                <option value="">Priority</option>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
+                  <option key={p} value={p}>{priorityConfig[p]?.label || p}</option>
+                ))}
+              </select>
+              <select
+                className="h-8 rounded-lg border border-border-subtle px-2 text-xs bg-white min-w-[150px]"
+                disabled={bulkBusy}
+                defaultValue=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  handleBulkAction({ assigneeId: e.target.value }, 'Selected tasks reassigned');
+                  e.currentTarget.value = '';
+                }}
+              >
+                <option value="">Reassign</option>
+                {teamMembers.map((u: any) => (
+                  <option key={u.id} value={u.id}>
+                    {getDisplayName(u.firstName, u.lastName)}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (window.confirm(`Delete ${selectedTaskIds.length} selected tasks? This cannot be undone.`)) {
+                    handleBulkAction({ delete: true }, `${selectedTaskIds.length} tasks deleted`);
+                  }
+                }}
+                disabled={bulkBusy}
+                className="ml-auto h-8 px-2.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium inline-flex items-center gap-1 disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete
+              </button>
+              {bulkBusy && (
+                <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Applying...
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
