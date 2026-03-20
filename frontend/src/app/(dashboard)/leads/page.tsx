@@ -1111,6 +1111,9 @@ function LeadsContent() {
         </div>
       )}
 
+      {/* ─── Workload Dashboard (below stats) ─────────────────────── */}
+      <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+
       {/* DNC Warning Banner */}
       {filters.showBlocked === 'true' && (
         <div className="flex items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200">
@@ -1476,8 +1479,7 @@ function LeadsContent() {
         </div>
       </div>
 
-      {/* ─── Workload Dashboard ─────────────────────────────────── */}
-      <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+      {/* WorkloadDashboard moved to below stats cards */}
 
       {/* ─── Modals ──────────────────────────────────────────────── */}
       {showBulkReassign && (
