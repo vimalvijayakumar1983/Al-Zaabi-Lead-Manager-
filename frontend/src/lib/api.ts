@@ -258,6 +258,22 @@ class ApiClient {
     return this.request<any>(`/tasks/${id}/complete`, { method: 'POST' });
   }
 
+  async updateTask(id: string, data: any) {
+    return this.request<any>(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteTask(id: string) {
+    return this.request<any>(`/tasks/${id}`, { method: 'DELETE' });
+  }
+
+  async bulkUpdateTasks(taskIds: string[], data: any) {
+    return this.request<any>('/tasks/bulk', { method: 'PATCH', body: JSON.stringify({ taskIds, ...data }) });
+  }
+
+  async getTaskStats() {
+    return this.request<any>('/tasks/stats');
+  }
+
   // Analytics
   async getDashboard(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';

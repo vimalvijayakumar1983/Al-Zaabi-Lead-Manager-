@@ -9,13 +9,13 @@ import {
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
   FileText, Trash2, LogOut, Columns3, Plus, GripVertical,
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
-  AtSign, Palette, ChevronDown, Image, Save, Sparkles,
+  AtSign, Palette, ChevronDown, ChevronUp, Image, Save, Sparkles,
   Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
-  Download, RefreshCw, Inbox, Server,
+  Download, RefreshCw, Inbox, Server, GitBranch,
   Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
@@ -23,6 +23,7 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
   { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
+  { key: 'pipelineStages', label: 'Pipeline Stages', icon: GitBranch, adminOnly: true },
   { key: 'callDispositions', label: 'Call Dispositions', icon: Phone, adminOnly: true },
   { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
   { key: 'emailTemplates', label: 'Email Templates', icon: LayoutTemplate, adminOnly: true },
@@ -92,6 +93,7 @@ export default function SettingsPage() {
             <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
           )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
+          {activeTab === 'pipelineStages' && isAdmin && <PipelineStagesSection />}
           {activeTab === 'callDispositions' && isAdmin && <CallDispositionsSection />}
           {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
           {activeTab === 'emailTemplates' && isAdmin && <EmailTemplatesSection />}
@@ -1160,6 +1162,228 @@ function DangerZoneSection() {
           </form>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ─── Pipeline Stages Section ───────────────────────────────────── */
+
+const STAGE_COLORS = [
+  '#f97316', '#3b82f6', '#8b5cf6', '#f59e0b', '#06b6d4',
+  '#22c55e', '#10b981', '#ef4444', '#ec4899', '#6366f1',
+];
+
+function PipelineStagesSection() {
+  const [stages, setStages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newStageName, setNewStageName] = useState('');
+  const [newStageColor, setNewStageColor] = useState(STAGE_COLORS[0]);
+  const [saving, setSaving] = useState(false);
+
+  const fetchStages = async () => {
+    try {
+      const data = await api.getPipelineStages();
+      const sorted = (Array.isArray(data) ? data : (data as any).stages || []).sort(
+        (a: any, b: any) => a.order - b.order
+      );
+      setStages(sorted);
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchStages(); }, []);
+
+  const handleMoveUp = async (idx: number) => {
+    if (idx === 0) return;
+    const items = [...stages];
+    [items[idx - 1], items[idx]] = [items[idx], items[idx - 1]];
+    setStages(items);
+    try {
+      await api.reorderPipelineStages(items.map((s: any) => s.id));
+    } catch {
+      fetchStages();
+    }
+  };
+
+  const handleMoveDown = async (idx: number) => {
+    if (idx === stages.length - 1) return;
+    const items = [...stages];
+    [items[idx], items[idx + 1]] = [items[idx + 1], items[idx]];
+    setStages(items);
+    try {
+      await api.reorderPipelineStages(items.map((s: any) => s.id));
+    } catch {
+      fetchStages();
+    }
+  };
+
+  const handleRename = async (id: string) => {
+    if (!editName.trim()) return;
+    try {
+      await api.updatePipelineStage(id, { name: editName.trim() });
+      setEditingId(null);
+      fetchStages();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleAddStage = async () => {
+    if (!newStageName.trim()) return;
+    setSaving(true);
+    try {
+      await api.createPipelineStage({ name: newStageName.trim(), color: newStageColor });
+      setShowAddModal(false);
+      setNewStageName('');
+      setNewStageColor(STAGE_COLORS[0]);
+      fetchStages();
+    } catch (err: any) {
+      alert(err.message);
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <SectionHeader title="Pipeline Stages" description="Manage pipeline stages for this division. Drag to reorder, click to rename." />
+        <button onClick={() => setShowAddModal(true)} className="btn-primary gap-1.5 text-sm">
+          <Plus className="h-4 w-4" />
+          Add Stage
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="card p-8 text-center">
+          <div className="animate-spin h-6 w-6 border-2 border-brand-600 border-t-transparent rounded-full mx-auto" />
+        </div>
+      ) : stages.length === 0 ? (
+        <div className="card p-8 text-center">
+          <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+            <GitBranch className="h-6 w-6 text-gray-400" />
+          </div>
+          <p className="text-sm font-medium text-gray-900 mb-1">No pipeline stages yet</p>
+          <p className="text-xs text-gray-500 mb-4">Create pipeline stages to track your leads through different phases.</p>
+          <button onClick={() => setShowAddModal(true)} className="btn-primary text-sm gap-1.5">
+            <Plus className="h-4 w-4" />
+            Create First Stage
+          </button>
+        </div>
+      ) : (
+        <div className="card overflow-hidden divide-y divide-gray-100">
+          {stages.map((stage: any, idx: number) => (
+            <div key={stage.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
+              {/* Up/Down arrows */}
+              <div className="flex flex-col gap-0.5">
+                <button
+                  onClick={() => handleMoveUp(idx)}
+                  disabled={idx === 0}
+                  className={`p-0.5 rounded transition-colors ${idx === 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => handleMoveDown(idx)}
+                  disabled={idx === stages.length - 1}
+                  className={`p-0.5 rounded transition-colors ${idx === stages.length - 1 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              {/* Order number */}
+              <span className="text-xs font-medium text-gray-400 w-5 text-center">{idx + 1}</span>
+
+              {/* Color dot */}
+              <div className="h-5 w-5 rounded-full flex-shrink-0" style={{ backgroundColor: stage.color || '#6366f1' }} />
+
+              {/* Name (editable) */}
+              <div className="flex-1 min-w-0">
+                {editingId === stage.id ? (
+                  <form
+                    onSubmit={(e) => { e.preventDefault(); handleRename(stage.id); }}
+                    className="flex items-center gap-2"
+                  >
+                    <input
+                      className="input text-sm py-1"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      autoFocus
+                      onBlur={() => handleRename(stage.id)}
+                    />
+                  </form>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-900">{stage.name}</span>
+                    <button
+                      onClick={() => { setEditingId(stage.id); setEditName(stage.name); }}
+                      className="p-1 rounded hover:bg-gray-100 text-gray-300 hover:text-gray-500 transition-colors"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+                <span className="text-xs text-gray-400">{stage._count?.leads ?? 0} lead{(stage._count?.leads ?? 0) !== 1 ? 's' : ''}</span>
+              </div>
+
+              {/* Won/Lost badge */}
+              {stage.isWonStage && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium border border-green-200">Won Stage</span>
+              )}
+              {stage.isLostStage && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium border border-red-200">Lost Stage</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add Stage Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowAddModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Pipeline Stage</h3>
+              <button onClick={() => setShowAddModal(false)} className="p-1 rounded-lg hover:bg-gray-100"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="label">Stage Name</label>
+                <input
+                  className="input text-sm"
+                  placeholder="e.g., Qualification"
+                  value={newStageName}
+                  onChange={(e) => setNewStageName(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label">Color</label>
+                <div className="flex gap-2 flex-wrap">
+                  {STAGE_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setNewStageColor(c)}
+                      className={`h-7 w-7 rounded-full border-2 transition-all ${newStageColor === c ? 'border-gray-900 scale-110' : 'border-transparent'}`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setShowAddModal(false)} className="btn-secondary text-sm">Cancel</button>
+                <button onClick={handleAddStage} disabled={saving || !newStageName.trim()} className="btn-primary text-sm">
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  Add Stage
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

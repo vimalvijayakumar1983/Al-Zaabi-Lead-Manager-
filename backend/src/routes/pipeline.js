@@ -247,11 +247,33 @@ router.post('/stages/reorder', authorize('ADMIN', 'MANAGER'), validate(z.object(
   try {
     const { stageIds } = req.validated;
 
-    await prisma.$transaction(
-      stageIds.map((id, index) =>
-        prisma.pipelineStage.update({ where: { id }, data: { order: index } })
-      )
-    );
+    // Verify all stages belong to the user's orgs
+    const stages = await prisma.pipelineStage.findMany({
+      where: { id: { in: stageIds }, organizationId: { in: req.orgIds } },
+    });
+    if (stages.length !== stageIds.length) {
+      return res.status(400).json({ error: 'Invalid stage IDs' });
+    }
+
+    // Two-phase reorder to avoid unique constraint violation on [organizationId, order].
+    // Phase 1: set all orders to negative temporary values (offset by -1000 - index)
+    // Phase 2: set all orders to the desired final values
+    await prisma.$transaction(async (tx) => {
+      // Phase 1: move to temporary negative orders
+      for (let i = 0; i < stageIds.length; i++) {
+        await tx.pipelineStage.update({
+          where: { id: stageIds[i] },
+          data: { order: -(1000 + i) },
+        });
+      }
+      // Phase 2: set final orders
+      for (let i = 0; i < stageIds.length; i++) {
+        await tx.pipelineStage.update({
+          where: { id: stageIds[i] },
+          data: { order: i },
+        });
+      }
+    });
 
     res.json({ message: 'Stages reordered' });
   } catch (err) {
