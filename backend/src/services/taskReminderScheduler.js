@@ -88,6 +88,50 @@ async function checkTaskReminders() {
       }
     }
 
+    // ── Find tasks with a custom REMINDER time that has arrived ──
+    const reminderTasks = await prisma.task.findMany({
+      where: {
+        status: { in: ['PENDING', 'IN_PROGRESS'] },
+        reminder: {
+          gt: new Date(now.getTime() - 2 * 60 * 1000), // within last 2 min (to catch on this poll cycle)
+          lte: now,
+        },
+        NOT: { assigneeId: null },
+      },
+      include: {
+        assignee: { select: { id: true, firstName: true, lastName: true, organizationId: true } },
+        lead: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    for (const task of reminderTasks) {
+      const key = `${task.id}:REMINDER`;
+      if (notifiedTasks.has(key)) continue;
+
+      try {
+        const leadName = task.lead
+          ? `${(task.lead.firstName || '').trim()} ${(task.lead.lastName || '').trim()}`.trim() || 'Unknown'
+          : '';
+        const leadContext = leadName ? ` for ${leadName}` : '';
+
+        await createNotification({
+          type: NOTIFICATION_TYPES.TASK_REMINDER,
+          title: 'Task Reminder',
+          message: `Reminder: "${task.title}"${leadContext}`,
+          userId: task.assigneeId,
+          entityType: 'task',
+          entityId: task.id,
+          metadata: { taskTitle: task.title },
+          organizationId: task.assignee.organizationId,
+        });
+
+        notifiedTasks.set(key, now.getTime());
+        logger.info(`[TaskReminder] Reminder notification sent for task ${task.id} to user ${task.assigneeId}`);
+      } catch (err) {
+        logger.error(`[TaskReminder] Error sending reminder for task ${task.id}:`, err.message);
+      }
+    }
+
     // ── Find OVERDUE tasks (past due date, still open, not yet notified) ──
     const overdueTasks = await prisma.task.findMany({
       where: {
