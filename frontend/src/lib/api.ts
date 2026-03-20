@@ -314,8 +314,9 @@ class ApiClient {
   }
 
   // Users
-  async getUsers() {
-    return this.request<any[]>('/users');
+  async getUsers(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/users${q}`);
   }
 
   async inviteUser(data: any) {

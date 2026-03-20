@@ -211,7 +211,7 @@ function SourceRuleRow({
   const activeUsers = users.filter((u) => u.isActive);
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {/* Source select */}
       <select
         value={rule.source}
@@ -318,6 +318,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
   const [divisions, setDivisions] = useState<Organization[]>([]);
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [inherited, setInherited] = useState(false);
+  const [divisionUsers, setDivisionUsers] = useState<User[] | null>(null);
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
   // Load divisions for super admin
@@ -328,6 +329,19 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
       }).catch(() => {});
     }
   }, [isSuperAdmin, isOpen]);
+
+  // Load division-scoped users when a division is selected
+  useEffect(() => {
+    if (selectedDivisionId) {
+      api.getUsers(selectedDivisionId).then((data) => {
+        setDivisionUsers(data || []);
+      }).catch(() => setDivisionUsers([]));
+    } else {
+      setDivisionUsers(null);
+    }
+  }, [selectedDivisionId]);
+
+  const displayUsers = divisionUsers !== null ? divisionUsers : users;
 
   /* ---- state ---- */
   const [loading, setLoading] = useState(true);
@@ -447,9 +461,9 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
       />
 
       {/* Modal panel */}
-      <div className="relative z-10 my-8 w-full max-w-2xl animate-[slideUp_0.25s_ease-out] rounded-2xl bg-white shadow-2xl">
+      <div className="relative z-10 my-8 w-full max-w-2xl mx-4 sm:mx-auto animate-[slideUp_0.25s_ease-out] rounded-2xl bg-white shadow-2xl overflow-x-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-gray-200 px-4 sm:px-6 py-4">
           <div>
             <h2 className="text-lg font-bold text-gray-900">Allocation Settings</h2>
             <p className="text-xs text-gray-500 mt-0.5">Configure how leads are assigned to your team</p>
@@ -522,7 +536,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
         {loading ? (
           <LoadingSkeleton />
         ) : (
-          <div className="max-h-[calc(100vh-12rem)] overflow-y-auto">
+          <div className="max-h-[70vh] sm:max-h-[80vh] overflow-y-auto">
             <div className="space-y-6 p-6">
               {/* ──────── Section 1: Assignment Method ──────── */}
               <section>
@@ -587,7 +601,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
                   </p>
 
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 max-h-64 overflow-y-auto space-y-1">
-                    {users.filter((u) => u.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u.role)).map((u) => {
+                    {displayUsers.filter((u) => u.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u.role)).map((u) => {
                       const isChecked = eligibleUserIds.includes(u.id);
                       return (
                         <label key={u.id} className="flex items-center gap-3 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-white transition-colors">
@@ -597,7 +611,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
                             onChange={(e) => {
                               if (eligibleUserIds.length === 0) {
                                 // Switching from "all" to specific: select all except this one
-                                const allIds = users
+                                const allIds = displayUsers
                                   .filter((u2) => u2.isActive && ['SALES_REP', 'MANAGER', 'ADMIN'].includes(u2.role))
                                   .map((u2) => u2.id);
                                 setEligibleUserIds(allIds.filter((id) => id !== u.id));
@@ -659,7 +673,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
                     <SourceRuleRow
                       key={idx}
                       rule={rule}
-                      users={users}
+                      users={displayUsers}
                       usedSources={usedSources}
                       onUpdate={(updated) => updateSourceRule(idx, updated)}
                       onRemove={() => removeSourceRule(idx)}
@@ -769,7 +783,7 @@ export function AllocationSettings({ isOpen, onClose, users }: AllocationSetting
 
         {/* Footer */}
         {!loading && (
-          <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-4 sm:px-6 py-4">
             <button
               type="button"
               onClick={onClose}
