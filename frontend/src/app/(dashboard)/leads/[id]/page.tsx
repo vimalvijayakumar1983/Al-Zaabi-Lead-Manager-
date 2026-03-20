@@ -1759,65 +1759,34 @@ export default function LeadDetailPage() {
       </div>
       {/* ← end scrollable content zone */}
 
-      {/* ═══ FROZEN BOTTOM ZONE — Preview Strip stays pinned ═══ */}
-      {/* ═══ Mini Lead Preview Strip — Coming Up Next ═══ */}
+      {/* ═══ FROZEN BOTTOM — Compact single-line preview strip ═══ */}
       {navData && nextLeadPreviews.length > 0 && currentNavIndex >= 0 && (
-        <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 py-2 border-t border-gray-200/50 bg-white">
-        <div className="card p-3 bg-gradient-to-r from-gray-50/80 to-white border border-gray-200/60">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-              Coming Up Next
-            </p>
-            <span className="text-[10px] text-gray-400">Click to jump</span>
-          </div>
-          <div className="flex gap-3 overflow-x-auto pb-1">
+        <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 py-1.5 border-t border-gray-200 bg-gray-50/80">
+          <div className="flex items-center gap-2 text-xs overflow-x-auto">
+            <span className="text-gray-400 font-medium flex-shrink-0">Next →</span>
             {nextLeadPreviews.map((preview, i) => (
               <button
                 key={preview.id}
                 onClick={() => router.push(`/leads/${preview.id}`)}
-                className="flex-shrink-0 w-48 rounded-xl p-3 bg-white border border-gray-200 hover:border-brand-300 hover:shadow-md transition-all text-left group active:scale-[0.98]"
+                className="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-white hover:shadow-sm border border-transparent hover:border-gray-200 transition-all group"
               >
-                <div className="flex items-center gap-2 mb-1.5">
-                  <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">
-                    {preview.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() || '?'}
-                  </div>
-                  <span className="text-sm font-semibold text-gray-900 truncate group-hover:text-brand-600 transition-colors">
-                    {preview.name}
-                  </span>
+                <div className="h-5 w-5 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0">
+                  {preview.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() || '?'}
                 </div>
-                {preview.company && (
-                  <p className="text-xs text-gray-500 truncate mb-1.5">{preview.company}</p>
-                )}
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
-                    preview.status === 'NEW' ? 'bg-indigo-50 text-indigo-700' :
-                    preview.status === 'CONTACTED' ? 'bg-blue-50 text-blue-700' :
-                    preview.status === 'QUALIFIED' ? 'bg-cyan-50 text-cyan-700' :
-                    preview.status === 'WON' ? 'bg-green-50 text-green-700' :
-                    preview.status === 'LOST' ? 'bg-red-50 text-red-700' :
-                    'bg-gray-50 text-gray-600'
-                  }`}>
-                    {preview.status.replace(/_/g, ' ')}
-                  </span>
-                  <span className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
-                    preview.callCount === 0 ? 'bg-gray-100 text-gray-500' :
-                    preview.callCount <= 2 ? 'bg-blue-50 text-blue-600' :
-                    preview.callCount <= 5 ? 'bg-amber-50 text-amber-600' :
-                    'bg-red-50 text-red-600'
-                  }`}>
-                    📞 {preview.callCount}
-                  </span>
-                </div>
-                <div className="text-[10px] text-gray-400 mt-1.5 font-medium">
-                  +{i + 1} {i === 0 ? 'next' : i === 1 ? 'after' : 'later'}
-                </div>
+                <span className="font-medium text-gray-700 group-hover:text-brand-600 truncate max-w-[120px]">{preview.name}</span>
+                <span className={`text-[10px] font-medium px-1 py-0.5 rounded ${
+                  preview.status === 'NEW' ? 'bg-indigo-50 text-indigo-600' :
+                  preview.status === 'CONTACTED' ? 'bg-blue-50 text-blue-600' :
+                  preview.status === 'QUALIFIED' ? 'bg-cyan-50 text-cyan-600' :
+                  preview.status === 'WON' ? 'bg-green-50 text-green-600' :
+                  preview.status === 'LOST' ? 'bg-red-50 text-red-600' :
+                  'bg-gray-100 text-gray-500'
+                }`}>{preview.status.replace(/_/g, ' ')}</span>
+                <span className={`text-[10px] ${preview.callCount === 0 ? 'text-gray-400' : preview.callCount <= 2 ? 'text-blue-500' : preview.callCount <= 5 ? 'text-amber-500' : 'text-red-500'}`}>📞{preview.callCount}</span>
+                {i < nextLeadPreviews.length - 1 && <span className="text-gray-300 ml-1">│</span>}
               </button>
             ))}
           </div>
-        </div>
         </div>
       )}
 
