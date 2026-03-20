@@ -252,6 +252,7 @@ export default function TasksPage() {
   const [totalFromApi, setTotalFromApi] = useState(0);
   const [page, setPage] = useState(1);
   const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
 
   // ── Search (debounced) ────────────────────────────────────────────
   const [searchInput, setSearchInput] = useState('');
@@ -304,10 +305,23 @@ export default function TasksPage() {
     }
   }, [viewMode]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setActiveDivisionId(localStorage.getItem('activeDivisionId'));
+    }
+  }, []);
+
+  const scopedDivisionId = useMemo(() => {
+    if (!currentUser) return null;
+    return currentUser.role === 'SUPER_ADMIN'
+      ? activeDivisionId
+      : currentUser.organizationId;
+  }, [currentUser, activeDivisionId]);
+
   // ── Fetch team members ────────────────────────────────────────────
   useEffect(() => {
-    api.getUsers().then(setTeamMembers).catch(() => {});
-  }, []);
+    api.getUsers(scopedDivisionId || undefined).then(setTeamMembers).catch(() => {});
+  }, [scopedDivisionId]);
 
   // ── Build API params & fetch ──────────────────────────────────────
   const fetchTasks = useCallback(async () => {
@@ -332,6 +346,7 @@ export default function TasksPage() {
 
       if (sortField) params.sortBy = sortField;
       if (sortDir) params.sortOrder = sortDir;
+      if (scopedDivisionId) params.divisionId = scopedDivisionId;
 
       // Check if overdue-only filter
       if (datePreset === 'overdue') {
@@ -346,7 +361,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, searchQuery, statusFilters, priorityFilters, sortField, sortDir, datePreset]);
+  }, [page, searchQuery, statusFilters, priorityFilters, sortField, sortDir, datePreset, scopedDivisionId]);
 
   useEffect(() => {
     fetchTasks();
@@ -627,6 +642,11 @@ export default function TasksPage() {
           <p className="text-text-secondary text-sm mt-0.5">
             Manage and track your team&apos;s tasks
           </p>
+          {currentUser?.role === 'SUPER_ADMIN' && !scopedDivisionId && (
+            <p className="text-xs text-amber-700 mt-1">
+              Select a division from the top switcher to create and assign tasks.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -636,7 +656,12 @@ export default function TasksPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={() => setShowForm(true)} className="btn-primary">
+          <button
+            onClick={() => setShowForm(true)}
+            className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={currentUser?.role === 'SUPER_ADMIN' && !scopedDivisionId}
+            title={currentUser?.role === 'SUPER_ADMIN' && !scopedDivisionId ? 'Select a division first' : 'New Task'}
+          >
             <Plus className="h-4 w-4" />
             New Task
           </button>
@@ -1449,7 +1474,14 @@ export default function TasksPage() {
       )}
 
       {/* ═══ Create Task Modal ════════════════════════════════════════ */}
-      {showForm && <CreateTaskModal onClose={() => setShowForm(false)} onCreated={fetchTasks} />}
+      {showForm && (
+        <CreateTaskModal
+          onClose={() => setShowForm(false)}
+          onCreated={fetchTasks}
+          divisionId={scopedDivisionId}
+          requireDivisionSelection={currentUser?.role === 'SUPER_ADMIN'}
+        />
+      )}
       {editingTask && (
         <EditTaskModal
           task={editingTask}
@@ -1468,7 +1500,17 @@ export default function TasksPage() {
 // ═══════════════════════════════════════════════════════════════════
 // ─── Create Task Modal ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
-function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateTaskModal({
+  onClose,
+  onCreated,
+  divisionId,
+  requireDivisionSelection,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  divisionId?: string | null;
+  requireDivisionSelection?: boolean;
+}) {
   const addToast = useNotificationStore((s) => s.addToast);
   const { user: currentUser } = useAuthStore();
   const [form, setForm] = useState({
@@ -1486,10 +1528,15 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
   const [users, setUsers] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveAndCreateAnother, setSaveAndCreateAnother] = useState(false);
+  const canCreateForDivision = !requireDivisionSelection || !!divisionId;
 
   useEffect(() => {
-    api.getUsers().then(setUsers).catch(() => {});
-  }, []);
+    if (!canCreateForDivision) {
+      setUsers([]);
+      return;
+    }
+    api.getUsers(divisionId || undefined).then(setUsers).catch(() => {});
+  }, [divisionId, canCreateForDivision]);
 
   const dueAtDate = useMemo(() => {
     if (!form.dueAt) return null;
@@ -1527,6 +1574,14 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
     e.preventDefault();
     setSaving(true);
     try {
+      if (!canCreateForDivision) {
+        addToast({
+          type: 'error',
+          title: 'Division required',
+          message: 'Please select a division before creating a task.',
+        });
+        return;
+      }
       if (!form.title.trim() || form.title.trim().length < 3) {
         addToast({ type: 'error', title: 'Invalid title', message: 'Please enter at least 3 characters.' });
         return;
@@ -1567,6 +1622,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
         description: form.description.trim() || null,
         dueAt: dueAtDate.toISOString(),
         reminder,
+        divisionId,
         recurRule: form.isRecurring ? form.recurRule : null,
       });
       addToast({ type: 'success', title: 'Task Created', message: 'New task has been created successfully.' });
@@ -1607,6 +1663,18 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
+          {!canCreateForDivision && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Select a division from the top switcher to load members and create tasks.
+            </div>
+          )}
+
+          {divisionId && (
+            <div className="rounded-lg border border-border-subtle bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary">
+              Assignees are scoped to this division.
+            </div>
+          )}
+
           <div>
             <label className="label">Quick Start</label>
             <div className="flex flex-wrap gap-2">
@@ -1824,7 +1892,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
             <button type="button" onClick={onClose} className="btn-secondary">
               Cancel
             </button>
-            <button type="submit" className="btn-primary flex items-center gap-2" disabled={saving}>
+            <button type="submit" className="btn-primary flex items-center gap-2" disabled={saving || !canCreateForDivision}>
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" /> Creating...

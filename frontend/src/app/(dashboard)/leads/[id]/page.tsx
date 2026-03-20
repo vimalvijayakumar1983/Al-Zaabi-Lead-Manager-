@@ -1770,7 +1770,13 @@ export default function LeadDetailPage() {
         </div>
       )}
 
-      {showTaskModal && <CreateTaskModal onClose={() => setShowTaskModal(false)} onSubmit={handleCreateTask} />}
+      {showTaskModal && (
+        <CreateTaskModal
+          onClose={() => setShowTaskModal(false)}
+          onSubmit={handleCreateTask}
+          divisionId={lead.organizationId}
+        />
+      )}
 
       {/* Log Call Modal */}
       {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={getLeadDisplayName(lead)} />}
@@ -2048,7 +2054,15 @@ function formatTimeAgo(dateStr: string) {
 
 // ─── Create Task Modal ───────────────────────────────────────────
 
-function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
+function CreateTaskModal({
+  onClose,
+  onSubmit,
+  divisionId,
+}: {
+  onClose: () => void;
+  onSubmit: (data: any) => void;
+  divisionId?: string;
+}) {
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -2072,7 +2086,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
   const [meId, setMeId] = useState('');
 
   useEffect(() => {
-    Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]) => {
+    Promise.all([api.getUsers(divisionId), api.getMe()]).then(([userList, me]) => {
       setUsers(Array.isArray(userList) ? userList : []);
       setFullUsers(Array.isArray(userList) ? userList : []);
       setCurrentUserId(me?.id || '');
@@ -2081,7 +2095,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
         setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
       }
     }).catch(() => {});
-  }, []);
+  }, [divisionId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2094,6 +2108,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
         priority: form.priority,
         assigneeId: form.assigneeId,
         dueAt: new Date(form.dueAt).toISOString(),
+        divisionId,
       };
       if (form.reminderDate && form.reminderTime) {
         payload.reminder = new Date(`${form.reminderDate}T${form.reminderTime}:00`).toISOString();
@@ -2150,6 +2165,9 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
                 <span className="text-xs text-green-600 font-medium">Assigned to you</span>
               )}
             </div>
+            {divisionId && (
+              <p className="text-[11px] text-gray-500 mb-1.5">Only members in this lead&apos;s division are shown.</p>
+            )}
             <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
               <option value="">Select assignee...</option>
               {users.map((u) => (
