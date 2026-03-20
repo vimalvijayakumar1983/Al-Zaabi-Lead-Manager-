@@ -765,11 +765,11 @@ export default function LeadDetailPage() {
               <div className="hidden lg:flex items-center gap-1 ml-1">
                 <div className="w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all duration-500 ${visitedCountRef.current >= navData.leadIds.length ? 'bg-green-500' : 'bg-brand-500'}`}
-                    style={{ width: `${Math.min(100, (visitedCountRef.current / navData.leadIds.length) * 100)}%` }}
+                    className={`h-full rounded-full transition-all duration-500 ${visitedCount >= navData.leadIds.length ? 'bg-green-500' : 'bg-brand-500'}`}
+                    style={{ width: `${Math.min(100, (visitedCount / navData.leadIds.length) * 100)}%` }}
                   />
                 </div>
-                <span className="text-[10px] text-gray-400">{visitedCountRef.current}/{navData.leadIds.length}</span>
+                <span className="text-[10px] text-gray-400">{visitedCount}/{navData.leadIds.length}</span>
               </div>
             </div>
           )}
