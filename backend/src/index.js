@@ -9,6 +9,7 @@ const { logger } = require('./config/logger');
 const { prisma } = require('./config/database');
 const { setupWebSocket } = require('./websocket/server');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const { startWillCallAgainSafetyNetScheduler, stopWillCallAgainSafetyNetScheduler } = require('./services/willCallAgainSafetyNetScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -23,6 +24,7 @@ const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
+const callLogRoutes = require('./routes/call-logs');
 
 const app = express();
 const server = createServer(app);
@@ -76,6 +78,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/call-logs', callLogRoutes);
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);
@@ -90,11 +93,13 @@ const PORT = config.port || 4000;
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
+  startWillCallAgainSafetyNetScheduler();
 });
 
 // Graceful shutdown
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+  stopWillCallAgainSafetyNetScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');
