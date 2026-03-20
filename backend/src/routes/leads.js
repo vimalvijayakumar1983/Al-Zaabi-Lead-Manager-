@@ -4,7 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
-const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
+const { calculateLeadScore, predictConversion, calculateFullScore, rescoreAndPersist } = require('../utils/leadScoring');
 const { detectDuplicates } = require('../utils/duplicateDetection');
 const { createAuditLog } = require('../middleware/auditLog');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
@@ -721,11 +721,26 @@ router.get('/:id', async (req, res, next) => {
       } catch { /* non-critical */ }
     }
 
+    // Calculate full score breakdown for display
+    let scoreBreakdown = null;
+    try {
+      const scoreResult = await calculateFullScore(lead.id);
+      scoreBreakdown = scoreResult.breakdown;
+      // If score has drifted, silently update it
+      if (scoreResult.score !== lead.score) {
+        await prisma.lead.update({
+          where: { id: lead.id },
+          data: { score: scoreResult.score, conversionProb: scoreResult.conversionProb },
+        });
+      }
+    } catch { /* non-critical — breakdown is optional */ }
+
     res.json({
       ...lead,
       unreadCommunications: unreadCount,
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
       doNotCallByUser,
+      scoreBreakdown,
     });
   } catch (err) {
     next(err);
@@ -988,11 +1003,24 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     const { tags: tagNames, ...updateData } = data;
 
-    // Recalculate score if relevant fields change
-    const merged = { ...existing, ...updateData };
-    const activityCount = await prisma.leadActivity.count({ where: { leadId: existing.id } });
-    updateData.score = calculateLeadScore(merged, activityCount);
-    updateData.conversionProb = predictConversion(updateData.score, updateData.status || existing.status);
+    // Recalculate score using full multi-dimensional engine
+    // Scores profile + engagement + source + recency - penalties
+    const scoreResult = await calculateFullScore(existing.id);
+    if (scoreResult.breakdown) {
+      // Re-score with merged data for profile changes not yet saved
+      const merged = { ...existing, ...updateData };
+      const profileDelta = (merged.email && !existing.email ? 4 : 0)
+        + (merged.phone && !existing.phone ? 4 : 0)
+        + (merged.company && !existing.company ? 3 : 0);
+      updateData.score = Math.min(scoreResult.score + profileDelta, 100);
+      updateData.conversionProb = scoreResult.conversionProb;
+    } else {
+      // Fallback to basic scoring
+      const merged = { ...existing, ...updateData };
+      const activityCount = await prisma.leadActivity.count({ where: { leadId: existing.id } });
+      updateData.score = calculateLeadScore(merged, activityCount);
+      updateData.conversionProb = predictConversion(updateData.score, updateData.status || existing.status);
+    }
 
     // Handle won/lost timestamps
     if (updateData.status === 'WON' && existing.status !== 'WON') {
@@ -1546,6 +1574,74 @@ router.post('/:id/unblock', async (req, res, next) => {
     });
 
     res.json({ success: true, message: 'Lead unblocked — restored to active leads' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Rescore a single lead (GET score breakdown) ─────────────────
+router.get('/:id/score', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      select: { id: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const result = await calculateFullScore(lead.id);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Rescore a single lead and persist ──────────────────────────
+router.post('/:id/rescore', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      select: { id: true, score: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const result = await rescoreAndPersist(lead.id);
+    res.json({
+      success: true,
+      data: {
+        previousScore: lead.score,
+        newScore: result.score,
+        conversionProb: result.conversionProb,
+        breakdown: result.breakdown,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Bulk rescore all leads in org ──────────────────────────────
+router.post('/bulk/rescore', async (req, res, next) => {
+  try {
+    const leads = await prisma.lead.findMany({
+      where: { organizationId: { in: req.orgIds } },
+      select: { id: true },
+    });
+
+    let scored = 0;
+    let errors = 0;
+    for (const lead of leads) {
+      try {
+        await rescoreAndPersist(lead.id);
+        scored++;
+      } catch {
+        errors++;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { total: leads.length, scored, errors },
+    });
   } catch (err) {
     next(err);
   }

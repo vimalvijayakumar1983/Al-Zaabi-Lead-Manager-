@@ -4,6 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { logger } = require('../config/logger');
+const { rescoreAndPersist } = require('../utils/leadScoring');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -374,6 +375,15 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       }
     }
 
+    // Rescore lead after call — engagement signals changed
+    let newScore = null;
+    try {
+      const scoreResult = await rescoreAndPersist(data.leadId);
+      newScore = scoreResult.score;
+    } catch (scoreErr) {
+      logger.warn('Post-call rescore failed:', scoreErr.message);
+    }
+
     res.status(201).json({
       callLog,
       followUpTaskId,
@@ -381,6 +391,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         statusChanged: autoAction?.statusChange || null,
         taskCreated: !!followUpTaskId,
       },
+      newScore,
     });
   } catch (err) {
     next(err);
