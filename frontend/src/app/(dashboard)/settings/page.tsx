@@ -1562,7 +1562,7 @@ function SearchInput({ value, onChange, placeholder }: { value: string; onChange
 
 const DISPOSITION_GROUPS: { label: string; icon: string; dispositions: string[] }[] = [
   { label: 'Positive Outcomes', icon: '✅', dispositions: ['INTERESTED', 'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'QUALIFIED', 'PROPOSAL_REQUESTED'] },
-  { label: 'Retry / Follow-up', icon: '🔄', dispositions: ['NO_ANSWER', 'VOICEMAIL_LEFT', 'CALLBACK', 'BUSY', 'GATEKEEPER', 'FOLLOW_UP_EMAIL'] },
+  { label: 'Retry / Follow-up', icon: '🔄', dispositions: ['NO_ANSWER', 'VOICEMAIL_LEFT', 'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN', 'BUSY', 'GATEKEEPER', 'FOLLOW_UP_EMAIL'] },
   { label: 'Closed / Negative', icon: '🚫', dispositions: ['NOT_INTERESTED', 'WRONG_NUMBER', 'DO_NOT_CALL'] },
   { label: 'Other', icon: '📝', dispositions: ['OTHER'] },
 ];
@@ -1570,6 +1570,9 @@ const DISPOSITION_GROUPS: { label: string; icon: string; dispositions: string[] 
 // Default disposition labels — used as fallback when API fails or returns empty
 const DEFAULT_DISPOSITION_SETTINGS: { disposition: string; label: string; requireNotes: boolean }[] = [
   { disposition: 'CALLBACK', label: 'Call Back Requested', requireNotes: false },
+  { disposition: 'CALL_LATER', label: 'Call Later (Scheduled)', requireNotes: false },
+  { disposition: 'CALL_AGAIN', label: 'Call Again (Anytime)', requireNotes: false },
+  { disposition: 'WILL_CALL_US_AGAIN', label: 'Will Call Us Again (Soft Loop)', requireNotes: false },
   { disposition: 'MEETING_ARRANGED', label: 'Meeting Arranged', requireNotes: false },
   { disposition: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', requireNotes: false },
   { disposition: 'INTERESTED', label: 'Interested - Send Info', requireNotes: false },

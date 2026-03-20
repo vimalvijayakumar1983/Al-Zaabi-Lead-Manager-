@@ -217,7 +217,8 @@ export interface Communication {
 
 // ─── Call Log ────────────────────────────────────────────────────
 export type CallDisposition =
-  | 'CALLBACK' | 'MEETING_ARRANGED' | 'APPOINTMENT_BOOKED' | 'INTERESTED'
+  | 'CALLBACK' | 'CALL_LATER' | 'CALL_AGAIN' | 'WILL_CALL_US_AGAIN'
+  | 'MEETING_ARRANGED' | 'APPOINTMENT_BOOKED' | 'INTERESTED'
   | 'NOT_INTERESTED' | 'NO_ANSWER' | 'VOICEMAIL_LEFT' | 'WRONG_NUMBER'
   | 'BUSY' | 'GATEKEEPER' | 'FOLLOW_UP_EMAIL' | 'QUALIFIED'
   | 'PROPOSAL_REQUESTED' | 'DO_NOT_CALL' | 'OTHER';

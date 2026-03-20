@@ -13,6 +13,7 @@ const { startSLAMonitor, stopSLAMonitor } = require('./services/slaMonitor');
 const { startTimeBasedScheduler, stopTimeBasedScheduler } = require('./services/timeBasedAutomationScheduler');
 const { startCallbackReminderScheduler, stopCallbackReminderScheduler } = require('./services/callbackReminderScheduler');
 const { startTaskReminderScheduler, stopTaskReminderScheduler } = require('./services/taskReminderScheduler');
+const { startWillCallAgainSafetyNetScheduler, stopWillCallAgainSafetyNetScheduler } = require('./services/willCallAgainSafetyNetScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -157,6 +158,9 @@ server.listen(PORT, () => {
 
   // Start the task reminder scheduler (due-soon & overdue pop-ups)
   startTaskReminderScheduler();
+
+  // Start soft-loop inactivity safety net (Will Call Us Again)
+  startWillCallAgainSafetyNetScheduler();
 });
 
 // Graceful shutdown
@@ -166,6 +170,7 @@ const shutdown = async () => {
   stopTimeBasedScheduler();
   stopCallbackReminderScheduler();
   stopTaskReminderScheduler();
+  stopWillCallAgainSafetyNetScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

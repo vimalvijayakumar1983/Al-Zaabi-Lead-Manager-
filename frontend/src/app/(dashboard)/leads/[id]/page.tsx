@@ -1416,6 +1416,9 @@ export default function LeadDetailPage() {
                     {callLogs.map((log) => {
                       const dispositionStyles: Record<string, { bg: string; text: string; border: string }> = {
                         CALLBACK: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+                        CALL_LATER: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+                        CALL_AGAIN: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+                        WILL_CALL_US_AGAIN: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
                         MEETING_ARRANGED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
                         APPOINTMENT_BOOKED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
                         INTERESTED: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
@@ -1433,7 +1436,9 @@ export default function LeadDetailPage() {
                       };
                       const style = dispositionStyles[log.disposition] || dispositionStyles.OTHER;
                       const dispositionLabel: Record<string, string> = {
-                        CALLBACK: 'Call Back Requested', MEETING_ARRANGED: 'Meeting Arranged',
+                        CALLBACK: 'Call Back Requested', CALL_LATER: 'Call Later (Scheduled)',
+                        CALL_AGAIN: 'Call Again (Anytime)', WILL_CALL_US_AGAIN: 'Will Call Us Again',
+                        MEETING_ARRANGED: 'Meeting Arranged',
                         APPOINTMENT_BOOKED: 'Appointment Booked', INTERESTED: 'Interested',
                         NOT_INTERESTED: 'Not Interested', NO_ANSWER: 'No Answer',
                         VOICEMAIL_LEFT: 'Voicemail Left', WRONG_NUMBER: 'Wrong Number',
@@ -1456,6 +1461,9 @@ export default function LeadDetailPage() {
                             {log.user && <span>By {log.user.firstName} {log.user.lastName}</span>}
                             {log.duration && <span>Duration: {Math.floor(log.duration / 60)}m {log.duration % 60}s</span>}
                             {log.callbackDate && <span>Callback: {new Date(log.callbackDate).toLocaleString()}</span>}
+                            {log.metadata?.expectedCallbackWindowLabel && (
+                              <span>Expected callback: {String(log.metadata.expectedCallbackWindowLabel)}</span>
+                            )}
                             {log.meetingDate && <span>Meeting: {new Date(log.meetingDate).toLocaleString()}</span>}
                             {log.appointmentDate && <span>Appointment: {new Date(log.appointmentDate).toLocaleString()}</span>}
                             {log.followUpTaskId && (
@@ -2342,6 +2350,7 @@ function CreateTaskModal({
 const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: string; description?: string }[] = [
   { value: 'CALL_LATER', label: 'Call Later (Scheduled)', group: 'Follow-up', icon: '🕐', description: 'Client requested a specific date & time' },
   { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', group: 'Follow-up', icon: '🔄', description: 'Follow up anytime — no specific schedule' },
+  { value: 'WILL_CALL_US_AGAIN', label: 'Will Call Us Again', group: 'Follow-up', icon: '🤝', description: 'Client said they will call us back; keep soft engagement' },
   { value: 'MEETING_ARRANGED', label: 'Meeting Arranged', group: 'Positive', icon: '📅' },
   { value: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', group: 'Positive', icon: '✅' },
   { value: 'INTERESTED', label: 'Interested - Send Info', group: 'Positive', icon: '👍' },
@@ -2358,6 +2367,13 @@ const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: 
   { value: 'OTHER', label: 'Other', group: 'Other', icon: '📝' },
 ];
 
+const EXPECTED_CALLBACK_WINDOW_OPTIONS = [
+  { value: 'WITHIN_24_HOURS', label: 'Within 24 hours' },
+  { value: 'WITHIN_3_DAYS', label: 'Within 3 days' },
+  { value: 'WITHIN_7_DAYS', label: 'Within 7 days' },
+  { value: 'WITHIN_14_DAYS', label: 'Within 14 days' },
+];
+
 function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string }) {
   const [form, setForm] = useState({
     disposition: '',
@@ -2366,6 +2382,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
     callbackDate: '',
     meetingDate: '',
     appointmentDate: '',
+    expectedCallbackWindow: '',
     createFollowUp: true,
   });
   const [submitting, setSubmitting] = useState(false);
@@ -2387,6 +2404,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
   const notesRequired = selectedDisposition ? (dispositionSettings[selectedDisposition] ?? selectedDisposition === 'OTHER') : false;
   const notesEmpty = !form.notes || !form.notes.trim();
   const isCallLater = selectedDisposition === 'CALL_LATER';
+  const isWillCallUsAgain = selectedDisposition === 'WILL_CALL_US_AGAIN';
   const showCallback = isCallLater || selectedDisposition === 'CALL_AGAIN' || selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
   const callbackDateRequired = isCallLater; // CALL_LATER = mandatory date/time
   const callbackDateMissing = callbackDateRequired && !form.callbackDate;
@@ -2408,6 +2426,7 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
         callbackDate: form.callbackDate ? new Date(form.callbackDate).toISOString() : null,
         meetingDate: form.meetingDate ? new Date(form.meetingDate).toISOString() : null,
         appointmentDate: form.appointmentDate ? new Date(form.appointmentDate).toISOString() : null,
+        expectedCallbackWindow: form.expectedCallbackWindow || null,
         createFollowUp: form.createFollowUp,
       });
     } finally {
@@ -2436,7 +2455,11 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
                 <button
                   key={opt.value}
                   type="button"
-                  onClick={() => setForm({ ...form, disposition: opt.value })}
+                  onClick={() => setForm((prev) => ({
+                    ...prev,
+                    disposition: opt.value,
+                    expectedCallbackWindow: opt.value === 'WILL_CALL_US_AGAIN' ? prev.expectedCallbackWindow : '',
+                  }))}
                   className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-all ${
                     form.disposition === opt.value
                       ? 'border-brand-500 bg-brand-50 text-brand-700 ring-1 ring-brand-500'
@@ -2481,6 +2504,25 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
               ) : (
                 <p className="text-xs text-gray-400 mt-1">Optional — when should we call back?</p>
               )}
+            </div>
+          )}
+
+          {isWillCallUsAgain && (
+            <div className="space-y-2 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
+              <label className="label mb-0">Expected Callback Window (optional)</label>
+              <select
+                className="input"
+                value={form.expectedCallbackWindow}
+                onChange={(e) => setForm({ ...form, expectedCallbackWindow: e.target.value })}
+              >
+                <option value="">Not sure yet</option>
+                {EXPECTED_CALLBACK_WINDOW_OPTIONS.map((window) => (
+                  <option key={window.value} value={window.value}>{window.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-indigo-700">
+                No urgent callback is forced. If there is no inbound reply within this window, the system creates a low-priority soft follow-up task.
+              </p>
             </div>
           )}
 
