@@ -158,21 +158,22 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
       });
     }
 
-    if (data.assigneeId !== req.user.id) {
-      notifyUser(data.assigneeId, {
-        type: 'task_assigned',
-        task: { id: task.id, title: task.title },
-      });
-    }
+    notifyUser(data.assigneeId, {
+      type: data.assigneeId === req.user.id ? 'task_created' : 'task_assigned',
+      task: { id: task.id, title: task.title },
+    });
 
     res.status(201).json(task);
 
     // ── Fire-and-forget notification ──
-    if (data.assigneeId && data.assigneeId !== req.user.id) {
+    if (data.assigneeId) {
+      const isSelfAssigned = data.assigneeId === req.user.id;
       createNotification({
         type: NOTIFICATION_TYPES.TASK_ASSIGNED,
-        title: 'New Task Assigned',
-        message: `${getDisplayName(req.user)} assigned you task: ${task.title}`,
+        title: isSelfAssigned ? 'Task Created' : 'New Task Assigned',
+        message: isSelfAssigned
+          ? `You created a new task: ${task.title}`
+          : `${getDisplayName(req.user)} assigned you task: ${task.title}`,
         userId: data.assigneeId,
         actorId: req.user.id,
         entityType: 'task',
