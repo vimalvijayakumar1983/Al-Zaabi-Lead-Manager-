@@ -589,7 +589,7 @@ export default function DivisionsPage() {
 
   // ── Show Toast Helper ─────────────────────────────────────────────
   const showToast = (msg: string) => {
-    addToast({ type: 'success', title: msg });
+    addToast({ type: 'success', title: 'Success', message: msg });
   };
 
   // ── Fetch Divisions ───────────────────────────────────────────────
