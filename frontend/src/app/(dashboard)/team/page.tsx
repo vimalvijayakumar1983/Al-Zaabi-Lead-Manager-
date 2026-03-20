@@ -16,6 +16,7 @@ import {
   UserCog, Zap, Star, Trash2, Plus, RefreshCw,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Name display helpers ───────────────────────────────────────────
 function getDisplayName(first?: string | null, last?: string | null): string {
@@ -95,6 +96,7 @@ const sortOptions: { value: SortField; label: string }[] = [
 // ─── Main Component ────────────────────────────────────────────────
 export default function TeamPage() {
   const { user: currentUser } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Core state
@@ -377,8 +379,9 @@ export default function TeamPage() {
       setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
       setAddDivisionId('');
       setAddDivisionRole('SALES_REP');
+      addToast({ type: 'success', title: 'Division Added', message: 'User added to division successfully.' });
     } catch (err: any) {
-      alert(err?.message || 'Failed to add division');
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to add division' });
     }
     setMembershipLoading(null);
   };
@@ -389,8 +392,9 @@ export default function TeamPage() {
       await api.removeUserFromDivision(userId, divisionId);
       const memberships = await api.getUserDivisions(userId);
       setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      addToast({ type: 'success', title: 'Division Removed', message: 'User removed from division successfully.' });
     } catch (err: any) {
-      alert(err?.message || 'Failed to remove from division');
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to remove from division' });
     }
     setMembershipLoading(null);
   };
@@ -401,8 +405,9 @@ export default function TeamPage() {
       await api.updateUserDivisionRole(userId, divisionId, { role });
       const memberships = await api.getUserDivisions(userId);
       setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      addToast({ type: 'success', title: 'Role Updated', message: 'Division role updated successfully.' });
     } catch (err: any) {
-      alert(err?.message || 'Failed to update role');
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to update role' });
     }
     setMembershipLoading(null);
   };
@@ -413,8 +418,9 @@ export default function TeamPage() {
       await api.updateUserDivisionRole(userId, divisionId, { isPrimary: true });
       const memberships = await api.getUserDivisions(userId);
       setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      addToast({ type: 'success', title: 'Primary Division Set', message: 'Primary division updated successfully.' });
     } catch (err: any) {
-      alert(err?.message || 'Failed to set primary division');
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to set primary division' });
     }
     setMembershipLoading(null);
   };
@@ -461,18 +467,20 @@ export default function TeamPage() {
     if (!confirm(`Deactivate ${getDisplayName(user.firstName, user.lastName)}? They will lose access immediately.`)) return;
     try {
       await api.deactivateUser(user.id);
+      addToast({ type: 'success', title: 'User Deactivated', message: `${getDisplayName(user.firstName, user.lastName)} has been deactivated.` });
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to deactivate user' });
     }
   };
 
   const handleReactivate = async (user: User) => {
     try {
       await api.reactivateUser(user.id);
+      addToast({ type: 'success', title: 'User Reactivated', message: `${getDisplayName(user.firstName, user.lastName)} has been reactivated.` });
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to reactivate user' });
     }
   };
 
@@ -486,12 +494,12 @@ export default function TeamPage() {
     setDeleteLoading(true);
     try {
       await api.deleteUserPermanently(deleteConfirmUser.id, deleteReassignTo || undefined);
-      alert(`${getDisplayName(deleteConfirmUser.firstName, deleteConfirmUser.lastName)} permanently deleted`);
+      addToast({ type: 'success', title: 'User Deleted', message: `${getDisplayName(deleteConfirmUser.firstName, deleteConfirmUser.lastName)} permanently deleted.` });
       setDeleteConfirmUser(null);
       setDeleteReassignTo('');
       fetchUsers();
     } catch (err: any) {
-      alert(err?.message || 'Failed to delete user');
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to delete user' });
     } finally {
       setDeleteLoading(false);
     }
@@ -501,10 +509,11 @@ export default function TeamPage() {
     if (!confirm(`Deactivate ${selectedIds.size} selected users?`)) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.deactivateUser(id)));
+      addToast({ type: 'success', title: 'Bulk Deactivate', message: `${selectedIds.size} users have been deactivated.` });
       setSelectedIds(new Set());
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to deactivate users' });
     }
   };
 
@@ -512,11 +521,12 @@ export default function TeamPage() {
     if (!role || !['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'].includes(role)) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { role })));
+      addToast({ type: 'success', title: 'Role Updated', message: `${selectedIds.size} users updated to ${roleConfig[role]?.label || role}.` });
       setSelectedIds(new Set());
       setShowBulkRoleDropdown(false);
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to change roles' });
     }
   };
 
@@ -524,11 +534,12 @@ export default function TeamPage() {
     if (!isSuperAdmin || !divisionId) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { divisionId } as any)));
+      addToast({ type: 'success', title: 'Division Transferred', message: `${selectedIds.size} users transferred to new division.` });
       setSelectedIds(new Set());
       setShowBulkDivisionDropdown(false);
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to transfer division' });
     }
   };
 
@@ -2157,6 +2168,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
 function RolesAccessModal({ onClose }: { onClose: () => void }) {
   const { user: currentUser } = useAuthStore();
   const { rolePermissions, loadPermissions } = usePermissionsStore();
+  const addToast = useNotificationStore((s) => s.addToast);
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
   const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
 
@@ -2189,8 +2201,9 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
       await api.updateRolePermissions(editPerms);
       await loadPermissions();
       setDirty(false);
+      addToast({ type: 'success', title: 'Permissions Saved', message: 'Role permissions updated successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to save');
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to save' });
     } finally {
       setSaving(false);
     }

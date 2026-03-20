@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { useNotificationStore } from '@/store/notificationStore';
 import {
   Upload, FileSpreadsheet, X, ArrowRight, ArrowLeft, Check,
   AlertTriangle, CheckCircle2, XCircle, Download, Clock,
@@ -136,6 +137,7 @@ export default function ImportPage() {
 function ImportWizard() {
   const { user } = useAuthStore();
   const router = useRouter();
+  const addToast = useNotificationStore((s) => s.addToast);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<WizardStep>('upload');
@@ -235,6 +237,7 @@ function ImportWizard() {
       });
       setResult(data);
       setStep('result');
+      addToast({ type: 'success', title: 'Import complete', message: `${data.imported} records imported successfully` });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -334,7 +337,7 @@ function ImportWizard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-text-primary">Upload File</h3>
               <button
-                onClick={() => api.downloadImportTemplate(selectedModule).catch((err: any) => alert(err.message))}
+                onClick={() => api.downloadImportTemplate(selectedModule).catch((err: any) => addToast({ type: 'error', title: 'Template download failed', message: err.message }))}
                 className="text-sm text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -993,6 +996,7 @@ function ImportWizard() {
 
 /* ─── Export Tab ─────────────────────────────────────────────────── */
 function ExportTab() {
+  const addToast = useNotificationStore((s) => s.addToast);
   const [exportModule, setExportModule] = useState('leads');
   const [exporting, setExporting] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -1006,8 +1010,9 @@ function ExportTab() {
     setExporting(true);
     try {
       await api.exportData(exportModule, filters);
+      addToast({ type: 'success', title: 'Export complete', message: `${exportModule} data exported successfully` });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Export failed', message: err.message });
     } finally {
       setExporting(false);
     }
@@ -1223,14 +1228,17 @@ function ImportHistoryTab() {
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
+  const addToast = useNotificationStore((s) => s.addToast);
+
   const handleUndo = async (id: string) => {
     if (!confirm('Are you sure you want to undo this import? Imported records will be archived/removed.')) return;
     setUndoing(id);
     try {
       await api.undoImport(id);
+      addToast({ type: 'success', title: 'Import undone', message: 'The import has been successfully reversed' });
       fetchHistory();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Undo failed', message: err.message });
     } finally {
       setUndoing(null);
     }
@@ -1378,6 +1386,7 @@ function ImportHistoryTab() {
 
 /* ─── Import Detail Modal ────────────────────────────────────────── */
 function ImportDetailModal({ importRecord, onClose }: { importRecord: ImportHistoryItem; onClose: () => void }) {
+  const addToast = useNotificationStore((s) => s.addToast);
   const errors = (importRecord.errors || []) as any[];
 
   return (
@@ -1453,7 +1462,7 @@ function ImportDetailModal({ importRecord, onClose }: { importRecord: ImportHist
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-semibold text-text-primary">Errors ({errors.length})</h4>
                 <button
-                  onClick={() => api.downloadErrorsCsv(importRecord.id).catch((err: any) => alert(err.message))}
+                  onClick={() => api.downloadErrorsCsv(importRecord.id).catch((err: any) => addToast({ type: 'error', title: 'Download failed', message: err.message }))}
                   className="text-2xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
                 >
                   <Download className="h-3 w-3" />

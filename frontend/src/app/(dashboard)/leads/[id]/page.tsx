@@ -64,6 +64,7 @@ export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const dispatchDataChange = useNotificationStore((s) => s.dispatchDataChange);
+  const addToast = useNotificationStore((s) => s.addToast);
   const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
@@ -285,8 +286,9 @@ export default function LeadDetailPage() {
     try {
       await api.moveLead(lead.id, stage.id, 0);
       await refreshLead();
+      addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${stage.name}` });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Stage Update Failed', message: err.message });
     }
   };
 
@@ -372,9 +374,10 @@ export default function LeadDetailPage() {
       await api.updateLead(lead.id, data);
       setIsEditing(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Lead Saved', message: 'Lead details updated successfully' });
       return true;
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Save Failed', message: err.message });
       return false;
     } finally {
       setSaving(false);
@@ -419,8 +422,9 @@ export default function LeadDetailPage() {
       await api.createTask({ ...taskData, leadId: lead!.id });
       setShowTaskModal(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Task Created', message: 'New task has been created' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Task Creation Failed', message: err.message });
     }
   };
 
@@ -429,8 +433,9 @@ export default function LeadDetailPage() {
       await api.logCommunication({ ...commData, leadId: lead!.id });
       setShowCommModal(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Communication Logged', message: 'Communication has been recorded' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Log Communication Failed', message: err.message });
     }
   };
 
@@ -452,8 +457,9 @@ export default function LeadDetailPage() {
       await api.logCall({ ...callData, leadId: lead!.id });
       setShowCallLogModal(false);
       await Promise.all([refreshLead(), loadCallLogs()]);
+      addToast({ type: 'success', title: 'Call Logged', message: 'Call log has been recorded' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Log Call Failed', message: err.message });
     }
   };
 
@@ -462,8 +468,9 @@ export default function LeadDetailPage() {
       await api.sendEmail({ leadId: lead!.id, ...emailData });
       setShowEmailComposer(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Email Sent', message: 'Email has been sent successfully' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Send Email Failed', message: err.message });
     }
   };
 
@@ -473,8 +480,9 @@ export default function LeadDetailPage() {
       await api.updateLead(lead.id, { status: 'WON' });
       setShowConvertModal(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Lead Converted', message: 'Lead has been marked as Won' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Conversion Failed', message: err.message });
     }
   };
 
@@ -491,9 +499,10 @@ export default function LeadDetailPage() {
         dealAmount: lead.budget ? Number(lead.budget) : undefined,
       });
       setShowConvertToContact(false);
+      addToast({ type: 'success', title: 'Converted to Contact', message: 'Lead has been converted to a contact' });
       router.push(`/contacts/${contact.id}`);
     } catch (err: any) {
-      alert(err.message || 'Failed to convert lead to contact');
+      addToast({ type: 'error', title: 'Conversion Failed', message: err.message || 'Failed to convert lead to contact' });
     } finally {
       setConvertingToContact(false);
     }
@@ -608,7 +617,7 @@ export default function LeadDetailPage() {
     } catch (err: any) {
       // Remove optimistic message on failure
       setChatMessages(prev => prev.filter(m => m.id !== tempId));
-      alert(err.message);
+      addToast({ type: 'error', title: 'Message Failed', message: err.message });
     } finally {
       setSendingChat(false);
     }
@@ -621,8 +630,9 @@ export default function LeadDetailPage() {
       setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
       setEditingMsgId(null);
       setEditingBody('');
+      addToast({ type: 'success', title: 'Message Edited', message: 'Message has been updated' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Edit Failed', message: err.message });
     }
   };
 
@@ -632,8 +642,9 @@ export default function LeadDetailPage() {
       await api.deleteInboxMessage(messageId);
       setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
       setMenuOpenMsgId(null);
+      addToast({ type: 'success', title: 'Message Deleted', message: 'Message has been deleted' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Delete Failed', message: err.message });
     }
   };
 
@@ -817,9 +828,10 @@ export default function LeadDetailPage() {
                 if (!confirm('Unblock this lead? They will reappear in active lead views.')) return;
                 try {
                   await api.unblockLead(lead.id);
+                  addToast({ type: 'success', title: 'Lead Unblocked', message: 'Lead has been unblocked' });
                   window.location.reload();
                 } catch (err: any) {
-                  alert(err.message || 'Failed to unblock lead');
+                  addToast({ type: 'error', title: 'Unblock Failed', message: err.message || 'Failed to unblock lead' });
                 }
               }}
               className="text-[11px] font-semibold text-red-600 hover:text-red-800 px-2 py-0.5 rounded hover:bg-red-100 transition-colors"

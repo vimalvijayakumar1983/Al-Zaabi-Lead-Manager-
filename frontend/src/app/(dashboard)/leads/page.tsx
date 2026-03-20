@@ -16,6 +16,7 @@ import { BulkReassignModal } from './components/BulkReassignModal';
 import { AllocationSettings } from './components/AllocationSettings';
 import { WorkloadDashboard } from './components/WorkloadDashboard';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -187,6 +188,7 @@ export default function LeadsPage() {
 function LeadsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // ─── State ──────────────────────────────────────────────────────
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -547,8 +549,9 @@ function LeadsContent() {
       setShowForm(false);
       fetchLeads();
       fetchStats();
+      addToast({ type: 'success', title: 'Lead Created', message: 'New lead has been created successfully' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to create lead' });
     }
   };
 
@@ -585,7 +588,8 @@ function LeadsContent() {
       setShowBulkActions(false);
       fetchLeads();
       fetchStats();
-    } catch (err: any) { alert(err.message); }
+      addToast({ type: 'success', title: 'Status Updated', message: `${selectedLeads.size} lead(s) updated to ${status}` });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update leads' }); }
   };
 
   const handleBulkReassign = async (assignedToId: string, _reason?: string) => {
@@ -595,7 +599,8 @@ function LeadsContent() {
       setSelectedLeads(new Set());
       fetchLeads();
       fetchStats();
-    } catch (err: any) { alert(err.message); }
+      addToast({ type: 'success', title: 'Leads Reassigned', message: `${selectedLeads.size} lead(s) reassigned successfully` });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to reassign leads' }); }
   };
 
   const handleBulkDelete = async () => {
@@ -609,7 +614,8 @@ function LeadsContent() {
       setSelectedLeads(new Set());
       fetchLeads();
       fetchStats();
-    } catch (err: any) { alert(err.message); }
+      addToast({ type: 'success', title: 'Leads Archived', message: `${ids.length} lead(s) archived successfully` });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to archive leads' }); }
   };
 
   const handleQuickStatus = async (leadId: string, status: string) => {
@@ -618,7 +624,8 @@ function LeadsContent() {
       setQuickActionId(null);
       fetchLeads();
       fetchStats();
-    } catch (err: any) { alert(err.message); }
+      addToast({ type: 'success', title: 'Status Updated', message: `Lead status changed to ${status}` });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update status' }); }
   };
 
   const handleQuickDelete = async (leadId: string) => {
@@ -628,7 +635,8 @@ function LeadsContent() {
       setQuickActionId(null);
       fetchLeads();
       fetchStats();
-    } catch (err: any) { alert(err.message); }
+      addToast({ type: 'success', title: 'Lead Archived', message: 'Lead has been archived successfully' });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to archive lead' }); }
   };
 
   const handleInlineUpdate = async (leadId: string, field: string, value: string) => {
@@ -856,7 +864,7 @@ function LeadsContent() {
         return (
           <InlineEdit value={currentVal} onSave={async (v) => {
               if (useStages) {
-                try { await api.moveLead(lead.id, v, 0); fetchLeads(); fetchStats(); } catch (err: any) { alert(err.message); }
+                try { await api.moveLead(lead.id, v, 0); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Lead Moved', message: 'Lead stage updated' }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
               } else {
                 handleInlineUpdate(lead.id, 'status', v);
               }
@@ -1022,7 +1030,7 @@ function LeadsContent() {
                 {stages.length > 0
                   ? stages.filter((s) => s.id !== (lead as any).stageId).map((s) => (
                       <button key={s.id} onClick={async () => {
-                        try { await api.moveLead(lead.id, s.id, 0); setQuickActionId(null); fetchLeads(); fetchStats(); } catch (err: any) { alert(err.message); }
+                        try { await api.moveLead(lead.id, s.id, 0); setQuickActionId(null); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
                       }} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                         <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: s.color || '#6B7280' }} />
                         {s.name}
@@ -1291,7 +1299,7 @@ function LeadsContent() {
                       {stages.length > 0
                         ? stages.map((s) => (
                             <button key={s.id} onClick={async () => {
-                              try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); } catch (err: any) { alert(err.message); }
+                              try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
                             }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                               <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
                               {s.name}

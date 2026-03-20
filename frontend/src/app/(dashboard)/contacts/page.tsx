@@ -14,6 +14,7 @@ import {
   BarChart3, TrendingUp, Clock, Hash, LayoutGrid, List, Columns,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 import { ContactColumnManager, loadContactColumns, saveContactColumns, type ContactColumnDef } from './components/column-config';
 
 // ─── Name Helpers ────────────────────────────────────────────────
@@ -62,6 +63,7 @@ const typeLabels: Record<ContactType, { label: string; icon: any }> = {
 
 export default function ContactsPage() {
   const router = useRouter();
+  const addToast = useNotificationStore((s) => s.addToast);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<ContactStats | null>(null);
@@ -161,12 +163,14 @@ export default function ContactsPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('Archive this contact?')) return;
     await api.deleteContact(id);
+    addToast({ type: 'success', title: 'Contact Archived', message: 'Contact has been archived successfully' });
     fetchContacts();
     fetchStats();
   };
 
   const handleBulkUpdate = async (data: Record<string, any>) => {
     await api.bulkUpdateContacts(Array.from(selectedIds), data);
+    addToast({ type: 'success', title: 'Bulk Update Complete', message: `${selectedIds.size} contacts updated successfully` });
     setSelectedIds(new Set());
     fetchContacts();
     fetchStats();
@@ -195,8 +199,9 @@ export default function ContactsPage() {
       // If specific contacts are selected, export only those
       if (selectedIds.size > 0) params.ids = Array.from(selectedIds).join(',');
       await api.exportContacts(params);
+      addToast({ type: 'success', title: 'Export Complete', message: 'Contacts exported successfully' });
     } catch (err: any) {
-      alert(err.message || 'Export failed');
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Export failed' });
     } finally {
       setExporting(false);
     }
@@ -212,8 +217,10 @@ export default function ContactsPage() {
   const handleFormSubmit = async (data: any) => {
     if (editingContact) {
       await api.updateContact(editingContact.id, data);
+      addToast({ type: 'success', title: 'Contact Updated', message: 'Contact has been updated successfully' });
     } else {
       await api.createContact(data);
+      addToast({ type: 'success', title: 'Contact Created', message: 'New contact has been created successfully' });
     }
     setShowForm(false);
     setEditingContact(null);
@@ -867,6 +874,7 @@ function SortHeader({ label, field, sortBy, sortOrder, onSort }: { label: string
 
 function ContactFormModal({ contact, onClose, onSubmit }: { contact: Contact | null; onClose: () => void; onSubmit: (data: any) => void }) {
   const isEditing = !!contact;
+  const addToast = useNotificationStore((s) => s.addToast);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'basic' | 'details' | 'address' | 'social' | 'preferences'>('basic');
   const [form, setForm] = useState({
@@ -910,7 +918,7 @@ function ContactFormModal({ contact, onClose, onSubmit }: { contact: Contact | n
       if (!payload.dateOfBirth) payload.dateOfBirth = null;
       await onSubmit(payload);
     } catch (err: any) {
-      alert(err.message || 'Failed to save');
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to save' });
     } finally {
       setSaving(false);
     }

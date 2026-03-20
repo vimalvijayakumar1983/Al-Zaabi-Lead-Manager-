@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
+import { useNotificationStore } from '@/store/notificationStore';
 import type { Task, PaginatedResponse } from '@/types';
 import {
   CheckCircle2,
@@ -229,6 +230,7 @@ function StatCard({
 // ═══════════════════════════════════════════════════════════════════
 export default function TasksPage() {
   const { user: currentUser } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // ── Data ──────────────────────────────────────────────────────────
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -486,8 +488,13 @@ export default function TasksPage() {
 
   // ── Task actions ──────────────────────────────────────────────────
   const handleComplete = async (taskId: string) => {
-    await api.completeTask(taskId);
-    fetchTasks();
+    try {
+      await api.completeTask(taskId);
+      addToast({ type: 'success', title: 'Task Completed', message: 'Task has been marked as completed' });
+      fetchTasks();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to complete task' });
+    }
   };
 
   // ── Sort label ────────────────────────────────────────────────────
@@ -1130,6 +1137,7 @@ export default function TasksPage() {
 // ─── Create Task Modal ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const addToast = useNotificationStore((s) => s.addToast);
   const [form, setForm] = useState({
     title: '',
     type: 'FOLLOW_UP_CALL',
@@ -1153,10 +1161,11 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
         ...form,
         dueAt: new Date(form.dueAt).toISOString(),
       });
+      addToast({ type: 'success', title: 'Task Created', message: 'New task has been created successfully' });
       onClose();
       onCreated();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to create task' });
     } finally {
       setSaving(false);
     }

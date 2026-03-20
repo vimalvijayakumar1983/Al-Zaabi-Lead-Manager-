@@ -13,6 +13,7 @@ import {
   ListTodo, Globe, TrendingUp, Shield, BarChart3,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -233,6 +234,7 @@ type ViewMode = 'list' | 'detail' | 'templates';
 // ─── Main Page ───────────────────────────────────────────────────
 
 export default function AutomationsPage() {
+  const addToast = useNotificationStore((s) => s.addToast);
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<ViewMode>('list');
@@ -291,8 +293,9 @@ export default function AutomationsPage() {
     try {
       await api.toggleAutomation(id);
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Updated', message: 'Automation toggled successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to toggle automation');
+      addToast({ type: 'error', title: 'Toggle Failed', message: err.message || 'Failed to toggle automation' });
     }
   };
 
@@ -305,8 +308,9 @@ export default function AutomationsPage() {
         setView('list');
       }
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Deleted', message: 'Automation deleted successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to delete automation');
+      addToast({ type: 'error', title: 'Delete Failed', message: err.message || 'Failed to delete automation' });
     }
   };
 
@@ -314,8 +318,9 @@ export default function AutomationsPage() {
     try {
       await api.duplicateAutomation(id);
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Duplicated', message: 'Automation duplicated successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to duplicate automation');
+      addToast({ type: 'error', title: 'Duplicate Failed', message: err.message || 'Failed to duplicate automation' });
     }
   };
 
@@ -329,8 +334,9 @@ export default function AutomationsPage() {
       setShowForm(false);
       setEditingRule(null);
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Saved', message: editingRule ? 'Automation updated successfully.' : 'Automation created successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to save automation');
+      addToast({ type: 'error', title: 'Save Failed', message: err.message || 'Failed to save automation' });
     }
   };
 
@@ -377,6 +383,7 @@ export default function AutomationsPage() {
         onEdit={(rule) => { handleEdit(rule); setView('list'); }}
         onToggle={handleToggle}
         onDelete={handleDelete}
+        addToast={addToast}
       />
     );
   }
@@ -676,12 +683,13 @@ function AutomationCard({ rule, onToggle, onEdit, onDelete, onDuplicate, onViewD
 
 // ─── Automation Detail View ──────────────────────────────────────
 
-function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
+function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete, addToast }: {
   ruleId: string;
   onBack: () => void;
   onEdit: (rule: AutomationRule) => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
+  addToast: (toast: { type: 'success' | 'error' | 'warning' | 'info'; title: string; message: string }) => void;
 }) {
   const [rule, setRule] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
@@ -771,9 +779,9 @@ function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
             onClick={async () => {
               try {
                 await api.saveAutomationAsTemplate(rule.id);
-                alert('Automation saved as a reusable template!');
+                addToast({ type: 'success', title: 'Template Saved', message: 'Automation saved as a reusable template!' });
               } catch (err: any) {
-                alert(err.message || 'Failed to save as template');
+                addToast({ type: 'error', title: 'Template Save Failed', message: err.message || 'Failed to save as template' });
               }
             }}
             className="btn-secondary text-sm"

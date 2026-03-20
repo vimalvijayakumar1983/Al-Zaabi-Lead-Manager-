@@ -14,6 +14,7 @@ import {
   Calendar, BarChart3, Hash, Target,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Source config ─────────────────────────────────────────────────
 const sourceOptions = [
@@ -80,6 +81,7 @@ function getDisplayInitials(first?: string | null, last?: string | null): string
 // ─── Main Component ────────────────────────────────────────────────
 export default function PipelinePage() {
   const { user: currentUser } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // Core state
   const [stages, setStages] = useState<PipelineStage[]>([]);
@@ -188,11 +190,13 @@ export default function PipelinePage() {
     setDragOverStage(null);
     if (!draggedLead) return;
 
+    const targetStage = stages.find(s => s.id === stageId);
     try {
       await api.moveLead(draggedLead, stageId, 0);
+      addToast({ type: 'success', title: 'Lead Moved', message: `Lead moved to ${targetStage?.name || 'stage'}` });
       fetchStages();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' });
     }
     setDraggedLead(null);
   };

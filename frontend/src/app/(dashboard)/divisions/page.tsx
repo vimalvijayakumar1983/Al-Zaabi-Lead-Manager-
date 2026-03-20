@@ -60,6 +60,7 @@ import {
   GitBranch,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Constants ──────────────────────────────────────────────────────
 const ROLES = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'] as const;
@@ -487,6 +488,7 @@ function UserActionMenu({
 export default function DivisionsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // Auth
   const [authorized, setAuthorized] = useState<boolean | null>(null);
@@ -578,9 +580,6 @@ export default function DivisionsPage() {
   const [transferring, setTransferring] = useState(false);
   const [transferError, setTransferError] = useState('');
 
-  // Success toast
-  const [toast, setToast] = useState('');
-
   // ── Auth Check ────────────────────────────────────────────────────
   useEffect(() => {
     if (user) {
@@ -590,8 +589,7 @@ export default function DivisionsPage() {
 
   // ── Show Toast Helper ─────────────────────────────────────────────
   const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(''), 3000);
+    addToast({ type: 'success', title: msg });
   };
 
   // ── Fetch Divisions ───────────────────────────────────────────────
@@ -1134,13 +1132,7 @@ export default function DivisionsPage() {
   // ═══════════════════════════════════════════════════════════════════
   return (
     <div className="space-y-6">
-      {/* ── Toast ───────────────────────────────────────────────────── */}
-      {toast && (
-        <div className="fixed top-4 right-4 z-[100] flex items-center gap-2 bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-lg text-sm font-medium animate-fade-in-up">
-          <CheckCircle2 className="h-4 w-4" />
-          {toast}
-        </div>
-      )}
+      {/* Toasts are now handled globally by the notification store */}
 
       {/* ── Page Header ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
