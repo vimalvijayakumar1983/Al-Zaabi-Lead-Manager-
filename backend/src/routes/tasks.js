@@ -36,6 +36,46 @@ const taskSchema = z.object({
   reminder: z.string().datetime().optional().nullable(),
 });
 
+// ─── Task Stats ─────────────────────────────────────────────────
+router.get('/stats', async (req, res, next) => {
+  try {
+    const where = {};
+    if (req.isRestrictedRole) {
+      where.assigneeId = req.user.id;
+    } else {
+      where.assignee = { organizationId: { in: req.orgIds } };
+    }
+
+    const now = new Date();
+    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
+    const weekEnd = new Date(todayStart);
+    weekEnd.setDate(weekEnd.getDate() + (6 - weekEnd.getDay()));
+    weekEnd.setHours(23, 59, 59, 999);
+
+    const [total, pending, inProgress, completed, cancelled, overdue, completedToday, dueThisWeek, byPriority, byType] = await Promise.all([
+      prisma.task.count({ where }),
+      prisma.task.count({ where: { ...where, status: 'PENDING' } }),
+      prisma.task.count({ where: { ...where, status: 'IN_PROGRESS' } }),
+      prisma.task.count({ where: { ...where, status: 'COMPLETED' } }),
+      prisma.task.count({ where: { ...where, status: 'CANCELLED' } }),
+      prisma.task.count({ where: { ...where, dueAt: { lt: now }, status: { in: ['PENDING', 'IN_PROGRESS'] } } }),
+      prisma.task.count({ where: { ...where, status: 'COMPLETED', completedAt: { gte: todayStart, lte: todayEnd } } }),
+      prisma.task.count({ where: { ...where, status: { not: 'COMPLETED' }, dueAt: { gte: todayStart, lte: weekEnd } } }),
+      prisma.task.groupBy({ by: ['priority'], where, _count: true }),
+      prisma.task.groupBy({ by: ['type'], where, _count: true }),
+    ]);
+
+    res.json({
+      total, pending, inProgress, completed, cancelled, overdue, completedToday, dueThisWeek,
+      byPriority: byPriority.reduce((acc, r) => ({ ...acc, [r.priority]: r._count }), {}),
+      byType: byType.reduce((acc, r) => ({ ...acc, [r.type]: r._count }), {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── List Tasks ──────────────────────────────────────────────────
 router.get('/', validateQuery(paginationSchema.extend({
   status: z.string().optional(),
@@ -218,6 +258,46 @@ router.post('/:id/complete', async (req, res, next) => {
     }
 
     broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Bulk Update Tasks ──────────────────────────────────────────
+router.patch('/bulk', validate(z.object({
+  taskIds: z.array(z.string().uuid()).min(1),
+  status: z.enum(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']).optional(),
+  priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+  assigneeId: z.string().uuid().optional(),
+  delete: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const { taskIds, delete: shouldDelete, ...updateData } = req.validated;
+
+    // Verify tasks belong to accessible orgs
+    const accessibleTasks = await prisma.task.findMany({
+      where: { id: { in: taskIds }, assignee: { organizationId: { in: req.orgIds } } },
+      select: { id: true },
+    });
+    const accessibleIds = accessibleTasks.map(t => t.id);
+
+    if (accessibleIds.length === 0) return res.status(404).json({ error: 'No accessible tasks found' });
+
+    if (shouldDelete) {
+      await prisma.task.deleteMany({ where: { id: { in: accessibleIds } } });
+      res.json({ message: `${accessibleIds.length} tasks deleted`, count: accessibleIds.length });
+    } else {
+      const data = {};
+      if (updateData.status) data.status = updateData.status;
+      if (updateData.priority) data.priority = updateData.priority;
+      if (updateData.assigneeId) data.assigneeId = updateData.assigneeId;
+      if (updateData.status === 'COMPLETED') data.completedAt = new Date();
+
+      await prisma.task.updateMany({ where: { id: { in: accessibleIds } }, data });
+      res.json({ message: `${accessibleIds.length} tasks updated`, count: accessibleIds.length });
+    }
+
+    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, {}).catch(() => {});
   } catch (err) {
     next(err);
   }
