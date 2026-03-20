@@ -720,7 +720,7 @@ export default function LeadDetailPage() {
   return (
     <div>
       {/* ═══ STICKY TOP ZONE — Nav + Header + Stage stays frozen ═══ */}
-      <div className="sticky top-14 z-10 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 pt-1 pb-4 bg-[var(--color-surface-secondary,#f8fafc)]/95 backdrop-blur-sm border-b border-gray-200/50 space-y-4 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+      <div className="sticky top-14 z-10 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 pt-1 pb-4 backdrop-blur-sm border-b border-gray-200/50 space-y-4" style={{ backgroundColor: 'rgba(248, 250, 252, 0.95)', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.04)' }}>
       {/* ═══ Lead Navigation Bar ═══ */}
       {navData && navData.leadIds.length > 1 && currentNavIndex >= 0 && (
         <div className="card px-4 py-2.5 bg-gradient-to-r from-slate-50 via-white to-slate-50 border border-gray-200/80 shadow-sm">
@@ -1790,7 +1790,7 @@ export default function LeadDetailPage() {
       {/* ═══ STICKY BOTTOM ZONE — Preview Strip stays frozen ═══ */}
       {/* ═══ Mini Lead Preview Strip — Coming Up Next ═══ */}
       {navData && nextLeadPreviews.length > 0 && currentNavIndex >= 0 && (
-        <div className="sticky bottom-0 z-10 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 bg-[var(--color-surface-secondary,#f8fafc)]/95 backdrop-blur-sm border-t border-gray-200/50">
+        <div className="sticky bottom-0 z-10 -mx-3 sm:-mx-4 md:-mx-6 px-3 sm:px-4 md:px-6 py-2 backdrop-blur-sm border-t border-gray-200/50" style={{ backgroundColor: 'rgba(248, 250, 252, 0.95)' }}>
         <div className="card p-3 bg-gradient-to-r from-gray-50/80 to-white border border-gray-200/60">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
