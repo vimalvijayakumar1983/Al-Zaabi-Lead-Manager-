@@ -1213,6 +1213,31 @@ class ApiClient {
   async getLeadAttachments(leadId: string) {
     return this.request<any[]>(`/inbox/conversations/${leadId}/attachments`);
   }
+
+  // ─── Saved Views ─────────────────────────────────────────────────
+  async getSavedViews(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/saved-views${q}`);
+  }
+
+  async createSavedView(data: any) {
+    return this.request<any>('/saved-views', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateSavedView(id: string, data: any) {
+    return this.request<any>(`/saved-views/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteSavedView(id: string) {
+    return this.request<any>(`/saved-views/${id}`, { method: 'DELETE' });
+  }
+
+  async migrateSavedViews(views: any[], divisionId?: string) {
+    return this.request<any>('/saved-views/migrate', {
+      method: 'POST',
+      body: JSON.stringify({ views, divisionId }),
+    });
+  }
 }
 
 export const api = new ApiClient();

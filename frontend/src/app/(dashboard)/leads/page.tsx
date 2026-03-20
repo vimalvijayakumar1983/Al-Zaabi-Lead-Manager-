@@ -7,7 +7,7 @@ import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
 import { ColumnManager, loadColumns, saveColumns, type ColumnDef } from './components/column-config';
-import { ViewSidebar, SYSTEM_VIEWS, loadCustomViews, saveCustomViews, loadActiveViewId, saveActiveViewId, type SavedView } from './components/saved-views';
+import { ViewSidebar, SYSTEM_VIEWS, loadActiveViewId, saveActiveViewId, getLegacyLocalViews, markViewsMigrated, type SavedView } from './components/saved-views';
 import { KanbanView } from './components/kanban-view';
 import { InlineEdit } from './components/inline-edit';
 import { AdvancedFilters, FilterBadges, emptyFilters, type FilterState } from './components/advanced-filters';
@@ -238,8 +238,9 @@ function LeadsContent() {
 
   // Saved views
   const [activeViewId, setActiveViewId] = useState(() => loadActiveViewId());
-  const [customViews, setCustomViews] = useState<SavedView[]>(() => loadCustomViews());
+  const [customViews, setCustomViews] = useState<SavedView[]>([]);
   const [showViewSidebar, setShowViewSidebar] = useState(true);
+  const [viewsLoaded, setViewsLoaded] = useState(false);
 
   // Advanced filters
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -365,31 +366,56 @@ function LeadsContent() {
     } catch { /* non-critical */ }
   }, []);
 
-  // Restore saved view filters on page mount
+  // Load saved views from server + migrate localStorage views
   useEffect(() => {
-    const savedViewId = loadActiveViewId();
-    if (savedViewId && savedViewId !== 'all') {
-      // Check system views first
-      const systemView = SYSTEM_VIEWS.find(v => v.id === savedViewId);
-      // Then check custom views
-      const allViews = [...SYSTEM_VIEWS, ...loadCustomViews()];
-      const view = allViews.find(v => v.id === savedViewId);
-      if (view) {
-        const restored = { ...emptyFilters };
-        Object.entries(view.filters).forEach(([key, val]) => {
-          if (val !== undefined && val !== null && val !== '') {
-            (restored as any)[key] = String(val);
+    const loadServerViews = async () => {
+      try {
+        const divId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+        
+        // 1. Fetch server-side views
+        const serverViews = await api.getSavedViews(divId || undefined) as SavedView[];
+        
+        // 2. Check for legacy localStorage views to migrate
+        const legacyViews = getLegacyLocalViews();
+        if (legacyViews.length > 0) {
+          try {
+            const result = await api.migrateSavedViews(legacyViews, divId || undefined) as any;
+            if (result?.views) {
+              serverViews.push(...result.views);
+            }
+            markViewsMigrated();
+          } catch { /* ignore migration errors */ }
+        }
+        
+        setCustomViews(serverViews);
+        setViewsLoaded(true);
+        
+        // 3. Restore active view filters
+        const savedViewId = loadActiveViewId();
+        if (savedViewId && savedViewId !== 'all') {
+          const allViews = [...SYSTEM_VIEWS, ...serverViews];
+          const view = allViews.find(v => v.id === savedViewId);
+          if (view) {
+            const restored = { ...emptyFilters };
+            Object.entries(view.filters).forEach(([key, val]) => {
+              if (val !== undefined && val !== null && val !== '') {
+                (restored as any)[key] = String(val);
+              }
+            });
+            setFilters(restored);
+            if (view.sortBy) setSortBy(view.sortBy);
+            if (view.sortOrder) setSortOrder(view.sortOrder);
+          } else {
+            setActiveViewId('all');
+            saveActiveViewId('all');
           }
-        });
-        setFilters(restored);
-        if (view.sortBy) setSortBy(view.sortBy);
-        if (view.sortOrder) setSortOrder(view.sortOrder);
-      } else {
-        // Saved view was deleted — reset
-        setActiveViewId('all');
-        saveActiveViewId('all');
+        }
+      } catch (error) {
+        console.error('Failed to load saved views:', error);
+        setViewsLoaded(true);
       }
-    }
+    };
+    loadServerViews();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
@@ -559,19 +585,38 @@ function LeadsContent() {
     setPagination((p) => ({ ...p, page: 1 }));
   };
 
-  const handleSaveView = (view: SavedView) => {
-    const updated = [...customViews, view];
-    setCustomViews(updated);
-    saveCustomViews(updated);
-    setActiveViewId(view.id);
-    saveActiveViewId(view.id);
+  const handleSaveView = async (viewData: any) => {
+    try {
+      const divId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const created = await api.createSavedView({
+        ...viewData,
+        divisionId: divId || undefined,
+      }) as SavedView;
+      setCustomViews(prev => [...prev, created]);
+      setActiveViewId(created.id);
+      saveActiveViewId(created.id);
+    } catch (error) {
+      console.error('Failed to save view:', error);
+    }
   };
 
-  const handleDeleteView = (id: string) => {
-    const updated = customViews.filter((v) => v.id !== id);
-    setCustomViews(updated);
-    saveCustomViews(updated);
-    if (activeViewId === id) handleSelectView(SYSTEM_VIEWS[0]);
+  const handleEditView = async (id: string, viewData: any) => {
+    try {
+      const updated = await api.updateSavedView(id, viewData) as SavedView;
+      setCustomViews(prev => prev.map(v => v.id === id ? updated : v));
+    } catch (error) {
+      console.error('Failed to update view:', error);
+    }
+  };
+
+  const handleDeleteView = async (id: string) => {
+    try {
+      await api.deleteSavedView(id);
+      setCustomViews(prev => prev.filter(v => v.id !== id));
+      if (activeViewId === id) handleSelectView(SYSTEM_VIEWS[0]);
+    } catch (error) {
+      console.error('Failed to delete view:', error);
+    }
   };
 
   const handleRemoveFilter = (key: keyof FilterState) => {
@@ -1061,9 +1106,13 @@ function LeadsContent() {
             onSelectView={handleSelectView}
             onSaveView={handleSaveView}
             onDeleteView={handleDeleteView}
+            onEditView={handleEditView}
             currentFilters={filters}
             currentSortBy={sortBy}
             currentSortOrder={sortOrder}
+            currentUserId={currentUser?.id}
+            currentUserRole={currentUser?.role}
+            orgUsers={users}
           />
         )}
 

@@ -36,6 +36,7 @@ const channelWebhookRoutes = require('./routes/channel-webhooks');
 const contactRoutes = require('./routes/contacts');
 const callLogRoutes = require('./routes/call-logs');
 const roleRoutes = require('./routes/roles');
+const savedViewRoutes = require('./routes/saved-views');
 
 const app = express();
 const server = createServer(app);
@@ -121,6 +122,7 @@ const routeMounts = [
   ['/contacts', contactRoutes],
   ['/call-logs', callLogRoutes],
   ['/roles', roleRoutes],
+  ['/saved-views', savedViewRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {
