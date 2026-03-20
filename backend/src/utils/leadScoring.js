@@ -175,8 +175,9 @@ async function getPipelinePosition(lead) {
     }
 
     // Get all stages for this org, ordered by position
+    // Note: PipelineStage model has no isActive field — all stages are active
     const stages = await prisma.pipelineStage.findMany({
-      where: { organizationId: lead.organizationId, isActive: true },
+      where: { organizationId: lead.organizationId },
       orderBy: { order: 'asc' },
       select: { id: true, name: true, order: true, isWonStage: true, isLostStage: true },
     });
