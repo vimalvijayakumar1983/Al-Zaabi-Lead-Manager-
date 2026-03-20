@@ -151,7 +151,7 @@ export default function LeadDetailPage() {
     : [];
 
   // Keyboard shortcuts ref (actual handler defined after handleSaveAndNext)
-  const saveAndNextRef = useRef<() => void>(null);
+  const saveAndNextRef = useRef<(() => void) | null>(null);
 
   const getFieldLabel = (key: string, defaultLabel: string): string => {
     if (!fieldConfig) return defaultLabel;
