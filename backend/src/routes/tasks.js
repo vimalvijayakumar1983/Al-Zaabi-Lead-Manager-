@@ -7,6 +7,7 @@ const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagi
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { checkTaskReminders } = require('../services/taskReminderScheduler');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -417,8 +418,7 @@ router.patch('/bulk', validate(z.object({
     // Verify tasks belong to accessible orgs
     const accessibleTasks = await prisma.task.findMany({
       where: { id: { in: taskIds }, assignee: { organizationId: { in: req.orgIds } } },
-      select: {
-        id: true,
+      include: {
         assignee: { select: { organizationId: true } },
         lead: { select: { organizationId: true } },
       },
@@ -449,8 +449,38 @@ router.patch('/bulk', validate(z.object({
     }
 
     if (shouldDelete) {
+      await Promise.all(
+        accessibleTasks.map((task) => {
+          const taskOrgId = task.lead?.organizationId || task.assignee?.organizationId || req.user.organizationId;
+          return upsertRecycleBinItem({
+            entityType: 'TASK',
+            entityId: task.id,
+            entityLabel: task.title,
+            organizationId: taskOrgId,
+            deletedById: req.user.id,
+            recordAssigneeId: task.assigneeId,
+            recordCreatorId: task.createdById,
+            snapshot: {
+              title: task.title,
+              description: task.description,
+              type: task.type,
+              priority: task.priority,
+              status: task.status,
+              dueAt: task.dueAt,
+              completedAt: task.completedAt,
+              isRecurring: task.isRecurring,
+              recurRule: task.recurRule,
+              reminder: task.reminder,
+              leadId: task.leadId,
+              contactId: task.contactId,
+              assigneeId: task.assigneeId,
+              createdById: task.createdById,
+            },
+          });
+        })
+      );
       await prisma.task.deleteMany({ where: { id: { in: accessibleIds } } });
-      res.json({ message: `${accessibleIds.length} tasks deleted`, count: accessibleIds.length });
+      res.json({ message: `${accessibleIds.length} tasks moved to recycle bin`, count: accessibleIds.length });
     } else {
       const data = {};
       if (updateData.status) data.status = updateData.status;
@@ -474,11 +504,42 @@ router.delete('/:id', async (req, res, next) => {
     // Verify task belongs to accessible orgs
     const existing = await prisma.task.findFirst({
       where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+      include: {
+        assignee: { select: { organizationId: true } },
+        lead: { select: { organizationId: true } },
+      },
     });
     if (!existing) return res.status(404).json({ error: 'Task not found' });
 
+    const taskOrgId = existing.lead?.organizationId || existing.assignee?.organizationId || req.user.organizationId;
+    await upsertRecycleBinItem({
+      entityType: 'TASK',
+      entityId: existing.id,
+      entityLabel: existing.title,
+      organizationId: taskOrgId,
+      deletedById: req.user.id,
+      recordAssigneeId: existing.assigneeId,
+      recordCreatorId: existing.createdById,
+      snapshot: {
+        title: existing.title,
+        description: existing.description,
+        type: existing.type,
+        priority: existing.priority,
+        status: existing.status,
+        dueAt: existing.dueAt,
+        completedAt: existing.completedAt,
+        isRecurring: existing.isRecurring,
+        recurRule: existing.recurRule,
+        reminder: existing.reminder,
+        leadId: existing.leadId,
+        contactId: existing.contactId,
+        assigneeId: existing.assigneeId,
+        createdById: existing.createdById,
+      },
+    });
+
     await prisma.task.delete({ where: { id: req.params.id } });
-    res.json({ message: 'Task deleted' });
+    res.json({ message: 'Task moved to recycle bin' });
 
     broadcastDataChange(req.user.organizationId, 'task', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {

@@ -29,6 +29,7 @@ import {
   Inbox,
   UserCircle,
   Shield,
+  Archive,
 } from 'lucide-react';
 
 const navItems = [
@@ -44,6 +45,7 @@ const navItems = [
   { href: '/integrations', label: 'Integrations', icon: Plug2, permission: 'integrations' },
   { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
   { href: '/roles', label: 'Roles', icon: Shield, permission: 'roles' },
+  { href: '/recycle-bin', label: 'Recycle Bin', icon: Archive, permission: 'recycleBin' },
   { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'import' },
   { href: '/divisions', label: 'Divisions', icon: Building2, shortcut: '0', permission: 'divisions', divisionOnly: true },
 ];

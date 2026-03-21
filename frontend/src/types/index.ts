@@ -680,6 +680,43 @@ export interface NotificationPreferences {
   defaultCallbackSnoozeMinutes?: number;
 }
 
+export type RecycleScope = 'none' | 'own' | 'team' | 'division' | 'all';
+export type RecycleEntityType = 'LEAD' | 'CONTACT' | 'TASK' | 'CAMPAIGN';
+
+export interface RecycleBinAccessRule {
+  view: RecycleScope;
+  restore: RecycleScope;
+  purge: boolean;
+}
+
+export interface RecycleBinAccessSettings {
+  roleScopes: Record<string, RecycleBinAccessRule>;
+  userOverrides: Record<string, RecycleBinAccessRule>;
+}
+
+export interface RecycleBinItem {
+  id: string;
+  entityType: RecycleEntityType;
+  entityId: string;
+  entityLabel?: string | null;
+  organizationId: string;
+  deletedById?: string | null;
+  recordOwnerId?: string | null;
+  recordAssigneeId?: string | null;
+  recordCreatorId?: string | null;
+  deletedAt: string;
+  purgeAt: string;
+  metadata?: Record<string, any>;
+  snapshot?: Record<string, any> | null;
+  createdAt: string;
+  updatedAt: string;
+  daysUntilPurge?: number;
+  capabilities?: {
+    canRestore: boolean;
+    canPurge: boolean;
+  };
+}
+
 export interface Toast {
   id: string;
   type: 'success' | 'error' | 'warning' | 'info';

@@ -26,6 +26,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/campaigns': { title: 'Campaigns', description: 'Marketing campaign management' },
   '/team': { title: 'Team', description: 'Team members and access control' },
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
+  '/recycle-bin': { title: 'Recycle Bin', description: 'Restore or permanently remove deleted records' },
   '/import': { title: 'Import Center', description: 'Import data from files' },
   '/divisions': { title: 'Divisions', description: 'Manage organization divisions' },
   '/roles': { title: 'Roles & Permissions', description: 'Manage roles and access control' },
@@ -235,6 +236,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/team': 'team',
     '/roles': 'roles',
     '/settings': 'settings',
+    '/recycle-bin': 'recycleBin',
     '/import': 'import',
     '/divisions': 'divisions',
   };

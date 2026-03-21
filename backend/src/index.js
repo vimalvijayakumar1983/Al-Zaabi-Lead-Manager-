@@ -18,6 +18,10 @@ const {
   startNotificationEscalationScheduler,
   stopNotificationEscalationScheduler,
 } = require('./services/notificationEscalationScheduler');
+const {
+  startRecycleBinPurgeScheduler,
+  stopRecycleBinPurgeScheduler,
+} = require('./services/recycleBinPurgeScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -44,6 +48,7 @@ const contactRoutes = require('./routes/contacts');
 const callLogRoutes = require('./routes/call-logs');
 const roleRoutes = require('./routes/roles');
 const savedViewRoutes = require('./routes/saved-views');
+const recycleBinRoutes = require('./routes/recycle-bin');
 
 const app = express();
 const server = createServer(app);
@@ -130,6 +135,7 @@ const routeMounts = [
   ['/call-logs', callLogRoutes],
   ['/roles', roleRoutes],
   ['/saved-views', savedViewRoutes],
+  ['/recycle-bin', recycleBinRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {
@@ -168,6 +174,9 @@ server.listen(PORT, () => {
 
   // Start unread reminder escalation monitor
   startNotificationEscalationScheduler();
+
+  // Purge recycle bin records that crossed retention window
+  startRecycleBinPurgeScheduler();
 });
 
 // Graceful shutdown
@@ -179,6 +188,7 @@ const shutdown = async () => {
   stopTaskReminderScheduler();
   stopWillCallAgainSafetyNetScheduler();
   stopNotificationEscalationScheduler();
+  stopRecycleBinPurgeScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

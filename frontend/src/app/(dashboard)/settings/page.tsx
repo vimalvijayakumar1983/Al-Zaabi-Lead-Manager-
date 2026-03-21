@@ -4,7 +4,15 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import type { CustomField, FieldType, Organization, BuiltInField, NotificationPreferences } from '@/types';
+import type {
+  CustomField,
+  FieldType,
+  Organization,
+  BuiltInField,
+  NotificationPreferences,
+  RecycleBinAccessSettings,
+  RecycleScope,
+} from '@/types';
 import { CallDispositionStudioSection } from './call-disposition-studio';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
@@ -17,7 +25,7 @@ import {
   Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
@@ -30,6 +38,7 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
   { key: 'emailTemplates', label: 'Email Templates', icon: LayoutTemplate, adminOnly: true },
   { key: 'notifications', label: 'Notifications', icon: Bell },
+  { key: 'recycleBinAccess', label: 'Recycle Bin Access', icon: Trash2, adminOnly: true },
   { key: 'audit', label: 'Audit Log', icon: Shield, adminOnly: true },
   { key: 'danger', label: 'Danger Zone', icon: AlertTriangle },
 ];
@@ -109,6 +118,7 @@ export default function SettingsPage() {
           {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
           {activeTab === 'emailTemplates' && isAdmin && <EmailTemplatesSection />}
           {activeTab === 'notifications' && <NotificationsSection />}
+          {activeTab === 'recycleBinAccess' && isAdmin && <RecycleBinAccessSection />}
           {activeTab === 'audit' && isAdmin && <AuditLogSection />}
           {activeTab === 'danger' && <DangerZoneSection />}
         </div>
@@ -1172,6 +1182,166 @@ function NotificationsSection() {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Recycle Bin Access Section ────────────────────────────────── */
+function RecycleBinAccessSection() {
+  const [settings, setSettings] = useState<RecycleBinAccessSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  const roleOrder = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'];
+  const scopeOptions: Array<{ value: RecycleScope; label: string }> = [
+    { value: 'none', label: 'No access' },
+    { value: 'own', label: 'Own records' },
+    { value: 'team', label: 'Team records' },
+    { value: 'division', label: 'Division records' },
+    { value: 'all', label: 'All allowed divisions' },
+  ];
+
+  useEffect(() => {
+    api.getRecycleBinAccessSettings()
+      .then((response) => setSettings(response.settings))
+      .catch(() => setSettings(null));
+  }, []);
+
+  const updateRoleField = (role: string, key: 'view' | 'restore' | 'purge', value: RecycleScope | boolean) => {
+    if (!settings) return;
+    const current = settings.roleScopes[role] || { view: 'none', restore: 'none', purge: false };
+    setSettings({
+      ...settings,
+      roleScopes: {
+        ...settings.roleScopes,
+        [role]: {
+          ...current,
+          [key]: value,
+        },
+      },
+    });
+  };
+
+  const handleSave = async () => {
+    if (!settings) return;
+    setSaving(true);
+    try {
+      const response = await api.updateRecycleBinAccessSettings({
+        roleScopes: settings.roleScopes,
+      });
+      setSettings(response.settings);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 2500);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to save recycle bin access settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!settings) {
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <SectionHeader
+          title="Recycle Bin Access"
+          description="Configure who can see and restore deleted records by division scope"
+        />
+        <div className="card p-6 space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="grid grid-cols-4 gap-3 items-center">
+              <div className="skeleton h-4 w-20" />
+              <div className="skeleton h-8 w-full" />
+              <div className="skeleton h-8 w-full" />
+              <div className="skeleton h-8 w-full" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <SectionHeader
+        title="Recycle Bin Access"
+        description="Control visibility and restore scope per role. Team scope currently follows division scope."
+      />
+
+      <div className="card overflow-hidden">
+        <div className="px-6 py-4 bg-surface-secondary border-b border-border-subtle">
+          <h3 className="text-sm font-semibold text-text-primary">Role access matrix</h3>
+        </div>
+        <div className="divide-y divide-border-subtle">
+          <div className="hidden md:grid grid-cols-12 gap-3 px-6 py-3 text-2xs uppercase tracking-wide text-text-tertiary">
+            <div className="col-span-3">Role</div>
+            <div className="col-span-3">View Scope</div>
+            <div className="col-span-3">Restore Scope</div>
+            <div className="col-span-3">Permanent Delete</div>
+          </div>
+          {roleOrder.map((role) => {
+            const roleConfig = settings.roleScopes[role] || { view: 'none', restore: 'none', purge: false };
+            return (
+              <div key={role} className="px-4 sm:px-6 py-4 grid grid-cols-1 md:grid-cols-12 gap-3 md:items-center">
+                <div className="md:col-span-3">
+                  <p className="text-sm font-medium text-text-primary">{role.replace('_', ' ')}</p>
+                </div>
+                <div className="md:col-span-3">
+                  <select
+                    value={roleConfig.view}
+                    onChange={(e) => updateRoleField(role, 'view', e.target.value as RecycleScope)}
+                    className="w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm"
+                  >
+                    {scopeOptions.map((option) => (
+                      <option key={`${role}-view-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="md:col-span-3">
+                  <select
+                    value={roleConfig.restore}
+                    onChange={(e) => updateRoleField(role, 'restore', e.target.value as RecycleScope)}
+                    className="w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm"
+                  >
+                    {scopeOptions.map((option) => (
+                      <option key={`${role}-restore-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="md:col-span-3">
+                  <label className="inline-flex items-center gap-2 text-sm text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={roleConfig.purge}
+                      onChange={(e) => updateRoleField(role, 'purge', e.target.checked)}
+                      disabled={!['SUPER_ADMIN', 'ADMIN'].includes(role)}
+                      className="h-4 w-4 rounded border-border-subtle"
+                    />
+                    Allow permanent delete
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        {success ? (
+          <div className="flex items-center gap-1.5 text-sm text-emerald-600 animate-fade-in">
+            <Check className="h-4 w-4" />
+            Recycle bin access updated
+          </div>
+        ) : (
+          <div />
+        )}
+        <button onClick={handleSave} disabled={saving} className="btn-primary">
+          {saving ? 'Saving...' : 'Save Access Settings'}
+        </button>
       </div>
     </div>
   );

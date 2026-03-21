@@ -12,6 +12,7 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const { autoAssign, getNextAssignee } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
 const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -1353,6 +1354,29 @@ router.delete('/:id', async (req, res, next) => {
       data: { isArchived: true },
     });
 
+    await upsertRecycleBinItem({
+      entityType: 'LEAD',
+      entityId: lead.id,
+      entityLabel: getDisplayName(lead),
+      organizationId: lead.organizationId,
+      deletedById: req.user.id,
+      recordOwnerId: lead.assignedToId || null,
+      recordCreatorId: lead.createdById || null,
+      metadata: {
+        status: lead.status,
+        source: lead.source,
+      },
+      snapshot: {
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        email: lead.email,
+        phone: lead.phone,
+        company: lead.company,
+        assignedToId: lead.assignedToId,
+        createdById: lead.createdById,
+      },
+    });
+
     await createAuditLog({
       userId: req.user.id,
       organizationId: lead.organizationId,
@@ -1362,7 +1386,7 @@ router.delete('/:id', async (req, res, next) => {
       req,
     });
 
-    res.json({ message: 'Lead archived' });
+    res.json({ message: 'Lead moved to recycle bin' });
 
     broadcastDataChange(lead.organizationId, 'lead', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {

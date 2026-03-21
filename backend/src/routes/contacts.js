@@ -7,6 +7,7 @@ const { paginationSchema, paginate, paginatedResponse } = require('../utils/pagi
 const { createAuditLog } = require('../middleware/auditLog');
 const { logger } = require('../config/logger');
 const { broadcastDataChange } = require('../websocket/server');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -603,12 +604,35 @@ router.delete('/:id', async (req, res, next) => {
       data: { isArchived: true },
     });
 
+    await upsertRecycleBinItem({
+      entityType: 'CONTACT',
+      entityId: existing.id,
+      entityLabel: getDisplayName(existing),
+      organizationId: existing.organizationId,
+      deletedById: req.user.id,
+      recordOwnerId: existing.ownerId || null,
+      recordCreatorId: existing.createdById || null,
+      metadata: {
+        lifecycle: existing.lifecycle,
+        type: existing.type,
+      },
+      snapshot: {
+        firstName: existing.firstName,
+        lastName: existing.lastName,
+        email: existing.email,
+        phone: existing.phone,
+        mobile: existing.mobile,
+        ownerId: existing.ownerId,
+        createdById: existing.createdById,
+      },
+    });
+
     createAuditLog({
       userId: req.user.id, organizationId: req.orgId,
       action: 'delete', entity: 'contact', entityId: req.params.id, req,
     });
 
-    res.json({ message: 'Contact archived' });
+    res.json({ message: 'Contact moved to recycle bin' });
 
     broadcastDataChange(existing.organizationId, 'contact', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {

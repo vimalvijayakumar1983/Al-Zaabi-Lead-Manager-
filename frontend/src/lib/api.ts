@@ -3,7 +3,7 @@ import type {
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
   ApiKey, WidgetConfig, Contact, ContactStats, Deal,
-  AppNotification, NotificationPreferences,
+  AppNotification, NotificationPreferences, RecycleBinItem, RecycleBinAccessSettings,
   BuiltInField, CustomField
 } from '@/types';
 
@@ -1116,6 +1116,57 @@ class ApiClient {
   async deleteNotification(id: string) {
     return this.request<{ success: boolean }>(`/notifications/${id}`, {
       method: 'DELETE',
+    });
+  }
+
+  async getRecycleBinItems(params?: {
+    type?: 'LEAD' | 'CONTACT' | 'TASK' | 'CAMPAIGN';
+    search?: string;
+    divisionId?: string;
+    expiringInDays?: number;
+    page?: number;
+    limit?: number;
+    sortBy?: 'deletedAt' | 'purgeAt' | 'entityLabel';
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const query = params
+      ? '?' + new URLSearchParams(params as Record<string, string>).toString()
+      : '';
+    return this.request<{
+      data: RecycleBinItem[];
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+      };
+    }>(`/recycle-bin${query}`);
+  }
+
+  async restoreRecycleBinItem(id: string) {
+    return this.request<{ success: boolean; result: any }>(`/recycle-bin/${id}/restore`, {
+      method: 'POST',
+    });
+  }
+
+  async permanentlyDeleteRecycleBinItem(id: string) {
+    return this.request<{ success: boolean; result: any }>(`/recycle-bin/${id}/permanent`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getRecycleBinAccessSettings() {
+    return this.request<{ settings: RecycleBinAccessSettings; availableScopes: string[] }>(
+      '/recycle-bin/access-settings'
+    );
+  }
+
+  async updateRecycleBinAccessSettings(data: Partial<RecycleBinAccessSettings>) {
+    return this.request<{ settings: RecycleBinAccessSettings }>('/recycle-bin/access-settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
     });
   }
 
