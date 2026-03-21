@@ -246,7 +246,9 @@ function LeadsContent() {
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [stats, setStats] = useState<any>(null);
   const [quickActionId, setQuickActionId] = useState<string | null>(null);
+  const [quickActionDirection, setQuickActionDirection] = useState<'up' | 'down'>('down');
   const quickActionRef = useRef<HTMLDivElement>(null);
+  const leadsScrollRef = useRef<HTMLDivElement>(null);
 
   // Column management
   const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumns());
@@ -1015,18 +1017,40 @@ function LeadsContent() {
         return <SLABadge slaInfo={sla} />;
       }
       case 'actions': {
-        const shouldOpenUp = rowIndex >= Math.max(0, leads.length - 3);
         return (
           <div className="relative">
-            <button onClick={() => setQuickActionId(quickActionId === lead.id ? null : lead.id)}
+            <button
+              onClick={(e) => {
+                if (quickActionId === lead.id) {
+                  setQuickActionId(null);
+                  return;
+                }
+                const triggerRect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                const containerRect = leadsScrollRef.current?.getBoundingClientRect();
+                const fallbackOpenUp = rowIndex >= Math.max(0, leads.length - 4);
+                const reservedBottomSpace = selectedLeads.size > 0 ? 96 : 24;
+                let shouldOpenUp = fallbackOpenUp;
+
+                if (containerRect) {
+                  const availableBelow = containerRect.bottom - triggerRect.bottom - reservedBottomSpace;
+                  const availableAbove = triggerRect.top - containerRect.top - 12;
+                  shouldOpenUp = availableBelow < 260 && availableAbove > availableBelow;
+                } else if (typeof window !== 'undefined') {
+                  const viewportBelow = window.innerHeight - triggerRect.bottom - reservedBottomSpace;
+                  shouldOpenUp = viewportBelow < 260;
+                }
+
+                setQuickActionDirection(shouldOpenUp ? 'up' : 'down');
+                setQuickActionId(lead.id);
+              }}
               className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
             </button>
             {quickActionId === lead.id && (
               <div
                 ref={quickActionRef}
-                className={`absolute right-0 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 ${
-                  shouldOpenUp ? 'bottom-full mb-1' : 'top-full mt-1'
+                className={`absolute right-0 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 max-h-[min(70vh,24rem)] overflow-y-auto ${
+                  quickActionDirection === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
                 }`}
               >
                 <Link href={`/leads/${lead.id}`} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -1345,7 +1369,7 @@ function LeadsContent() {
           {/* ═══════════════════ TABLE VIEW ═══════════════════ */}
           {viewMode === 'table' && (
             <div className="card overflow-hidden flex-1 min-h-0 flex flex-col">
-              <div className="flex-1 min-h-0 overflow-auto leads-scroll">
+              <div ref={leadsScrollRef} className="flex-1 min-h-0 overflow-auto leads-scroll">
                 <table className="min-w-full">
                   <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#e5e7eb]">
                     <tr className="border-b border-border">
