@@ -1194,9 +1194,21 @@ function LeadsContent() {
     ? getStagesForLead(activeQuickLead).filter((s) => s.id !== (activeQuickLead as any).stageId)
     : [];
   const bulkStageOptions = (() => {
+    const selectedLeadDivisionIds = new Set<string>();
+    for (const leadId of Array.from(selectedLeads)) {
+      const selectedLead = leads.find((lead) => lead.id === leadId);
+      const divisionId = selectedLead ? getLeadDivisionId(selectedLead) : null;
+      if (divisionId) selectedLeadDivisionIds.add(divisionId);
+    }
+
+    const scopedStages =
+      selectedLeadDivisionIds.size === 1
+        ? stages.filter((stage) => !stage.organizationId || selectedLeadDivisionIds.has(stage.organizationId))
+        : stages;
+
     const seen = new Set<string>();
-    return stages.filter((stage) => {
-      const key = `${stage.organizationId || ''}::${String(stage.name || '').trim().toLowerCase()}`;
+    return scopedStages.filter((stage) => {
+      const key = String(stage.name || '').trim().toLowerCase() || stage.id;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1439,12 +1451,12 @@ function LeadsContent() {
 
           {/* Bulk Actions Bar */}
           {selectedLeads.size > 0 && (
-            <div className="fixed bottom-[max(3.75rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 w-[min(980px,calc(100vw-1.5rem))] pointer-events-none">
-              <div className="card p-3 bg-brand-50 border-brand-200 shadow-xl flex items-center justify-between pointer-events-auto">
-                <span className="text-sm font-medium text-brand-700">
+            <div className="fixed bottom-[max(4.5rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+              <div className="card p-2.5 sm:p-3 bg-brand-50 border-brand-200 shadow-xl inline-flex items-center gap-3 sm:gap-4 pointer-events-none">
+                <span className="text-xs sm:text-sm font-medium text-brand-700 whitespace-nowrap pointer-events-none">
                   {selectedLeads.size} lead{selectedLeads.size > 1 ? 's' : ''} selected
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
                   <div className="relative">
                     <button onClick={() => setShowBulkActions(!showBulkActions)} className="btn-secondary text-xs gap-1">
                       <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
@@ -1454,7 +1466,7 @@ function LeadsContent() {
                       <div className="absolute right-0 bottom-full mb-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 max-h-60 overflow-y-auto">
                         {bulkStageOptions.length > 0
                           ? bulkStageOptions.map((s) => (
-                              <button key={s.id} onClick={async () => {
+                              <button key={s.id || `${s.organizationId || ''}:${s.name}`} onClick={async () => {
                                 try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
                               }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                                 <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
