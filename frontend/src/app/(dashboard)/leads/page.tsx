@@ -563,7 +563,7 @@ function LeadsContent() {
       : stages;
     const seen = new Set<string>();
     return scopedStages.filter((stage) => {
-      const key = stage.id || `${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+      const key = `${stage.organizationId || leadDivisionId || ''}::${String(stage.name || '').trim().toLowerCase()}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1196,7 +1196,7 @@ function LeadsContent() {
   const bulkStageOptions = (() => {
     const seen = new Set<string>();
     return stages.filter((stage) => {
-      const key = stage.id || `${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+      const key = `${stage.organizationId || ''}::${String(stage.name || '').trim().toLowerCase()}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
