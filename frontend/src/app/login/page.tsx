@@ -6,7 +6,7 @@ import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
 const features = [
-  { icon: Zap, title: 'Smart Automation', description: 'Automate follow-ups, assignments, and scoring' },
+  { icon: Zap, title: 'Advance Automations', description: 'Automate follow-ups, assignments, and scoring' },
   { icon: BarChart3, title: 'Advanced Analytics', description: 'Real-time insights and conversion funnels' },
   { icon: Shield, title: 'Enterprise Security', description: 'Role-based access and audit logging' },
 ];
