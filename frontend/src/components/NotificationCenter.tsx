@@ -369,14 +369,18 @@ function NotificationItem({
   const iconDef = getNotificationIcon(notification.type);
   const IconComponent = iconDef.icon;
   const hasActor = !!notification.actor;
+  const isTaskEntity = notification.entityType === 'task' && !!notification.entityId;
   const isTaskNotification =
-    notification.type.startsWith('TASK_') && notification.entityType === 'task';
+    isTaskEntity &&
+    (notification.type.startsWith('TASK_') ||
+      notification.type === 'NOTIFICATION_ESCALATED');
   const isReminderNotification =
     notification.type === 'TASK_REMINDER' ||
     notification.type === 'TASK_DUE_SOON' ||
     notification.type === 'TASK_OVERDUE' ||
     notification.type === 'CALLBACK_REMINDER' ||
-    notification.type === 'CALLBACK_REMINDER_HANDOFF';
+    notification.type === 'CALLBACK_REMINDER_HANDOFF' ||
+    (notification.type === 'NOTIFICATION_ESCALATED' && isTaskEntity);
   const canEscalate = isReminderNotification;
 
   const handleArchive = useCallback(
@@ -484,6 +488,43 @@ function NotificationItem({
         <p className="text-[12px] text-text-tertiary leading-relaxed line-clamp-2 mt-0.5 pr-6">
           {notification.message}
         </p>
+        {(isTaskNotification || isReminderNotification || canEscalate) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {isTaskNotification && (
+              <button
+                onClick={(e) => handleAction(e, 'MARK_DONE')}
+                disabled={actionBusy}
+                className="h-6 px-2 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+              >
+                Done
+              </button>
+            )}
+            {isReminderNotification && (
+              <button
+                onClick={(e) =>
+                  handleAction(
+                    e,
+                    'SNOOZE',
+                    notification.type.startsWith('CALLBACK_') ? 30 : 15
+                  )
+                }
+                disabled={actionBusy}
+                className="h-6 px-2 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50"
+              >
+                Snooze
+              </button>
+            )}
+            {canEscalate && notification.type !== 'NOTIFICATION_ESCALATED' && (
+              <button
+                onClick={(e) => handleAction(e, 'ESCALATE')}
+                disabled={actionBusy}
+                className="h-6 px-2 rounded-md text-[10px] font-semibold bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+              >
+                Escalate
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Hover actions — slide in from right with glass bg */}
@@ -495,42 +536,6 @@ function NotificationItem({
           ${showActions ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'}
         `}
       >
-        {isTaskNotification && (
-          <button
-            onClick={(e) => handleAction(e, 'MARK_DONE')}
-            title="Mark task done"
-            disabled={actionBusy}
-            className="h-7 px-2 flex items-center justify-center rounded-md hover:bg-emerald-50 text-emerald-600 transition-colors text-[10px] font-semibold disabled:opacity-50"
-          >
-            Done
-          </button>
-        )}
-        {isReminderNotification && (
-          <button
-            onClick={(e) =>
-              handleAction(
-                e,
-                'SNOOZE',
-                notification.type.startsWith('CALLBACK_') ? 30 : 15
-              )
-            }
-            title="Snooze reminder"
-            disabled={actionBusy}
-            className="h-7 px-2 flex items-center justify-center rounded-md hover:bg-amber-50 text-amber-600 transition-colors text-[10px] font-semibold disabled:opacity-50"
-          >
-            Snooze
-          </button>
-        )}
-        {canEscalate && (
-          <button
-            onClick={(e) => handleAction(e, 'ESCALATE')}
-            title="Escalate"
-            disabled={actionBusy}
-            className="h-7 px-2 flex items-center justify-center rounded-md hover:bg-red-50 text-red-600 transition-colors text-[10px] font-semibold disabled:opacity-50"
-          >
-            Escalate
-          </button>
-        )}
         {!notification.isRead && (
           <button
             onClick={handleRead}
