@@ -1190,6 +1190,18 @@ function LeadsContent() {
   };
 
   const activeQuickLead = quickActionId ? leads.find((lead) => lead.id === quickActionId) || null : null;
+  const quickActionStageOptions = activeQuickLead
+    ? getStagesForLead(activeQuickLead).filter((s) => s.id !== (activeQuickLead as any).stageId)
+    : [];
+  const bulkStageOptions = (() => {
+    const seen = new Set<string>();
+    return stages.filter((stage) => {
+      const key = stage.id || `${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  })();
 
   // Listen for open-lead-form event from command palette
   useEffect(() => {
@@ -1392,8 +1404,8 @@ function LeadsContent() {
               </Link>
               <div className="border-t border-gray-100 my-1" />
               <div className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase">Move to Stage</div>
-              {stages.length > 0
-                ? stages.filter((s) => s.id !== (activeQuickLead as any).stageId).map((s) => (
+              {quickActionStageOptions.length > 0
+                ? quickActionStageOptions.map((s) => (
                     <button key={s.id} onClick={async () => {
                       try {
                         await api.moveLead(activeQuickLead.id, s.id, 0);
@@ -1427,45 +1439,47 @@ function LeadsContent() {
 
           {/* Bulk Actions Bar */}
           {selectedLeads.size > 0 && (
-            <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[min(980px,calc(100vw-1.5rem))] card p-3 bg-brand-50 border-brand-200 shadow-xl flex items-center justify-between">
-              <span className="text-sm font-medium text-brand-700">
-                {selectedLeads.size} lead{selectedLeads.size > 1 ? 's' : ''} selected
-              </span>
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <button onClick={() => setShowBulkActions(!showBulkActions)} className="btn-secondary text-xs gap-1">
-                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    Move to Stage
+            <div className="fixed bottom-[max(3.75rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 w-[min(980px,calc(100vw-1.5rem))] pointer-events-none">
+              <div className="card p-3 bg-brand-50 border-brand-200 shadow-xl flex items-center justify-between pointer-events-auto">
+                <span className="text-sm font-medium text-brand-700">
+                  {selectedLeads.size} lead{selectedLeads.size > 1 ? 's' : ''} selected
+                </span>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <button onClick={() => setShowBulkActions(!showBulkActions)} className="btn-secondary text-xs gap-1">
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                      Move to Stage
+                    </button>
+                    {showBulkActions && (
+                      <div className="absolute right-0 bottom-full mb-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 max-h-60 overflow-y-auto">
+                        {bulkStageOptions.length > 0
+                          ? bulkStageOptions.map((s) => (
+                              <button key={s.id} onClick={async () => {
+                                try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
+                              }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                                <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
+                                {s.name}
+                              </button>
+                            ))
+                          : Object.keys(statusColors).map((s) => (
+                              <button key={s} onClick={() => handleBulkStatusUpdate(s)} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                                <span className={`inline-block w-2 h-2 rounded-full mr-2 ${statusColors[s].split(' ')[0]}`} />
+                                {getStatusLabel(s)}
+                              </button>
+                            ))}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => setShowBulkReassign(true)} className="btn-secondary text-xs gap-1">
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                    Reassign
                   </button>
-                  {showBulkActions && (
-                    <div className="absolute right-0 bottom-full mb-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 max-h-60 overflow-y-auto">
-                      {stages.length > 0
-                        ? stages.map((s) => (
-                            <button key={s.id} onClick={async () => {
-                              try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
-                            }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-                              <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
-                              {s.name}
-                            </button>
-                          ))
-                        : Object.keys(statusColors).map((s) => (
-                            <button key={s} onClick={() => handleBulkStatusUpdate(s)} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-                              <span className={`inline-block w-2 h-2 rounded-full mr-2 ${statusColors[s].split(' ')[0]}`} />
-                              {getStatusLabel(s)}
-                            </button>
-                          ))}
-                    </div>
-                  )}
+                  <button onClick={handleBulkDelete} className="btn-secondary text-xs text-red-600 hover:text-red-700 gap-1">
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    Delete
+                  </button>
+                  <button onClick={() => setSelectedLeads(new Set())} className="btn-secondary text-xs">Clear</button>
                 </div>
-                <button onClick={() => setShowBulkReassign(true)} className="btn-secondary text-xs gap-1">
-                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                  Reassign
-                </button>
-                <button onClick={handleBulkDelete} className="btn-secondary text-xs text-red-600 hover:text-red-700 gap-1">
-                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  Delete
-                </button>
-                <button onClick={() => setSelectedLeads(new Set())} className="btn-secondary text-xs">Clear</button>
               </div>
             </div>
           )}
