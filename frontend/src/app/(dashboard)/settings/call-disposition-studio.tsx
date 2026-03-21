@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import { Plus, Save, Loader2, Settings2, X, Trash2 } from 'lucide-react';
+import { Plus, Save, Loader2, Settings2, X, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 
 type StudioField = {
   key: string;
@@ -51,6 +51,18 @@ const BUILTIN_MAP_TARGETS = [
   'DO_NOT_CALL', 'OTHER',
 ];
 
+const CATEGORY_OPTIONS = ['Follow-up', 'Positive', 'Retry', 'Closed', 'Other', 'Custom'];
+const STATUS_OPTIONS = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST'];
+const TASK_TYPE_OPTIONS = ['FOLLOW_UP_CALL', 'EMAIL', 'MEETING', 'PROPOSAL', 'OTHER'];
+const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+
+const ACTION_LABELS: Record<StudioAction['type'], string> = {
+  CREATE_TASK: 'Create follow-up task',
+  UPDATE_STATUS: 'Update lead status',
+  ADD_TAG: 'Add tag to lead',
+  NOTIFY_ASSIGNEE: 'Notify assignee',
+};
+
 const blankDisposition = (): StudioDisposition => ({
   key: '',
   label: '',
@@ -70,6 +82,10 @@ function toKey(input: string) {
   return input.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
 }
 
+function toOptionValue(input: string) {
+  return input.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+}
+
 export function CallDispositionStudioSection() {
   const { user } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -83,6 +99,7 @@ export function CallDispositionStudioSection() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<StudioDisposition>(blankDisposition());
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -115,6 +132,7 @@ export function CallDispositionStudioSection() {
     } else {
       setDraft(JSON.parse(JSON.stringify(dispositions[index])));
     }
+    setShowAdvanced(false);
     setEditingIndex(index);
     setEditorOpen(true);
   };
@@ -212,7 +230,7 @@ export function CallDispositionStudioSection() {
                     {!d.isActive && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Inactive</span>}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
-                    Key: <code>{d.key}</code> • Maps to: <code>{d.mapsTo}</code> • Fields: {d.fields?.length || 0} • Actions: {d.actions?.length || 0}
+                    {d.category || 'Other'} • {d.requireNotes ? 'Notes required' : 'Notes optional'} • Fields: {d.fields?.length || 0} • Actions: {d.actions?.length || 0}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -238,39 +256,69 @@ export function CallDispositionStudioSection() {
             </div>
 
             <div className="p-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="label">Label *</label>
-                  <input className="input" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
-                </div>
-                <div>
-                  <label className="label">Key</label>
-                  <input className="input" value={draft.key} onChange={(e) => setDraft({ ...draft, key: toKey(e.target.value) })} placeholder="AUTO_FROM_LABEL" />
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="md:col-span-2">
+                  <label className="label">Display name *</label>
+                  <input className="input" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="e.g. Meeting Arranged" />
                 </div>
                 <div>
                   <label className="label">Category</label>
-                  <input className="input" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} />
+                  <select className="input" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+                    {CATEGORY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="label">Icon</label>
-                  <input className="input" value={draft.icon} onChange={(e) => setDraft({ ...draft, icon: e.target.value })} />
+                  <input className="input" value={draft.icon} onChange={(e) => setDraft({ ...draft, icon: e.target.value })} placeholder="e.g. 📅" />
                 </div>
                 <div>
                   <label className="label">Color</label>
                   <input type="color" className="input h-10" value={draft.color} onChange={(e) => setDraft({ ...draft, color: e.target.value })} />
                 </div>
-                <div>
-                  <label className="label">Maps To (stored disposition)</label>
-                  <select className="input" value={draft.mapsTo} onChange={(e) => setDraft({ ...draft, mapsTo: e.target.value })}>
-                    {BUILTIN_MAP_TARGETS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
+                <div className="md:col-span-3">
+                  <label className="label">Description (optional)</label>
+                  <input className="input" value={draft.description || ''} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Short helper text shown to agents" />
                 </div>
               </div>
 
-              <div className="flex items-center gap-4 text-sm">
-                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={draft.isActive} onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })} /> Active</label>
-                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={draft.requireNotes} onChange={(e) => setDraft({ ...draft, requireNotes: e.target.checked })} /> Require notes</label>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
+                Internal ID auto-generated: <code className="font-semibold">{toKey(draft.key || draft.label || 'NEW_DISPOSITION')}</code>
               </div>
+
+              <div className="flex items-center gap-6 text-sm">
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={draft.isActive} onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })} /> Active</label>
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={draft.requireNotes} onChange={(e) => setDraft({ ...draft, requireNotes: e.target.checked })} /> Make notes mandatory</label>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700"
+              >
+                {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                {showAdvanced ? 'Hide advanced settings' : 'Show advanced settings'}
+              </button>
+
+              {showAdvanced && (
+                <div className="card p-3 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="label">Internal key override</label>
+                      <input className="input" value={draft.key} onChange={(e) => setDraft({ ...draft, key: toKey(e.target.value) })} placeholder="Optional" />
+                    </div>
+                    <div>
+                      <label className="label">Store as backend disposition</label>
+                      <select className="input" value={draft.mapsTo} onChange={(e) => setDraft({ ...draft, mapsTo: e.target.value })}>
+                        {BUILTIN_MAP_TARGETS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">Sort order</label>
+                      <input type="number" className="input" value={draft.sortOrder} onChange={(e) => setDraft({ ...draft, sortOrder: Number(e.target.value || 0) })} />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="card p-3 space-y-2">
                 <div className="flex items-center justify-between">
@@ -282,45 +330,75 @@ export function CallDispositionStudioSection() {
                     <Plus className="h-3.5 w-3.5" /> Add Field
                   </button>
                 </div>
-                {(draft.fields || []).map((field, index) => (
-                  <div key={index} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end border border-gray-100 rounded-lg p-2">
-                    <div><label className="label">Key</label><input className="input" value={field.key} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, key: toKey(e.target.value) } : f) }))} /></div>
-                    <div><label className="label">Label</label><input className="input" value={field.label} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, label: e.target.value } : f) }))} /></div>
-                    <div>
-                      <label className="label">Type</label>
-                      <select className="input" value={field.type} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, type: e.target.value as any } : f) }))}>
-                        <option value="text">text</option>
-                        <option value="textarea">textarea</option>
-                        <option value="number">number</option>
-                        <option value="select">select</option>
-                        <option value="datetime">datetime</option>
-                        <option value="boolean">boolean</option>
-                      </select>
-                    </div>
-                    <div><label className="label">Show when field</label><input className="input" value={field.showWhen?.fieldKey || ''} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, showWhen: { fieldKey: e.target.value, equals: f.showWhen?.equals || '' } } : f) }))} /></div>
-                    <div><label className="label">Equals</label><input className="input" value={field.showWhen?.equals || ''} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, showWhen: { fieldKey: f.showWhen?.fieldKey || '', equals: e.target.value } } : f) }))} /></div>
-                    <div className="flex items-center gap-2">
-                      <label className="inline-flex items-center gap-1 text-xs"><input type="checkbox" checked={field.required} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, required: e.target.checked } : f) }))} /> req</label>
-                      <button onClick={() => setDraft((prev) => ({ ...prev, fields: prev.fields.filter((_, i) => i !== index) }))} className="btn-secondary text-xs px-2 py-1 text-red-600">Remove</button>
-                    </div>
-                    {field.type === 'select' && (
-                      <div className="md:col-span-6">
-                        <label className="label">Options (comma-separated value:label)</label>
-                        <input
-                          className="input"
-                          value={(field.options || []).map((o) => `${o.value}:${o.label}`).join(', ')}
-                          onChange={(e) => {
-                            const options = e.target.value.split(',').map((token) => token.trim()).filter(Boolean).map((token) => {
-                              const [value, label] = token.split(':');
-                              return { value: (value || '').trim(), label: (label || value || '').trim() };
-                            }).filter((o) => o.value);
-                            setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, options } : f) }));
-                          }}
-                        />
+                {(draft.fields || []).map((field, index) => {
+                  const currentKey = toKey(field.key || field.label || `FIELD_${index + 1}`);
+                  const otherFields = (draft.fields || []).filter((_, i) => i !== index);
+                  return (
+                    <div key={index} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end border border-gray-100 rounded-lg p-2">
+                      <div className="md:col-span-2">
+                        <label className="label">Field label</label>
+                        <input className="input" value={field.label} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, label: e.target.value, key: toKey(e.target.value || f.key) } : f) }))} placeholder="e.g. Meeting Date & Time" />
+                        <p className="text-[10px] text-gray-400 mt-1">ID: <code>{currentKey}</code></p>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div>
+                        <label className="label">Type</label>
+                        <select className="input" value={field.type} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, type: e.target.value as any } : f) }))}>
+                          <option value="text">Short text</option>
+                          <option value="textarea">Long text</option>
+                          <option value="number">Number</option>
+                          <option value="select">Dropdown</option>
+                          <option value="datetime">Date & time</option>
+                          <option value="boolean">Yes / No</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label">Show only when</label>
+                        <select
+                          className="input"
+                          value={field.showWhen?.fieldKey || ''}
+                          onChange={(e) => setDraft((prev) => ({
+                            ...prev,
+                            fields: prev.fields.map((f, i) => i === index
+                              ? { ...f, showWhen: e.target.value ? { fieldKey: e.target.value, equals: f.showWhen?.equals || '' } : null }
+                              : f),
+                          }))}
+                        >
+                          <option value="">Always show</option>
+                          {otherFields.map((f, i) => {
+                            const key = toKey(f.key || f.label || `FIELD_${i + 1}`);
+                            return <option key={key} value={key}>{f.label || key}</option>;
+                          })}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label">Equals value</label>
+                        <input className="input" value={field.showWhen?.equals || ''} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, showWhen: f.showWhen ? { ...f.showWhen, equals: e.target.value } : null } : f) }))} />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="inline-flex items-center gap-1 text-xs"><input type="checkbox" checked={field.required} onChange={(e) => setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, required: e.target.checked } : f) }))} /> required</label>
+                        <button onClick={() => setDraft((prev) => ({ ...prev, fields: prev.fields.filter((_, i) => i !== index) }))} className="btn-secondary text-xs px-2 py-1 text-red-600">Remove</button>
+                      </div>
+                      {field.type === 'select' && (
+                        <div className="md:col-span-6">
+                          <label className="label">Dropdown options (one per line)</label>
+                          <textarea
+                            className="input"
+                            rows={3}
+                            value={(field.options || []).map((o) => o.label).join('\n')}
+                            onChange={(e) => {
+                              const options = e.target.value
+                                .split('\n')
+                                .map((line) => line.trim())
+                                .filter(Boolean)
+                                .map((label) => ({ value: toOptionValue(label), label }));
+                              setDraft((prev) => ({ ...prev, fields: prev.fields.map((f, i) => i === index ? { ...f, options } : f) }));
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="card p-3 space-y-2">
@@ -334,44 +412,63 @@ export function CallDispositionStudioSection() {
                   </button>
                 </div>
                 {(draft.actions || []).map((action, index) => (
-                  <div key={index} className="border border-gray-100 rounded-lg p-2 space-y-2">
-                    <div className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
+                  <div key={index} className="border border-gray-100 rounded-lg p-3 space-y-2">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
                       <div>
-                        <label className="label">Type</label>
-                        <select className="input" value={action.type} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, type: e.target.value as any } : a) }))}>
-                          <option value="CREATE_TASK">CREATE_TASK</option>
-                          <option value="UPDATE_STATUS">UPDATE_STATUS</option>
-                          <option value="ADD_TAG">ADD_TAG</option>
-                          <option value="NOTIFY_ASSIGNEE">NOTIFY_ASSIGNEE</option>
+                        <label className="label">Action</label>
+                        <select className="input" value={action.type} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, type: e.target.value as any, config: {} } : a) }))}>
+                          {(Object.keys(ACTION_LABELS) as StudioAction['type'][]).map((type) => (
+                            <option key={type} value={type}>{ACTION_LABELS[type]}</option>
+                          ))}
                         </select>
                       </div>
-                      <div><label className="label">Lead status in</label><input className="input" value={(action.conditions?.leadStatusIn || []).join(',')} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, conditions: { ...(a.conditions || {}), leadStatusIn: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) } } : a) }))} /></div>
-                      <div><label className="label">Source in</label><input className="input" value={(action.conditions?.leadSourceIn || []).join(',')} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, conditions: { ...(a.conditions || {}), leadSourceIn: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) } } : a) }))} /></div>
-                      <div><label className="label">Min score</label><input type="number" className="input" value={action.conditions?.minScore ?? ''} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, conditions: { ...(a.conditions || {}), minScore: e.target.value ? Number(e.target.value) : undefined } } : a) }))} /></div>
+                      <div>
+                        <label className="label">Only for lead status (comma-separated)</label>
+                        <input className="input" value={(action.conditions?.leadStatusIn || []).join(',')} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, conditions: { ...(a.conditions || {}), leadStatusIn: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) } } : a) }))} placeholder={STATUS_OPTIONS.join(', ')} />
+                      </div>
+                      <div>
+                        <label className="label">Min score</label>
+                        <input type="number" className="input" value={action.conditions?.minScore ?? ''} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, conditions: { ...(a.conditions || {}), minScore: e.target.value ? Number(e.target.value) : undefined } } : a) }))} />
+                      </div>
                       <div className="flex items-center gap-2">
-                        <label className="inline-flex items-center gap-1 text-xs"><input type="checkbox" checked={action.isActive !== false} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, isActive: e.target.checked } : a) }))} /> active</label>
+                        <label className="inline-flex items-center gap-1 text-xs"><input type="checkbox" checked={action.isActive !== false} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, isActive: e.target.checked } : a) }))} /> enabled</label>
                         <button onClick={() => setDraft((prev) => ({ ...prev, actions: prev.actions.filter((_, i) => i !== index) }))} className="btn-secondary text-xs px-2 py-1 text-red-600">Remove</button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                      <div><label className="label">Config key</label><input className="input" placeholder="e.g. title" value={Object.keys(action.config || {})[0] || ''} readOnly /></div>
-                      <div className="md:col-span-2">
-                        <label className="label">Config JSON</label>
-                        <textarea
-                          className="input"
-                          rows={2}
-                          value={JSON.stringify(action.config || {})}
-                          onChange={(e) => {
-                            try {
-                              const parsed = JSON.parse(e.target.value || '{}');
-                              setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: parsed } : a) }));
-                            } catch {
-                              // Ignore invalid json until corrected
-                            }
-                          }}
-                        />
+
+                    {action.type === 'CREATE_TASK' && (
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                        <div><label className="label">Task title</label><input className="input" value={action.config?.title || ''} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), title: e.target.value } } : a) }))} /></div>
+                        <div><label className="label">Task type</label><select className="input" value={action.config?.taskType || 'FOLLOW_UP_CALL'} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), taskType: e.target.value } } : a) }))}>{TASK_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
+                        <div><label className="label">Priority</label><select className="input" value={action.config?.priority || 'MEDIUM'} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), priority: e.target.value } } : a) }))}>{PRIORITY_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+                        <div><label className="label">Due in hours</label><input type="number" className="input" value={action.config?.dueInHours ?? 24} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), dueInHours: Number(e.target.value || 24) } } : a) }))} /></div>
                       </div>
-                    </div>
+                    )}
+
+                    {action.type === 'UPDATE_STATUS' && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div>
+                          <label className="label">Set lead status to</label>
+                          <select className="input" value={action.config?.status || 'CONTACTED'} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), status: e.target.value } } : a) }))}>
+                            {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{status}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {action.type === 'ADD_TAG' && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div><label className="label">Tag name</label><input className="input" value={action.config?.tagName || ''} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), tagName: e.target.value } } : a) }))} /></div>
+                        <div><label className="label">Tag color</label><input type="color" className="input h-10" value={action.config?.tagColor || '#6366f1'} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), tagColor: e.target.value } } : a) }))} /></div>
+                      </div>
+                    )}
+
+                    {action.type === 'NOTIFY_ASSIGNEE' && (
+                      <div className="grid grid-cols-1 gap-2">
+                        <div><label className="label">Notification title</label><input className="input" value={action.config?.title || ''} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), title: e.target.value } } : a) }))} /></div>
+                        <div><label className="label">Message</label><textarea className="input" rows={2} value={action.config?.message || ''} onChange={(e) => setDraft((prev) => ({ ...prev, actions: prev.actions.map((a, i) => i === index ? { ...a, config: { ...(a.config || {}), message: e.target.value } } : a) }))} /></div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
