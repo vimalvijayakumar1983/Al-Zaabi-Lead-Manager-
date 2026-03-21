@@ -26,6 +26,7 @@ const TASK_CHECK_INTERVAL = 30 * 1000;
 const DUE_SOON_MINUTES = 30;
 
 let taskReminderInterval = null;
+let isChecking = false;
 
 // Track which tasks we've already notified about to avoid duplicates
 // Key: `${taskId}:${type}`, Value: timestamp
@@ -39,6 +40,11 @@ let cleanupInterval = null;
  * Main scheduler loop — checks for due-soon and overdue tasks.
  */
 async function checkTaskReminders() {
+  if (isChecking) {
+    logger.warn('[TaskReminder] Previous check still running, skipping overlapping cycle');
+    return;
+  }
+  isChecking = true;
   try {
     const now = new Date();
     const dueSoonThreshold = new Date(now.getTime() + DUE_SOON_MINUTES * 60 * 1000);
@@ -61,8 +67,24 @@ async function checkTaskReminders() {
     for (const task of dueSoonTasks) {
       const key = `${task.id}:DUE_SOON`;
       if (notifiedTasks.has(key)) continue;
+      if (!task.assigneeId || !task.assignee?.organizationId) continue;
 
       try {
+        const existingDueSoon = await prisma.notification.findFirst({
+          where: {
+            type: NOTIFICATION_TYPES.TASK_DUE_SOON,
+            userId: task.assigneeId,
+            entityType: 'task',
+            entityId: task.id,
+            isArchived: false,
+          },
+          select: { id: true },
+        });
+        if (existingDueSoon) {
+          notifiedTasks.set(key, now.getTime());
+          continue;
+        }
+
         const minutesLeft = Math.round((new Date(task.dueAt).getTime() - now.getTime()) / 60000);
         const leadName = task.lead
           ? `${(task.lead.firstName || '').trim()} ${(task.lead.lastName || '').trim()}`.trim() || 'Unknown'
@@ -105,8 +127,24 @@ async function checkTaskReminders() {
     for (const task of reminderTasks) {
       const key = `${task.id}:REMINDER`;
       if (notifiedTasks.has(key)) continue;
+      if (!task.assigneeId || !task.assignee?.organizationId) continue;
 
       try {
+        const existingReminder = await prisma.notification.findFirst({
+          where: {
+            type: NOTIFICATION_TYPES.TASK_REMINDER,
+            userId: task.assigneeId,
+            entityType: 'task',
+            entityId: task.id,
+            isArchived: false,
+          },
+          select: { id: true },
+        });
+        if (existingReminder) {
+          notifiedTasks.set(key, now.getTime());
+          continue;
+        }
+
         const leadName = task.lead
           ? `${(task.lead.firstName || '').trim()} ${(task.lead.lastName || '').trim()}`.trim() || 'Unknown'
           : '';
@@ -145,8 +183,24 @@ async function checkTaskReminders() {
     for (const task of overdueTasks) {
       const key = `${task.id}:OVERDUE`;
       if (notifiedTasks.has(key)) continue;
+      if (!task.assigneeId || !task.assignee?.organizationId) continue;
 
       try {
+        const existingOverdue = await prisma.notification.findFirst({
+          where: {
+            type: NOTIFICATION_TYPES.TASK_OVERDUE,
+            userId: task.assigneeId,
+            entityType: 'task',
+            entityId: task.id,
+            isArchived: false,
+          },
+          select: { id: true },
+        });
+        if (existingOverdue) {
+          notifiedTasks.set(key, now.getTime());
+          continue;
+        }
+
         const minutesOverdue = Math.round((now.getTime() - new Date(task.dueAt).getTime()) / 60000);
         const leadName = task.lead
           ? `${(task.lead.firstName || '').trim()} ${(task.lead.lastName || '').trim()}`.trim() || 'Unknown'
@@ -180,6 +234,8 @@ async function checkTaskReminders() {
     }
   } catch (err) {
     logger.error('[TaskReminder] Scheduler error:', err.message);
+  } finally {
+    isChecking = false;
   }
 }
 
