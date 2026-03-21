@@ -1781,7 +1781,7 @@ function RoleCard({
 }: {
   role: CustomRole;
   onEdit?: () => void;
-  onClone: () => void;
+  onClone?: () => void;
   onDelete?: () => void;
   onViewPermissions: () => void;
 }) {
@@ -1851,13 +1851,15 @@ function RoleCard({
           <Eye className="w-3.5 h-3.5" />
           Permissions
         </button>
-        <button
-          onClick={onClone}
-          className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100 transition-colors"
-          title="Clone role"
-        >
-          <Copy className="w-3.5 h-3.5" />
-        </button>
+        {onClone && (
+          <button
+            onClick={onClone}
+            className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-gray-100 transition-colors"
+            title="Clone role"
+          >
+            <Copy className="w-3.5 h-3.5" />
+          </button>
+        )}
         {!isSystem && onEdit && (
           <button
             onClick={onEdit}
@@ -1956,7 +1958,8 @@ function ErrorState({
 
 export default function RolesPage() {
   const { user } = useAuthStore();
-  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const canManageRoles =
+    user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
   // ── Data State ──
   const [roles, setRoles] = useState<CustomRole[]>([]);
@@ -2092,7 +2095,7 @@ export default function RolesPage() {
   // ── Update role ──
   const handleUpdateRole = useCallback(
     async (formData: FormState) => {
-      if (!!editingRole) return;
+      if (!editingRole) return;
       setIsSaving(true);
       try {
         const res = await fetch(apiUrl(`/api/roles/${editingRole!.id}`), {
@@ -2131,7 +2134,7 @@ export default function RolesPage() {
 
   // ── Delete role ──
   const handleDeleteRole = useCallback(async () => {
-    if (!!deletingRole) return;
+    if (!deletingRole) return;
     setIsDeleting(true);
     try {
       const res = await fetch(apiUrl(`/api/roles/${deletingRole!.id}`), {
@@ -2161,7 +2164,7 @@ export default function RolesPage() {
   // ── Clone role ──
   const handleCloneRole = useCallback(
     async (newName: string) => {
-      if (!!cloningRole) return;
+      if (!cloningRole) return;
       setIsCloning(true);
       try {
         const res = await fetch(apiUrl(`/api/roles/${cloningRole!.id}/clone`), {
@@ -2251,7 +2254,7 @@ export default function RolesPage() {
               Manage access control across your organization
             </p>
           </div>
-          {isSuperAdmin && (
+          {canManageRoles && (
             <button
               onClick={() => setShowCreateModal(true)}
               className="bg-indigo-600 text-white hover:bg-indigo-700 px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 self-start sm:self-auto"
@@ -2356,7 +2359,7 @@ export default function RolesPage() {
                   <RoleCard
                     key={role.id}
                     role={role}
-                    onClone={() => setCloningRole(role)}
+                    onClone={canManageRoles ? () => setCloningRole(role) : undefined}
                     onViewPermissions={() => setViewingPermissions(role)}
                   />
                 ))}
@@ -2382,7 +2385,7 @@ export default function RolesPage() {
                     Roles you&apos;ve created for your organization
                   </p>
                 </div>
-                {isSuperAdmin && customRoles.length > 0 && (
+                {canManageRoles && customRoles.length > 0 && (
                   <button
                     onClick={() => setShowCreateModal(true)}
                     className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
@@ -2403,9 +2406,9 @@ export default function RolesPage() {
                     <RoleCard
                       key={role.id}
                       role={role}
-                      onEdit={() => setEditingRole(role)}
-                      onClone={() => setCloningRole(role)}
-                      onDelete={() => setDeletingRole(role)}
+                      onEdit={canManageRoles ? () => setEditingRole(role) : undefined}
+                      onClone={canManageRoles ? () => setCloningRole(role) : undefined}
+                      onDelete={canManageRoles ? () => setDeletingRole(role) : undefined}
                       onViewPermissions={() => setViewingPermissions(role)}
                     />
                   ))}
