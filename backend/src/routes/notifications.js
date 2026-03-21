@@ -646,6 +646,25 @@ router.post('/read-all', async (req, res) => {
   }
 });
 
+router.post('/clear-all', async (req, res) => {
+  try {
+    const divisionScope = resolveDivisionScope(req);
+    const where = { userId: req.user.id, isArchived: false };
+    if (divisionScope) {
+      where.organizationId = divisionScope;
+    }
+    const updated = await prisma.notification.updateMany({
+      where,
+      data: { isArchived: true, isRead: true, readAt: new Date() },
+    });
+    const unreadCount = await getUnreadCount(req.user.id, divisionScope);
+    res.json({ success: true, changed: updated.count, unreadCount });
+  } catch (error) {
+    logger.error('Failed to clear all notifications', { error: error.message });
+    res.status(500).json({ error: 'Failed to clear all notifications' });
+  }
+});
+
 router.post('/:id/archive', async (req, res) => {
   try {
     await prisma.notification.updateMany({

@@ -706,6 +706,7 @@ export default function NotificationCenter({
     fetchNotifications,
     markAsRead,
     markAllAsRead,
+    clearAllNotifications,
     archiveNotification,
     deleteNotification,
     notificationAction,
@@ -722,6 +723,7 @@ export default function NotificationCenter({
   // Local state
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [isMarkingAll, setIsMarkingAll] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [page, setPage] = useState(1);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -858,6 +860,15 @@ export default function NotificationCenter({
     await markAllAsRead();
     setIsMarkingAll(false);
   }, [markAllAsRead]);
+
+  const handleClearAll = useCallback(async () => {
+    if (notifications.length === 0) return;
+    const confirmed = window.confirm('Clear all notifications from this center?');
+    if (!confirmed) return;
+    setIsClearingAll(true);
+    await clearAllNotifications();
+    setIsClearingAll(false);
+  }, [notifications.length, clearAllNotifications]);
 
   const handleNotificationClick = useCallback(
     (n: AppNotification) => {
@@ -1009,6 +1020,20 @@ export default function NotificationCenter({
           </div>
 
           <div className="flex items-center gap-1">
+            {notifications.length > 0 && (
+              <button
+                onClick={handleClearAll}
+                disabled={isClearingAll}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+              >
+                {isClearingAll ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+                Clear all
+              </button>
+            )}
             {unreadCount > 0 && (
               <button
                 onClick={handleMarkAllRead}

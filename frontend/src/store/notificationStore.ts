@@ -78,6 +78,7 @@ interface NotificationStore {
   fetchUnreadCount: () => Promise<void>;
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: () => Promise<void>;
+  clearAllNotifications: () => Promise<void>;
   archiveNotification: (id: string) => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
   notificationAction: (id: string, action: NotificationAction, minutes?: number) => Promise<any>;
@@ -261,6 +262,35 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
       }));
     } catch (error) {
       console.error('Failed to mark all as read:', error);
+    }
+  },
+
+  clearAllNotifications: async () => {
+    try {
+      const response = await api.clearAllNotifications() as any;
+      set((state) => ({
+        notifications: [],
+        unreadCount:
+          typeof response.unreadCount === 'number'
+            ? response.unreadCount
+            : 0,
+        pagination: {
+          ...state.pagination,
+          page: 1,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false,
+        },
+      }));
+      get().addToast({
+        type: 'success',
+        title: 'Notifications Cleared',
+        message: 'All notifications were removed from your active center.',
+        duration: 3000,
+      });
+    } catch (error) {
+      console.error('Failed to clear all notifications:', error);
     }
   },
 

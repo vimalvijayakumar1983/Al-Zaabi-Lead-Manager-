@@ -1100,6 +1100,13 @@ class ApiClient {
     });
   }
 
+  async clearAllNotifications() {
+    return this.request<{ success: boolean; changed: number; unreadCount: number }>(
+      '/notifications/clear-all',
+      { method: 'POST' }
+    );
+  }
+
   async archiveNotification(id: string) {
     return this.request<{ success: boolean }>(`/notifications/${id}/archive`, {
       method: 'POST',
