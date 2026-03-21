@@ -14,6 +14,10 @@ const { startTimeBasedScheduler, stopTimeBasedScheduler } = require('./services/
 const { startCallbackReminderScheduler, stopCallbackReminderScheduler } = require('./services/callbackReminderScheduler');
 const { startTaskReminderScheduler, stopTaskReminderScheduler } = require('./services/taskReminderScheduler');
 const { startWillCallAgainSafetyNetScheduler, stopWillCallAgainSafetyNetScheduler } = require('./services/willCallAgainSafetyNetScheduler');
+const {
+  startNotificationEscalationScheduler,
+  stopNotificationEscalationScheduler,
+} = require('./services/notificationEscalationScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -161,6 +165,9 @@ server.listen(PORT, () => {
 
   // Start soft-loop inactivity safety net (Will Call Us Again)
   startWillCallAgainSafetyNetScheduler();
+
+  // Start unread reminder escalation monitor
+  startNotificationEscalationScheduler();
 });
 
 // Graceful shutdown
@@ -171,6 +178,7 @@ const shutdown = async () => {
   stopCallbackReminderScheduler();
   stopTaskReminderScheduler();
   stopWillCallAgainSafetyNetScheduler();
+  stopNotificationEscalationScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

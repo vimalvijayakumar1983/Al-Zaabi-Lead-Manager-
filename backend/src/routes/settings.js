@@ -4,6 +4,10 @@ const bcrypt = require('bcryptjs');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const {
+  getUserNotificationPreferences,
+  updateUserNotificationPreferences,
+} = require('../services/notificationPreferences');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -150,57 +154,21 @@ router.put('/organization', authorize('ADMIN'), validate(z.object({
 // ─── Get Notification Preferences ───────────────────────────────
 router.get('/notifications', async (req, res, next) => {
   try {
-    const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
-      select: { settings: true },
-    });
-
-    const settings = typeof org.settings === 'object' ? org.settings : {};
-    const userNotifs = settings[`notifs_${req.user.id}`] || {
-      emailNewLead: true,
-      emailLeadAssigned: true,
-      emailTaskDue: true,
-      emailWeeklyDigest: true,
-      inAppNewLead: true,
-      inAppLeadAssigned: true,
-      inAppTaskDue: true,
-      inAppStatusChange: true,
-    };
-
-    res.json(userNotifs);
+    const preferences = await getUserNotificationPreferences(req.user.id, req.orgId);
+    res.json(preferences);
   } catch (err) {
     next(err);
   }
 });
 
 // ─── Update Notification Preferences ────────────────────────────
-router.put('/notifications', validate(z.object({
-  emailNewLead: z.boolean().optional(),
-  emailLeadAssigned: z.boolean().optional(),
-  emailTaskDue: z.boolean().optional(),
-  emailWeeklyDigest: z.boolean().optional(),
-  inAppNewLead: z.boolean().optional(),
-  inAppLeadAssigned: z.boolean().optional(),
-  inAppTaskDue: z.boolean().optional(),
-  inAppStatusChange: z.boolean().optional(),
-})), async (req, res, next) => {
+router.put('/notifications', validate(z.record(z.boolean())), async (req, res, next) => {
   try {
-    const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
-      select: { settings: true },
-    });
-
-    const settings = typeof org.settings === 'object' ? org.settings : {};
-    const currentNotifs = settings[`notifs_${req.user.id}`] || {};
-    const updated = { ...currentNotifs, ...req.validated };
-
-    await prisma.organization.update({
-      where: { id: req.orgId },
-      data: {
-        settings: { ...settings, [`notifs_${req.user.id}`]: updated },
-      },
-    });
-
+    const updated = await updateUserNotificationPreferences(
+      req.user.id,
+      req.orgId,
+      req.validated
+    );
     res.json(updated);
   } catch (err) {
     next(err);

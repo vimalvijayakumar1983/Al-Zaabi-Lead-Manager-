@@ -27,14 +27,6 @@ const DUE_SOON_MINUTES = 30;
 
 let taskReminderInterval = null;
 
-// Track which tasks we've already notified about to avoid duplicates
-// Key: `${taskId}:${type}`, Value: timestamp
-const notifiedTasks = new Map();
-
-// Clean up old entries every hour
-const CLEANUP_INTERVAL = 60 * 60 * 1000;
-let cleanupInterval = null;
-
 /**
  * Main scheduler loop — checks for due-soon and overdue tasks.
  */
@@ -59,9 +51,6 @@ async function checkTaskReminders() {
     });
 
     for (const task of dueSoonTasks) {
-      const key = `${task.id}:DUE_SOON`;
-      if (notifiedTasks.has(key)) continue;
-
       try {
         const minutesLeft = Math.round((new Date(task.dueAt).getTime() - now.getTime()) / 60000);
         const leadName = task.lead
@@ -76,11 +65,15 @@ async function checkTaskReminders() {
           userId: task.assigneeId,
           entityType: 'task',
           entityId: task.id,
-          metadata: { minutesLeft, taskTitle: task.title },
+          metadata: {
+            minutesLeft,
+            taskTitle: task.title,
+            dedupeKey: `task_due_soon:${task.id}:${new Date(task.dueAt).toISOString()}`,
+            dedupeWindowMinutes: 1440,
+            bundle: false,
+          },
           organizationId: task.assignee.organizationId,
         });
-
-        notifiedTasks.set(key, now.getTime());
         logger.info(`[TaskReminder] Due-soon notification sent for task ${task.id} to user ${task.assigneeId}`);
       } catch (err) {
         logger.error(`[TaskReminder] Error sending due-soon for task ${task.id}:`, err.message);
@@ -103,9 +96,6 @@ async function checkTaskReminders() {
     });
 
     for (const task of reminderTasks) {
-      const key = `${task.id}:REMINDER`;
-      if (notifiedTasks.has(key)) continue;
-
       try {
         const leadName = task.lead
           ? `${(task.lead.firstName || '').trim()} ${(task.lead.lastName || '').trim()}`.trim() || 'Unknown'
@@ -119,11 +109,14 @@ async function checkTaskReminders() {
           userId: task.assigneeId,
           entityType: 'task',
           entityId: task.id,
-          metadata: { taskTitle: task.title },
+          metadata: {
+            taskTitle: task.title,
+            dedupeKey: `task_reminder:${task.id}:${task.reminder ? new Date(task.reminder).toISOString() : 'none'}`,
+            dedupeWindowMinutes: 1440,
+            bundle: false,
+          },
           organizationId: task.assignee.organizationId,
         });
-
-        notifiedTasks.set(key, now.getTime());
         logger.info(`[TaskReminder] Reminder notification sent for task ${task.id} to user ${task.assigneeId}`);
       } catch (err) {
         logger.error(`[TaskReminder] Error sending reminder for task ${task.id}:`, err.message);
@@ -143,9 +136,6 @@ async function checkTaskReminders() {
     });
 
     for (const task of overdueTasks) {
-      const key = `${task.id}:OVERDUE`;
-      if (notifiedTasks.has(key)) continue;
-
       try {
         const minutesOverdue = Math.round((now.getTime() - new Date(task.dueAt).getTime()) / 60000);
         const leadName = task.lead
@@ -168,11 +158,15 @@ async function checkTaskReminders() {
           userId: task.assigneeId,
           entityType: 'task',
           entityId: task.id,
-          metadata: { minutesOverdue, taskTitle: task.title },
+          metadata: {
+            minutesOverdue,
+            taskTitle: task.title,
+            dedupeKey: `task_overdue:${task.id}:${Math.floor(now.getTime() / (6 * 60 * 60 * 1000))}`,
+            dedupeWindowMinutes: 360,
+            bundle: false,
+          },
           organizationId: task.assignee.organizationId,
         });
-
-        notifiedTasks.set(key, now.getTime());
         logger.info(`[TaskReminder] Overdue notification sent for task ${task.id} to user ${task.assigneeId}`);
       } catch (err) {
         logger.error(`[TaskReminder] Error sending overdue for task ${task.id}:`, err.message);
@@ -180,18 +174,6 @@ async function checkTaskReminders() {
     }
   } catch (err) {
     logger.error('[TaskReminder] Scheduler error:', err.message);
-  }
-}
-
-/**
- * Clean up old entries from the notified set (older than 24 hours).
- */
-function cleanupNotifiedTasks() {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const [key, timestamp] of notifiedTasks) {
-    if (timestamp < cutoff) {
-      notifiedTasks.delete(key);
-    }
   }
 }
 
@@ -212,9 +194,6 @@ function startTaskReminderScheduler(intervalMs = TASK_CHECK_INTERVAL) {
   taskReminderInterval = setInterval(() => {
     checkTaskReminders().catch((err) => logger.error('[TaskReminder] Periodic check failed:', err.message));
   }, intervalMs);
-
-  // Cleanup old entries periodically
-  cleanupInterval = setInterval(cleanupNotifiedTasks, CLEANUP_INTERVAL);
 }
 
 /**
@@ -225,10 +204,6 @@ function stopTaskReminderScheduler() {
     clearInterval(taskReminderInterval);
     taskReminderInterval = null;
     logger.info('[TaskReminder] Scheduler stopped');
-  }
-  if (cleanupInterval) {
-    clearInterval(cleanupInterval);
-    cleanupInterval = null;
   }
 }
 

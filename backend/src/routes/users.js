@@ -26,11 +26,11 @@ router.use(authenticate, orgScope);
 
 // Default permission matrix
 const DEFAULT_PERMISSIONS = {
-  SUPER_ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: true },
-  ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: false },
-  MANAGER: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: false, import: false, team: true, roles: false, settings: false, invite: true, deleteData: false, exportData: true, divisions: false },
-  SALES_REP: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, deleteData: false, exportData: false, divisions: false },
-  VIEWER: { dashboard: true, leads: true, contacts: true, inbox: false, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, deleteData: false, exportData: false, divisions: false },
+  SUPER_ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, deleteData: true, exportData: true, divisions: true },
+  ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, deleteData: true, exportData: true, divisions: false },
+  MANAGER: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: false, import: false, team: true, roles: false, settings: false, invite: true, notifications: true, deleteData: false, exportData: true, divisions: false },
+  SALES_REP: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, deleteData: false, exportData: false, divisions: false },
+  VIEWER: { dashboard: true, leads: true, contacts: true, inbox: false, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, deleteData: false, exportData: false, divisions: false },
 };
 
 function mergeRolePermissions(input) {
