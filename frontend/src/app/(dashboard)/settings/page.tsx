@@ -1778,6 +1778,9 @@ function CallDispositionsSection() {
    ═══════════════════════════════════════════════════════════════════════ */
 
 function CustomFieldsSection() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const adminDivisionId = user?.organizationId || '';
   // ─── State ─────────────────────────────────────────────────────────
   const [divisions, setDivisions] = useState<Organization[]>([]);
   const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
@@ -1803,10 +1806,10 @@ function CustomFieldsSection() {
   const [showAddTag, setShowAddTag] = useState(false);
 
   const fetchTags = async () => {
-    if (!selectedDivisionId) return;
+    if (!effectiveDivisionId) return;
     setLoadingTags(true);
     try {
-      const data: any = await api.getTags(selectedDivisionId);
+      const data: any = await api.getTags(effectiveDivisionId);
       setTags(Array.isArray(data) ? data : []);
     } catch { setTags([]); }
     setLoadingTags(false);
@@ -1827,13 +1830,26 @@ function CustomFieldsSection() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const divDropdownRef = useRef<HTMLDivElement>(null);
+  const effectiveDivisionId = isSuperAdmin
+    ? selectedDivisionId
+    : selectedDivisionId || adminDivisionId;
 
   // ─── Fetch divisions on mount ──────────────────────────────────────
   useEffect(() => {
     api.getDivisions()
-      .then(divs => setDivisions(divs))
-      .catch(() => {});
-  }, []);
+      .then(divs => {
+        setDivisions(divs);
+        if (!isSuperAdmin) {
+          const fallbackDivisionId = adminDivisionId || divs[0]?.id || '';
+          if (fallbackDivisionId) setSelectedDivisionId(fallbackDivisionId);
+        }
+      })
+      .catch(() => {
+        if (!isSuperAdmin && adminDivisionId) {
+          setSelectedDivisionId(adminDivisionId);
+        }
+      });
+  }, [adminDivisionId, isSuperAdmin]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -1856,8 +1872,9 @@ function CustomFieldsSection() {
   // ─── Fetch field config ────────────────────────────────────────────
   const fetchFieldConfig = useCallback(async () => {
     setLoading(true);
+    const scopeDivisionId = isSuperAdmin ? selectedDivisionId : undefined;
     try {
-      const data = await api.getFieldConfig(selectedDivisionId || undefined);
+      const data = await api.getFieldConfig(scopeDivisionId);
       setBuiltInFields(data.builtInFields || DEFAULT_BUILTIN_FIELDS);
       setCustomFields(data.customFields || []);
       setStatusLabels(data.statusLabels || {});
@@ -1865,7 +1882,7 @@ function CustomFieldsSection() {
     } catch {
       // Fallback: fetch custom fields only
       try {
-        const cfs = await api.getCustomFields(selectedDivisionId || undefined);
+        const cfs = await api.getCustomFields(scopeDivisionId);
         setCustomFields(cfs || []);
         setBuiltInFields(DEFAULT_BUILTIN_FIELDS);
       } catch {
@@ -1875,30 +1892,30 @@ function CustomFieldsSection() {
     }
     setUnsavedChanges(false);
     setLoading(false);
-  }, [selectedDivisionId]);
+  }, [isSuperAdmin, selectedDivisionId]);
 
   useEffect(() => { fetchFieldConfig(); }, [fetchFieldConfig]);
 
   // ─── Fetch pipeline stages ───────────────────────────────────────
   const fetchPipelineStages = useCallback(async () => {
-    if (!selectedDivisionId) {
+    if (!effectiveDivisionId) {
       setPipelineStages([]);
       return;
     }
     setLoadingStages(true);
     try {
-      const stages = await api.getPipelineStages(selectedDivisionId);
+      const stages = await api.getPipelineStages(effectiveDivisionId);
       setPipelineStages(stages);
     } catch {
       setPipelineStages([]);
     }
     setLoadingStages(false);
-  }, [selectedDivisionId]);
+  }, [effectiveDivisionId]);
 
   useEffect(() => {
     if (activeSection === 'pipelineStages') fetchPipelineStages();
     if (activeSection === 'tags') fetchTags();
-  }, [activeSection, fetchPipelineStages]);
+  }, [activeSection, fetchPipelineStages, effectiveDivisionId]);
 
   // ─── Computed stats ────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -1951,7 +1968,7 @@ function CustomFieldsSection() {
         if (f.customLabel) entry.customLabel = f.customLabel;
         fields[f.key] = entry;
       });
-      await api.saveFieldConfig(selectedDivisionId || null, fields);
+      await api.saveFieldConfig(isSuperAdmin ? selectedDivisionId || null : null, fields);
       setUnsavedChanges(false);
       setToast({ type: 'success', message: 'Field configuration saved successfully' });
     } catch (err: any) {
@@ -1964,7 +1981,7 @@ function CustomFieldsSection() {
   const saveStatusLabels = async () => {
     setSavingStatus(true);
     try {
-      await api.saveStatusLabels(selectedDivisionId || null, statusLabels);
+      await api.saveStatusLabels(isSuperAdmin ? selectedDivisionId || null : null, statusLabels);
       setStatusUnsaved(false);
       setToast({ type: 'success', message: 'Status labels saved successfully' });
     } catch (err: any) {
@@ -1980,7 +1997,7 @@ function CustomFieldsSection() {
       await api.createPipelineStage({
         name: newStageName.trim(),
         color: newStageColor,
-        divisionId: selectedDivisionId || undefined,
+        divisionId: effectiveDivisionId || undefined,
       });
       setNewStageName('');
       setNewStageColor('#6366f1');
@@ -2110,7 +2127,11 @@ function CustomFieldsSection() {
 
   // ─── Division selector label ───────────────────────────────────────
   const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
-  const divisionLabel = selectedDivision ? selectedDivision.name : 'All Divisions / Group Level';
+  const divisionLabel = selectedDivision
+    ? selectedDivision.name
+    : isSuperAdmin
+    ? 'All Divisions / Group Level'
+    : 'My Division';
 
   // ─── Render ────────────────────────────────────────────────────────
   return (
@@ -2172,23 +2193,25 @@ function CustomFieldsSection() {
             {selectedDivision && (
               <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: selectedDivision.primaryColor || '#6366f1' }} />
             )}
-            {!selectedDivision && <Globe className="h-3.5 w-3.5 text-gray-400" />}
+            {!selectedDivision && isSuperAdmin && <Globe className="h-3.5 w-3.5 text-gray-400" />}
             {divisionLabel}
             <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${divDropdownOpen ? 'rotate-180' : ''}`} />
           </button>
           {divDropdownOpen && (
             <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-1 max-h-64 overflow-y-auto">
-              <button
-                onClick={() => { setSelectedDivisionId(''); setDivDropdownOpen(false); }}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
-                  !selectedDivisionId ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700'
-                }`}
-              >
-                <Globe className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-                All Divisions / Group Level
-                {!selectedDivisionId && <Check className="h-3.5 w-3.5 ml-auto text-indigo-600" />}
-              </button>
-              {divisions.length > 0 && <div className="border-t border-gray-100 my-1" />}
+              {isSuperAdmin && (
+                <button
+                  onClick={() => { setSelectedDivisionId(''); setDivDropdownOpen(false); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
+                    !selectedDivisionId ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700'
+                  }`}
+                >
+                  <Globe className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                  All Divisions / Group Level
+                  {!selectedDivisionId && <Check className="h-3.5 w-3.5 ml-auto text-indigo-600" />}
+                </button>
+              )}
+              {isSuperAdmin && divisions.length > 0 && <div className="border-t border-gray-100 my-1" />}
               {divisions.map(div => (
                 <button
                   key={div.id}
@@ -2543,7 +2566,7 @@ function CustomFieldsSection() {
         ) : activeSection === 'pipelineStages' ? (
           /* ═══ PIPELINE STAGES TAB ═══════════════════════════════ */
           <div>
-            {!selectedDivisionId ? (
+            {!effectiveDivisionId ? (
               <div className="p-10 text-center">
                 <div className="h-14 w-14 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-4">
                   <Layers className="h-7 w-7 text-amber-500" />
@@ -2776,7 +2799,7 @@ function CustomFieldsSection() {
         ) : activeSection === 'tags' ? (
           /* ═══ TAGS TAB ════════════════════════════════════════════ */
           <div>
-            {!selectedDivisionId ? (
+            {!effectiveDivisionId ? (
               <div className="p-10 text-center">
                 <div className="h-14 w-14 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-4">
                   <Tag className="h-7 w-7 text-amber-500" />
@@ -2815,7 +2838,7 @@ function CustomFieldsSection() {
                   onKeyDown={async (e) => {
                     if (e.key === 'Enter' && newTagName.trim()) {
                       try {
-                        await api.createTag({ name: newTagName.trim(), color: newTagColor, organizationId: selectedDivisionId! });
+                        await api.createTag({ name: newTagName.trim(), color: newTagColor, organizationId: effectiveDivisionId! });
                         setShowAddTag(false);
                         setNewTagName('');
                         fetchTags();
@@ -2830,7 +2853,7 @@ function CustomFieldsSection() {
                   onClick={async () => {
                     if (!newTagName.trim()) return;
                     try {
-                      await api.createTag({ name: newTagName.trim(), color: newTagColor, organizationId: selectedDivisionId! });
+                      await api.createTag({ name: newTagName.trim(), color: newTagColor, organizationId: effectiveDivisionId! });
                       setShowAddTag(false);
                       setNewTagName('');
                       fetchTags();
@@ -3140,7 +3163,8 @@ function CustomFieldsSection() {
         <CustomFieldModal
           field={editingField}
           divisions={divisions}
-          selectedDivisionId={selectedDivisionId}
+          selectedDivisionId={effectiveDivisionId || ''}
+          allowGlobalScope={isSuperAdmin}
           onClose={() => { setShowModal(false); setEditingField(null); }}
           onSaved={() => {
             setShowModal(false);
@@ -3162,12 +3186,14 @@ function CustomFieldModal({
   field,
   divisions,
   selectedDivisionId,
+  allowGlobalScope,
   onClose,
   onSaved,
 }: {
   field: CustomField | null;
   divisions: Organization[];
   selectedDivisionId: string;
+  allowGlobalScope: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -3179,7 +3205,12 @@ function CustomFieldModal({
   const [description, setDescription] = useState(field?.description || '');
   const [placeholder, setPlaceholder] = useState(field?.placeholder || '');
   const [defaultValue, setDefaultValue] = useState(field?.defaultValue || '');
-  const [divisionId, setDivisionId] = useState<string>(field?.divisionId || selectedDivisionId || '');
+  const [divisionId, setDivisionId] = useState<string>(() => {
+    if (!allowGlobalScope) {
+      return field?.divisionId || selectedDivisionId || divisions[0]?.id || '';
+    }
+    return field?.divisionId || selectedDivisionId || '';
+  });
   const [options, setOptions] = useState<string[]>((field?.options as string[]) || []);
   const [newOption, setNewOption] = useState('');
   const [saving, setSaving] = useState(false);
@@ -3189,6 +3220,12 @@ function CustomFieldModal({
   );
 
   const isSelect = type === 'SELECT' || type === 'MULTI_SELECT';
+
+  useEffect(() => {
+    if (!allowGlobalScope && !divisionId) {
+      setDivisionId(selectedDivisionId || divisions[0]?.id || '');
+    }
+  }, [allowGlobalScope, divisionId, divisions, selectedDivisionId]);
 
   const addOption = () => {
     const val = newOption.trim();
@@ -3220,7 +3257,7 @@ function CustomFieldModal({
         description: description || undefined,
         placeholder: placeholder || undefined,
         defaultValue: defaultValue || undefined,
-        divisionId: divisionId || null,
+        divisionId: allowGlobalScope ? divisionId || null : divisionId || selectedDivisionId || null,
       };
 
       if (field) {
@@ -3280,13 +3317,15 @@ function CustomFieldModal({
                 value={divisionId}
                 onChange={(e) => setDivisionId(e.target.value)}
               >
-                <option value="">All Divisions (Global)</option>
+                {allowGlobalScope && <option value="">All Divisions (Global)</option>}
                 {divisions.map(div => (
                   <option key={div.id} value={div.id}>{div.name}</option>
                 ))}
               </select>
               <p className="text-[11px] text-gray-400 mt-1">
-                Global fields are visible across all divisions. Division-scoped fields only appear within that division.
+                {allowGlobalScope
+                  ? 'Global fields are visible across all divisions. Division-scoped fields only appear within that division.'
+                  : 'Fields are scoped to your assigned division.'}
               </p>
             </div>
 
