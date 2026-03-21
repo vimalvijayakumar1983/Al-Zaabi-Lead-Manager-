@@ -27,6 +27,8 @@ export default function RecycleBinPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [type, setType] = useState<'' | RecycleEntityType>('');
   const [expiringInDays, setExpiringInDays] = useState<number | ''>('');
@@ -80,6 +82,10 @@ export default function RecycleBinPage() {
     fetchItems(1).catch(() => setLoading(false));
   }, [fetchItems]);
 
+  useEffect(() => {
+    setSelectedIds((current) => current.filter((id) => items.some((item) => item.id === id)));
+  }, [items]);
+
   const handleRestore = useCallback(async (item: RecycleBinItem) => {
     const allowed = item.capabilities?.canRestore;
     if (!allowed) return;
@@ -118,6 +124,72 @@ export default function RecycleBinPage() {
     }, {});
     return { expiringSoon, byType };
   }, [items]);
+
+  const selectedItems = useMemo(
+    () => items.filter((item) => selectedIds.includes(item.id)),
+    [items, selectedIds]
+  );
+  const allOnPageSelected = items.length > 0 && selectedIds.length === items.length;
+  const canBulkRestore = selectedItems.some((item) => item.capabilities?.canRestore);
+  const canBulkPurge = selectedItems.length > 0 && selectedItems.every((item) => item.capabilities?.canPurge);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((current) =>
+      current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id]
+    );
+  }, []);
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedIds((current) => {
+      if (allOnPageSelected) return [];
+      return items.map((item) => item.id);
+    });
+  }, [allOnPageSelected, items]);
+
+  const handleBulkRestore = useCallback(async () => {
+    const ids = selectedItems
+      .filter((item) => item.capabilities?.canRestore)
+      .map((item) => item.id);
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const response = await api.bulkRestoreRecycleBinItems(ids);
+      await fetchItems(page, false);
+      setSelectedIds([]);
+      const { summary: resultSummary } = response;
+      if (resultSummary.failed > 0 || resultSummary.skipped > 0 || resultSummary.missing > 0) {
+        alert(`Restored ${resultSummary.restored}/${resultSummary.requested}. Some records could not be restored.`);
+      }
+    } catch (error: any) {
+      alert(error?.message || 'Failed to restore selected records');
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [selectedItems, fetchItems, page]);
+
+  const handleBulkPermanentDelete = useCallback(async () => {
+    if (!canBulkPurge || selectedItems.length === 0) return;
+    const confirmation = window.prompt(
+      `Type DELETE to permanently remove ${selectedItems.length} selected record(s).`,
+      ''
+    );
+    if (!confirmation) return;
+    setBulkBusy(true);
+    try {
+      const ids = selectedItems.map((item) => item.id);
+      const response = await api.bulkPermanentlyDeleteRecycleBinItems(ids, confirmation);
+      await fetchItems(page, false);
+      setSelectedIds([]);
+      const { summary: resultSummary } = response;
+      if (resultSummary.failed > 0 || resultSummary.missing > 0) {
+        alert(`Deleted ${resultSummary.purged}/${resultSummary.requested}. Some records could not be deleted.`);
+      }
+    } catch (error: any) {
+      alert(error?.message || 'Failed to permanently delete selected records');
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [canBulkPurge, selectedItems, fetchItems, page]);
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -224,9 +296,54 @@ export default function RecycleBinPage() {
           </div>
         ) : (
           <div className="divide-y divide-border-subtle">
+            <div className="px-4 py-2.5 bg-surface-secondary flex items-center justify-between">
+              <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border-subtle"
+                  checked={allOnPageSelected}
+                  onChange={toggleSelectAllOnPage}
+                />
+                Select all on page
+              </label>
+              {selectedIds.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-2xs text-text-tertiary">{selectedIds.length} selected</span>
+                  <button
+                    onClick={handleBulkRestore}
+                    disabled={!canBulkRestore || bulkBusy}
+                    className="h-7 px-2.5 rounded-md text-2xs font-medium bg-emerald-50 text-emerald-700 disabled:opacity-50"
+                  >
+                    {bulkBusy ? 'Processing...' : 'Restore selected'}
+                  </button>
+                  <button
+                    onClick={handleBulkPermanentDelete}
+                    disabled={!canBulkPurge || bulkBusy}
+                    className="h-7 px-2.5 rounded-md text-2xs font-medium bg-red-50 text-red-700 disabled:opacity-50"
+                  >
+                    Delete selected
+                  </button>
+                  <button
+                    onClick={() => setSelectedIds([])}
+                    disabled={bulkBusy}
+                    className="h-7 px-2.5 rounded-md text-2xs font-medium bg-surface text-text-secondary border border-border-subtle disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
             {items.map((item) => (
               <div key={item.id} className="px-4 py-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
+                <div className="min-w-0 flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 rounded border-border-subtle"
+                    checked={selectedIds.includes(item.id)}
+                    onChange={() => toggleSelect(item.id)}
+                    disabled={bulkBusy}
+                  />
+                  <div>
                   <p className="text-sm font-medium text-text-primary truncate">
                     {item.entityLabel || `${item.entityType} ${item.entityId.slice(0, 8)}`}
                   </p>
@@ -236,11 +353,12 @@ export default function RecycleBinPage() {
                   <p className="text-2xs text-amber-600 mt-0.5">
                     {item.daysUntilPurge ?? 0} day(s) remaining
                   </p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleRestore(item)}
-                    disabled={!item.capabilities?.canRestore || actionBusyId === item.id}
+                    disabled={!item.capabilities?.canRestore || actionBusyId === item.id || bulkBusy}
                     className="h-8 px-2.5 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                   >
                     {actionBusyId === item.id ? (
@@ -254,7 +372,7 @@ export default function RecycleBinPage() {
                   </button>
                   <button
                     onClick={() => handlePermanentDelete(item)}
-                    disabled={!item.capabilities?.canPurge || actionBusyId === item.id}
+                    disabled={!item.capabilities?.canPurge || actionBusyId === item.id || bulkBusy}
                     className="h-8 px-2.5 rounded-md text-xs font-medium bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-50"
                   >
                     <span className="inline-flex items-center gap-1">

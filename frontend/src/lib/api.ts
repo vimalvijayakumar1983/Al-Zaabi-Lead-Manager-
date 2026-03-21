@@ -1151,9 +1151,36 @@ class ApiClient {
     });
   }
 
+  async bulkRestoreRecycleBinItems(ids: string[]) {
+    return this.request<{
+      success: boolean;
+      summary: { requested: number; restored: number; skipped: number; failed: number; missing: number };
+      restored: Array<{ id: string; entityType: string; entityId: string }>;
+      skipped: Array<{ id: string; reason: string }>;
+      failed: Array<{ id: string; reason: string }>;
+      missingIds: string[];
+    }>('/recycle-bin/bulk/restore', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
   async permanentlyDeleteRecycleBinItem(id: string) {
     return this.request<{ success: boolean; result: any }>(`/recycle-bin/${id}/permanent`, {
       method: 'DELETE',
+    });
+  }
+
+  async bulkPermanentlyDeleteRecycleBinItems(ids: string[], confirmText: string) {
+    return this.request<{
+      success: boolean;
+      summary: { requested: number; purged: number; failed: number; missing: number };
+      purged: Array<{ id: string; entityType: string; entityId: string }>;
+      failed: Array<{ id: string; reason: string }>;
+      missingIds: string[];
+    }>('/recycle-bin/bulk/permanent-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids, confirmText }),
     });
   }
 
