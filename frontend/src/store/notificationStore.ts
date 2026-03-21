@@ -10,8 +10,6 @@ import type {
   Toast,
 } from '@/types';
 
-// ─── Helpers ─────────────────────────────────────────────────────
-
 const getToastType = (notificationType: NotificationType): Toast['type'] => {
   if (
     notificationType === 'LEAD_WON' ||
@@ -37,7 +35,8 @@ const getToastType = (notificationType: NotificationType): Toast['type'] => {
     notificationType === 'TASK_REMINDER' ||
     notificationType === 'CAMPAIGN_BUDGET_ALERT' ||
     notificationType === 'CALLBACK_REMINDER' ||
-    notificationType === 'CALLBACK_REMINDER_HANDOFF'
+    notificationType === 'CALLBACK_REMINDER_HANDOFF' ||
+    notificationType === 'NOTIFICATION_ESCALATED'
   ) {
     return 'warning';
   }
@@ -46,74 +45,84 @@ const getToastType = (notificationType: NotificationType): Toast['type'] => {
 
 const playNotificationSound = () => {
   try {
-    // A subtle, short notification chime encoded as a data URI
-    // (a tiny sine-wave beep generated offline, ~0.15 s)
     const audio = new Audio(
       'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2JkJSMgHJkXGN0hJGZm5OHd2dfZHWGk5qZkYR0ZV9leIiUmpeTg3JjXmV5ipaampSEdGRfZnqKl5qYkYJxYl5me4uYmpeQgHBhXmd9jJmbl5B/b2BeaH6NmpuXj35uX15pf46bm5eOfW1fX2qAj5yblo17bF9gaoGQnJuVjHtrX2BrgpsA'
     );
     audio.volume = 0.3;
-    audio.play().catch(() => {
-      // Autoplay may be blocked — silently ignore
-    });
+    audio.play().catch(() => {});
   } catch {
-    // Audio API not available (e.g., SSR) — ignore
+    // ignore audio errors
   }
 };
 
-// ─── Store types ─────────────────────────────────────────────────
-
 type DataChangeHandler = (event: { entity: string; action: string; entityId?: string }) => void;
+type NotificationAction = 'MARK_DONE' | 'SNOOZE' | 'ESCALATE';
+
+interface NotificationPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
 
 interface NotificationStore {
   notifications: AppNotification[];
   unreadCount: number;
+  pagination: NotificationPagination;
   isLoading: boolean;
   isConnected: boolean;
   preferences: NotificationPreferences;
-
-  // Notification actions
   fetchNotifications: (params?: NotificationFilters) => Promise<void>;
   fetchUnreadCount: () => Promise<void>;
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: () => Promise<void>;
   archiveNotification: (id: string) => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
-
-  // WebSocket
+  notificationAction: (id: string, action: NotificationAction, minutes?: number) => Promise<any>;
+  snoozeNotification: (id: string, minutes?: number) => Promise<any>;
+  escalateNotification: (id: string) => Promise<any>;
   connectWebSocket: (token: string) => void;
   disconnectWebSocket: () => void;
-
-  // Toast
   toasts: Toast[];
   addToast: (toast: Omit<Toast, 'id'>) => void;
   removeToast: (id: string) => void;
-
-  // Preferences
   fetchPreferences: () => Promise<void>;
   updatePreferences: (prefs: Partial<NotificationPreferences>) => Promise<void>;
-
-  // Real-time data sync
   subscribeDataChange: (handler: DataChangeHandler) => void;
   unsubscribeDataChange: (handler: DataChangeHandler) => void;
-  /** Dispatch a data-change event locally (bypass WebSocket) */
   dispatchDataChange: (event: { entity: string; action: string; entityId?: string }) => void;
 }
-
-// ─── Internal references (outside Zustand for WebSocket lifecycle) ─
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_DELAY = 30_000; // 30 s
-
-// Data-change event subscribers (used by useRealtimeSync hook)
+const MAX_RECONNECT_DELAY = 30_000;
 const dataChangeListeners = new Set<DataChangeHandler>();
 
-// ─── Store ───────────────────────────────────────────────────────
+const DEFAULT_PAGINATION: NotificationPagination = {
+  page: 1,
+  limit: 20,
+  total: 0,
+  totalPages: 0,
+  hasNext: false,
+  hasPrev: false,
+};
+
+function mergeUniqueNotifications(existing: AppNotification[], incoming: AppNotification[]) {
+  const map = new Map<string, AppNotification>();
+  for (const item of existing) map.set(item.id, item);
+  for (const item of incoming) map.set(item.id, item);
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
 
 export const useNotificationStore = create<NotificationStore>((set, get) => ({
   notifications: [],
   unreadCount: 0,
+  pagination: DEFAULT_PAGINATION,
   isLoading: false,
   isConnected: false,
   preferences: {
@@ -126,14 +135,22 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     integrations: true,
     team: true,
     system: true,
+    emailNewLead: true,
+    emailLeadAssigned: true,
+    emailTaskDue: true,
+    emailWeeklyDigest: true,
+    inAppNewLead: true,
+    inAppLeadAssigned: true,
+    inAppTaskDue: true,
+    inAppStatusChange: true,
+    escalationEnabled: true,
+    digestEnabled: true,
   },
-
   toasts: [],
 
-  // ── Fetch notifications ──────────────────────────────────────
-
   fetchNotifications: async (params) => {
-    set({ isLoading: true });
+    const requestedPage = params?.page || 1;
+    set({ isLoading: requestedPage === 1 });
     try {
       const queryParams: Record<string, string | number> = {};
       if (params?.type) queryParams.type = params.type;
@@ -145,14 +162,22 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
       const response = await api.getNotifications(
         Object.keys(queryParams).length > 0 ? queryParams : undefined
       );
-      set({ notifications: response.data, isLoading: false });
+
+      set((state) => {
+        const append = requestedPage > 1;
+        return {
+          notifications: append
+            ? mergeUniqueNotifications(state.notifications, response.data)
+            : response.data,
+          pagination: response.pagination || DEFAULT_PAGINATION,
+          isLoading: false,
+        };
+      });
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
       set({ isLoading: false });
     }
   },
-
-  // ── Unread count ─────────────────────────────────────────────
 
   fetchUnreadCount: async () => {
     try {
@@ -163,64 +188,68 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     }
   },
 
-  // ── Mark as read ─────────────────────────────────────────────
-
   markAsRead: async (id) => {
     try {
-      await api.markNotificationRead(id);
+      const response = await api.markNotificationRead(id) as any;
       set((state) => ({
         notifications: state.notifications.map((n) =>
           n.id === id ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
         ),
-        unreadCount: Math.max(0, state.unreadCount - 1),
+        unreadCount:
+          typeof response.unreadCount === 'number'
+            ? response.unreadCount
+            : Math.max(0, state.unreadCount - 1),
       }));
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
     }
   },
 
-  // ── Mark all as read ─────────────────────────────────────────
-
   markAllAsRead: async () => {
     try {
-      await api.markAllNotificationsRead();
+      const response = await api.markAllNotificationsRead() as any;
       set((state) => ({
         notifications: state.notifications.map((n) => ({
           ...n,
           isRead: true,
           readAt: n.readAt || new Date().toISOString(),
         })),
-        unreadCount: 0,
+        unreadCount:
+          typeof response.unreadCount === 'number'
+            ? response.unreadCount
+            : 0,
       }));
     } catch (error) {
-      console.error('Failed to mark all notifications as read:', error);
+      console.error('Failed to mark all as read:', error);
     }
   },
 
-  // ── Archive ──────────────────────────────────────────────────
-
   archiveNotification: async (id) => {
     try {
-      await api.archiveNotification(id);
+      const response = await api.archiveNotification(id) as any;
       set((state) => ({
         notifications: state.notifications.filter((n) => n.id !== id),
+        unreadCount:
+          typeof response.unreadCount === 'number'
+            ? response.unreadCount
+            : state.unreadCount,
       }));
     } catch (error) {
       console.error('Failed to archive notification:', error);
     }
   },
 
-  // ── Delete ───────────────────────────────────────────────────
-
   deleteNotification: async (id) => {
     try {
-      await api.deleteNotification(id);
+      const response = await api.deleteNotification(id) as any;
       set((state) => {
         const notification = state.notifications.find((n) => n.id === id);
         return {
           notifications: state.notifications.filter((n) => n.id !== id),
           unreadCount:
-            notification && !notification.isRead
+            typeof response.unreadCount === 'number'
+              ? response.unreadCount
+              : notification && !notification.isRead
               ? Math.max(0, state.unreadCount - 1)
               : state.unreadCount,
         };
@@ -230,10 +259,43 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     }
   },
 
-  // ── WebSocket ────────────────────────────────────────────────
+  notificationAction: async (id, action, minutes) => {
+    const response = await api.notificationAction(id, action, minutes);
+    set((state) => ({
+      notifications: state.notifications.map((n) => (n.id === id ? response.notification || n : n)),
+      unreadCount:
+        typeof response.unreadCount === 'number'
+          ? response.unreadCount
+          : state.unreadCount,
+    }));
+    return response;
+  },
+
+  snoozeNotification: async (id, minutes = 15) => {
+    const response = await api.snoozeNotification(id, minutes);
+    set((state) => ({
+      notifications: state.notifications.map((n) => (n.id === id ? response.notification || n : n)),
+      unreadCount:
+        typeof response.unreadCount === 'number'
+          ? response.unreadCount
+          : state.unreadCount,
+    }));
+    return response;
+  },
+
+  escalateNotification: async (id) => {
+    const response = await api.escalateNotification(id);
+    set((state) => ({
+      notifications: state.notifications.map((n) => (n.id === id ? response.notification || n : n)),
+      unreadCount:
+        typeof response.unreadCount === 'number'
+          ? response.unreadCount
+          : state.unreadCount,
+    }));
+    return response;
+  },
 
   connectWebSocket: (token) => {
-    // Tear down any existing connection first
     get().disconnectWebSocket();
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
@@ -256,15 +318,27 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
           if (data.type === 'notification') {
             const notification = data.notification as AppNotification;
-            // Prepend the new notification
-            set((state) => ({
-              notifications: [notification, ...state.notifications],
-              unreadCount: state.unreadCount + 1,
-            }));
+            set((state) => {
+              const existing = state.notifications.find((n) => n.id === notification.id);
+              const notifications = existing
+                ? state.notifications.map((n) => (n.id === notification.id ? { ...n, ...notification } : n))
+                : [notification, ...state.notifications];
+              const unreadCount = (() => {
+                if (!existing) {
+                  return !notification.isRead ? state.unreadCount + 1 : state.unreadCount;
+                }
+                if (existing.isRead && !notification.isRead) return state.unreadCount + 1;
+                if (!existing.isRead && notification.isRead) return Math.max(0, state.unreadCount - 1);
+                return state.unreadCount;
+              })();
+              return { notifications, unreadCount };
+            });
 
-            // Show a toast for real-time notifications
-            // Callback reminders get a longer display (15s) so agents don't miss them
-            const isUrgentReminder = notification.type === 'CALLBACK_REMINDER' || notification.type === 'CALLBACK_REMINDER_HANDOFF' || notification.type === 'TASK_REMINDER';
+            const isUrgentReminder =
+              notification.type === 'CALLBACK_REMINDER' ||
+              notification.type === 'CALLBACK_REMINDER_HANDOFF' ||
+              notification.type === 'TASK_REMINDER' ||
+              notification.type === 'NOTIFICATION_ESCALATED';
             get().addToast({
               type: getToastType(notification.type),
               title: notification.title,
@@ -274,14 +348,21 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
               entityId: notification.entityId,
             });
 
-            // Play sound if preference enabled
             if (get().preferences.soundEnabled !== false) {
               playNotificationSound();
             }
           }
 
+          if (data.type === 'notification_updated') {
+            const notification = data.notification as AppNotification;
+            set((state) => ({
+              notifications: state.notifications.map((n) =>
+                n.id === notification.id ? { ...n, ...notification } : n
+              ),
+            }));
+          }
+
           if (data.type === 'data_changed') {
-            // Notify all subscribed components to refresh their data
             const changeEvent = {
               entity: data.entity as string,
               action: data.action as string,
@@ -291,35 +372,26 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
               try {
                 handler(changeEvent);
               } catch {
-                // Prevent one broken handler from affecting others
+                // ignore single subscriber failures
               }
             });
           }
         } catch {
-          // Malformed message — ignore
+          // ignore malformed ws payloads
         }
       };
 
       ws.onclose = () => {
         set({ isConnected: false });
-
-        // Reconnect with exponential back-off
-        const delay = Math.min(
-          1000 * Math.pow(2, reconnectAttempts),
-          MAX_RECONNECT_DELAY
-        );
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
         reconnectAttempts += 1;
-
         reconnectTimer = setTimeout(() => {
-          // Only reconnect if disconnectWebSocket wasn't called
-          if (ws !== null) {
-            connect();
-          }
+          if (ws !== null) connect();
         }, delay);
       };
 
       ws.onerror = () => {
-        // onclose will fire after onerror — reconnection is handled there
+        // reconnect handled by onclose
       };
     };
 
@@ -332,7 +404,6 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
       reconnectTimer = null;
     }
     if (ws) {
-      // Remove onclose handler so it doesn't trigger reconnect
       ws.onclose = null;
       ws.close();
       ws = null;
@@ -341,19 +412,15 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     set({ isConnected: false });
   },
 
-  // ── Toast management ─────────────────────────────────────────
-
   addToast: (toast) => {
     const id = crypto.randomUUID();
     const duration = toast.duration || 5000;
 
     set((state) => {
-      const newToasts = [...state.toasts, { ...toast, id }];
-      // Keep at most 5 visible — drop the oldest if we exceed
-      return { toasts: newToasts.length > 5 ? newToasts.slice(-5) : newToasts };
+      const next = [...state.toasts, { ...toast, id }];
+      return { toasts: next.length > 5 ? next.slice(-5) : next };
     });
 
-    // Auto-remove after duration
     setTimeout(() => {
       get().removeToast(id);
     }, duration);
@@ -364,8 +431,6 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
       toasts: state.toasts.filter((t) => t.id !== id),
     }));
   },
-
-  // ── Real-time data sync ─────────────────────────────────────
 
   subscribeDataChange: (handler) => {
     dataChangeListeners.add(handler);
@@ -380,12 +445,10 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
       try {
         handler(event);
       } catch {
-        // Prevent one broken handler from affecting others
+        // ignore single subscriber failures
       }
     });
   },
-
-  // ── Preferences ──────────────────────────────────────────────
 
   fetchPreferences: async () => {
     try {

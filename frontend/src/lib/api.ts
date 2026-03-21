@@ -823,11 +823,11 @@ class ApiClient {
   }
 
   async getNotificationPreferences() {
-    return this.request<any>('/settings/notifications');
+    return this.request<any>('/notifications/preferences');
   }
 
   async updateNotificationPreferences(data: Record<string, boolean>) {
-    return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
+    return this.request<any>('/notifications/preferences', { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async getAuditLog() {
@@ -1070,7 +1070,14 @@ class ApiClient {
       : '';
     return this.request<{
       data: AppNotification[];
-      pagination: { page: number; limit: number; total: number; totalPages: number };
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+      };
     }>(`/notifications${query}`);
   }
 
@@ -1111,6 +1118,77 @@ class ApiClient {
       method: 'PUT',
       body: JSON.stringify(data),
     });
+  }
+
+  async notificationAction(id: string, action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE', minutes?: number) {
+    return this.request<{
+      success: boolean;
+      action: string;
+      result: any;
+      notification: AppNotification;
+      unreadCount: number;
+    }>(`/notifications/${id}/action`, {
+      method: 'POST',
+      body: JSON.stringify({ action, ...(typeof minutes === 'number' ? { minutes } : {}) }),
+    });
+  }
+
+  async snoozeNotification(id: string, minutes = 15) {
+    return this.request<{
+      success: boolean;
+      action: string;
+      result: any;
+      notification: AppNotification;
+      unreadCount: number;
+    }>(`/notifications/${id}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ minutes }),
+    });
+  }
+
+  async escalateNotification(id: string) {
+    return this.request<{
+      success: boolean;
+      action: string;
+      result: any;
+      notification: AppNotification;
+      unreadCount: number;
+    }>(`/notifications/${id}/escalate`, {
+      method: 'POST',
+    });
+  }
+
+  async getNotificationDigest(params?: {
+    range?: '24h' | '7d' | '30d';
+    dateFrom?: string;
+    dateTo?: string;
+    limit?: number;
+  }) {
+    const query = params
+      ? '?' + new URLSearchParams(
+          Object.entries(params).reduce<Record<string, string>>((acc, [k, v]) => {
+            if (v !== undefined && v !== null) acc[k] = String(v);
+            return acc;
+          }, {})
+        ).toString()
+      : '';
+    return this.request<any>(`/notifications/digest${query}`);
+  }
+
+  async getNotificationAnalytics(params?: {
+    range?: '24h' | '7d' | '30d';
+    dateFrom?: string;
+    dateTo?: string;
+  }) {
+    const query = params
+      ? '?' + new URLSearchParams(
+          Object.entries(params).reduce<Record<string, string>>((acc, [k, v]) => {
+            if (v !== undefined && v !== null) acc[k] = String(v);
+            return acc;
+          }, {})
+        ).toString()
+      : '';
+    return this.request<any>(`/notifications/analytics${query}`);
   }
 
   // ─── Lead Allocation ────────────────────────────────────────────

@@ -41,7 +41,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Notification Center state
   const [notifOpen, setNotifOpen] = useState(false);
   const bellRef = useRef<HTMLButtonElement>(null);
-  const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket } =
+  const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket, fetchPreferences } =
     useNotificationStore();
 
   // IMPORTANT: usePermissionsStore must be called here at the top level,
@@ -50,6 +50,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // conditional return (like `if (!isAuthenticated) return null`) causes
   // "Rendered fewer hooks than expected" crashes during sign-out.
   const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
+  const hasNotificationAccess = !user || !permissionsLoaded ||
+    hasPermission(user.id, user.role, 'notifications');
 
   // Organization branding state
   const [orgBranding, setOrgBranding] = useState<{
@@ -135,12 +137,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   // Connect WebSocket and fetch unread count when authenticated
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && hasNotificationAccess) {
       try {
         const token = localStorage.getItem('token');
         if (token) {
           connectWebSocket(token);
           fetchUnreadCount();
+          fetchPreferences();
         }
       } catch (err) {
         console.error('WebSocket/notification init error:', err);
@@ -153,7 +156,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         // Ignore cleanup errors
       }
     };
-  }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
+  }, [isAuthenticated, hasNotificationAccess, connectWebSocket, disconnectWebSocket, fetchUnreadCount, fetchPreferences]);
 
   // When a user's profile is updated (e.g. role change by super admin),
   // re-fetch the profile. If the role actually changed, reload the page
@@ -283,11 +286,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         onMobileClose={() => setMobileMenuOpen(false)}
       />
       <CommandPalette />
-      <NotificationCenter
-        isOpen={notifOpen}
-        onClose={() => setNotifOpen(false)}
-        anchorRef={bellRef}
-      />
+      {hasNotificationAccess && (
+        <NotificationCenter
+          isOpen={notifOpen}
+          onClose={() => setNotifOpen(false)}
+          anchorRef={bellRef}
+        />
+      )}
 
       {/* Main content area */}
       <main className="transition-all duration-300 ease-smooth lg:pl-[var(--sidebar-width)]">
@@ -329,19 +334,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="hidden sm:block">
               <GlobalSearch />
             </div>
-            <button
-              ref={bellRef}
-              className="btn-icon relative"
-              title="Notifications"
-              onClick={() => setNotifOpen(!notifOpen)}
-            >
-              <Bell className="h-4.5 w-4.5" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 h-4.5 min-w-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ring-2 ring-white px-1">
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
-              )}
-            </button>
+            {hasNotificationAccess && (
+              <button
+                ref={bellRef}
+                className="btn-icon relative"
+                title="Notifications"
+                onClick={() => setNotifOpen(!notifOpen)}
+              >
+                <Bell className="h-4.5 w-4.5" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 h-4.5 min-w-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ring-2 ring-white px-1">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+            )}
             <button className="btn-icon hidden sm:inline-flex" title="Help">
               <HelpCircle className="h-4.5 w-4.5" />
             </button>

@@ -72,7 +72,7 @@ const FILTER_TABS: TabDefinition[] = [
   {
     key: 'tasks',
     label: 'Tasks',
-    matcher: (n) => n.type.startsWith('TASK_'),
+    matcher: (n) => n.type.startsWith('TASK_') || n.type.startsWith('CALLBACK_') || n.type === 'NOTIFICATION_ESCALATED',
   },
   {
     key: 'system',
@@ -84,7 +84,8 @@ const FILTER_TABS: TabDefinition[] = [
       n.type.startsWith('DIVISION_') ||
       n.type.startsWith('TEAM_') ||
       n.type.startsWith('CAMPAIGN_') ||
-      n.type.startsWith('AUTOMATION_'),
+          n.type.startsWith('AUTOMATION_') ||
+          n.type.startsWith('NOTIFICATION_'),
   },
 ];
 
@@ -204,6 +205,11 @@ const notificationIcons: Record<string, NotificationIconDef> = {
   },
   AUTOMATION_ERROR: {
     icon: AlertOctagon,
+    color: 'text-red-600',
+    bg: 'bg-red-50',
+  },
+  NOTIFICATION_ESCALATED: {
+    icon: AlertTriangle,
     color: 'text-red-600',
     bg: 'bg-red-50',
   },
@@ -340,6 +346,12 @@ interface NotificationItemProps {
   onRead: (id: string) => void;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onAction: (
+    id: string,
+    action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
+    minutes?: number
+  ) => void;
+  actionBusy: boolean;
   onClick: (n: AppNotification) => void;
 }
 
@@ -348,6 +360,8 @@ function NotificationItem({
   onRead,
   onArchive,
   onDelete,
+  onAction,
+  actionBusy,
   onClick,
 }: NotificationItemProps) {
   const [showActions, setShowActions] = useState(false);
@@ -355,6 +369,15 @@ function NotificationItem({
   const iconDef = getNotificationIcon(notification.type);
   const IconComponent = iconDef.icon;
   const hasActor = !!notification.actor;
+  const isTaskNotification =
+    notification.type.startsWith('TASK_') && notification.entityType === 'task';
+  const isReminderNotification =
+    notification.type === 'TASK_REMINDER' ||
+    notification.type === 'TASK_DUE_SOON' ||
+    notification.type === 'TASK_OVERDUE' ||
+    notification.type === 'CALLBACK_REMINDER' ||
+    notification.type === 'CALLBACK_REMINDER_HANDOFF';
+  const canEscalate = isReminderNotification;
 
   const handleArchive = useCallback(
     (e: React.MouseEvent) => {
@@ -380,6 +403,14 @@ function NotificationItem({
       onRead(notification.id);
     },
     [notification.id, onRead]
+  );
+
+  const handleAction = useCallback(
+    (e: React.MouseEvent, action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE', minutes?: number) => {
+      e.stopPropagation();
+      onAction(notification.id, action, minutes);
+    },
+    [notification.id, onAction]
   );
 
   return (
@@ -464,6 +495,42 @@ function NotificationItem({
           ${showActions ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'}
         `}
       >
+        {isTaskNotification && (
+          <button
+            onClick={(e) => handleAction(e, 'MARK_DONE')}
+            title="Mark task done"
+            disabled={actionBusy}
+            className="h-7 px-2 flex items-center justify-center rounded-md hover:bg-emerald-50 text-emerald-600 transition-colors text-[10px] font-semibold disabled:opacity-50"
+          >
+            Done
+          </button>
+        )}
+        {isReminderNotification && (
+          <button
+            onClick={(e) =>
+              handleAction(
+                e,
+                'SNOOZE',
+                notification.type.startsWith('CALLBACK_') ? 30 : 15
+              )
+            }
+            title="Snooze reminder"
+            disabled={actionBusy}
+            className="h-7 px-2 flex items-center justify-center rounded-md hover:bg-amber-50 text-amber-600 transition-colors text-[10px] font-semibold disabled:opacity-50"
+          >
+            Snooze
+          </button>
+        )}
+        {canEscalate && (
+          <button
+            onClick={(e) => handleAction(e, 'ESCALATE')}
+            title="Escalate"
+            disabled={actionBusy}
+            className="h-7 px-2 flex items-center justify-center rounded-md hover:bg-red-50 text-red-600 transition-colors text-[10px] font-semibold disabled:opacity-50"
+          >
+            Escalate
+          </button>
+        )}
         {!notification.isRead && (
           <button
             onClick={handleRead}
@@ -568,11 +635,13 @@ export default function NotificationCenter({
     unreadCount,
     isLoading,
     isConnected,
+    pagination,
     fetchNotifications,
     markAsRead,
     markAllAsRead,
     archiveNotification,
     deleteNotification,
+    notificationAction,
   } = useNotificationStore();
 
   // Local state
@@ -580,9 +649,9 @@ export default function NotificationCenter({
   const [isMarkingAll, setIsMarkingAll] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+  const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
 
   // ── Mount/unmount animation ───────────────────────────────────────────
 
@@ -606,7 +675,6 @@ export default function NotificationCenter({
       fetchNotifications({ limit: NOTIFICATION_PAGE_SIZE, page: 1 });
       setHasLoadedOnce(true);
       setPage(1);
-      setHasMore(true);
     }
   }, [isOpen, hasLoadedOnce, fetchNotifications]);
 
@@ -623,7 +691,6 @@ export default function NotificationCenter({
     }
     // For category tabs (leads/tasks/system) we filter client-side
     setPage(1);
-    setHasMore(true);
     // Scroll to top
     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activeTab, isOpen, fetchNotifications]);
@@ -688,7 +755,12 @@ export default function NotificationCenter({
       leads: notifications.filter(
         (n) => n.type.startsWith('LEAD_') || n.type.startsWith('PIPELINE_')
       ).length,
-      tasks: notifications.filter((n) => n.type.startsWith('TASK_')).length,
+      tasks: notifications.filter(
+        (n) =>
+          n.type.startsWith('TASK_') ||
+          n.type.startsWith('CALLBACK_') ||
+          n.type === 'NOTIFICATION_ESCALATED'
+      ).length,
       system: notifications.filter(
         (n) =>
           n.type.startsWith('SYSTEM_') ||
@@ -697,7 +769,8 @@ export default function NotificationCenter({
           n.type.startsWith('DIVISION_') ||
           n.type.startsWith('TEAM_') ||
           n.type.startsWith('CAMPAIGN_') ||
-          n.type.startsWith('AUTOMATION_')
+          n.type.startsWith('AUTOMATION_') ||
+          n.type.startsWith('NOTIFICATION_')
       ).length,
     };
     return counts;
@@ -728,7 +801,7 @@ export default function NotificationCenter({
   );
 
   const handleLoadMore = useCallback(async () => {
-    if (isLoadingMore || !hasMore) return;
+    if (isLoadingMore || !pagination.hasNext) return;
     setIsLoadingMore(true);
     const nextPage = page + 1;
     try {
@@ -742,7 +815,25 @@ export default function NotificationCenter({
       // Ignore
     }
     setIsLoadingMore(false);
-  }, [isLoadingMore, hasMore, page, fetchNotifications, activeTab]);
+  }, [isLoadingMore, pagination.hasNext, page, fetchNotifications, activeTab]);
+
+  const handleNotificationAction = useCallback(
+    async (
+      id: string,
+      action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
+      minutes?: number
+    ) => {
+      setActionInFlightId(id);
+      try {
+        await notificationAction(id, action, minutes);
+      } catch (err: any) {
+        alert(err?.message || 'Failed to perform notification action');
+      } finally {
+        setActionInFlightId(null);
+      }
+    },
+    [notificationAction]
+  );
 
   const handleViewAll = useCallback(() => {
     router.push('/settings?tab=notifications');
@@ -750,7 +841,7 @@ export default function NotificationCenter({
   }, [router, onClose]);
 
   const handleSettings = useCallback(() => {
-    router.push('/settings?tab=notification-preferences');
+    router.push('/settings?tab=notifications');
     onClose();
   }, [router, onClose]);
 
@@ -762,14 +853,14 @@ export default function NotificationCenter({
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollEl;
-      if (scrollHeight - scrollTop - clientHeight < 80 && hasMore && !isLoadingMore) {
+      if (scrollHeight - scrollTop - clientHeight < 80 && pagination.hasNext && !isLoadingMore) {
         handleLoadMore();
       }
     };
 
     scrollEl.addEventListener('scroll', handleScroll, { passive: true });
     return () => scrollEl.removeEventListener('scroll', handleScroll);
-  }, [isOpen, hasMore, isLoadingMore, handleLoadMore]);
+  }, [isOpen, pagination.hasNext, isLoadingMore, handleLoadMore]);
 
   // ── Don't render if not open ──────────────────────────────────────────
 
@@ -805,20 +896,23 @@ export default function NotificationCenter({
         aria-label="Notification Center"
         aria-modal="true"
         className={`
-          fixed top-[3.75rem] right-3 z-50
-          w-[400px] max-w-[calc(100vw-1.5rem)]
+          fixed inset-x-2 top-16 z-50
+          sm:inset-x-auto sm:top-[3.75rem] sm:right-3
+          w-auto sm:w-[400px] max-w-[calc(100vw-1rem)] sm:max-w-[calc(100vw-1.5rem)]
           bg-white rounded-2xl
           shadow-[0_20px_60px_-10px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.05)]
           flex flex-col
-          max-h-[min(580px,calc(100vh-5rem))]
-          transition-all duration-200 ease-out origin-top-right
+          max-h-[min(70vh,calc(100vh-5rem))]
+          sm:max-h-[min(580px,calc(100vh-5rem))]
+          transition-all duration-200 ease-out origin-top
+          sm:origin-top-right
           ${isVisible
             ? 'opacity-100 scale-100 translate-y-0'
             : 'opacity-0 scale-[0.97] -translate-y-1'}
         `}
       >
         {/* Pointer caret anchored to bell icon */}
-        <div className="absolute -top-[7px] right-[52px] w-3.5 h-3.5 rotate-45 bg-white border-t border-l border-gray-200/80 rounded-tl-[3px] z-10" />
+        <div className="hidden sm:block absolute -top-[7px] right-[52px] w-3.5 h-3.5 rotate-45 bg-white border-t border-l border-gray-200/80 rounded-tl-[3px] z-10" />
 
         {/* ─── Header ──────────────────────────────────────────────── */}
         <div className="relative z-20 flex items-center justify-between px-5 pt-4 pb-3">
@@ -907,7 +1001,7 @@ export default function NotificationCenter({
           className="flex-1 overflow-y-auto overscroll-contain min-h-0 scrollbar-thin"
         >
           {/* Loading state */}
-          {isLoading && !hasLoadedOnce && (
+          {isLoading && notifications.length === 0 && (
             <div>
               {Array.from({ length: 5 }).map((_, i) => (
                 <NotificationSkeleton key={i} />
@@ -940,6 +1034,8 @@ export default function NotificationCenter({
                       onRead={markAsRead}
                       onArchive={archiveNotification}
                       onDelete={deleteNotification}
+                      onAction={handleNotificationAction}
+                      actionBusy={actionInFlightId === notif.id}
                       onClick={handleNotificationClick}
                     />
                   ))}
@@ -957,7 +1053,7 @@ export default function NotificationCenter({
               )}
 
               {/* End of list */}
-              {!hasMore && filteredNotifications.length > NOTIFICATION_PAGE_SIZE && (
+              {!pagination.hasNext && filteredNotifications.length > NOTIFICATION_PAGE_SIZE && (
                 <div className="flex items-center justify-center py-4">
                   <span className="text-[11px] text-text-tertiary">
                     You&apos;ve seen all notifications

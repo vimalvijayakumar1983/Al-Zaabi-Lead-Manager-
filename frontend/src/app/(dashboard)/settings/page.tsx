@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import type { CustomField, FieldType, Organization, BuiltInField } from '@/types';
@@ -35,6 +36,7 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
 
 export default function SettingsPage() {
   const { user } = useAuthStore();
+  const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>('profile');
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
   const isAdmin = user?.role === 'ADMIN' || isSuperAdmin;
@@ -46,6 +48,14 @@ export default function SettingsPage() {
     return true;
   });
 
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (!tabParam) return;
+    if (tabs.some((t) => t.key === tabParam)) {
+      setActiveTab(tabParam as Tab);
+    }
+  }, [searchParams]);
+
   return (
     <div className="animate-fade-in max-w-5xl mx-auto">
       <div className="mb-6">
@@ -53,10 +63,10 @@ export default function SettingsPage() {
         <p className="text-text-secondary text-sm mt-0.5">Manage your account, security, and preferences</p>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6">
         {/* Sidebar Navigation */}
-        <nav className="w-56 flex-shrink-0">
-          <div className="space-y-0.5">
+        <nav className="w-full lg:w-56 flex-shrink-0 overflow-x-auto">
+          <div className="flex lg:block gap-1 lg:gap-0.5 min-w-max lg:min-w-0">
             {filteredTabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.key;
@@ -64,7 +74,7 @@ export default function SettingsPage() {
                 <button
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+                  className={`w-auto lg:w-full flex items-center gap-2 lg:gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 whitespace-nowrap ${
                     isActive
                       ? 'bg-brand-50 text-brand-700 shadow-xs'
                       : tab.key === 'danger'
@@ -76,7 +86,7 @@ export default function SettingsPage() {
                     isActive ? 'text-brand-600' : tab.key === 'danger' ? 'text-red-500' : 'text-text-tertiary'
                   }`} />
                   {tab.label}
-                  <ChevronRight className={`h-3.5 w-3.5 ml-auto transition-opacity ${
+                  <ChevronRight className={`h-3.5 w-3.5 ml-auto transition-opacity hidden lg:block ${
                     isActive ? 'opacity-100 text-brand-500' : 'opacity-0'
                   }`} />
                 </button>
@@ -867,10 +877,28 @@ function NotificationsSection() {
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [analytics, setAnalytics] = useState<any | null>(null);
+  const [digest, setDigest] = useState<any | null>(null);
+  const [loadingInsights, setLoadingInsights] = useState(true);
+
+  const loadInsights = useCallback(async () => {
+    setLoadingInsights(true);
+    try {
+      const [analyticsData, digestData] = await Promise.all([
+        api.getNotificationAnalytics({ range: '7d' }),
+        api.getNotificationDigest({ range: '7d', limit: 5 }),
+      ]);
+      setAnalytics(analyticsData);
+      setDigest(digestData);
+    } finally {
+      setLoadingInsights(false);
+    }
+  }, []);
 
   useEffect(() => {
     api.getNotificationPreferences().then(setPrefs);
-  }, []);
+    loadInsights().catch(() => {});
+  }, [loadInsights]);
 
   const toggle = (key: string) => {
     if (!prefs) return;
@@ -903,6 +931,13 @@ function NotificationsSection() {
     { key: 'inAppLeadAssigned', label: 'Lead assignments', description: 'Notify when leads are assigned to you' },
     { key: 'inAppTaskDue', label: 'Task reminders', description: 'Show alerts for upcoming and overdue tasks' },
     { key: 'inAppStatusChange', label: 'Status changes', description: 'When lead status or pipeline stage changes' },
+  ];
+
+  const experienceNotifs = [
+    { key: 'soundEnabled', label: 'Sound alerts', description: 'Play a subtle alert sound for incoming notifications' },
+    { key: 'desktopEnabled', label: 'Desktop alerts', description: 'Enable browser desktop notifications when supported' },
+    { key: 'digestEnabled', label: 'Smart digest mode', description: 'Bundle low-priority alerts into digest-first delivery' },
+    { key: 'escalationEnabled', label: 'Escalation safety net', description: 'Auto-escalate stale critical reminders' },
   ];
 
   if (!prefs) {
@@ -938,7 +973,7 @@ function NotificationsSection() {
         </div>
         <div className="divide-y divide-border-subtle">
           {emailNotifs.map((notif) => (
-            <div key={notif.key} className="px-6 py-4 flex items-center justify-between">
+            <div key={notif.key} className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-text-primary">{notif.label}</p>
                 <p className="text-2xs text-text-tertiary mt-0.5">{notif.description}</p>
@@ -959,7 +994,28 @@ function NotificationsSection() {
         </div>
         <div className="divide-y divide-border-subtle">
           {inAppNotifs.map((notif) => (
-            <div key={notif.key} className="px-6 py-4 flex items-center justify-between">
+            <div key={notif.key} className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-text-primary">{notif.label}</p>
+                <p className="text-2xs text-text-tertiary mt-0.5">{notif.description}</p>
+              </div>
+              <ToggleSwitch checked={prefs[notif.key] ?? true} onChange={() => toggle(notif.key)} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Experience Controls */}
+      <div className="card overflow-hidden">
+        <div className="px-6 py-4 bg-surface-secondary border-b border-border-subtle">
+          <div className="flex items-center gap-2">
+            <Settings2 className="h-4 w-4 text-text-tertiary" />
+            <h3 className="text-sm font-semibold text-text-primary">Experience & Reliability</h3>
+          </div>
+        </div>
+        <div className="divide-y divide-border-subtle">
+          {experienceNotifs.map((notif) => (
+            <div key={notif.key} className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-text-primary">{notif.label}</p>
                 <p className="text-2xs text-text-tertiary mt-0.5">{notif.description}</p>
@@ -981,6 +1037,87 @@ function NotificationsSection() {
         <button onClick={handleSave} disabled={saving} className="btn-primary">
           {saving ? 'Saving...' : 'Save Preferences'}
         </button>
+      </div>
+
+      {/* Analytics + Optimization */}
+      <div className="card p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Notification Intelligence (7 days)</h3>
+            <p className="text-2xs text-text-tertiary mt-0.5">Read, action, snooze and escalation trends</p>
+          </div>
+          <button
+            onClick={() => loadInsights().catch(() => {})}
+            className="btn-ghost text-xs"
+            disabled={loadingInsights}
+          >
+            {loadingInsights ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+
+        {loadingInsights ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="rounded-lg border border-border-subtle p-3">
+                <div className="skeleton h-3 w-16 mb-2" />
+                <div className="skeleton h-6 w-12" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Sent</p>
+                <p className="text-lg font-semibold text-text-primary">{analytics?.totals?.sent ?? 0}</p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Read Rate</p>
+                <p className="text-lg font-semibold text-text-primary">{analytics?.totals?.readRate ?? 0}%</p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Action Rate</p>
+                <p className="text-lg font-semibold text-text-primary">{analytics?.totals?.actionRate ?? 0}%</p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Escalations</p>
+                <p className="text-lg font-semibold text-text-primary">{analytics?.totals?.escalated ?? 0}</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border-subtle p-3">
+              <p className="text-xs font-medium text-text-primary mb-2">Optimization Signals</p>
+              {analytics?.optimizationSignals?.length ? (
+                <ul className="space-y-1.5">
+                  {analytics.optimizationSignals.map((signal: string, idx: number) => (
+                    <li key={`${signal}-${idx}`} className="text-2xs text-text-secondary flex items-start gap-1.5">
+                      <Info className="h-3.5 w-3.5 mt-0.5 text-brand-500" />
+                      <span>{signal}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-2xs text-text-tertiary">No optimization signals in the selected range.</p>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-border-subtle p-3">
+              <p className="text-xs font-medium text-text-primary mb-2">Digest Preview</p>
+              {digest?.topUnread?.length ? (
+                <div className="space-y-2">
+                  {digest.topUnread.map((item: any) => (
+                    <div key={item.id} className="rounded-md bg-surface-secondary px-3 py-2">
+                      <p className="text-xs font-medium text-text-primary">{item.title}</p>
+                      <p className="text-2xs text-text-tertiary mt-0.5 line-clamp-2">{item.message}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-2xs text-text-tertiary">No unread digest items right now.</p>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -622,6 +622,7 @@ export type NotificationType =
   | 'AUTOMATION_ERROR'
   | 'CALLBACK_REMINDER'
   | 'CALLBACK_REMINDER_HANDOFF'
+  | 'NOTIFICATION_ESCALATED'
   | 'SYSTEM_ANNOUNCEMENT';
 
 export interface AppNotification {
@@ -665,6 +666,16 @@ export interface NotificationPreferences {
   integrations: boolean;
   team: boolean;
   system: boolean;
+  emailNewLead?: boolean;
+  emailLeadAssigned?: boolean;
+  emailTaskDue?: boolean;
+  emailWeeklyDigest?: boolean;
+  inAppNewLead?: boolean;
+  inAppLeadAssigned?: boolean;
+  inAppTaskDue?: boolean;
+  inAppStatusChange?: boolean;
+  escalationEnabled?: boolean;
+  digestEnabled?: boolean;
 }
 
 export interface Toast {
