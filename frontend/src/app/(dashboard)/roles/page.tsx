@@ -815,9 +815,13 @@ function PermissionModuleSection({
 function ViewPermissionsDrawer({
   role,
   onClose,
+  onEdit,
+  onClone,
 }: {
   role: CustomRole;
   onClose: () => void;
+  onEdit?: () => void;
+  onClone?: () => void;
 }) {
   const RIcon = getRoleIcon(role.icon);
 
@@ -841,7 +845,11 @@ function ViewPermissionsDrawer({
                 <h3 className="text-lg font-semibold text-gray-900">
                   {role.name}
                 </h3>
-                <p className="text-sm text-gray-600">Permissions (read-only)</p>
+                <p className="text-sm text-gray-600">
+                  {role.isSystem
+                    ? 'System role defaults (read-only)'
+                    : 'Permissions overview'}
+                </p>
               </div>
             </div>
             <button
@@ -854,6 +862,13 @@ function ViewPermissionsDrawer({
         </div>
 
         <div className="px-6 py-4 space-y-3">
+          {role.isSystem && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-xs text-amber-800">
+                System roles cannot be edited directly. Clone this role to create an editable custom version.
+              </p>
+            </div>
+          )}
           {Object.entries(PERMISSION_MODULES).map(([moduleKey, module]) => (
             <PermissionModuleSection
               key={moduleKey}
@@ -867,6 +882,30 @@ function ViewPermissionsDrawer({
             />
           ))}
         </div>
+        {(onEdit || onClone) && (
+          <div className="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-end gap-2">
+            {onClone && (
+              <button
+                type="button"
+                onClick={onClone}
+                className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg text-sm font-medium inline-flex items-center gap-2"
+              >
+                <Copy className="w-4 h-4" />
+                {role.isSystem ? 'Clone as Custom Role' : 'Clone Role'}
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-2 rounded-lg text-sm font-medium inline-flex items-center gap-2"
+              >
+                <Pencil className="w-4 h-4" />
+                Edit Role
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2468,6 +2507,22 @@ export default function RolesPage() {
         <ViewPermissionsDrawer
           role={viewingPermissions}
           onClose={() => setViewingPermissions(null)}
+          onClone={
+            canManageRoles
+              ? () => {
+                  setCloningRole(viewingPermissions);
+                  setViewingPermissions(null);
+                }
+              : undefined
+          }
+          onEdit={
+            canManageRoles && !viewingPermissions.isSystem
+              ? () => {
+                  setEditingRole(viewingPermissions);
+                  setViewingPermissions(null);
+                }
+              : undefined
+          }
         />
       )}
 
