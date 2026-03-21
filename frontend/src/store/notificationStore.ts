@@ -299,25 +299,51 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
   notificationAction: async (id, action, minutes) => {
     const response = await api.notificationAction(id, action, minutes);
-    set((state) => ({
-      notifications: state.notifications.map((n) => (n.id === id ? response.notification || n : n)),
-      unreadCount:
-        typeof response.unreadCount === 'number'
-          ? response.unreadCount
-          : state.unreadCount,
-    }));
+    set((state) => {
+      const shouldRemove = action === 'SNOOZE' || response?.notification?.isArchived === true;
+      const notifications = shouldRemove
+        ? state.notifications.filter((n) => n.id !== id)
+        : state.notifications.map((n) => (n.id === id ? response.notification || n : n));
+      return {
+        notifications,
+        unreadCount:
+          typeof response.unreadCount === 'number'
+            ? response.unreadCount
+            : state.unreadCount,
+      };
+    });
+
+    if (action === 'SNOOZE') {
+      const message =
+        response?.result?.message ||
+        `Reminder snoozed${typeof minutes === 'number' ? ` for ${minutes} minute(s)` : ''}.`;
+      get().addToast({
+        type: 'info',
+        title: 'Reminder Snoozed',
+        message,
+        duration: 4000,
+      });
+    }
     return response;
   },
 
   snoozeNotification: async (id, minutes = 15) => {
     const response = await api.snoozeNotification(id, minutes);
     set((state) => ({
-      notifications: state.notifications.map((n) => (n.id === id ? response.notification || n : n)),
+      notifications: state.notifications.filter((n) => n.id !== id),
       unreadCount:
         typeof response.unreadCount === 'number'
           ? response.unreadCount
           : state.unreadCount,
     }));
+    get().addToast({
+      type: 'info',
+      title: 'Reminder Snoozed',
+      message:
+        response?.result?.message ||
+        `Reminder snoozed for ${minutes} minute(s).`,
+      duration: 4000,
+    });
     return response;
   },
 

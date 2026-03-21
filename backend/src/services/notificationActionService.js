@@ -27,7 +27,13 @@ function canManageAcrossAssignee(userContext, notificationOrgId) {
   return user.organizationId === notificationOrgId || user.role === 'SUPER_ADMIN';
 }
 
-async function markNotificationAction(notification, actionType, extraMetadata = {}, markRead = true) {
+async function markNotificationAction(
+  notification,
+  actionType,
+  extraMetadata = {},
+  options = {}
+) {
+  const { markRead = true, archive = false } = options;
   const metadata = asObject(notification.metadata);
   const now = new Date();
 
@@ -35,6 +41,7 @@ async function markNotificationAction(notification, actionType, extraMetadata = 
     where: { id: notification.id },
     data: {
       isRead: markRead ? true : notification.isRead,
+      isArchived: archive ? true : notification.isArchived,
       readAt: markRead ? notification.readAt || now : notification.readAt,
       metadata: {
         ...metadata,

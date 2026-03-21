@@ -163,7 +163,7 @@ async function executeNotificationAction(notification, userContext, action, minu
     }
     updatedNotification = await markNotificationAction(notification, 'MARK_DONE', {
       completedTaskId: result.taskId,
-    }, true);
+    }, { markRead: true });
   } else if (action === 'SNOOZE') {
     result = await snoozeNotification(notification, userContext, minutes || 15);
     if (!result.ok) {
@@ -171,7 +171,7 @@ async function executeNotificationAction(notification, userContext, action, minu
     }
     updatedNotification = await markNotificationAction(notification, 'SNOOZE', {
       snoozedUntil: result.snoozedUntil,
-    }, true);
+    }, { markRead: true, archive: true });
   } else if (action === 'ESCALATE') {
     result = await escalateNotification(notification, userContext.id, 'manual');
     if (!result.ok) {
@@ -181,7 +181,7 @@ async function executeNotificationAction(notification, userContext, action, minu
     if (refreshed) {
       updatedNotification = await markNotificationAction(refreshed, 'ESCALATE', {
         escalationRequestedAt: new Date().toISOString(),
-      }, false);
+      }, { markRead: false });
     }
   }
 
