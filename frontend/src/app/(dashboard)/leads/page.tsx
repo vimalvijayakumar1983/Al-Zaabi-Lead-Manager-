@@ -1057,7 +1057,8 @@ function LeadsContent() {
                 const reservedBottomSpace = selectedLeads.size > 0 ? 132 : 16;
                 const availableBelow = Math.max(0, window.innerHeight - triggerRect.bottom - reservedBottomSpace - sidePadding);
                 const availableAbove = Math.max(0, triggerRect.top - sidePadding - 8);
-                const shouldOpenUp = availableBelow < minimumMenuHeight && availableAbove > availableBelow;
+                const isLowerHalfOfViewport = triggerRect.top > window.innerHeight * 0.45;
+                const shouldOpenUp = isLowerHalfOfViewport || (availableBelow < minimumMenuHeight && availableAbove > availableBelow);
                 const maxHeight = Math.max(
                   140,
                   Math.min(idealMenuMaxHeight, shouldOpenUp ? availableAbove : availableBelow),
