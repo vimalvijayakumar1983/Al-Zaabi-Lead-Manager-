@@ -55,7 +55,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
-import { FEATURES, type FeatureKey } from '@/lib/permissions';
+import { FEATURES, type FeatureKey, usePermissionsStore } from '@/lib/permissions';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -2027,6 +2027,7 @@ function ErrorState({
 
 export default function RolesPage() {
   const { user } = useAuthStore();
+  const refreshPermissions = usePermissionsStore((state) => state.loadPermissions);
   const canManageRoles =
     user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
   const canManageModuleVisibility = user?.role === 'SUPER_ADMIN';
@@ -2230,6 +2231,7 @@ export default function RolesPage() {
       setModuleVisibility(saved);
       moduleVisibilityInitialRef.current = JSON.stringify(saved);
       setModuleVisibilityDirty(false);
+      await refreshPermissions();
       addToast('success', 'Module visibility updated successfully');
     } catch (err) {
       const msg =
@@ -2238,7 +2240,12 @@ export default function RolesPage() {
     } finally {
       setModuleVisibilitySaving(false);
     }
-  }, [addToast, canManageModuleVisibility, moduleVisibility]);
+  }, [
+    addToast,
+    canManageModuleVisibility,
+    moduleVisibility,
+    refreshPermissions,
+  ]);
 
   // ── Create role ──
   const handleCreateRole = useCallback(
