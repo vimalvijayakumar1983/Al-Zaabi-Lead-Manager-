@@ -169,6 +169,41 @@ class ApiClient {
     return this.request<any>(`/leads/${id}`);
   }
 
+  async generateLeadAISummary(id: string, force = false) {
+    return this.request<{
+      success: boolean;
+      data: {
+        summary: string;
+        highlights: string[];
+        risks: string[];
+        opportunities: string[];
+        recommendedActions: Array<{
+          title: string;
+          reason: string;
+          priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+        }>;
+        confidence: number;
+        generatedAt: string;
+        signals: {
+          score: number;
+          conversionProb: number;
+          status: string;
+          openTasks: number;
+          overdueTasks: number;
+          staleDays: number | null;
+          communications: number;
+          calls: number;
+          notes: number;
+          hasWillCallAgain: boolean;
+          hasNotInterested: boolean;
+        };
+      };
+    }>(`/leads/${id}/ai-summary`, {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+    });
+  }
+
   async createLead(data: any) {
     return this.request<any>('/leads', { method: 'POST', body: JSON.stringify(data) });
   }
