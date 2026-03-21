@@ -810,7 +810,7 @@ function LeadsContent() {
 
   // ─── Cell Renderer ──────────────────────────────────────────────
 
-  const renderCell = (col: ColumnDef, lead: Lead) => {
+  const renderCell = (col: ColumnDef, lead: Lead, rowIndex: number) => {
     switch (col.id) {
       case 'select':
         return (
@@ -1014,7 +1014,8 @@ function LeadsContent() {
         if (!sla || !sla.enabled) return <span className="text-xs text-gray-400">-</span>;
         return <SLABadge slaInfo={sla} />;
       }
-      case 'actions':
+      case 'actions': {
+        const shouldOpenUp = rowIndex >= Math.max(0, leads.length - 3);
         return (
           <div className="relative">
             <button onClick={() => setQuickActionId(quickActionId === lead.id ? null : lead.id)}
@@ -1022,7 +1023,12 @@ function LeadsContent() {
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
             </button>
             {quickActionId === lead.id && (
-              <div ref={quickActionRef} className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+              <div
+                ref={quickActionRef}
+                className={`absolute right-0 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 ${
+                  shouldOpenUp ? 'bottom-full mb-1' : 'top-full mt-1'
+                }`}
+              >
                 <Link href={`/leads/${lead.id}`} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                   <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                   View Details
@@ -1053,6 +1059,7 @@ function LeadsContent() {
             )}
           </div>
         );
+      }
       default:
         // Custom field columns (id starts with cf_)
         if (col.id.startsWith('cf_') && col.isCustom) {
@@ -1297,7 +1304,7 @@ function LeadsContent() {
                     Move to Stage
                   </button>
                   {showBulkActions && (
-                    <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 max-h-60 overflow-y-auto">
+                    <div className="absolute right-0 bottom-full mb-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 max-h-60 overflow-y-auto">
                       {stages.length > 0
                         ? stages.map((s) => (
                             <button key={s.id} onClick={async () => {
@@ -1382,7 +1389,7 @@ function LeadsContent() {
                         </div>
                       </td></tr>
                     ) : (
-                      leads.map((lead) => (
+                      leads.map((lead, rowIndex) => (
                         <tr key={lead.id}
                           className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
                           onClick={(e) => {
@@ -1391,7 +1398,7 @@ function LeadsContent() {
                             router.push(`/leads/${lead.id}`);
                           }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead)}</td>
+                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
                           ))}
                         </tr>
                       ))
