@@ -221,16 +221,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const routePermissions: Record<string, string> = {
     '/dashboard': 'dashboard',
     '/leads': 'leads',
+    '/contacts': 'contacts',
+    '/inbox': 'inbox',
     '/pipeline': 'pipeline',
     '/tasks': 'tasks',
     '/analytics': 'analytics',
     '/automations': 'automations',
     '/campaigns': 'campaigns',
+    '/integrations': 'integrations',
     '/team': 'team',
+    '/roles': 'roles',
     '/settings': 'settings',
-    '/contacts': 'leads',
-    '/inbox': 'leads',
-    '/import': 'leads',
+    '/import': 'import',
     '/divisions': 'divisions',
   };
 

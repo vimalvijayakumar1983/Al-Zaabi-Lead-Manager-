@@ -26,12 +26,29 @@ router.use(authenticate, orgScope);
 
 // Default permission matrix
 const DEFAULT_PERMISSIONS = {
-  SUPER_ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: true },
-  ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true },
-  MANAGER: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, deleteData: false, exportData: true },
-  SALES_REP: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
-  VIEWER: { dashboard: true, leads: true, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
+  SUPER_ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: true },
+  ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: false },
+  MANAGER: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: false, import: false, team: true, roles: false, settings: false, invite: true, deleteData: false, exportData: true, divisions: false },
+  SALES_REP: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, deleteData: false, exportData: false, divisions: false },
+  VIEWER: { dashboard: true, leads: true, contacts: true, inbox: false, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, deleteData: false, exportData: false, divisions: false },
 };
+
+function mergeRolePermissions(input) {
+  const incoming = input && typeof input === 'object' ? input : {};
+  const merged = {};
+
+  for (const [role, defaults] of Object.entries(DEFAULT_PERMISSIONS)) {
+    merged[role] = { ...defaults, ...(incoming[role] || {}) };
+  }
+
+  for (const [role, perms] of Object.entries(incoming)) {
+    if (!merged[role]) {
+      merged[role] = perms;
+    }
+  }
+
+  return merged;
+}
 
 // ─── Get Permissions Config ─────────────────────────────────────
 router.get('/permissions', async (req, res, next) => {
@@ -41,7 +58,7 @@ router.get('/permissions', async (req, res, next) => {
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
-    const rolePermissions = settings.rolePermissions || DEFAULT_PERMISSIONS;
+    const rolePermissions = mergeRolePermissions(settings.rolePermissions);
     const userOverrides = settings.userPermissionOverrides || {};
     res.json({ rolePermissions, userOverrides, defaults: DEFAULT_PERMISSIONS });
   } catch (err) {
@@ -59,12 +76,13 @@ router.put('/permissions/roles', authorize('ADMIN'), validate(z.object({
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
-    const updated = { ...settings, rolePermissions: req.validated.rolePermissions };
+    const normalizedRolePermissions = mergeRolePermissions(req.validated.rolePermissions);
+    const updated = { ...settings, rolePermissions: normalizedRolePermissions };
     await prisma.organization.update({
       where: { id: req.orgId },
       data: { settings: updated },
     });
-    res.json({ rolePermissions: req.validated.rolePermissions });
+    res.json({ rolePermissions: normalizedRolePermissions });
   } catch (err) {
     next(err);
   }
