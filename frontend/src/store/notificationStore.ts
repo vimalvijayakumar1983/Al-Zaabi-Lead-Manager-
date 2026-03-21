@@ -119,6 +119,16 @@ function mergeUniqueNotifications(existing: AppNotification[], incoming: AppNoti
   );
 }
 
+function getActiveDivisionScope(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = localStorage.getItem('activeDivisionId');
+    return raw && raw.trim() ? raw.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export const useNotificationStore = create<NotificationStore>((set, get) => ({
   notifications: [],
   unreadCount: 0,
@@ -158,10 +168,25 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
       if (params?.entityType) queryParams.entityType = params.entityType;
       if (params?.page) queryParams.page = params.page;
       if (params?.limit) queryParams.limit = params.limit;
+      const divisionScope = getActiveDivisionScope();
+      if (divisionScope) queryParams.divisionId = divisionScope;
 
-      const response = await api.getNotifications(
-        Object.keys(queryParams).length > 0 ? queryParams : undefined
-      );
+      let response;
+      try {
+        response = await api.getNotifications(
+          Object.keys(queryParams).length > 0 ? queryParams : undefined
+        );
+      } catch (error) {
+        // fallback for users without division-scoped access using stale localStorage values
+        if (divisionScope) {
+          delete queryParams.divisionId;
+          response = await api.getNotifications(
+            Object.keys(queryParams).length > 0 ? queryParams : undefined
+          );
+        } else {
+          throw error;
+        }
+      }
 
       set((state) => {
         const append = requestedPage > 1;
@@ -181,7 +206,20 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
 
   fetchUnreadCount: async () => {
     try {
-      const { count } = await api.getUnreadCount();
+      const divisionScope = getActiveDivisionScope();
+      let result;
+      try {
+        result = await api.getUnreadCount(
+          divisionScope ? { divisionId: divisionScope } : undefined
+        );
+      } catch (error) {
+        if (divisionScope) {
+          result = await api.getUnreadCount();
+        } else {
+          throw error;
+        }
+      }
+      const { count } = result;
       set({ unreadCount: count });
     } catch (error) {
       console.error('Failed to fetch unread count:', error);

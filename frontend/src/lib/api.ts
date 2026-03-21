@@ -1081,8 +1081,11 @@ class ApiClient {
     }>(`/notifications${query}`);
   }
 
-  async getUnreadCount() {
-    return this.request<{ count: number }>('/notifications/unread-count');
+  async getUnreadCount(params?: { divisionId?: string }) {
+    const query = params?.divisionId
+      ? `?${new URLSearchParams({ divisionId: params.divisionId }).toString()}`
+      : '';
+    return this.request<{ count: number }>(`/notifications/unread-count${query}`);
   }
 
   async markNotificationRead(id: string) {

@@ -75,12 +75,14 @@ const listNotificationsSchema = paginationSchema.extend({
   entityType: z.string().optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
+  divisionId: z.string().uuid().optional(),
 });
 
 const analyticsQuerySchema = z.object({
   range: z.enum(['24h', '7d', '30d']).optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
+  divisionId: z.string().uuid().optional(),
 });
 
 const digestQuerySchema = analyticsQuerySchema.extend({
@@ -113,13 +115,34 @@ function resolveRange(query) {
   return { from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), to: new Date() };
 }
 
-async function getUnreadCount(userId) {
+function resolveDivisionScope(req, requestedDivisionId) {
+  if (requestedDivisionId) {
+    if (!req.orgIds.includes(requestedDivisionId)) {
+      const error = new Error('Invalid division scope');
+      error.status = 403;
+      throw error;
+    }
+    return requestedDivisionId;
+  }
+
+  if (req.orgIds.length === 1) {
+    return req.orgIds[0];
+  }
+
+  return null;
+}
+
+async function getUnreadCount(userId, divisionId = null) {
+  const where = {
+    userId,
+    isRead: false,
+    isArchived: false,
+  };
+  if (divisionId) {
+    where.organizationId = divisionId;
+  }
   return prisma.notification.count({
-    where: {
-      userId,
-      isRead: false,
-      isArchived: false,
-    },
+    where,
   });
 }
 
@@ -129,12 +152,12 @@ async function getUserNotification(notificationId, userId) {
   });
 }
 
-async function executeNotificationAction(notification, userId, action, minutes) {
+async function executeNotificationAction(notification, userContext, action, minutes) {
   let result = null;
   let updatedNotification = notification;
 
   if (action === 'MARK_DONE') {
-    result = await completeTaskFromNotification(notification, userId);
+    result = await completeTaskFromNotification(notification, userContext);
     if (!result.ok) {
       return { ok: false, error: result.error || 'Unable to mark task done' };
     }
@@ -142,7 +165,7 @@ async function executeNotificationAction(notification, userId, action, minutes) 
       completedTaskId: result.taskId,
     }, true);
   } else if (action === 'SNOOZE') {
-    result = await snoozeNotification(notification, userId, minutes || 15);
+    result = await snoozeNotification(notification, userContext, minutes || 15);
     if (!result.ok) {
       return { ok: false, error: result.error || 'Unable to snooze notification' };
     }
@@ -150,7 +173,7 @@ async function executeNotificationAction(notification, userId, action, minutes) 
       snoozedUntil: result.snoozedUntil,
     }, true);
   } else if (action === 'ESCALATE') {
-    result = await escalateNotification(notification, userId, 'manual');
+    result = await escalateNotification(notification, userContext.id, 'manual');
     if (!result.ok) {
       return { ok: false, error: result.error || 'Unable to escalate notification' };
     }
@@ -167,9 +190,15 @@ async function executeNotificationAction(notification, userId, action, minutes) 
 
 router.get('/unread-count', async (req, res) => {
   try {
-    const count = await getUnreadCount(req.user.id);
+    const requestedDivisionId =
+      typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
+    const divisionScope = resolveDivisionScope(req, requestedDivisionId);
+    const count = await getUnreadCount(req.user.id, divisionScope);
     res.json({ count });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     logger.error('Failed to get unread count', { error: error.message });
     res.status(500).json({ error: 'Failed to get unread count' });
   }
@@ -198,12 +227,25 @@ router.put('/preferences', validate(z.record(z.boolean())), async (req, res) => 
 router.get('/', validateQuery(listNotificationsSchema), async (req, res) => {
   try {
     const q = req.validatedQuery || req.query;
-    const { type, isRead, entityType, dateFrom, dateTo, page = 1, limit = 20 } = q;
+    const {
+      type,
+      isRead,
+      entityType,
+      dateFrom,
+      dateTo,
+      divisionId,
+      page = 1,
+      limit = 20,
+    } = q;
+    const divisionScope = resolveDivisionScope(req, divisionId);
 
     const where = {
       userId: req.user.id,
       isArchived: false,
     };
+    if (divisionScope) {
+      where.organizationId = divisionScope;
+    }
 
     if (type) where.type = type;
     if (isRead !== undefined && isRead !== null) where.isRead = isRead;
@@ -231,6 +273,9 @@ router.get('/', validateQuery(listNotificationsSchema), async (req, res) => {
 
     res.json(paginatedResponse(notifications, total, page, limit));
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     logger.error('Failed to list notifications', { error: error.message });
     res.status(500).json({ error: 'Failed to list notifications' });
   }
@@ -238,14 +283,19 @@ router.get('/', validateQuery(listNotificationsSchema), async (req, res) => {
 
 router.get('/digest', validateQuery(digestQuerySchema), async (req, res) => {
   try {
-    const { limit } = req.validatedQuery;
+    const { limit, divisionId } = req.validatedQuery;
+    const divisionScope = resolveDivisionScope(req, divisionId);
     const { from, to } = resolveRange(req.validatedQuery);
+    const where = {
+      userId: req.user.id,
+      isArchived: false,
+      createdAt: { gte: from, lte: to },
+    };
+    if (divisionScope) {
+      where.organizationId = divisionScope;
+    }
     const rows = await prisma.notification.findMany({
-      where: {
-        userId: req.user.id,
-        isArchived: false,
-        createdAt: { gte: from, lte: to },
-      },
+      where,
       select: {
         id: true,
         type: true,
@@ -291,6 +341,9 @@ router.get('/digest', validateQuery(digestQuerySchema), async (req, res) => {
       topUnread,
     });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     logger.error('Failed to generate notification digest', { error: error.message });
     res.status(500).json({ error: 'Failed to generate digest' });
   }
@@ -298,13 +351,18 @@ router.get('/digest', validateQuery(digestQuerySchema), async (req, res) => {
 
 router.get('/analytics', validateQuery(analyticsQuerySchema), async (req, res) => {
   try {
+    const divisionScope = resolveDivisionScope(req, req.validatedQuery.divisionId);
     const { from, to } = resolveRange(req.validatedQuery);
+    const where = {
+      userId: req.user.id,
+      isArchived: false,
+      createdAt: { gte: from, lte: to },
+    };
+    if (divisionScope) {
+      where.organizationId = divisionScope;
+    }
     const rows = await prisma.notification.findMany({
-      where: {
-        userId: req.user.id,
-        isArchived: false,
-        createdAt: { gte: from, lte: to },
-      },
+      where,
       select: {
         id: true,
         type: true,
@@ -403,6 +461,9 @@ router.get('/analytics', validateQuery(analyticsQuerySchema), async (req, res) =
       optimizationSignals,
     });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     logger.error('Failed to build notification analytics', { error: error.message });
     res.status(500).json({ error: 'Failed to get analytics' });
   }
@@ -416,14 +477,24 @@ router.post('/:id/action', validate(actionSchema), async (req, res) => {
     }
 
     const { action, minutes } = req.validated;
-    const actionResult = await executeNotificationAction(notification, req.user.id, action, minutes);
+    const actionResult = await executeNotificationAction(
+      notification,
+      {
+        id: req.user.id,
+        role: req.user.role,
+        organizationId: req.user.organizationId,
+        orgIds: req.orgIds,
+      },
+      action,
+      minutes
+    );
     if (!actionResult.ok) {
       return res.status(400).json({ error: actionResult.error });
     }
 
     const { result, notification: updatedNotification } = actionResult;
 
-    const unreadCount = await getUnreadCount(req.user.id);
+    const unreadCount = await getUnreadCount(req.user.id, resolveDivisionScope(req));
     return res.json({
       success: true,
       action,
@@ -445,14 +516,19 @@ router.post('/:id/snooze', validate(snoozeSchema), async (req, res) => {
     }
     const actionResult = await executeNotificationAction(
       notification,
-      req.user.id,
+      {
+        id: req.user.id,
+        role: req.user.role,
+        organizationId: req.user.organizationId,
+        orgIds: req.orgIds,
+      },
       'SNOOZE',
       req.validated.minutes || 15
     );
     if (!actionResult.ok) {
       return res.status(400).json({ error: actionResult.error });
     }
-    const unreadCount = await getUnreadCount(req.user.id);
+    const unreadCount = await getUnreadCount(req.user.id, resolveDivisionScope(req));
     return res.json({
       success: true,
       action: 'SNOOZE',
@@ -472,11 +548,20 @@ router.post('/:id/escalate', async (req, res) => {
     if (!notification) {
       return res.status(404).json({ error: 'Notification not found' });
     }
-    const actionResult = await executeNotificationAction(notification, req.user.id, 'ESCALATE');
+    const actionResult = await executeNotificationAction(
+      notification,
+      {
+        id: req.user.id,
+        role: req.user.role,
+        organizationId: req.user.organizationId,
+        orgIds: req.orgIds,
+      },
+      'ESCALATE'
+    );
     if (!actionResult.ok) {
       return res.status(400).json({ error: actionResult.error });
     }
-    const unreadCount = await getUnreadCount(req.user.id);
+    const unreadCount = await getUnreadCount(req.user.id, resolveDivisionScope(req));
     return res.json({
       success: true,
       action: 'ESCALATE',
@@ -496,7 +581,7 @@ router.post('/:id/read', async (req, res) => {
       where: { id: req.params.id, userId: req.user.id, isRead: false },
       data: { isRead: true, readAt: new Date() },
     });
-    const unreadCount = await getUnreadCount(req.user.id);
+    const unreadCount = await getUnreadCount(req.user.id, resolveDivisionScope(req));
     res.json({ success: true, changed: updated.count, unreadCount });
   } catch (error) {
     logger.error('Failed to mark notification as read', { error: error.message });
@@ -506,11 +591,17 @@ router.post('/:id/read', async (req, res) => {
 
 router.post('/read-all', async (req, res) => {
   try {
+    const divisionScope = resolveDivisionScope(req);
+    const where = { userId: req.user.id, isRead: false, isArchived: false };
+    if (divisionScope) {
+      where.organizationId = divisionScope;
+    }
     const updated = await prisma.notification.updateMany({
-      where: { userId: req.user.id, isRead: false, isArchived: false },
+      where,
       data: { isRead: true, readAt: new Date() },
     });
-    res.json({ success: true, changed: updated.count, unreadCount: 0 });
+    const unreadCount = await getUnreadCount(req.user.id, divisionScope);
+    res.json({ success: true, changed: updated.count, unreadCount });
   } catch (error) {
     logger.error('Failed to mark all as read', { error: error.message });
     res.status(500).json({ error: 'Failed to mark all as read' });
@@ -523,7 +614,7 @@ router.post('/:id/archive', async (req, res) => {
       where: { id: req.params.id, userId: req.user.id },
       data: { isArchived: true },
     });
-    const unreadCount = await getUnreadCount(req.user.id);
+    const unreadCount = await getUnreadCount(req.user.id, resolveDivisionScope(req));
     res.json({ success: true, unreadCount });
   } catch (error) {
     logger.error('Failed to archive notification', { error: error.message });
@@ -536,7 +627,7 @@ router.delete('/:id', async (req, res) => {
     await prisma.notification.deleteMany({
       where: { id: req.params.id, userId: req.user.id },
     });
-    const unreadCount = await getUnreadCount(req.user.id);
+    const unreadCount = await getUnreadCount(req.user.id, resolveDivisionScope(req));
     res.json({ success: true, unreadCount });
   } catch (error) {
     logger.error('Failed to delete notification', { error: error.message });

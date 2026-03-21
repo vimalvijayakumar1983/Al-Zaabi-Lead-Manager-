@@ -5,6 +5,28 @@ function asObject(value) {
   return typeof value === 'object' && value !== null ? value : {};
 }
 
+function asUserContext(userContext) {
+  if (!userContext || typeof userContext !== 'object') {
+    return { id: '', role: '', organizationId: '', orgIds: [] };
+  }
+  return {
+    id: userContext.id || '',
+    role: userContext.role || '',
+    organizationId: userContext.organizationId || '',
+    orgIds: Array.isArray(userContext.orgIds) ? userContext.orgIds : [],
+  };
+}
+
+function canManageAcrossAssignee(userContext, notificationOrgId) {
+  const user = asUserContext(userContext);
+  const privileged = ['ADMIN', 'MANAGER', 'SUPER_ADMIN'].includes(user.role);
+  if (!privileged) return false;
+  if (user.orgIds.length > 0) {
+    return user.orgIds.includes(notificationOrgId);
+  }
+  return user.organizationId === notificationOrgId || user.role === 'SUPER_ADMIN';
+}
+
 async function markNotificationAction(notification, actionType, extraMetadata = {}, markRead = true) {
   const metadata = asObject(notification.metadata);
   const now = new Date();
@@ -24,7 +46,8 @@ async function markNotificationAction(notification, actionType, extraMetadata = 
   });
 }
 
-async function completeTaskFromNotification(notification, userId) {
+async function completeTaskFromNotification(notification, userContext) {
+  const user = asUserContext(userContext);
   if (notification.entityType !== 'task' || !notification.entityId) {
     return { ok: false, error: 'Notification is not linked to a task' };
   }
@@ -41,7 +64,12 @@ async function completeTaskFromNotification(notification, userId) {
     },
   });
 
-  if (!task || task.assigneeId !== userId) {
+  if (!task) {
+    return { ok: false, error: 'Task not found' };
+  }
+
+  const canManage = canManageAcrossAssignee(user, notification.organizationId);
+  if (task.assigneeId !== user.id && !canManage) {
     return { ok: false, error: 'Task not found or not assigned to you' };
   }
 
@@ -58,7 +86,7 @@ async function completeTaskFromNotification(notification, userId) {
     await prisma.leadActivity.create({
       data: {
         leadId: task.leadId,
-        userId,
+        userId: user.id,
         type: 'TASK_COMPLETED',
         description: `Task completed from notification: ${task.title}`,
         metadata: { source: 'notification_action', notificationId: notification.id },
@@ -74,7 +102,8 @@ async function completeTaskFromNotification(notification, userId) {
   };
 }
 
-async function snoozeNotification(notification, userId, minutes) {
+async function snoozeNotification(notification, userContext, minutes) {
+  const user = asUserContext(userContext);
   const snoozeMinutes = Number.isFinite(minutes) ? Math.max(5, Math.min(10080, Math.floor(minutes))) : 15;
   const now = new Date();
   const snoozedUntil = new Date(now.getTime() + snoozeMinutes * 60 * 1000);
@@ -89,7 +118,12 @@ async function snoozeNotification(notification, userId, minutes) {
       },
     });
 
-    if (!task || task.assigneeId !== userId) {
+    if (!task) {
+      return { ok: false, error: 'Task not found' };
+    }
+
+    const canManage = canManageAcrossAssignee(user, notification.organizationId);
+    if (task.assigneeId !== user.id && !canManage) {
       return { ok: false, error: 'Task not found or not assigned to you' };
     }
 
@@ -116,7 +150,13 @@ async function snoozeNotification(notification, userId, minutes) {
       },
     });
 
-    if (!callLog || (callLog.lead?.assignedToId && callLog.lead.assignedToId !== userId)) {
+    const canManage = canManageAcrossAssignee(user, notification.organizationId);
+    if (
+      !callLog ||
+      (callLog.lead?.assignedToId &&
+        callLog.lead.assignedToId !== user.id &&
+        !canManage)
+    ) {
       return { ok: false, error: 'Callback record unavailable for snooze' };
     }
 
@@ -128,7 +168,7 @@ async function snoozeNotification(notification, userId, minutes) {
           ...asObject(callLog.metadata),
           reminderSent: false,
           reminderSentAt: null,
-          snoozedByUserId: userId,
+          snoozedByUserId: user.id,
           snoozedAt: now.toISOString(),
           snoozedUntil: snoozedUntil.toISOString(),
         },
