@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 import {
   Upload, FileSpreadsheet, X, ArrowRight, ArrowLeft, Check,
   AlertTriangle, CheckCircle2, XCircle, Download, Clock,
@@ -1231,7 +1232,14 @@ function ImportHistoryTab() {
   const addToast = useNotificationStore((s) => s.addToast);
 
   const handleUndo = async (id: string) => {
-    if (!confirm('Are you sure you want to undo this import? Imported records will be archived/removed.')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Undo this import?',
+      message: 'Imported records will be moved to Recycle Bin or removed based on module behavior.',
+      confirmText: 'Undo Import',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     setUndoing(id);
     try {
       await api.undoImport(id);

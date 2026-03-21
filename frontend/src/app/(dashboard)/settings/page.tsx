@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
 import type {
   CustomField,
   FieldType,
@@ -162,7 +163,12 @@ function ProfileSection() {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Save failed',
+        message: err?.message || 'Unable to save changes.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }
@@ -480,7 +486,12 @@ function OrganizationSection() {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Save failed',
+        message: err?.message || 'Unable to save changes.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }
@@ -931,7 +942,12 @@ function NotificationsSection() {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Save failed',
+        message: err?.message || 'Unable to save settings.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }
@@ -1234,7 +1250,12 @@ function RecycleBinAccessSection() {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2500);
     } catch (err: any) {
-      alert(err?.message || 'Failed to save recycle bin access settings');
+      await premiumAlert({
+        title: 'Save failed',
+        message: err?.message || 'Failed to save recycle bin access settings',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }
@@ -1589,7 +1610,12 @@ function PipelineStagesSection() {
       setEditingId(null);
       fetchStages();
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Action failed',
+        message: err?.message || 'Operation failed.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     }
   };
 
@@ -1603,7 +1629,12 @@ function PipelineStagesSection() {
       setNewStageColor(STAGE_COLORS[0]);
       fetchStages();
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Action failed',
+        message: err?.message || 'Operation failed.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     }
     setSaving(false);
   };
@@ -2430,7 +2461,14 @@ function CustomFieldsSection() {
 
   // ─── Custom field actions ──────────────────────────────────────────
   const handleDeleteCustomField = async (field: CustomField) => {
-    if (!confirm(`Delete custom field "${field.label}"?\n\nThis will permanently remove all data stored in this field from all leads.`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Delete custom field "${field.label}"?`,
+      message: 'This will permanently remove all data stored in this field from all leads.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteCustomField(field.id);
       setToast({ type: 'success', message: `Field "${field.label}" deleted` });
@@ -3203,7 +3241,14 @@ function CustomFieldsSection() {
                         setShowAddTag(false);
                         setNewTagName('');
                         fetchTags();
-                      } catch (err: any) { alert(err.message); }
+                      } catch (err: any) {
+                        await premiumAlert({
+                          title: 'Update failed',
+                          message: err?.message || 'Unable to update stage.',
+                          confirmText: 'OK',
+                          variant: 'danger',
+                        });
+                      }
                     }
                     if (e.key === 'Escape') setShowAddTag(false);
                   }}
@@ -3218,7 +3263,14 @@ function CustomFieldsSection() {
                       setShowAddTag(false);
                       setNewTagName('');
                       fetchTags();
-                    } catch (err: any) { alert(err.message); }
+                    } catch (err: any) {
+                      await premiumAlert({
+                        title: 'Update failed',
+                        message: err?.message || 'Unable to update stage.',
+                        confirmText: 'OK',
+                        variant: 'danger',
+                      });
+                    }
                   }}
                   className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700"
                 >
@@ -3273,7 +3325,14 @@ function CustomFieldsSection() {
                           if (e.key === 'Enter') {
                             const val = (e.target as HTMLInputElement).value.trim();
                             if (val && val !== tag.name) {
-                              try { await api.updateTag(tag.id, { name: val }); fetchTags(); } catch (err: any) { alert(err.message); }
+                              try { await api.updateTag(tag.id, { name: val }); fetchTags(); } catch (err: any) {
+                                await premiumAlert({
+                                  title: 'Update failed',
+                                  message: err?.message || 'Unable to update tag.',
+                                  confirmText: 'OK',
+                                  variant: 'danger',
+                                });
+                              }
                             }
                             setEditingTagId(null);
                           }
@@ -3305,7 +3364,14 @@ function CustomFieldsSection() {
                     {/* Delete */}
                     <button
                       onClick={async () => {
-                        if (!confirm(`Delete tag "${tag.name}"? It will be removed from all leads.`)) return;
+                        const confirmed = await premiumConfirm({
+                          title: `Delete tag "${tag.name}"?`,
+                          message: 'This tag will be removed from all leads.',
+                          confirmText: 'Delete Tag',
+                          cancelText: 'Cancel',
+                          variant: 'danger',
+                        });
+                        if (!confirmed) return;
                         try { await api.deleteTag(tag.id); fetchTags(); } catch {}
                       }}
                       className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all"
@@ -4816,7 +4882,14 @@ function EmailTemplatesSection() {
   };
 
   const handleDelete = async (name: string) => {
-    if (!confirm('Delete this template? This cannot be undone.')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this template?',
+      message: 'This action cannot be undone.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteEmailTemplate(name, divisionId);
       await fetchTemplates();

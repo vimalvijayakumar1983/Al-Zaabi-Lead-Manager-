@@ -16,6 +16,7 @@ import {
 import { RefreshButton } from '@/components/RefreshButton';
 import { useNotificationStore } from '@/store/notificationStore';
 import { ContactColumnManager, loadContactColumns, saveContactColumns, type ContactColumnDef } from './components/column-config';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
 
 // ─── Name Helpers ────────────────────────────────────────────────
 
@@ -161,9 +162,16 @@ export default function ContactsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Archive this contact?')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this contact?',
+      message: 'The contact will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     await api.deleteContact(id);
-    addToast({ type: 'success', title: 'Contact Archived', message: 'Contact has been archived successfully' });
+    addToast({ type: 'success', title: 'Contact Moved', message: 'Contact moved to Recycle Bin' });
     fetchContacts();
     fetchStats();
   };
@@ -909,7 +917,15 @@ function ContactFormModal({ contact, onClose, onSubmit }: { contact: Contact | n
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.firstName || !form.lastName) return alert('First and Last name are required');
+    if (!form.firstName || !form.lastName) {
+      await premiumAlert({
+        title: 'Missing required fields',
+        message: 'First and Last name are required.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
     setSaving(true);
     try {
       const payload: any = { ...form };

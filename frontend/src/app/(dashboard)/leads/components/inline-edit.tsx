@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { premiumAlert } from '@/lib/premiumDialogs';
 
 interface InlineEditProps {
   value: string;
@@ -45,7 +46,12 @@ export function InlineEdit({
       await onSave(editValue);
       setEditing(false);
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Update failed',
+        message: err?.message || 'Unable to save changes.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }

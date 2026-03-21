@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 import type { Task, PaginatedResponse, TaskStatus, Priority, TaskType } from '@/types';
 import {
   CheckCircle2,
@@ -579,7 +580,13 @@ export default function TasksPage() {
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    const confirmed = window.confirm('Delete this task permanently?');
+    const confirmed = await premiumConfirm({
+      title: 'Delete this task permanently?',
+      message: 'This action cannot be undone.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
     if (!confirmed) return;
 
     try {
@@ -1451,8 +1458,15 @@ export default function TasksPage() {
                 ))}
               </select>
               <button
-                onClick={() => {
-                  if (window.confirm(`Delete ${selectedTaskIds.length} selected tasks? This cannot be undone.`)) {
+                onClick={async () => {
+                  const confirmed = await premiumConfirm({
+                    title: `Delete ${selectedTaskIds.length} selected task(s)?`,
+                    message: 'This action cannot be undone.',
+                    confirmText: 'Delete Permanently',
+                    cancelText: 'Cancel',
+                    variant: 'danger',
+                  });
+                  if (confirmed) {
                     handleBulkAction({ delete: true }, `${selectedTaskIds.length} tasks deleted`);
                   }
                 }}

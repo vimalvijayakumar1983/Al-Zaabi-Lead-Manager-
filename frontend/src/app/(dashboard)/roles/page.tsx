@@ -155,7 +155,7 @@ const PERMISSION_MODULES: Record<string, PermissionModule> = {
       create: 'Create new leads',
       edit: 'Edit leads',
       delete: 'Delete leads permanently',
-      archive: 'Archive/unarchive leads',
+      archive: 'Delete/restore leads (Recycle Bin)',
       import: 'Import leads from CSV',
       export: 'Export leads data',
       assign: 'Assign leads to users',

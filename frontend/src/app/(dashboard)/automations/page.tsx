@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { api } from '@/lib/api';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
 import type { AutomationRule } from '@/types';
 import {
   Zap, Plus, X, Hash, Clock, Play, Pause, MoreHorizontal,
@@ -154,7 +155,7 @@ const standardConditionFields: { value: string; label: string; category: 'standa
   // Time
   { value: 'time', label: 'Time', category: 'standard', fieldType: 'TIME' },
   // State
-  { value: 'isArchived', label: 'Archived', category: 'standard', fieldType: 'BOOLEAN' },
+  { value: 'isArchived', label: 'In Recycle Bin', category: 'standard', fieldType: 'BOOLEAN' },
 ];
 
 // Returns which operators make sense for a field type
@@ -300,7 +301,14 @@ export default function AutomationsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this automation? This cannot be undone.')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this automation?',
+      message: 'This action cannot be undone.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteAutomation(id);
       if (selectedRuleId === id) {
@@ -1503,10 +1511,34 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
     setForm({ ...form, actions: updated });
   };
 
-  const handleSubmit = () => {
-    if (!form.name.trim()) return alert('Name is required');
-    if (form.actions.length === 0) return alert('At least one action is required');
-    if (isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) return alert('Please set a valid time delay');
+  const handleSubmit = async () => {
+    if (!form.name.trim()) {
+      await premiumAlert({
+        title: 'Validation required',
+        message: 'Name is required.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
+    if (form.actions.length === 0) {
+      await premiumAlert({
+        title: 'Validation required',
+        message: 'At least one action is required.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
+    if (isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) {
+      await premiumAlert({
+        title: 'Validation required',
+        message: 'Please set a valid time delay.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
 
     // Build final conditions: inject __delay__ for time-based triggers
     const finalConditions = [...form.conditions];
@@ -2065,9 +2097,25 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
             {step < totalSteps ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (step === 1 && !form.name.trim()) return alert('Name is required');
-                  if (step === 1 && isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) return alert('Please set a valid time delay');
+                onClick={async () => {
+                  if (step === 1 && !form.name.trim()) {
+                    await premiumAlert({
+                      title: 'Validation required',
+                      message: 'Name is required.',
+                      confirmText: 'OK',
+                      variant: 'danger',
+                    });
+                    return;
+                  }
+                  if (step === 1 && isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) {
+                    await premiumAlert({
+                      title: 'Validation required',
+                      message: 'Please set a valid time delay.',
+                      confirmText: 'OK',
+                      variant: 'danger',
+                    });
+                    return;
+                  }
                   setStep(step + 1);
                 }}
                 className="btn-primary text-sm"

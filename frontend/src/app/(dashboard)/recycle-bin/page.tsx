@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import type { RecycleBinItem, RecycleEntityType } from '@/types';
 import { ArchiveRestore, Loader2, RefreshCw, Search, Trash2, CalendarClock } from 'lucide-react';
+import { premiumAlert, premiumConfirm, premiumPrompt } from '@/lib/premiumDialogs';
 
 const TYPE_OPTIONS: Array<{ value: '' | RecycleEntityType; label: string }> = [
   { value: '', label: 'All types' },
@@ -94,7 +95,12 @@ export default function RecycleBinPage() {
       await api.restoreRecycleBinItem(item.id);
       await fetchItems(page, false);
     } catch (error: any) {
-      alert(error?.message || 'Failed to restore record');
+      await premiumAlert({
+        title: 'Restore failed',
+        message: error?.message || 'Failed to restore record',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setActionBusyId(null);
     }
@@ -103,14 +109,25 @@ export default function RecycleBinPage() {
   const handlePermanentDelete = useCallback(async (item: RecycleBinItem) => {
     const allowed = item.capabilities?.canPurge;
     if (!allowed) return;
-    const ok = window.confirm('Permanently delete this record from Recycle Bin? This cannot be undone.');
+    const ok = await premiumConfirm({
+      title: 'Delete permanently?',
+      message: 'This record will be permanently removed and cannot be recovered.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
     if (!ok) return;
     setActionBusyId(item.id);
     try {
       await api.permanentlyDeleteRecycleBinItem(item.id);
       await fetchItems(page, false);
     } catch (error: any) {
-      alert(error?.message || 'Failed to permanently delete record');
+      await premiumAlert({
+        title: 'Permanent delete failed',
+        message: error?.message || 'Failed to permanently delete record',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setActionBusyId(null);
     }
@@ -158,10 +175,20 @@ export default function RecycleBinPage() {
       setSelectedIds([]);
       const { summary: resultSummary } = response;
       if (resultSummary.failed > 0 || resultSummary.skipped > 0 || resultSummary.missing > 0) {
-        alert(`Restored ${resultSummary.restored}/${resultSummary.requested}. Some records could not be restored.`);
+        await premiumAlert({
+          title: 'Partial restore',
+          message: `Restored ${resultSummary.restored}/${resultSummary.requested}. Some records could not be restored.`,
+          confirmText: 'OK',
+          variant: 'info',
+        });
       }
     } catch (error: any) {
-      alert(error?.message || 'Failed to restore selected records');
+      await premiumAlert({
+        title: 'Bulk restore failed',
+        message: error?.message || 'Failed to restore selected records',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setBulkBusy(false);
     }
@@ -169,10 +196,17 @@ export default function RecycleBinPage() {
 
   const handleBulkPermanentDelete = useCallback(async () => {
     if (!canBulkPurge || selectedItems.length === 0) return;
-    const confirmation = window.prompt(
-      `Type DELETE to permanently remove ${selectedItems.length} selected record(s).`,
-      ''
-    );
+    const confirmation = await premiumPrompt({
+      title: 'Confirm permanent delete',
+      message: `Type DELETE to permanently remove ${selectedItems.length} selected record(s).`,
+      placeholder: 'DELETE',
+      initialValue: '',
+      requiredValue: 'DELETE',
+      requiredValueHint: 'You must type DELETE exactly to continue.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
     if (!confirmation) return;
     setBulkBusy(true);
     try {
@@ -182,10 +216,20 @@ export default function RecycleBinPage() {
       setSelectedIds([]);
       const { summary: resultSummary } = response;
       if (resultSummary.failed > 0 || resultSummary.missing > 0) {
-        alert(`Deleted ${resultSummary.purged}/${resultSummary.requested}. Some records could not be deleted.`);
+        await premiumAlert({
+          title: 'Partial delete',
+          message: `Deleted ${resultSummary.purged}/${resultSummary.requested}. Some records could not be deleted.`,
+          confirmText: 'OK',
+          variant: 'info',
+        });
       }
     } catch (error: any) {
-      alert(error?.message || 'Failed to permanently delete selected records');
+      await premiumAlert({
+        title: 'Bulk permanent delete failed',
+        message: error?.message || 'Failed to permanently delete selected records',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setBulkBusy(false);
     }

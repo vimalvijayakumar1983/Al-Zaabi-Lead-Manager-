@@ -17,6 +17,7 @@ import { AllocationSettings } from './components/AllocationSettings';
 import { WorkloadDashboard } from './components/WorkloadDashboard';
 import { RefreshButton } from '@/components/RefreshButton';
 import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -648,7 +649,14 @@ function LeadsContent() {
 
   const handleBulkDelete = async () => {
     if (selectedLeads.size === 0) return;
-    if (!confirm(`Archive ${selectedLeads.size} lead(s)?`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Delete ${selectedLeads.size} selected lead(s)?`,
+      message: 'Selected leads will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       const ids = Array.from(selectedLeads);
       for (let i = 0; i < ids.length; i++) {
@@ -657,8 +665,8 @@ function LeadsContent() {
       setSelectedLeads(new Set());
       fetchLeads();
       fetchStats();
-      addToast({ type: 'success', title: 'Leads Archived', message: `${ids.length} lead(s) archived successfully` });
-    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to archive leads' }); }
+      addToast({ type: 'success', title: 'Leads Moved', message: `${ids.length} lead(s) moved to Recycle Bin` });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete leads' }); }
   };
 
   const handleQuickStatus = async (leadId: string, status: string) => {
@@ -672,14 +680,21 @@ function LeadsContent() {
   };
 
   const handleQuickDelete = async (leadId: string) => {
-    if (!confirm('Archive this lead?')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this lead?',
+      message: 'The lead will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteLead(leadId);
       setQuickActionId(null);
       fetchLeads();
       fetchStats();
-      addToast({ type: 'success', title: 'Lead Archived', message: 'Lead has been archived successfully' });
-    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to archive lead' }); }
+      addToast({ type: 'success', title: 'Lead Moved', message: 'Lead moved to Recycle Bin' });
+    } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete lead' }); }
   };
 
   const handleInlineUpdate = async (leadId: string, field: string, value: string) => {
@@ -1090,7 +1105,7 @@ function LeadsContent() {
                 <div className="border-t border-gray-100 my-1" />
                 <button onClick={() => handleQuickDelete(lead.id)} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  Archive Lead
+                  Delete Lead
                 </button>
               </div>
             )}
@@ -1365,7 +1380,7 @@ function LeadsContent() {
                 </button>
                 <button onClick={handleBulkDelete} className="btn-secondary text-xs text-red-600 hover:text-red-700 gap-1">
                   <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  Archive
+                  Delete
                 </button>
                 <button onClick={() => setSelectedLeads(new Set())} className="btn-secondary text-xs">Clear</button>
               </div>

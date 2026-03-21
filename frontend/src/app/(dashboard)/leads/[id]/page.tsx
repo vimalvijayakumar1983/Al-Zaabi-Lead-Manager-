@@ -9,6 +9,7 @@ import { ReassignmentPanel } from '../components/ReassignmentPanel';
 import { LogCallModalDynamic } from '../components/log-call-modal';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 
 const statusColors: Record<string, string> = {
   NEW: 'bg-indigo-100 text-indigo-800 border-indigo-200',
@@ -301,7 +302,15 @@ export default function LeadDetailPage() {
   };
 
   const handleDelete = async () => {
-    if (!lead || !confirm('Archive this lead?')) return;
+    if (!lead) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this lead?',
+      message: 'This lead will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     await api.deleteLead(lead.id);
     router.push('/leads');
   };
@@ -638,7 +647,14 @@ export default function LeadDetailPage() {
   };
 
   const handleDeleteMessage = async (messageId: string) => {
-    if (!confirm('Delete this message? It will be shown as "message was deleted".')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this message?',
+      message: 'This message will remain in timeline as "message was deleted".',
+      confirmText: 'Delete message',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteInboxMessage(messageId);
       setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
@@ -793,7 +809,7 @@ export default function LeadDetailPage() {
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
               </button>
             )}
-            <button onClick={handleDelete} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Archive lead">
+            <button onClick={handleDelete} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Delete lead">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
             </button>
             {hasNext && !isEditing && navData && navData.leadIds.length > 1 && (
@@ -826,7 +842,14 @@ export default function LeadDetailPage() {
           {fullUsers.find(u => u.id === currentUserId && ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(u.role)) && (
             <button
               onClick={async () => {
-                if (!confirm('Unblock this lead? They will reappear in active lead views.')) return;
+                const confirmed = await premiumConfirm({
+                  title: 'Unblock this lead?',
+                  message: 'The lead will appear again in active lead views.',
+                  confirmText: 'Unblock',
+                  cancelText: 'Cancel',
+                  variant: 'default',
+                });
+                if (!confirmed) return;
                 try {
                   await api.unblockLead(lead.id);
                   addToast({ type: 'success', title: 'Lead Unblocked', message: 'Lead has been unblocked' });

@@ -52,6 +52,7 @@ import {
 } from 'lucide-react';
 import type { Campaign, PaginatedResponse, User, Organization } from '@/types';
 import { api } from '@/lib/api';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import { RefreshButton } from '@/components/RefreshButton';
@@ -1690,7 +1691,14 @@ export default function CampaignsPage() {
 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Are you sure you want to delete ${selectedIds.size} campaign(s)? This cannot be undone.`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Delete ${selectedIds.size} campaign(s)?`,
+      message: 'This action cannot be undone.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     setActionLoading(true);
     try {
       const ids = Array.from(selectedIds);

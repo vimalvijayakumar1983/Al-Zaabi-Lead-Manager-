@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore, FEATURES } from '@/lib/permissions';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
 import type { User, Organization, DivisionMembership } from '@/types';
 import {
   UserPlus, X, Shield, Users as UsersIcon, Crown, Eye,
@@ -464,7 +465,14 @@ export default function TeamPage() {
 
   // ─── Handlers ──────────────────────────────────────────────
   const handleDeactivate = async (user: User) => {
-    if (!confirm(`Deactivate ${getDisplayName(user.firstName, user.lastName)}? They will lose access immediately.`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Deactivate ${getDisplayName(user.firstName, user.lastName)}?`,
+      message: 'They will lose access immediately.',
+      confirmText: 'Deactivate',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deactivateUser(user.id);
       addToast({ type: 'success', title: 'User Deactivated', message: `${getDisplayName(user.firstName, user.lastName)} has been deactivated.` });
@@ -506,7 +514,14 @@ export default function TeamPage() {
   };
 
   const handleBulkDeactivate = async () => {
-    if (!confirm(`Deactivate ${selectedIds.size} selected users?`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Deactivate ${selectedIds.size} selected user(s)?`,
+      message: 'Selected users will lose access immediately.',
+      confirmText: 'Deactivate Users',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.deactivateUser(id)));
       addToast({ type: 'success', title: 'Bulk Deactivate', message: `${selectedIds.size} users have been deactivated.` });
@@ -2388,10 +2403,15 @@ function ManageDivisionsModal({ user, divisions, onClose, onSaved }: {
     })));
   };
 
-  const handleRemove = (membership: any) => {
+  const handleRemove = async (membership: any) => {
     const activeMemberships = memberships.filter(m => !pendingRemoves.includes(m.divisionId));
     if (activeMemberships.length <= 1) {
-      alert('User must belong to at least one division');
+      await premiumAlert({
+        title: 'Division required',
+        message: 'User must belong to at least one division.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
       return;
     }
     setPendingRemoves(prev => [...prev, membership.divisionId]);

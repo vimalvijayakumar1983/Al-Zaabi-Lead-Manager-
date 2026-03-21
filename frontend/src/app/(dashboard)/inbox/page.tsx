@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 import {
   MessageCircle, Send, Search, Phone, Mail, ArrowLeft,
   User, Building2, Star, Clock, ChevronDown, Smile, X, ExternalLink,
@@ -515,7 +516,14 @@ function InboxContent() {
 
   // ─── Delete message ────────────────────────────────────────────
   const handleDeleteMessage = async (messageId: string) => {
-    if (!confirm('Delete this message? It will be shown as "message was deleted".')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this message?',
+      message: 'It will remain visible as "message was deleted".',
+      confirmText: 'Delete message',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteInboxMessage(messageId);
       setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));

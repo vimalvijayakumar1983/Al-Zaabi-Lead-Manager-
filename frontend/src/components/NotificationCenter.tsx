@@ -11,6 +11,7 @@ import React, {
 import { useRouter } from 'next/navigation';
 import { useNotificationStore } from '@/store/notificationStore';
 import type { AppNotification, NotificationType } from '@/types';
+import { premiumAlert, premiumConfirm, premiumPrompt } from '@/lib/premiumDialogs';
 import {
   Bell,
   BellOff,
@@ -444,18 +445,28 @@ function NotificationItem({
     [notification.id, onAction]
   );
 
-  const resolveSnoozeMinutes = useCallback(() => {
+  const resolveSnoozeMinutes = useCallback(async () => {
     if (snoozeChoice !== 'custom') {
       return normalizeSnoozeMinutes(Number(snoozeChoice), defaultSnoozeMinutes);
     }
-    const raw = window.prompt(
-      `Enter snooze time in minutes (${SNOOZE_MIN_MINUTES}-${SNOOZE_MAX_MINUTES})`,
-      String(defaultSnoozeMinutes)
-    );
+    const raw = await premiumPrompt({
+      title: 'Custom Snooze Duration',
+      message: `Enter snooze time in minutes (${SNOOZE_MIN_MINUTES}-${SNOOZE_MAX_MINUTES}).`,
+      placeholder: String(defaultSnoozeMinutes),
+      initialValue: String(defaultSnoozeMinutes),
+      confirmText: 'Apply',
+      cancelText: 'Cancel',
+      variant: 'info',
+    });
     if (raw === null) return null;
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) {
-      alert('Please enter a valid number of minutes.');
+      await premiumAlert({
+        title: 'Invalid duration',
+        message: 'Please enter a valid number of minutes.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
       return null;
     }
     const minutes = normalizeSnoozeMinutes(parsed, defaultSnoozeMinutes);
@@ -563,8 +574,8 @@ function NotificationItem({
                   <option value="custom">Custom</option>
                 </select>
                 <button
-                  onClick={(e) => {
-                    const minutes = resolveSnoozeMinutes();
+                  onClick={async (e) => {
+                    const minutes = await resolveSnoozeMinutes();
                     if (minutes === null) return;
                     handleAction(e, 'SNOOZE', minutes);
                   }}
@@ -608,7 +619,7 @@ function NotificationItem({
         )}
         <button
           onClick={handleArchive}
-          title="Archive"
+          title="Dismiss"
           className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-text-tertiary hover:text-text-primary transition-colors"
         >
           <Archive className="h-3.5 w-3.5" />
@@ -863,7 +874,13 @@ export default function NotificationCenter({
 
   const handleClearAll = useCallback(async () => {
     if (notifications.length === 0) return;
-    const confirmed = window.confirm('Clear all notifications from this center?');
+    const confirmed = await premiumConfirm({
+      title: 'Clear all notifications?',
+      message: 'This will remove all notifications from your active list.',
+      confirmText: 'Clear all',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
     if (!confirmed) return;
     setIsClearingAll(true);
     await clearAllNotifications();
@@ -913,7 +930,12 @@ export default function NotificationCenter({
       try {
         await notificationAction(id, action, minutes);
       } catch (err: any) {
-        alert(err?.message || 'Failed to perform notification action');
+        await premiumAlert({
+          title: 'Action failed',
+          message: err?.message || 'Failed to perform notification action',
+          confirmText: 'OK',
+          variant: 'danger',
+        });
       } finally {
         setActionInFlightId(null);
       }
