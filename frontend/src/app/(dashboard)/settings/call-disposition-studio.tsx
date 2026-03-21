@@ -63,6 +63,73 @@ const ACTION_LABELS: Record<StudioAction['type'], string> = {
   NOTIFY_ASSIGNEE: 'Notify assignee',
 };
 
+type IconOption = { emoji: string; name: string; keywords: string[] };
+
+const ICON_LIBRARY: Record<string, IconOption[]> = {
+  Popular: [
+    { emoji: '📞', name: 'Phone', keywords: ['call', 'phone'] },
+    { emoji: '📅', name: 'Calendar', keywords: ['meeting', 'appointment'] },
+    { emoji: '✅', name: 'Check', keywords: ['done', 'confirmed'] },
+    { emoji: '👍', name: 'Thumbs up', keywords: ['positive', 'good'] },
+    { emoji: '👎', name: 'Thumbs down', keywords: ['negative', 'no'] },
+    { emoji: '🏁', name: 'Finish', keywords: ['completed', 'done'] },
+    { emoji: '🤝', name: 'Handshake', keywords: ['follow up', 'relationship'] },
+    { emoji: '📝', name: 'Notes', keywords: ['other', 'notes'] },
+    { emoji: '🚫', name: 'Do not call', keywords: ['blocked', 'stop'] },
+    { emoji: '⭐', name: 'Star', keywords: ['qualified', 'important'] },
+  ],
+  Communication: [
+    { emoji: '☎️', name: 'Telephone', keywords: ['call'] },
+    { emoji: '📧', name: 'Email', keywords: ['mail'] },
+    { emoji: '💬', name: 'Chat', keywords: ['message'] },
+    { emoji: '📨', name: 'Inbox', keywords: ['voicemail', 'message'] },
+    { emoji: '📵', name: 'No signal', keywords: ['no answer'] },
+    { emoji: '📞', name: 'Receiver', keywords: ['phone'] },
+    { emoji: '🔄', name: 'Repeat', keywords: ['call again', 'retry'] },
+    { emoji: '🕐', name: 'Clock one', keywords: ['call later', 'time'] },
+    { emoji: '🔔', name: 'Bell', keywords: ['reminder', 'notify'] },
+    { emoji: '📱', name: 'Mobile', keywords: ['phone'] },
+  ],
+  Outcomes: [
+    { emoji: '🎯', name: 'Target', keywords: ['goal', 'qualified'] },
+    { emoji: '📋', name: 'Clipboard', keywords: ['proposal'] },
+    { emoji: '✅', name: 'Completed', keywords: ['booked', 'confirmed'] },
+    { emoji: '❌', name: 'Cross mark', keywords: ['wrong', 'failed'] },
+    { emoji: '🚧', name: 'Barrier', keywords: ['gatekeeper', 'blocked'] },
+    { emoji: '⚠️', name: 'Warning', keywords: ['attention'] },
+    { emoji: '🟢', name: 'Green circle', keywords: ['positive'] },
+    { emoji: '🟡', name: 'Yellow circle', keywords: ['retry'] },
+    { emoji: '🔴', name: 'Red circle', keywords: ['closed', 'negative'] },
+    { emoji: '🏆', name: 'Trophy', keywords: ['won', 'success'] },
+  ],
+  Business: [
+    { emoji: '💼', name: 'Briefcase', keywords: ['business', 'service'] },
+    { emoji: '🏢', name: 'Office', keywords: ['center', 'inside'] },
+    { emoji: '🌐', name: 'Global', keywords: ['outside', 'external'] },
+    { emoji: '📈', name: 'Growth', keywords: ['analytics'] },
+    { emoji: '📊', name: 'Chart', keywords: ['analysis'] },
+    { emoji: '💰', name: 'Money bag', keywords: ['price', 'budget'] },
+    { emoji: '🧾', name: 'Receipt', keywords: ['billing'] },
+    { emoji: '🛠️', name: 'Tools', keywords: ['service'] },
+    { emoji: '📦', name: 'Package', keywords: ['delivery', 'service'] },
+    { emoji: '🏷️', name: 'Tag', keywords: ['tag'] },
+  ],
+  People: [
+    { emoji: '🙋', name: 'Raised hand', keywords: ['interested'] },
+    { emoji: '🤷', name: 'Shrug', keywords: ['not sure'] },
+    { emoji: '🙅', name: 'No gesture', keywords: ['not interested'] },
+    { emoji: '👤', name: 'Person', keywords: ['lead'] },
+    { emoji: '👥', name: 'People', keywords: ['team'] },
+    { emoji: '🧑‍💼', name: 'Professional', keywords: ['client'] },
+    { emoji: '🤔', name: 'Thinking', keywords: ['follow up'] },
+    { emoji: '😊', name: 'Smile', keywords: ['positive'] },
+    { emoji: '😐', name: 'Neutral face', keywords: ['neutral'] },
+    { emoji: '😕', name: 'Confused', keywords: ['mismatch'] },
+  ],
+};
+
+const ICON_CATEGORIES = Object.keys(ICON_LIBRARY);
+
 const blankDisposition = (): StudioDisposition => ({
   key: '',
   label: '',
@@ -100,6 +167,9 @@ export function CallDispositionStudioSection() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<StudioDisposition>(blankDisposition());
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [iconCategory, setIconCategory] = useState<string>('Popular');
+  const [iconQuery, setIconQuery] = useState('');
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -125,6 +195,24 @@ export function CallDispositionStudioSection() {
   }, [selectedDivisionId]);
 
   const activeCount = useMemo(() => dispositions.filter((d) => d.isActive).length, [dispositions]);
+  const visibleIcons = useMemo(() => {
+    const source = ICON_LIBRARY[iconCategory] || ICON_LIBRARY.Popular;
+    const query = iconQuery.trim().toLowerCase();
+    if (!query) return source;
+    const all = ICON_CATEGORIES.flatMap((category) => ICON_LIBRARY[category] || []);
+    const filtered = all.filter((item) => {
+      const hay = `${item.name} ${item.keywords.join(' ')}`.toLowerCase();
+      return hay.includes(query);
+    });
+    const deduped: IconOption[] = [];
+    const seen = new Set<string>();
+    for (const icon of filtered) {
+      if (seen.has(icon.emoji)) continue;
+      seen.add(icon.emoji);
+      deduped.push(icon);
+    }
+    return deduped;
+  }, [iconCategory, iconQuery]);
 
   const openEditor = (index: number | null) => {
     if (index === null) {
@@ -133,6 +221,9 @@ export function CallDispositionStudioSection() {
       setDraft(JSON.parse(JSON.stringify(dispositions[index])));
     }
     setShowAdvanced(false);
+    setIconPickerOpen(false);
+    setIconCategory('Popular');
+    setIconQuery('');
     setEditingIndex(index);
     setEditorOpen(true);
   };
@@ -269,7 +360,16 @@ export function CallDispositionStudioSection() {
                 </div>
                 <div>
                   <label className="label">Icon</label>
-                  <input className="input" value={draft.icon} onChange={(e) => setDraft({ ...draft, icon: e.target.value })} placeholder="e.g. 📅" />
+                  <div className="flex items-center gap-2">
+                    <input className="input" value={draft.icon} onChange={(e) => setDraft({ ...draft, icon: e.target.value })} placeholder="e.g. 📅" />
+                    <button
+                      type="button"
+                      className="btn-secondary px-3 py-2 text-xs whitespace-nowrap"
+                      onClick={() => setIconPickerOpen((prev) => !prev)}
+                    >
+                      {iconPickerOpen ? 'Hide Icons' : 'Choose Icon'}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="label">Color</label>
@@ -280,6 +380,56 @@ export function CallDispositionStudioSection() {
                   <input className="input" value={draft.description || ''} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Short helper text shown to agents" />
                 </div>
               </div>
+
+              {iconPickerOpen && (
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <div className="flex flex-col md:flex-row md:items-center gap-2">
+                    <input
+                      className="input"
+                      placeholder="Search icon by meaning (e.g. call, meeting, completed)"
+                      value={iconQuery}
+                      onChange={(e) => setIconQuery(e.target.value)}
+                    />
+                    <span className="text-xs text-gray-500 whitespace-nowrap">Selected: <span className="font-semibold">{draft.icon || 'none'}</span></span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {ICON_CATEGORIES.map((category) => (
+                      <button
+                        key={category}
+                        type="button"
+                        onClick={() => setIconCategory(category)}
+                        className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                          iconCategory === category
+                            ? 'bg-brand-50 text-brand-700 border-brand-300'
+                            : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        {category}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-8 md:grid-cols-12 gap-1.5 mt-3 max-h-56 overflow-y-auto pr-1">
+                    {visibleIcons.map((option) => (
+                      <button
+                        key={`${option.emoji}_${option.name}`}
+                        type="button"
+                        title={`${option.name} (${option.keywords.join(', ')})`}
+                        onClick={() => setDraft((prev) => ({ ...prev, icon: option.emoji }))}
+                        className={`h-9 rounded-md border text-lg hover:bg-gray-50 ${
+                          draft.icon === option.emoji ? 'border-brand-400 bg-brand-50' : 'border-gray-200'
+                        }`}
+                      >
+                        {option.emoji}
+                      </button>
+                    ))}
+                    {visibleIcons.length === 0 && (
+                      <div className="col-span-full text-xs text-gray-500 py-6 text-center">
+                        No icons found for this search.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
                 Internal ID auto-generated: <code className="font-semibold">{toKey(draft.key || draft.label || 'NEW_DISPOSITION')}</code>
