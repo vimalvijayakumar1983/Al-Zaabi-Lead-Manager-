@@ -1344,7 +1344,7 @@ function LeadsContent() {
 
           {/* Bulk Actions Bar */}
           {selectedLeads.size > 0 && (
-            <div className="card p-3 bg-brand-50 border-brand-200 flex items-center justify-between">
+            <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[min(980px,calc(100vw-1.5rem))] card p-3 bg-brand-50 border-brand-200 shadow-xl flex items-center justify-between">
               <span className="text-sm font-medium text-brand-700">
                 {selectedLeads.size} lead{selectedLeads.size > 1 ? 's' : ''} selected
               </span>
