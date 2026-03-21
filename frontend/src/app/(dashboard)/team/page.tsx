@@ -1872,7 +1872,7 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
   return (
     <div className="modal">
       <div className="overlay" onClick={onClose} />
-      <div className="modal-panel w-full max-w-lg relative z-50">
+      <div className={`modal-panel w-full relative z-50 ${tab === 'permissions' ? 'max-w-3xl' : 'max-w-lg'}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Edit Team Member</h2>
@@ -1984,14 +1984,14 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
               </div>
             </div>
 
-            <div className="card overflow-hidden">
-              <table className="w-full">
+            <div className="card overflow-x-auto">
+              <table className="w-full min-w-[640px]">
                 <thead>
                   <tr className="table-header">
-                    <th className="table-cell text-left">Feature</th>
-                    <th className="table-cell text-center">Role Default</th>
-                    <th className="table-cell text-center">Override</th>
-                    <th className="table-cell text-center">Effective</th>
+                    <th className="table-cell text-left whitespace-nowrap">Feature</th>
+                    <th className="table-cell text-center whitespace-nowrap">Role Default</th>
+                    <th className="table-cell text-center whitespace-nowrap">Override</th>
+                    <th className="table-cell text-center whitespace-nowrap">Effective</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
