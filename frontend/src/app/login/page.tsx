@@ -1,12 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
+const REMEMBER_KEY = 'lf_remembered_credentials';
+
 const features = [
-  { icon: Zap, title: 'Smart Automation', description: 'Automate follow-ups, assignments, and scoring' },
+  { icon: Zap, title: 'Advance Automations', description: 'Automate follow-ups, assignments, and scoring' },
   { icon: BarChart3, title: 'Advanced Analytics', description: 'Real-time insights and conversion funnels' },
   { icon: Shield, title: 'Enterprise Security', description: 'Role-based access and audit logging' },
 ];
@@ -23,6 +25,21 @@ export default function LoginPage() {
   const [lastName, setLastName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(REMEMBER_KEY);
+      if (stored) {
+        const { email: savedEmail, password: savedPassword } = JSON.parse(atob(stored));
+        if (savedEmail) setEmail(savedEmail);
+        if (savedPassword) setPassword(savedPassword);
+        setRememberMe(true);
+      }
+    } catch {
+      // ignore corrupt data
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,6 +50,11 @@ export default function LoginPage() {
       if (isRegister) {
         await register({ email, password, firstName, lastName, organizationName: orgName });
       } else {
+        if (rememberMe) {
+          localStorage.setItem(REMEMBER_KEY, btoa(JSON.stringify({ email, password })));
+        } else {
+          localStorage.removeItem(REMEMBER_KEY);
+        }
         await login(email, password);
       }
       router.push('/dashboard');
@@ -217,6 +239,21 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+
+            {!isRegister && (
+              <div className="flex items-center gap-2.5">
+                <input
+                  id="remember-me"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 rounded border-border-subtle text-brand-600 accent-brand-600 cursor-pointer"
+                />
+                <label htmlFor="remember-me" className="text-sm text-text-secondary cursor-pointer select-none">
+                  Remember password
+                </label>
+              </div>
+            )}
 
             <button
               type="submit"
