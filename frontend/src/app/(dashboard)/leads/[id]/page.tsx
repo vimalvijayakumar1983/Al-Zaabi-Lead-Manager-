@@ -67,6 +67,10 @@ export default function LeadDetailPage() {
   const addToast = useNotificationStore((s) => s.addToast);
   const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
+  const [aiSummaryData, setAiSummaryData] = useState<any | null>(null);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+  const [aiSummaryCopied, setAiSummaryCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
   const [noteContent, setNoteContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -248,6 +252,23 @@ export default function LeadDetailPage() {
     setUnreadCommsCount(data.unreadCommunications || 0);
   }, [id]);
 
+  const loadLeadAISummary = useCallback(async (force = false) => {
+    setAiSummaryLoading(true);
+    setAiSummaryError(null);
+    try {
+      const response = await api.generateLeadAISummary(id, force);
+      const payload = response?.data || null;
+      setAiSummaryData(payload);
+      if (payload?.summary) {
+        setLead((prev) => (prev ? { ...prev, aiSummary: payload.summary } : prev));
+      }
+    } catch (err: any) {
+      setAiSummaryError(err?.message || 'Failed to generate AI summary');
+    } finally {
+      setAiSummaryLoading(false);
+    }
+  }, [id]);
+
   useEffect(() => {
     // Fetch lead + pipeline stages in parallel to avoid the stepper
     // popping in after the rest of the page has rendered.
@@ -279,6 +300,10 @@ export default function LeadDetailPage() {
       .catch((err) => console.error('Failed to load lead:', err))
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    loadLeadAISummary(false).catch(() => {});
+  }, [loadLeadAISummary]);
 
   const handleStageClick = async (stage: { id: string; name: string; color: string; isWonStage?: boolean; isLostStage?: boolean }) => {
     if (!lead) return;
@@ -702,6 +727,19 @@ export default function LeadDetailPage() {
     { key: 'system',   label: 'System' },
   ];
 
+  const handleCopyAISummary = useCallback(async () => {
+    const text = aiSummaryData?.summary || lead?.aiSummary;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setAiSummaryCopied(true);
+      setTimeout(() => setAiSummaryCopied(false), 1500);
+      addToast({ type: 'success', title: 'Copied', message: 'AI summary copied to clipboard' });
+    } catch {
+      addToast({ type: 'error', title: 'Copy Failed', message: 'Unable to copy summary' });
+    }
+  }, [aiSummaryData?.summary, lead?.aiSummary, addToast]);
+
 
   if (loading) {
     return (
@@ -727,6 +765,11 @@ export default function LeadDetailPage() {
   const lostStage = pipelineStages.find((s: any) => s.isLostStage);
   const currentStageIndex = mainStages.findIndex((s: any) => s.id === lead.stageId);
   const isOnLostStage = lostStage && lead.stageId === lostStage.id;
+  const aiSignals = aiSummaryData?.signals || null;
+  const displayScore = Number(aiSignals?.score ?? lead.score ?? 0);
+  const displayConversionProb = typeof aiSignals?.conversionProb === 'number'
+    ? aiSignals.conversionProb
+    : lead.conversionProb;
 
   return (
     <div className="flex flex-col -m-3 sm:-m-4 md:-m-6 overflow-hidden" style={{ height: 'calc(100dvh - 3.5rem)' }}>
@@ -1114,30 +1157,135 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {/* AI Score */}
+          {/* AI Lead Summary */}
           <div className="card p-4">
-            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
-              Lead Intelligence
-            </h3>
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-1.5">
+                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                AI Lead Summary
+              </h3>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => loadLeadAISummary(true)}
+                  disabled={aiSummaryLoading}
+                  className="px-2 py-1 rounded-md border border-gray-200 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {aiSummaryLoading ? 'Refreshing...' : 'Regenerate'}
+                </button>
+                <button
+                  onClick={handleCopyAISummary}
+                  disabled={!aiSummaryData?.summary && !lead.aiSummary}
+                  className="px-2 py-1 rounded-md border border-gray-200 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {aiSummaryCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-gray-600">Lead Score</span>
-              <span className="text-2xl font-bold tabular-nums" style={{ color: (lead.score || 0) >= 70 ? '#16a34a' : (lead.score || 0) >= 40 ? '#d97706' : '#dc2626' }}>
-                {lead.score || 0}<span className="text-sm font-normal text-gray-400">/100</span>
+              <span className="text-2xl font-bold tabular-nums" style={{ color: displayScore >= 70 ? '#16a34a' : displayScore >= 40 ? '#d97706' : '#dc2626' }}>
+                {displayScore}<span className="text-sm font-normal text-gray-400">/100</span>
               </span>
             </div>
             <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden mb-3">
               <div className="h-full rounded-full transition-all duration-500" style={{
-                width: `${lead.score || 0}%`,
-                background: (lead.score || 0) >= 70 ? 'linear-gradient(90deg, #22c55e, #16a34a)' : (lead.score || 0) >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)',
+                width: `${displayScore}%`,
+                background: displayScore >= 70 ? 'linear-gradient(90deg, #22c55e, #16a34a)' : displayScore >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)',
               }} />
             </div>
-            {lead.conversionProb != null && (
-              <div className="flex items-center justify-between text-sm mb-2">
+
+            {displayConversionProb != null && (
+              <div className="flex items-center justify-between text-sm mb-3">
                 <span className="text-gray-600">Conversion Probability</span>
-                <span className="font-bold" style={{ color: lead.conversionProb >= 0.6 ? '#16a34a' : lead.conversionProb >= 0.3 ? '#d97706' : '#dc2626' }}>
-                  {Math.round(lead.conversionProb * 100)}%
+                <span className="font-bold" style={{ color: displayConversionProb >= 0.6 ? '#16a34a' : displayConversionProb >= 0.3 ? '#d97706' : '#dc2626' }}>
+                  {Math.round(displayConversionProb * 100)}%
                 </span>
+              </div>
+            )}
+
+            {aiSummaryLoading && !aiSummaryData ? (
+              <div className="space-y-2">
+                <div className="h-3 w-full rounded bg-gray-100 animate-pulse" />
+                <div className="h-3 w-5/6 rounded bg-gray-100 animate-pulse" />
+                <div className="h-3 w-4/6 rounded bg-gray-100 animate-pulse" />
+              </div>
+            ) : (
+              <>
+                <div className="p-3 rounded-lg bg-brand-50 border border-brand-100">
+                  <p className="text-sm text-gray-700 leading-relaxed">
+                    {aiSummaryData?.summary || lead.aiSummary || 'Generate AI summary to get lead insights and recommended actions.'}
+                  </p>
+                </div>
+
+                {aiSummaryData?.highlights?.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {aiSummaryData.highlights.slice(0, 6).map((item: string, idx: number) => (
+                      <span key={`ai-highlight-${idx}`} className="inline-flex items-center rounded-full bg-gray-100 text-gray-700 px-2 py-0.5 text-[11px] font-medium">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {(aiSummaryData?.risks?.length > 0 || aiSummaryData?.opportunities?.length > 0) && (
+                  <div className="mt-3 grid grid-cols-1 gap-2">
+                    {aiSummaryData?.risks?.length > 0 && (
+                      <div className="rounded-lg border border-red-100 bg-red-50/40 p-2.5">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700 mb-1">Risks</p>
+                        <ul className="space-y-1">
+                          {aiSummaryData.risks.slice(0, 2).map((risk: string, idx: number) => (
+                            <li key={`ai-risk-${idx}`} className="text-xs text-red-800">{risk}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiSummaryData?.opportunities?.length > 0 && (
+                      <div className="rounded-lg border border-green-100 bg-green-50/40 p-2.5">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-green-700 mb-1">Opportunities</p>
+                        <ul className="space-y-1">
+                          {aiSummaryData.opportunities.slice(0, 2).map((opp: string, idx: number) => (
+                            <li key={`ai-opp-${idx}`} className="text-xs text-green-800">{opp}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {aiSummaryData?.recommendedActions?.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-gray-200 p-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">Next Best Actions</p>
+                    <div className="space-y-1.5">
+                      {aiSummaryData.recommendedActions.slice(0, 2).map((action: any, idx: number) => (
+                        <div key={`ai-action-${idx}`} className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-gray-800">{action.title}</p>
+                            <p className="text-[11px] text-gray-500">{action.reason}</p>
+                          </div>
+                          <span className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${priorityColors[action.priority] || 'bg-gray-100 text-gray-700'}`}>
+                            {action.priority || 'MEDIUM'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(aiSummaryData?.confidence || aiSummaryData?.generatedAt || aiSummaryError) && (
+              <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
+                <span className={`${aiSummaryError ? 'text-red-600' : 'text-gray-500'}`}>
+                  {aiSummaryError
+                    ? aiSummaryError
+                    : `Confidence ${Math.round(aiSummaryData?.confidence || 0)}%`}
+                </span>
+                {aiSummaryData?.generatedAt && (
+                  <span className="text-gray-400">
+                    Updated {new Date(aiSummaryData.generatedAt).toLocaleString()}
+                  </span>
+                )}
               </div>
             )}
           </div>

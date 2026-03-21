@@ -12,6 +12,8 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const { autoAssign, getNextAssignee } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
 const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
+const { generateLeadSummaryInsights } = require('../services/aiService');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -88,6 +90,10 @@ const leadFilterSchema = paginationSchema.extend({
   minCallCount: z.coerce.number().int().min(0).optional(),
   maxCallCount: z.coerce.number().int().min(0).optional(),
   showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
+});
+
+const aiSummaryRequestSchema = z.object({
+  force: z.boolean().optional(),
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
@@ -664,6 +670,77 @@ router.delete('/:id/tags/:tagId', async (req, res, next) => {
 });
 
 // ─── Get Lead by ID ──────────────────────────────────────────────
+router.post('/:id/ai-summary', validate(aiSummaryRequestSchema), async (req, res, next) => {
+  try {
+    const summaryWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) summaryWhere.assignedToId = req.user.id;
+
+    const lead = await prisma.lead.findFirst({
+      where: summaryWhere,
+      include: {
+        stage: { select: { id: true, name: true, color: true } },
+        activities: {
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+          select: { id: true, type: true, description: true, createdAt: true },
+        },
+        notes: {
+          orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
+          take: 20,
+          select: { id: true, content: true, createdAt: true },
+        },
+        tasks: {
+          orderBy: { dueAt: 'asc' },
+          take: 30,
+          select: { id: true, title: true, status: true, priority: true, dueAt: true, createdAt: true, updatedAt: true },
+        },
+        communications: {
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+          select: { id: true, channel: true, direction: true, subject: true, body: true, createdAt: true },
+        },
+        callLogs: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          select: { id: true, disposition: true, notes: true, createdAt: true, metadata: true },
+        },
+      },
+    });
+
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const force = req.validated?.force === true;
+    const insights = generateLeadSummaryInsights(lead, {
+      activities: lead.activities,
+      communications: lead.communications,
+      tasks: lead.tasks,
+      notes: lead.notes,
+      callLogs: lead.callLogs,
+    });
+
+    const summaryText = insights.summary;
+    const shouldPersist = force || !lead.aiSummary || String(lead.aiSummary).trim() !== String(summaryText).trim();
+    if (shouldPersist) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { aiSummary: summaryText },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...insights,
+        summary: summaryText,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:id', async (req, res, next) => {
   try {
     const detailWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
