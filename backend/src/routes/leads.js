@@ -13,10 +13,15 @@ const { autoAssign, getNextAssignee } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
 const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 const { upsertRecycleBinItem } = require('../services/recycleBinService');
-const { generateLeadSummaryInsights } = require('../services/aiService');
+const { generateLeadSummaryInsights, regenerateLeadSummaryById } = require('../services/aiService');
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 const BUILTIN_CALL_OUTCOMES = new Set([
   'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN',
@@ -1108,6 +1113,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
 
     // Broadcast data change to all org users
     broadcastDataChange(targetOrgId, 'lead', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -1407,6 +1413,7 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     // Broadcast data change to all org users
     broadcastDataChange(existing.organizationId, 'lead', 'updated', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -1511,6 +1518,7 @@ router.post('/:id/notes', validate(z.object({
     res.status(201).json(note);
 
     broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -1632,6 +1640,7 @@ router.post('/:id/reassign', validate(z.object({
     res.json(updated);
 
     broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: updated.id }).catch(() => {});
+    refreshLeadAISummaryAsync(updated.id);
   } catch (err) { next(err); }
 });
 
@@ -1660,6 +1669,7 @@ router.patch('/bulk', validate(z.object({
     }, req.user.id).catch(() => {});
 
     broadcastDataChange(req.user.organizationId, 'lead', 'bulk_updated', req.user.id).catch(() => {});
+    leadIds.forEach((leadId) => refreshLeadAISummaryAsync(leadId));
   } catch (err) {
     next(err);
   }
@@ -1696,6 +1706,7 @@ router.post('/:id/block', async (req, res, next) => {
     });
 
     res.json({ success: true, message: 'Lead blocked — removed from active outreach' });
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -1733,6 +1744,7 @@ router.post('/:id/unblock', async (req, res, next) => {
     });
 
     res.json({ success: true, message: 'Lead unblocked — restored to active leads' });
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }

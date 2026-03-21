@@ -7,6 +7,7 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const { executeAutomations } = require('../services/automationEngine');
 const { rescoreAndPersist } = require('../utils/leadScoring');
 const { broadcastDataChange } = require('../websocket/server');
+const { regenerateLeadSummaryById } = require('../services/aiService');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -253,6 +254,7 @@ router.post('/move', validate(z.object({
 
     // Notify all subscribers to refresh lead data (including score widgets).
     broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: updated.id }).catch(() => {});
+    regenerateLeadSummaryById(updated.id).catch(() => {});
   } catch (err) {
     next(err);
   }

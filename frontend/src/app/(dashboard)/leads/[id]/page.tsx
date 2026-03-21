@@ -587,18 +587,21 @@ export default function LeadDetailPage() {
     // For lead events, only refresh if it's this lead (or no entityId specified)
     if (event.entity === 'lead' && event.entityId && event.entityId !== id) return;
     refreshLead();
-  }, [id, refreshLead]));
+    loadLeadAISummary(true).catch(() => {});
+  }, [id, refreshLead, loadLeadAISummary]));
 
   // Real-time sync: refresh chat messages when communications change (from other users)
   useRealtimeSync(['communication'], useCallback((event) => {
     if (event.entityId && event.entityId !== id) return;
     loadChatMessages();
-  }, [id, loadChatMessages]));
+    loadLeadAISummary(true).catch(() => {});
+  }, [id, loadChatMessages, loadLeadAISummary]));
 
   // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
   useRealtimeSync(['task'], useCallback(() => {
     refreshLead();
-  }, [refreshLead]));
+    loadLeadAISummary(true).catch(() => {});
+  }, [refreshLead, loadLeadAISummary]));
 
   // Auto-scroll chat container to bottom (without moving the page)
   useEffect(() => {

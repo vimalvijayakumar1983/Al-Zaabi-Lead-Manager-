@@ -6,6 +6,7 @@ const { validate } = require('../middleware/validate');
 const { logger } = require('../config/logger');
 const { rescoreAndPersist } = require('../utils/leadScoring');
 const { createNotification, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { regenerateLeadSummaryById } = require('../services/aiService');
 const {
   BUILTIN_DISPOSITION_SET,
   BUILTIN_DISPOSITION_KEYS,
@@ -806,6 +807,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       },
       newScore,
     });
+    regenerateLeadSummaryById(data.leadId).catch(() => {});
   } catch (err) {
     next(err);
   }

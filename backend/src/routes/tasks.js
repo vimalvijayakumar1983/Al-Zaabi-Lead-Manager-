@@ -8,6 +8,7 @@ const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { checkTaskReminders } = require('../services/taskReminderScheduler');
 const { upsertRecycleBinItem } = require('../services/recycleBinService');
+const { regenerateLeadSummaryById } = require('../services/aiService');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -24,6 +25,11 @@ function getDisplayName(obj) {
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 const taskSchema = z.object({
   title: z.string().min(1),
@@ -278,6 +284,7 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
     }
 
     broadcastDataChange(targetDivisionId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
+    refreshLeadAISummaryAsync(task.leadId);
 
     // Trigger immediate reminder check so notifications fire without waiting for next poll cycle
     if (taskData.reminder || taskData.dueAt) {
@@ -347,6 +354,7 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
     res.json(task);
 
     broadcastDataChange(targetDivisionId || req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+    refreshLeadAISummaryAsync(task.leadId || existing.leadId);
 
     // Trigger immediate reminder check when due date or reminder is changed
     if (updateData.reminder || updateData.dueAt) {
@@ -399,6 +407,7 @@ router.post('/:id/complete', async (req, res, next) => {
     }
 
     broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+    refreshLeadAISummaryAsync(task.leadId);
   } catch (err) {
     next(err);
   }
@@ -493,6 +502,8 @@ router.patch('/bulk', validate(z.object({
     }
 
     broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, {}).catch(() => {});
+    const affectedLeadIds = [...new Set(accessibleTasks.map((task) => task.leadId).filter(Boolean))];
+    affectedLeadIds.forEach((leadId) => refreshLeadAISummaryAsync(leadId));
   } catch (err) {
     next(err);
   }
@@ -542,6 +553,7 @@ router.delete('/:id', async (req, res, next) => {
     res.json({ message: 'Task moved to recycle bin' });
 
     broadcastDataChange(req.user.organizationId, 'task', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
+    refreshLeadAISummaryAsync(existing.leadId);
   } catch (err) {
     next(err);
   }

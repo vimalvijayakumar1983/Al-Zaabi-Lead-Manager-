@@ -5,9 +5,15 @@ const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { sendEmail } = require('../services/emailService');
 const { logger } = require('../config/logger');
+const { regenerateLeadSummaryById } = require('../services/aiService');
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 const communicationSchema = z.object({
   leadId: z.string().uuid(),
@@ -79,6 +85,7 @@ router.post('/', validate(communicationSchema), async (req, res, next) => {
     }
 
     res.status(201).json(communication);
+    refreshLeadAISummaryAsync(data.leadId);
   } catch (err) {
     next(err);
   }
@@ -134,6 +141,7 @@ router.post('/send-email', validate(z.object({
     });
 
     res.status(201).json(communication);
+    refreshLeadAISummaryAsync(leadId);
   } catch (err) {
     next(err);
   }

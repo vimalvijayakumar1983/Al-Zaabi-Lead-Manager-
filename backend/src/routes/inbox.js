@@ -7,6 +7,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
+const { regenerateLeadSummaryById } = require('../services/aiService');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -48,6 +49,11 @@ const upload = multer({
 });
 
 const router = Router();
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 // ─── Serve Attachment File from DB (public — UUID acts as access token) ──
 
@@ -399,6 +405,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
     };
 
     res.status(201).json(enriched);
+    refreshLeadAISummaryAsync(leadId);
 
     broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -544,6 +551,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     };
 
     res.status(201).json(enriched);
+    refreshLeadAISummaryAsync(leadId);
 
     broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -691,6 +699,7 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
     });
 
     res.json(updated);
+    refreshLeadAISummaryAsync(leadId);
   } catch (err) { next(err); }
 });
 
@@ -725,6 +734,7 @@ router.post('/conversations/:leadId/notes', async (req, res, next) => {
     });
 
     res.status(201).json(note);
+    refreshLeadAISummaryAsync(leadId);
 
     broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -783,6 +793,7 @@ router.patch('/messages/:messageId', validate(z.object({
     });
 
     res.json(updated);
+    refreshLeadAISummaryAsync(message.leadId);
 
     broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -812,6 +823,7 @@ router.delete('/messages/:messageId', async (req, res, next) => {
     });
 
     res.json({ message: 'Message deleted' });
+    refreshLeadAISummaryAsync(message.leadId);
 
     broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
   } catch (err) { next(err); }

@@ -1,4 +1,5 @@
 const { logger } = require('../config/logger');
+const { prisma } = require('../config/database');
 
 /**
  * AI Service - generates lead summaries, suggestions, and scores
@@ -266,6 +267,66 @@ function generateLeadSummaryInsights(lead, { activities = [], communications = [
   };
 }
 
+async function fetchLeadSummaryContext(leadId) {
+  if (!leadId) return null;
+  return prisma.lead.findUnique({
+    where: { id: leadId },
+    include: {
+      stage: { select: { id: true, name: true, color: true } },
+      activities: {
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        select: { id: true, type: true, description: true, createdAt: true },
+      },
+      notes: {
+        orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
+        take: 20,
+        select: { id: true, content: true, createdAt: true },
+      },
+      tasks: {
+        orderBy: { dueAt: 'asc' },
+        take: 30,
+        select: { id: true, title: true, status: true, priority: true, dueAt: true, createdAt: true, updatedAt: true },
+      },
+      communications: {
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        select: { id: true, channel: true, direction: true, subject: true, body: true, createdAt: true },
+      },
+      callLogs: {
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { id: true, disposition: true, notes: true, createdAt: true, metadata: true },
+      },
+    },
+  });
+}
+
+async function regenerateLeadSummaryById(leadId) {
+  try {
+    const lead = await fetchLeadSummaryContext(leadId);
+    if (!lead || lead.isArchived) return null;
+
+    const insights = generateLeadSummaryInsights(lead, {
+      activities: lead.activities,
+      communications: lead.communications,
+      tasks: lead.tasks,
+      notes: lead.notes,
+      callLogs: lead.callLogs,
+    });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { aiSummary: insights.summary },
+    });
+
+    return insights;
+  } catch (error) {
+    logger.warn('Failed to regenerate lead AI summary', { leadId, error: error.message });
+    return null;
+  }
+}
+
 /**
  * Build context string for LLM prompts
  */
@@ -294,4 +355,9 @@ const buildLeadContext = (lead, activities, communications) => {
   };
 };
 
-module.exports = { generateLeadSummary, suggestNextAction, generateLeadSummaryInsights };
+module.exports = {
+  generateLeadSummary,
+  suggestNextAction,
+  generateLeadSummaryInsights,
+  regenerateLeadSummaryById,
+};
