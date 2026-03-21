@@ -250,7 +250,7 @@ function LeadsContent() {
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [stats, setStats] = useState<any>(null);
   const [quickActionId, setQuickActionId] = useState<string | null>(null);
-  const [quickActionPosition, setQuickActionPosition] = useState<{ top: number; left: number; openUp: boolean } | null>(null);
+  const [quickActionPosition, setQuickActionPosition] = useState<{ top: number; left: number; openUp: boolean; maxHeight: number } | null>(null);
   const quickActionRef = useRef<HTMLDivElement>(null);
 
   // Column management
@@ -1110,19 +1110,24 @@ function LeadsContent() {
                 const menuWidth = 192;
                 const sidePadding = 8;
                 const menuGap = 6;
+                const idealMenuMaxHeight = 360;
                 const minimumMenuHeight = 220;
-                const reservedBottomSpace = selectedLeads.size > 0 ? 112 : 16;
-                const availableBelow = window.innerHeight - triggerRect.bottom - reservedBottomSpace;
-                const availableAbove = triggerRect.top - 12;
+                const reservedBottomSpace = selectedLeads.size > 0 ? 132 : 16;
+                const availableBelow = Math.max(0, window.innerHeight - triggerRect.bottom - reservedBottomSpace - sidePadding);
+                const availableAbove = Math.max(0, triggerRect.top - sidePadding - 8);
                 const shouldOpenUp = availableBelow < minimumMenuHeight && availableAbove > availableBelow;
+                const maxHeight = Math.max(
+                  140,
+                  Math.min(idealMenuMaxHeight, shouldOpenUp ? availableAbove : availableBelow),
+                );
                 const left = Math.max(
                   sidePadding,
                   Math.min(triggerRect.right - menuWidth, window.innerWidth - menuWidth - sidePadding),
                 );
                 const top = shouldOpenUp
-                  ? Math.max(8, triggerRect.top - menuGap)
-                  : Math.min(window.innerHeight - 8, triggerRect.bottom + menuGap);
-                setQuickActionPosition({ top, left, openUp: shouldOpenUp });
+                  ? Math.max(maxHeight + sidePadding, triggerRect.top - menuGap)
+                  : Math.max(sidePadding, Math.min(window.innerHeight - maxHeight - sidePadding, triggerRect.bottom + menuGap));
+                setQuickActionPosition({ top, left, openUp: shouldOpenUp, maxHeight });
                 setQuickActionId(lead.id);
               }}
               className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600">
@@ -1368,10 +1373,10 @@ function LeadsContent() {
           {quickActionPosition && activeQuickLead && typeof document !== 'undefined' && createPortal(
             <div
               ref={quickActionRef}
-              className={`fixed bg-white border border-gray-200 rounded-lg shadow-2xl z-[80] py-1 max-h-[min(70vh,24rem)] overflow-y-auto ${
+              className={`fixed bg-white border border-gray-200 rounded-lg shadow-2xl z-[80] py-1 overflow-y-auto ${
                 quickActionPosition.openUp ? '-translate-y-full' : ''
               }`}
-              style={{ top: quickActionPosition.top, left: quickActionPosition.left, width: 192 }}
+              style={{ top: quickActionPosition.top, left: quickActionPosition.left, width: 192, maxHeight: quickActionPosition.maxHeight }}
             >
               <Link
                 href={`/leads/${activeQuickLead.id}`}
