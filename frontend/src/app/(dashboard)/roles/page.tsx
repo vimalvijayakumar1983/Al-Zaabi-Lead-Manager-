@@ -55,6 +55,7 @@ import {
   LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
+import { FEATURES, type FeatureKey } from '@/lib/permissions';
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -287,6 +288,35 @@ const BASE_ROLE_OPTIONS: { value: string; label: string; level: number }[] = [
   { value: 'SALES_REP', label: 'Same as Sales Rep', level: 40 },
   { value: 'VIEWER', label: 'Same as Viewer', level: 20 },
 ];
+
+const MODULE_VISIBILITY_ROLES = [
+  { key: 'ADMIN', label: 'Division Admin' },
+  { key: 'MANAGER', label: 'Manager' },
+  { key: 'SALES_REP', label: 'Sales Rep' },
+  { key: 'VIEWER', label: 'Viewer' },
+] as const;
+
+const MODULE_VISIBILITY_KEYS: FeatureKey[] = [
+  'dashboard',
+  'leads',
+  'contacts',
+  'inbox',
+  'pipeline',
+  'tasks',
+  'analytics',
+  'automations',
+  'campaigns',
+  'integrations',
+  'import',
+  'team',
+  'roles',
+  'settings',
+  'divisions',
+];
+
+const MODULE_VISIBILITY_FEATURES = FEATURES.filter((feature) =>
+  MODULE_VISIBILITY_KEYS.includes(feature.key)
+);
 
 const DEFAULT_FORM_STATE: FormState = {
   name: '',
@@ -1999,11 +2029,22 @@ export default function RolesPage() {
   const { user } = useAuthStore();
   const canManageRoles =
     user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+  const canManageModuleVisibility = user?.role === 'SUPER_ADMIN';
 
   // ── Data State ──
   const [roles, setRoles] = useState<CustomRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [moduleVisibility, setModuleVisibility] = useState<
+    Record<string, Record<string, boolean>>
+  >({});
+  const [moduleVisibilityLoading, setModuleVisibilityLoading] = useState(true);
+  const [moduleVisibilityError, setModuleVisibilityError] = useState<string | null>(
+    null
+  );
+  const [moduleVisibilityDirty, setModuleVisibilityDirty] = useState(false);
+  const [moduleVisibilitySaving, setModuleVisibilitySaving] = useState(false);
+  const moduleVisibilityInitialRef = useRef<string>('');
 
   // ── UI State ──
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -2063,6 +2104,19 @@ export default function RolesPage() {
     () => roles.reduce((sum, r) => sum + r.userCount, 0),
     [roles]
   );
+  const moduleCountsByRole = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const role of MODULE_VISIBILITY_ROLES) {
+      let enabled = 0;
+      for (const feature of MODULE_VISIBILITY_FEATURES) {
+        if (moduleVisibility[role.key]?.[feature.key] === true) {
+          enabled++;
+        }
+      }
+      counts[role.key] = enabled;
+    }
+    return counts;
+  }, [moduleVisibility]);
 
   // ── Fetch roles ──
   const fetchRoles = useCallback(async () => {
@@ -2087,9 +2141,104 @@ export default function RolesPage() {
     }
   }, []);
 
+  const fetchModuleVisibility = useCallback(async () => {
+    setModuleVisibilityLoading(true);
+    setModuleVisibilityError(null);
+    try {
+      const res = await fetch(apiUrl('/api/users/permissions'), {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to fetch visibility matrix (${res.status})`);
+      }
+      const data = (await res.json()) as {
+        rolePermissions?: Record<string, Record<string, boolean>>;
+      };
+
+      const cloned: Record<string, Record<string, boolean>> = {};
+      for (const [role, perms] of Object.entries(data.rolePermissions || {})) {
+        cloned[role] = { ...perms };
+      }
+      setModuleVisibility(cloned);
+      moduleVisibilityInitialRef.current = JSON.stringify(cloned);
+      setModuleVisibilityDirty(false);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to load module visibility';
+      setModuleVisibilityError(msg);
+    } finally {
+      setModuleVisibilityLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchRoles();
-  }, [fetchRoles]);
+    fetchModuleVisibility();
+  }, [fetchRoles, fetchModuleVisibility]);
+
+  const toggleModuleVisibility = useCallback(
+    (roleKey: string, featureKey: string) => {
+      if (!canManageModuleVisibility) return;
+      setModuleVisibility((prev) => ({
+        ...prev,
+        [roleKey]: {
+          ...prev[roleKey],
+          [featureKey]: !(prev[roleKey]?.[featureKey] === true),
+        },
+      }));
+      setModuleVisibilityDirty(true);
+    },
+    [canManageModuleVisibility]
+  );
+
+  const resetModuleVisibility = useCallback(() => {
+    if (!moduleVisibilityInitialRef.current) return;
+    try {
+      const parsed = JSON.parse(moduleVisibilityInitialRef.current) as Record<
+        string,
+        Record<string, boolean>
+      >;
+      setModuleVisibility(parsed);
+      setModuleVisibilityDirty(false);
+    } catch {
+      // no-op: keep current state if parsing fails
+    }
+  }, []);
+
+  const saveModuleVisibility = useCallback(async () => {
+    if (!canManageModuleVisibility) return;
+    setModuleVisibilitySaving(true);
+    try {
+      const res = await fetch(apiUrl('/api/users/permissions/roles'), {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ rolePermissions: moduleVisibility }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(
+          (errData as Record<string, string>).error ??
+            (errData as Record<string, string>).message ??
+            `Failed to save module visibility (${res.status})`
+        );
+      }
+
+      const data = (await res.json()) as {
+        rolePermissions?: Record<string, Record<string, boolean>>;
+      };
+      const saved = data.rolePermissions ?? moduleVisibility;
+      setModuleVisibility(saved);
+      moduleVisibilityInitialRef.current = JSON.stringify(saved);
+      setModuleVisibilityDirty(false);
+      addToast('success', 'Module visibility updated successfully');
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to save module visibility';
+      addToast('error', msg);
+    } finally {
+      setModuleVisibilitySaving(false);
+    }
+  }, [addToast, canManageModuleVisibility, moduleVisibility]);
 
   // ── Create role ──
   const handleCreateRole = useCallback(
@@ -2375,6 +2524,142 @@ export default function RolesPage() {
                 );
               })}
             </div>
+
+            {/* ── Module Visibility Matrix ── */}
+            <section className="mb-10">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Module Visibility by Role
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-0.5">
+                    Decide which modules each role can see (Integrations, Team,
+                    Roles, and more).
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {canManageModuleVisibility && moduleVisibilityDirty && (
+                    <button
+                      type="button"
+                      onClick={resetModuleVisibility}
+                      className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg text-sm font-medium"
+                    >
+                      Reset
+                    </button>
+                  )}
+                  {canManageModuleVisibility ? (
+                    <button
+                      type="button"
+                      onClick={saveModuleVisibility}
+                      disabled={!moduleVisibilityDirty || moduleVisibilitySaving}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium text-white ${
+                        !moduleVisibilityDirty || moduleVisibilitySaving
+                          ? 'bg-indigo-300 cursor-not-allowed'
+                          : 'bg-indigo-600 hover:bg-indigo-700'
+                      }`}
+                    >
+                      {moduleVisibilitySaving ? 'Saving...' : 'Save Visibility'}
+                    </button>
+                  ) : (
+                    <span className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-full">
+                      Read-only
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {moduleVisibilityLoading ? (
+                <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+                  <div className="bg-gray-200 animate-pulse h-5 w-64 rounded mb-4" />
+                  <div className="space-y-2">
+                    {Array.from({ length: 6 }).map((_, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-gray-100 animate-pulse h-10 rounded"
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : moduleVisibilityError ? (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                  <p className="text-sm text-red-700">{moduleVisibilityError}</p>
+                  <button
+                    type="button"
+                    onClick={fetchModuleVisibility}
+                    className="mt-2 bg-white border border-red-200 text-red-700 hover:bg-red-50 px-3 py-1.5 rounded-lg text-sm font-medium"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-x-auto">
+                  <table className="w-full min-w-[980px]">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          Module
+                        </th>
+                        {MODULE_VISIBILITY_ROLES.map((role) => (
+                          <th
+                            key={role.key}
+                            className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider"
+                          >
+                            <div>{role.label}</div>
+                            <div className="text-[11px] normal-case text-gray-400 font-medium mt-0.5">
+                              {moduleCountsByRole[role.key] ?? 0}/
+                              {MODULE_VISIBILITY_FEATURES.length}
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {MODULE_VISIBILITY_FEATURES.map((feature) => (
+                        <tr key={feature.key} className="hover:bg-gray-50/60">
+                          <td className="px-4 py-3">
+                            <p className="text-sm font-medium text-gray-900">
+                              {feature.label}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                              {feature.section}
+                            </p>
+                          </td>
+                          {MODULE_VISIBILITY_ROLES.map((role) => {
+                            const enabled =
+                              moduleVisibility[role.key]?.[feature.key] === true;
+                            return (
+                              <td
+                                key={`${feature.key}-${role.key}`}
+                                className="px-4 py-3 text-center"
+                              >
+                                {canManageModuleVisibility ? (
+                                  <div className="inline-flex items-center justify-center">
+                                    <PermToggle
+                                      enabled={enabled}
+                                      onChange={() =>
+                                        toggleModuleVisibility(
+                                          role.key,
+                                          feature.key
+                                        )
+                                      }
+                                      label={`Toggle ${feature.label} for ${role.label}`}
+                                    />
+                                  </div>
+                                ) : enabled ? (
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-500 inline-block" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-gray-300 inline-block" />
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
 
             {/* ── System Roles ── */}
             <section className="mb-10">
