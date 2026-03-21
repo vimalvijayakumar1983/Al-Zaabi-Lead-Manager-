@@ -3,6 +3,8 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { sendEmail } = require('../services/emailService');
+const { logger } = require('../config/logger');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -22,7 +24,7 @@ router.get('/lead/:leadId', async (req, res, next) => {
     const communications = await prisma.communication.findMany({
       where: {
         leadId: req.params.leadId,
-        lead: { organizationId: req.orgId },
+        lead: { organizationId: { in: req.orgIds } },
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -41,7 +43,7 @@ router.post('/', validate(communicationSchema), async (req, res, next) => {
     const data = req.validated;
 
     const lead = await prisma.lead.findFirst({
-      where: { id: data.leadId, organizationId: req.orgId },
+      where: { id: data.leadId, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
@@ -68,6 +70,14 @@ router.post('/', validate(communicationSchema), async (req, res, next) => {
       },
     });
 
+    // Mark first response — any outbound communication counts as attending to the lead
+    if (data.direction === 'OUTBOUND' && !lead.firstRespondedAt) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { firstRespondedAt: new Date(), slaStatus: 'RESPONDED' },
+      });
+    }
+
     res.status(201).json(communication);
   } catch (err) {
     next(err);
@@ -84,8 +94,24 @@ router.post('/send-email', validate(z.object({
   try {
     const { leadId, to, subject, body } = req.validated;
 
-    // In production, send via SMTP/Nodemailer
-    // For now, log the communication
+    // Verify lead belongs to accessible orgs
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // Send via SMTP
+    const emailResult = await sendEmail({
+      to,
+      subject,
+      html: body,
+      organizationId: lead.organizationId,
+    });
+
+    if (!emailResult.success) {
+      logger.warn(`Email send failed for lead ${leadId}: ${emailResult.error}`);
+    }
+
     const communication = await prisma.communication.create({
       data: {
         leadId,

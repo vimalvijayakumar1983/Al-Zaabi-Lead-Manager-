@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
@@ -55,7 +56,19 @@ export default function LoginPage() {
         } else {
           localStorage.removeItem(REMEMBER_KEY);
         }
-        await login(email, password);
+        const response = await login(email, password);
+        // Store division data for SUPER_ADMIN users
+        if (response && typeof response === 'object') {
+          const authResponse = response as any;
+          // Store organization branding data
+          if (authResponse.user?.organization) {
+            localStorage.setItem('organization', JSON.stringify(authResponse.user.organization));
+          }
+          // Store divisions list for SUPER_ADMIN
+          if (authResponse.user?.role === 'SUPER_ADMIN' && authResponse.divisions) {
+            localStorage.setItem('divisions', JSON.stringify(authResponse.divisions));
+          }
+        }
       }
       router.push('/dashboard');
     } catch (err: any) {
@@ -88,7 +101,7 @@ export default function LoginPage() {
             <div className="h-10 w-10 rounded-xl bg-white/10 backdrop-blur flex items-center justify-center border border-white/20">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
-            <span className="text-xl font-bold tracking-tight">LeadFlow</span>
+            <span className="text-xl font-bold tracking-tight">Al-Zaabi Lead Manager</span>
           </div>
 
           {/* Main content */}
@@ -156,7 +169,7 @@ export default function LoginPage() {
             <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-soft">
               <Sparkles className="h-4.5 w-4.5 text-white" />
             </div>
-            <span className="text-xl font-bold text-text-primary tracking-tight">LeadFlow</span>
+            <span className="text-xl font-bold text-text-primary tracking-tight">Al-Zaabi Lead Manager</span>
           </div>
 
           <div className="animate-fade-in-up">
@@ -166,7 +179,7 @@ export default function LoginPage() {
             <p className="text-sm text-text-secondary mt-1.5 mb-8">
               {isRegister
                 ? 'Start managing your leads in minutes'
-                : 'Sign in to your LeadFlow account'}
+                : 'Sign in to your Al-Zaabi Lead Manager account'}
             </p>
           </div>
 
@@ -216,9 +229,9 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-sm font-medium text-text-primary">Password</label>
                 {!isRegister && (
-                  <button type="button" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
+                  <Link href="/forgot-password" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
                     Forgot password?
-                  </button>
+                  </Link>
                 )}
               </div>
               <div className="relative">
@@ -229,6 +242,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={isRegister ? 'Min 8 characters' : 'Enter your password'}
                   required
+                  minLength={isRegister ? 8 : undefined}
                 />
                 <button
                   type="button"

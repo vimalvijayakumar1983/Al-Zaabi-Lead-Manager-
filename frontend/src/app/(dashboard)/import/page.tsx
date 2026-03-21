@@ -4,12 +4,13 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { useNotificationStore } from '@/store/notificationStore';
 import {
   Upload, FileSpreadsheet, X, ArrowRight, ArrowLeft, Check,
   AlertTriangle, CheckCircle2, XCircle, Download, Clock,
   RotateCcw, ChevronDown, Eye, Trash2, FileText, Table2,
   Zap, Shield, Users, Megaphone, MapPin, Link2, Search,
-  BarChart3, Info,
+  BarChart3, Info, Contact,
 } from 'lucide-react';
 
 type WizardStep = 'upload' | 'mapping' | 'options' | 'review' | 'result';
@@ -72,7 +73,8 @@ interface ImportHistoryItem {
 }
 
 const MODULES = [
-  { key: 'leads', label: 'Leads', icon: Users, description: 'Import contacts and prospects', color: 'brand' },
+  { key: 'leads', label: 'Leads', icon: Users, description: 'Import sales leads and prospects', color: 'brand' },
+  { key: 'contacts', label: 'Contacts', icon: Contact, description: 'Import contacts and relationships', color: 'emerald' },
   { key: 'campaigns', label: 'Campaigns', icon: Megaphone, description: 'Import marketing campaigns', color: 'purple' },
 ];
 
@@ -135,6 +137,7 @@ export default function ImportPage() {
 function ImportWizard() {
   const { user } = useAuthStore();
   const router = useRouter();
+  const addToast = useNotificationStore((s) => s.addToast);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<WizardStep>('upload');
@@ -144,9 +147,11 @@ function ImportWizard() {
   const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
   const [duplicateAction, setDuplicateAction] = useState('skip');
   const [duplicateField, setDuplicateField] = useState('email');
-  const [assignToId, setAssignToId] = useState('');
+  const [assignToIds, setAssignToIds] = useState<string[]>([]);
   const [defaultStatus, setDefaultStatus] = useState('');
   const [defaultSource, setDefaultSource] = useState('');
+  const [ownerDropdownOpen, setOwnerDropdownOpen] = useState(false);
+  const ownerDropdownRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -158,6 +163,22 @@ function ImportWizard() {
   useEffect(() => {
     api.getUsers().then(setUsers).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ownerDropdownRef.current && !ownerDropdownRef.current.contains(e.target as Node)) {
+        setOwnerDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggleOwner = (userId: string) => {
+    setAssignToIds((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
 
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile);
@@ -210,12 +231,13 @@ function ImportWizard() {
         fieldMapping,
         duplicateAction,
         duplicateField: duplicateField || undefined,
-        assignToId: assignToId || undefined,
+        assignToIds: assignToIds.length > 0 ? assignToIds : undefined,
         defaultStatus: defaultStatus || undefined,
         defaultSource: defaultSource || undefined,
       });
       setResult(data);
       setStep('result');
+      addToast({ type: 'success', title: 'Import complete', message: `${data.imported} records imported successfully` });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -233,7 +255,7 @@ function ImportWizard() {
     setError('');
     setDuplicateAction('skip');
     setDuplicateField('email');
-    setAssignToId('');
+    setAssignToIds([]);
     setDefaultStatus('');
     setDefaultSource('');
   };
@@ -315,7 +337,7 @@ function ImportWizard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-text-primary">Upload File</h3>
               <button
-                onClick={() => api.downloadImportTemplate(selectedModule).catch((err: any) => alert(err.message))}
+                onClick={() => api.downloadImportTemplate(selectedModule).catch((err: any) => addToast({ type: 'error', title: 'Template download failed', message: err.message }))}
                 className="text-sm text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -545,6 +567,7 @@ function ImportWizard() {
                   <option value="">Don&apos;t check for duplicates</option>
                   <option value="email">Email</option>
                   <option value="phone">Phone</option>
+                  {selectedModule === 'contacts' && <option value="mobile">Mobile</option>}
                 </select>
               </div>
 
@@ -574,21 +597,69 @@ function ImportWizard() {
             </div>
           </div>
 
-          {/* Default Values */}
+          {/* Default Values — Leads */}
           {selectedModule === 'leads' && (
-            <div className="card p-6">
+            <div className="card p-6 overflow-visible">
               <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
               <p className="text-2xs text-text-tertiary mb-4">Set defaults for fields not present in your file</p>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">Assign To</label>
-                  <select value={assignToId} onChange={(e) => setAssignToId(e.target.value)} className="input">
-                    <option value="">No assignment</option>
-                    {users.map((u: any) => (
-                      <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                    ))}
-                  </select>
+                  <label className="label">Assign To <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+                  <div ref={ownerDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setOwnerDropdownOpen(!ownerDropdownOpen)}
+                      className="input w-full text-left flex items-center justify-between"
+                    >
+                      <span className={assignToIds.length === 0 ? 'text-text-tertiary' : 'text-text-primary'}>
+                        {assignToIds.length === 0
+                          ? 'No assignment'
+                          : assignToIds.length === 1
+                            ? users.find((u: any) => u.id === assignToIds[0])
+                              ? `${users.find((u: any) => u.id === assignToIds[0]).firstName} ${users.find((u: any) => u.id === assignToIds[0]).lastName}`
+                              : '1 selected'
+                            : `${assignToIds.length} owners selected`}
+                      </span>
+                      <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${ownerDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {ownerDropdownOpen && (
+                      <div className="absolute z-50 bottom-full mb-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
+                        {assignToIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAssignToIds([])}
+                            className="w-full px-3 py-1.5 text-left text-2xs text-red-500 hover:bg-red-50 border-b border-gray-100"
+                          >
+                            Clear all
+                          </button>
+                        )}
+                        {users.map((u: any) => {
+                          const isSelected = assignToIds.includes(u.id);
+                          return (
+                            <label
+                              key={u.id}
+                              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleOwner(u.id)}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              <span className="text-sm text-text-primary">{u.firstName} {u.lastName}</span>
+                            </label>
+                          );
+                        })}
+                        {users.length === 0 && (
+                          <p className="px-3 py-2 text-2xs text-text-tertiary">No team members found</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {assignToIds.length > 1 && (
+                    <p className="text-2xs text-brand-600 mt-1">Leads will be distributed round-robin among selected owners</p>
+                  )}
                 </div>
                 <div>
                   <label className="label">Default Status</label>
@@ -596,6 +667,101 @@ function ImportWizard() {
                     <option value="">NEW (default)</option>
                     <option value="CONTACTED">Contacted</option>
                     <option value="QUALIFIED">Qualified</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Default Source</label>
+                  <select value={defaultSource} onChange={(e) => setDefaultSource(e.target.value)} className="input">
+                    <option value="">CSV Import (default)</option>
+                    <option value="WEBSITE_FORM">Website Form</option>
+                    <option value="LIVE_CHAT">Live Chat Widget</option>
+                    <option value="FACEBOOK_ADS">Facebook Ads</option>
+                    <option value="GOOGLE_ADS">Google Ads</option>
+                    <option value="REFERRAL">Referral</option>
+                    <option value="EMAIL">Email</option>
+                    <option value="PHONE">Phone</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Default Values — Contacts */}
+          {selectedModule === 'contacts' && (
+            <div className="card p-6 overflow-visible">
+              <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
+              <p className="text-2xs text-text-tertiary mb-4">Set defaults for fields not present in your file</p>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="label">Owner <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+                  <div ref={ownerDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setOwnerDropdownOpen(!ownerDropdownOpen)}
+                      className="input w-full text-left flex items-center justify-between"
+                    >
+                      <span className={assignToIds.length === 0 ? 'text-text-tertiary' : 'text-text-primary'}>
+                        {assignToIds.length === 0
+                          ? 'No owner'
+                          : assignToIds.length === 1
+                            ? users.find((u: any) => u.id === assignToIds[0])
+                              ? `${users.find((u: any) => u.id === assignToIds[0]).firstName} ${users.find((u: any) => u.id === assignToIds[0]).lastName}`
+                              : '1 selected'
+                            : `${assignToIds.length} owners selected`}
+                      </span>
+                      <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${ownerDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {ownerDropdownOpen && (
+                      <div className="absolute z-50 bottom-full mb-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
+                        {assignToIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAssignToIds([])}
+                            className="w-full px-3 py-1.5 text-left text-2xs text-red-500 hover:bg-red-50 border-b border-gray-100"
+                          >
+                            Clear all
+                          </button>
+                        )}
+                        {users.map((u: any) => {
+                          const isSelected = assignToIds.includes(u.id);
+                          return (
+                            <label
+                              key={u.id}
+                              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleOwner(u.id)}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              <span className="text-sm text-text-primary">{u.firstName} {u.lastName}</span>
+                            </label>
+                          );
+                        })}
+                        {users.length === 0 && (
+                          <p className="px-3 py-2 text-2xs text-text-tertiary">No team members found</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {assignToIds.length > 1 && (
+                    <p className="text-2xs text-brand-600 mt-1">Contacts will be distributed round-robin among selected owners</p>
+                  )}
+                </div>
+                <div>
+                  <label className="label">Default Lifecycle</label>
+                  <select value={defaultStatus} onChange={(e) => setDefaultStatus(e.target.value)} className="input">
+                    <option value="">Subscriber (default)</option>
+                    <option value="LEAD">Lead</option>
+                    <option value="MARKETING_QUALIFIED">Marketing Qualified</option>
+                    <option value="SALES_QUALIFIED">Sales Qualified</option>
+                    <option value="OPPORTUNITY">Opportunity</option>
+                    <option value="CUSTOMER">Customer</option>
+                    <option value="EVANGELIST">Evangelist</option>
+                    <option value="OTHER">Other</option>
                   </select>
                 </div>
                 <div>
@@ -819,7 +985,7 @@ function ImportWizard() {
               Import More Data
             </button>
             <button onClick={() => router.push(`/${selectedModule}`)} className="btn-secondary">
-              View {selectedModule === 'leads' ? 'Leads' : 'Campaigns'}
+              View {selectedModule === 'leads' ? 'Leads' : selectedModule === 'contacts' ? 'Contacts' : 'Campaigns'}
             </button>
           </div>
         </div>
@@ -830,6 +996,7 @@ function ImportWizard() {
 
 /* ─── Export Tab ─────────────────────────────────────────────────── */
 function ExportTab() {
+  const addToast = useNotificationStore((s) => s.addToast);
   const [exportModule, setExportModule] = useState('leads');
   const [exporting, setExporting] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -843,8 +1010,9 @@ function ExportTab() {
     setExporting(true);
     try {
       await api.exportData(exportModule, filters);
+      addToast({ type: 'success', title: 'Export complete', message: `${exportModule} data exported successfully` });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Export failed', message: err.message });
     } finally {
       setExporting(false);
     }
@@ -877,7 +1045,7 @@ function ExportTab() {
         </div>
       </div>
 
-      {/* Filters (Leads only) */}
+      {/* Filters (Leads) */}
       {exportModule === 'leads' && (
         <div className="card p-6">
           <h3 className="text-sm font-semibold text-text-primary mb-1">Filter Data (Optional)</h3>
@@ -909,6 +1077,7 @@ function ExportTab() {
               >
                 <option value="">All Sources</option>
                 <option value="WEBSITE_FORM">Website Form</option>
+                <option value="LIVE_CHAT">Live Chat Widget</option>
                 <option value="FACEBOOK_ADS">Facebook Ads</option>
                 <option value="GOOGLE_ADS">Google Ads</option>
                 <option value="CSV_IMPORT">CSV Import</option>
@@ -945,6 +1114,75 @@ function ExportTab() {
         </div>
       )}
 
+      {/* Filters (Contacts) */}
+      {exportModule === 'contacts' && (
+        <div className="card p-6">
+          <h3 className="text-sm font-semibold text-text-primary mb-1">Filter Data (Optional)</h3>
+          <p className="text-2xs text-text-tertiary mb-4">Leave blank to export all contacts</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Lifecycle Stage</label>
+              <select
+                value={filters.status || ''}
+                onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                className="input"
+              >
+                <option value="">All Stages</option>
+                <option value="SUBSCRIBER">Subscriber</option>
+                <option value="LEAD">Lead</option>
+                <option value="MARKETING_QUALIFIED">Marketing Qualified</option>
+                <option value="SALES_QUALIFIED">Sales Qualified</option>
+                <option value="OPPORTUNITY">Opportunity</option>
+                <option value="CUSTOMER">Customer</option>
+                <option value="EVANGELIST">Evangelist</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Source</label>
+              <select
+                value={filters.source || ''}
+                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
+                className="input"
+              >
+                <option value="">All Sources</option>
+                <option value="WEBSITE_FORM">Website Form</option>
+                <option value="FACEBOOK_ADS">Facebook Ads</option>
+                <option value="GOOGLE_ADS">Google Ads</option>
+                <option value="CSV_IMPORT">CSV Import</option>
+                <option value="REFERRAL">Referral</option>
+                <option value="EMAIL">Email</option>
+                <option value="PHONE">Phone</option>
+                <option value="MANUAL">Manual</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Owner</label>
+              <select
+                value={filters.assignedToId || ''}
+                onChange={(e) => setFilters({ ...filters, assignedToId: e.target.value })}
+                className="input"
+              >
+                <option value="">All Users</option>
+                {users.map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className="label">Search</label>
+            <input
+              className="input max-w-sm"
+              placeholder="Search by name, email, or company..."
+              value={filters.search || ''}
+              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Export Action */}
       <div className="card p-6 text-center">
         <div className="h-14 w-14 rounded-2xl bg-brand-50 flex items-center justify-center mx-auto mb-4">
@@ -956,7 +1194,7 @@ function ExportTab() {
         </p>
         <button onClick={handleExport} disabled={exporting} className="btn-primary">
           <Download className="h-4 w-4" />
-          {exporting ? 'Exporting...' : `Export ${exportModule === 'leads' ? 'Leads' : 'Campaigns'}`}
+          {exporting ? 'Exporting...' : `Export ${exportModule === 'leads' ? 'Leads' : exportModule === 'contacts' ? 'Contacts' : 'Campaigns'}`}
         </button>
       </div>
     </div>
@@ -990,14 +1228,17 @@ function ImportHistoryTab() {
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
+  const addToast = useNotificationStore((s) => s.addToast);
+
   const handleUndo = async (id: string) => {
     if (!confirm('Are you sure you want to undo this import? Imported records will be archived/removed.')) return;
     setUndoing(id);
     try {
       await api.undoImport(id);
+      addToast({ type: 'success', title: 'Import undone', message: 'The import has been successfully reversed' });
       fetchHistory();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Undo failed', message: err.message });
     } finally {
       setUndoing(null);
     }
@@ -1145,6 +1386,7 @@ function ImportHistoryTab() {
 
 /* ─── Import Detail Modal ────────────────────────────────────────── */
 function ImportDetailModal({ importRecord, onClose }: { importRecord: ImportHistoryItem; onClose: () => void }) {
+  const addToast = useNotificationStore((s) => s.addToast);
   const errors = (importRecord.errors || []) as any[];
 
   return (
@@ -1220,7 +1462,7 @@ function ImportDetailModal({ importRecord, onClose }: { importRecord: ImportHist
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-semibold text-text-primary">Errors ({errors.length})</h4>
                 <button
-                  onClick={() => api.downloadErrorsCsv(importRecord.id).catch((err: any) => alert(err.message))}
+                  onClick={() => api.downloadErrorsCsv(importRecord.id).catch((err: any) => addToast({ type: 'error', title: 'Download failed', message: err.message }))}
                   className="text-2xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
                 >
                   <Download className="h-3 w-3" />

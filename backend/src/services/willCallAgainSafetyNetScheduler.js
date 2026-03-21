@@ -8,6 +8,7 @@
 
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
+const { createNotification, NOTIFICATION_TYPES } = require('./notificationService');
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
 const DEFAULT_WAIT_DAYS = 7;
@@ -179,6 +180,17 @@ async function checkWillCallAgainSafetyNet() {
               inactivityDays: waitDays,
             },
           },
+        });
+
+        await createNotification({
+          type: NOTIFICATION_TYPES.TASK_ASSIGNED,
+          title: `Safety Net Follow-up: ${leadName}`,
+          message: `Client said they would call back, but no inbound response was received. A gentle follow-up task has been created.`,
+          userId: assigneeId,
+          entityType: 'task',
+          entityId: task.id,
+          metadata: { callLogId: logEntry.id, trigger: 'will_call_us_again_safety_net' },
+          organizationId: logEntry.lead.organizationId,
         });
 
         logger.info(`[WillCallAgainSafetyNet] Created safety-net task ${task.id} for call log ${logEntry.id}`);

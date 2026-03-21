@@ -9,10 +9,25 @@ const { logger } = require('./config/logger');
 const { prisma } = require('./config/database');
 const { setupWebSocket } = require('./websocket/server');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const { startSLAMonitor, stopSLAMonitor } = require('./services/slaMonitor');
+const { startTimeBasedScheduler, stopTimeBasedScheduler } = require('./services/timeBasedAutomationScheduler');
+const { startCallbackReminderScheduler, stopCallbackReminderScheduler } = require('./services/callbackReminderScheduler');
+const { startTaskReminderScheduler, stopTaskReminderScheduler } = require('./services/taskReminderScheduler');
 const { startWillCallAgainSafetyNetScheduler, stopWillCallAgainSafetyNetScheduler } = require('./services/willCallAgainSafetyNetScheduler');
+const {
+  startNotificationEscalationScheduler,
+  stopNotificationEscalationScheduler,
+} = require('./services/notificationEscalationScheduler');
+const {
+  startRecycleBinPurgeScheduler,
+  stopRecycleBinPurgeScheduler,
+} = require('./services/recycleBinPurgeScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
+const divisionRoutes = require('./routes/divisions');
+const allocationRoutes = require('./routes/allocation');
+const emailSettingsRoutes = require('./routes/email-settings');
 const leadRoutes = require('./routes/leads');
 const pipelineRoutes = require('./routes/pipeline');
 const taskRoutes = require('./routes/tasks');
@@ -24,7 +39,16 @@ const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
+const integrationsRoutes = require('./routes/integrations');
+const publicLeadsRoutes = require('./routes/public-leads');
+const notificationRoutes = require('./routes/notifications');
+const inboxRoutes = require('./routes/inbox');
+const channelWebhookRoutes = require('./routes/channel-webhooks');
+const contactRoutes = require('./routes/contacts');
 const callLogRoutes = require('./routes/call-logs');
+const roleRoutes = require('./routes/roles');
+const savedViewRoutes = require('./routes/saved-views');
+const recycleBinRoutes = require('./routes/recycle-bin');
 
 const app = express();
 const server = createServer(app);
@@ -48,6 +72,23 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ─── Static File Serving (uploads) ─────────────────────────────────
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Also serve under /api/uploads so the Next.js proxy can reach files
+app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// ─── Widget Script (public, CORS-enabled) ───────────────────────────
+const widgetStaticOpts = {
+  setHeaders: (res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Content-Type', 'application/javascript; charset=utf-8');
+  },
+};
+app.use('/api/widget', express.static(path.join(__dirname, '../public'), widgetStaticOpts));
+app.use('/widget', express.static(path.join(__dirname, '../public'), widgetStaticOpts));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // Rate limiting
@@ -59,26 +100,48 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', limiter);
+app.use(limiter);
 
 // ─── Health Check ────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
-// ─── API Routes ──────────────────────────────────────────────────
-app.use('/api/auth', authRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/pipeline', pipelineRoutes);
-app.use('/api/tasks', taskRoutes);
-app.use('/api/communications', communicationRoutes);
-app.use('/api/campaigns', campaignRoutes);
-app.use('/api/automations', automationRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/webhooks', webhookRoutes);
-app.use('/api/import', importRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/api/call-logs', callLogRoutes);
+// ─── API Routes (mounted at both /api/* and /* for flexible deployment) ──
+const routeMounts = [
+  ['/auth', authRoutes],
+  ['/divisions', divisionRoutes],
+  ['/leads/allocation', allocationRoutes],
+  ['/leads', leadRoutes],
+  ['/pipeline', pipelineRoutes],
+  ['/tasks', taskRoutes],
+  ['/communications', communicationRoutes],
+  ['/campaigns', campaignRoutes],
+  ['/automations', automationRoutes],
+  ['/analytics', analyticsRoutes],
+  ['/users', userRoutes],
+  ['/webhooks', webhookRoutes],
+  ['/import', importRoutes],
+  ['/settings', settingsRoutes],
+  ['/integrations', integrationsRoutes],
+  ['/public', publicLeadsRoutes],
+  ['/notifications', notificationRoutes],
+  ['/inbox', inboxRoutes],
+  ['/channels', channelWebhookRoutes],
+  ['/contacts', contactRoutes],
+  ['/call-logs', callLogRoutes],
+  ['/roles', roleRoutes],
+  ['/saved-views', savedViewRoutes],
+  ['/recycle-bin', recycleBinRoutes],
+];
+
+for (const [path, handler] of routeMounts) {
+  app.use(`/api${path}`, handler);
+  app.use(path, handler);
+}
 
 // ─── Error Handling ──────────────────────────────────────────────
 app.use(notFoundHandler);
@@ -93,13 +156,39 @@ const PORT = config.port || 4000;
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
+
+  // Start the SLA monitoring service
+  startSLAMonitor();
+
+  // Start the time-based automation scheduler
+  startTimeBasedScheduler();
+
+  // Start the callback reminder scheduler (Call Later pop-ups)
+  startCallbackReminderScheduler();
+
+  // Start the task reminder scheduler (due-soon & overdue pop-ups)
+  startTaskReminderScheduler();
+
+  // Start soft-loop inactivity safety net (Will Call Us Again)
   startWillCallAgainSafetyNetScheduler();
+
+  // Start unread reminder escalation monitor
+  startNotificationEscalationScheduler();
+
+  // Purge recycle bin records that crossed retention window
+  startRecycleBinPurgeScheduler();
 });
 
 // Graceful shutdown
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+  stopSLAMonitor();
+  stopTimeBasedScheduler();
+  stopCallbackReminderScheduler();
+  stopTaskReminderScheduler();
   stopWillCallAgainSafetyNetScheduler();
+  stopNotificationEscalationScheduler();
+  stopRecycleBinPurgeScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

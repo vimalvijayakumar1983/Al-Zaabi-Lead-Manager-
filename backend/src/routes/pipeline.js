@@ -3,6 +3,58 @@ const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { executeAutomations } = require('../services/automationEngine');
+const { rescoreAndPersist } = require('../utils/leadScoring');
+const { broadcastDataChange } = require('../websocket/server');
+
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
+// ─── Smart stage-to-status mapping ──────────────────────────────
+// Maps pipeline stage names to lead status enum values.
+// Uses keyword matching to handle custom stage names intelligently.
+// KEY: Demotes WON/LOST when moving back to a non-terminal stage.
+function mapStageToStatus(stageName, isWonStage, isLostStage, currentStatus) {
+  // Terminal stages via explicit flags (set in Pipeline Stage Manager)
+  if (isWonStage) return 'WON';
+  if (isLostStage) return 'LOST';
+
+  const name = (stageName || '').toLowerCase().trim();
+
+  // NEW status keywords
+  if (/\bnew\b|untouched|fresh|incoming|unassigned|inquiry/.test(name)) return 'NEW';
+
+  // CONTACTED status keywords
+  if (/contact|touched|follow[\s-]?up|reach|called|responded|engaged|attempt|assessment|inspect|evaluat/.test(name)) return 'CONTACTED';
+
+  // QUALIFIED status keywords (including advanced pipeline stages)
+  if (/qualif|interested|hot|warm|ready|propos|negoti|present|demo|trial|review|meeting|scheduled|quote|service|sale|confirm|in[\s-]?progress|processing|working|active|pending|deliver|visit|booked/.test(name)) return 'QUALIFIED';
+
+  // WON/LOST by name (for stages without explicit flags)
+  if (/\bwon\b|closed[\s-]?won|deal[\s-]?won|converted|signed|completed|done|finished/.test(name)) return 'WON';
+  if (/\blost\b|closed[\s-]?lost|dead|rejected|disqualif|churned|cancelled|canceled/.test(name)) return 'LOST';
+
+  // ── KEY FIX: Demotion logic ──
+  // If lead was WON or LOST but is being moved to a non-terminal stage,
+  // it means the deal is being re-opened — demote to QUALIFIED
+  if (currentStatus === 'WON' || currentStatus === 'LOST') {
+    return 'QUALIFIED';
+  }
+
+  // Unrecognized stage name — keep current status
+  return currentStatus;
+}
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -10,13 +62,21 @@ router.use(authenticate, orgScope);
 // ─── Get Pipeline Stages ─────────────────────────────────────────
 router.get('/stages', async (req, res, next) => {
   try {
+    const leadFilter = { isArchived: false, doNotCall: false };
+    if (req.isRestrictedRole) leadFilter.assignedToId = req.user.id;
+
+    // Allow filtering to a single division via ?organizationId=
+    const orgFilter = req.query.organizationId && req.orgIds.includes(req.query.organizationId)
+      ? req.query.organizationId
+      : undefined;
+
     const stages = await prisma.pipelineStage.findMany({
-      where: { organizationId: req.orgId },
+      where: { organizationId: orgFilter ? orgFilter : { in: req.orgIds } },
       orderBy: { order: 'asc' },
       include: {
-        _count: { select: { leads: true } },
+        _count: { select: { leads: { where: leadFilter } } },
         leads: {
-          where: { isArchived: false },
+          where: leadFilter,
           orderBy: { stageOrder: 'asc' },
           include: {
             assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
@@ -37,18 +97,22 @@ router.post('/stages', authorize('ADMIN', 'MANAGER'), validate(z.object({
   color: z.string().optional(),
   isWonStage: z.boolean().optional(),
   isLostStage: z.boolean().optional(),
+  divisionId: z.string().uuid().optional(),
 })), async (req, res, next) => {
   try {
+    const { divisionId, ...stageData } = req.validated;
+    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+
     const maxOrder = await prisma.pipelineStage.aggregate({
-      where: { organizationId: req.orgId },
+      where: { organizationId: targetOrgId },
       _max: { order: true },
     });
 
     const stage = await prisma.pipelineStage.create({
       data: {
-        ...req.validated,
+        ...stageData,
         order: (maxOrder._max.order ?? -1) + 1,
-        organizationId: req.orgId,
+        organizationId: targetOrgId,
       },
     });
     res.status(201).json(stage);
@@ -64,6 +128,12 @@ router.put('/stages/:id', authorize('ADMIN', 'MANAGER'), validate(z.object({
   order: z.number().int().optional(),
 })), async (req, res, next) => {
   try {
+    // Verify stage belongs to one of the user's orgs
+    const existing = await prisma.pipelineStage.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Stage not found' });
+
     const stage = await prisma.pipelineStage.update({
       where: { id: req.params.id },
       data: req.validated,
@@ -84,19 +154,38 @@ router.post('/move', validate(z.object({
     const { leadId, stageId, order } = req.validated;
 
     const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: req.orgId },
+      where: { id: leadId, organizationId: { in: req.orgIds } },
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const stage = await prisma.pipelineStage.findFirst({
-      where: { id: stageId, organizationId: req.orgId },
+      where: { id: stageId, organizationId: { in: req.orgIds } },
     });
     if (!stage) return res.status(404).json({ error: 'Stage not found' });
 
-    // Determine status based on stage
-    let newStatus = lead.status;
-    if (stage.isWonStage) newStatus = 'WON';
-    else if (stage.isLostStage) newStatus = 'LOST';
+    // ── Guard: prevent cross-org stage assignment ──
+    if (stage.organizationId !== lead.organizationId) {
+      return res.status(400).json({ error: 'Cannot move lead to a stage in a different division' });
+    }
+
+    // ── Smart status sync: map pipeline stage name → lead status ──
+    let newStatus = mapStageToStatus(stage.name, stage.isWonStage, stage.isLostStage, lead.status);
+
+    // ── Smart wonAt/lostAt handling ──
+    // Set date when entering terminal stage, clear when leaving it
+    let wonAt = lead.wonAt;
+    let lostAt = lead.lostAt;
+    if (stage.isWonStage) {
+      wonAt = wonAt || new Date();  // Set if not already set
+      lostAt = null;                // Clear lost date
+    } else if (stage.isLostStage) {
+      lostAt = lostAt || new Date();
+      wonAt = null;                 // Clear won date
+    } else if (newStatus !== 'WON' && newStatus !== 'LOST') {
+      // Moving to a non-terminal stage — clear both (deal re-opened)
+      wonAt = null;
+      lostAt = null;
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.lead.update({
@@ -105,8 +194,8 @@ router.post('/move', validate(z.object({
           stageId,
           stageOrder: order,
           status: newStatus,
-          wonAt: stage.isWonStage && !lead.wonAt ? new Date() : lead.wonAt,
-          lostAt: stage.isLostStage && !lead.lostAt ? new Date() : lead.lostAt,
+          wonAt,
+          lostAt,
         },
       });
 
@@ -124,7 +213,46 @@ router.post('/move', validate(z.object({
       return result;
     });
 
-    res.json(updated);
+    // Keep score and conversion probability in sync with stage movement.
+    let responseLead = updated;
+    try {
+      const rescored = await rescoreAndPersist(updated.id);
+      responseLead = {
+        ...updated,
+        score: rescored.score,
+        conversionProb: rescored.conversionProb,
+      };
+    } catch (_) {
+      // Non-blocking: if rescore fails, stage move still succeeds.
+    }
+
+    res.json(responseLead);
+
+    // ── Fire-and-forget notification — notify lead owner ──
+    if (stageId !== lead.stageId && lead.assignedToId && lead.assignedToId !== req.user.id) {
+      createNotification({
+        type: NOTIFICATION_TYPES.PIPELINE_STAGE_CHANGED,
+        title: 'Lead Moved',
+        message: `${getDisplayName(lead)} moved to ${stage.name}`,
+        userId: lead.assignedToId,
+        actorId: req.user.id,
+        entityType: 'lead',
+        entityId: leadId,
+        organizationId: lead.organizationId,
+      }).catch(() => {});
+    }
+
+    // Fire automation rules for stage change
+    if (stageId !== lead.stageId) {
+      executeAutomations('LEAD_STAGE_CHANGED', {
+        organizationId: lead.organizationId,
+        lead: updated,
+        previousData: lead,
+      }).catch(() => {});
+    }
+
+    // Notify all subscribers to refresh lead data (including score widgets).
+    broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: updated.id }).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -137,13 +265,78 @@ router.post('/stages/reorder', authorize('ADMIN', 'MANAGER'), validate(z.object(
   try {
     const { stageIds } = req.validated;
 
-    await prisma.$transaction(
-      stageIds.map((id, index) =>
-        prisma.pipelineStage.update({ where: { id }, data: { order: index } })
-      )
-    );
+    // Verify all stages belong to the user's orgs
+    const stages = await prisma.pipelineStage.findMany({
+      where: { id: { in: stageIds }, organizationId: { in: req.orgIds } },
+    });
+    if (stages.length !== stageIds.length) {
+      return res.status(400).json({ error: 'Invalid stage IDs' });
+    }
+
+    // Two-phase reorder to avoid unique constraint violation on [organizationId, order].
+    // Phase 1: set all orders to negative temporary values (offset by -1000 - index)
+    // Phase 2: set all orders to the desired final values
+    await prisma.$transaction(async (tx) => {
+      // Phase 1: move to temporary negative orders
+      for (let i = 0; i < stageIds.length; i++) {
+        await tx.pipelineStage.update({
+          where: { id: stageIds[i] },
+          data: { order: -(1000 + i) },
+        });
+      }
+      // Phase 2: set final orders
+      for (let i = 0; i < stageIds.length; i++) {
+        await tx.pipelineStage.update({
+          where: { id: stageIds[i] },
+          data: { order: i },
+        });
+      }
+    });
 
     res.json({ message: 'Stages reordered' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Delete Pipeline Stage ────────────────────────────────────────
+router.delete('/stages/:id', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { reassignStageId } = req.query; // Optional: move leads to another stage
+
+    const existing = await prisma.pipelineStage.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      include: { _count: { select: { leads: true } } },
+    });
+    if (!existing) return res.status(404).json({ error: 'Stage not found' });
+
+    // If stage has leads, require reassignment target
+    if (existing._count.leads > 0) {
+      if (!reassignStageId) {
+        return res.status(400).json({
+          error: 'Stage has leads. Provide reassignStageId query param to move them.',
+          leadCount: existing._count.leads,
+        });
+      }
+      // Move all leads to the target stage
+      await prisma.lead.updateMany({
+        where: { stageId: req.params.id },
+        data: { stageId: reassignStageId },
+      });
+    }
+
+    await prisma.pipelineStage.delete({ where: { id: req.params.id } });
+
+    // Re-order remaining stages
+    const remaining = await prisma.pipelineStage.findMany({
+      where: { organizationId: existing.organizationId },
+      orderBy: { order: 'asc' },
+    });
+    await prisma.$transaction(
+      remaining.map((s, i) => prisma.pipelineStage.update({ where: { id: s.id }, data: { order: i } }))
+    );
+
+    res.json({ message: 'Stage deleted', reassignedLeads: existing._count.leads });
   } catch (err) {
     next(err);
   }

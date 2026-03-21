@@ -12,6 +12,10 @@
  * is demoted backward in the pipeline, the score drops accordingly.
  *
  * Plus negative signal deductions and smart conversion probability.
+ *
+ * Terminal override policy:
+ * - WON/completed lead => score 100, conversionProb 1.00
+ * - LOST lead          => score 0,   conversionProb 0.00
  */
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
@@ -56,7 +60,7 @@ const POSITIVE_DISPOSITIONS = [
 ];
 const NEUTRAL_DISPOSITIONS = [
   'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN',
-  'FOLLOW_UP_EMAIL', 'VOICEMAIL_LEFT', 'OTHER',
+  'FOLLOW_UP_EMAIL', 'VOICEMAIL_LEFT', 'ALREADY_COMPLETED_SERVICES', 'OTHER',
 ];
 const NEGATIVE_DISPOSITIONS = [
   'NO_ANSWER', 'BUSY', 'WRONG_NUMBER', 'NOT_INTERESTED', 'GATEKEEPER',
@@ -448,20 +452,26 @@ async function calculateFullScore(leadId) {
     // Calculate penalties
     const penalties = calculatePenalties(lead, calls);
 
+    // Terminal overrides for deterministic CRM behavior.
+    const isWonTerminal = pipelinePosition.isWon || lead.status === 'WON';
+    const isLostTerminal = pipelinePosition.isLost || lead.status === 'LOST';
+
     // Combine
     let totalScore = profile.score + engagement.score + source.score + pipelineMomentum.score;
+    let conversionProb;
 
-    if (penalties.forceZero) {
+    if (isWonTerminal) {
+      totalScore = 100;
+      conversionProb = 1.0;
+    } else if (isLostTerminal || penalties.forceZero) {
       totalScore = 0;
+      conversionProb = 0;
     } else {
       totalScore = Math.max(0, totalScore - penalties.penalty);
+      totalScore = Math.min(totalScore, 100);
+      // Conversion probability — pipeline-dominant
+      conversionProb = calculateConversionProbability(totalScore, engagement, pipelineMomentum, pipelinePosition);
     }
-    totalScore = Math.min(totalScore, 100);
-
-    // Conversion probability — pipeline-dominant
-    const conversionProb = penalties.forceZero
-      ? 0
-      : calculateConversionProbability(totalScore, engagement, pipelineMomentum, pipelinePosition);
 
     return {
       score: totalScore,
@@ -472,6 +482,7 @@ async function calculateFullScore(leadId) {
         source: { score: source.score, max: source.max, details: source.details },
         pipelineAndMomentum: { score: pipelineMomentum.score, max: pipelineMomentum.max, details: pipelineMomentum.details },
         penalties: penalties.details,
+        terminalOverride: isWonTerminal ? 'WON' : (isLostTerminal ? 'LOST' : null),
         total: totalScore,
       },
     };
