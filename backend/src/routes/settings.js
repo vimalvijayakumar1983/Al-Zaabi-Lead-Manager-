@@ -7,10 +7,36 @@ const { validate } = require('../middleware/validate');
 const {
   getUserNotificationPreferences,
   updateUserNotificationPreferences,
+  SNOOZE_MIN_MINUTES,
+  SNOOZE_MAX_MINUTES,
 } = require('../services/notificationPreferences');
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+const notificationPreferencesSchema = z.object({
+  soundEnabled: z.boolean().optional(),
+  desktopEnabled: z.boolean().optional(),
+  emailEnabled: z.boolean().optional(),
+  leads: z.boolean().optional(),
+  tasks: z.boolean().optional(),
+  campaigns: z.boolean().optional(),
+  integrations: z.boolean().optional(),
+  team: z.boolean().optional(),
+  system: z.boolean().optional(),
+  emailNewLead: z.boolean().optional(),
+  emailLeadAssigned: z.boolean().optional(),
+  emailTaskDue: z.boolean().optional(),
+  emailWeeklyDigest: z.boolean().optional(),
+  inAppNewLead: z.boolean().optional(),
+  inAppLeadAssigned: z.boolean().optional(),
+  inAppTaskDue: z.boolean().optional(),
+  inAppStatusChange: z.boolean().optional(),
+  escalationEnabled: z.boolean().optional(),
+  digestEnabled: z.boolean().optional(),
+  defaultTaskSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
+  defaultCallbackSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
+});
 
 // ─── Get Profile ────────────────────────────────────────────────
 router.get('/profile', async (req, res, next) => {
@@ -162,7 +188,7 @@ router.get('/notifications', async (req, res, next) => {
 });
 
 // ─── Update Notification Preferences ────────────────────────────
-router.put('/notifications', validate(z.record(z.boolean())), async (req, res, next) => {
+router.put('/notifications', validate(notificationPreferencesSchema), async (req, res, next) => {
   try {
     const updated = await updateUserNotificationPreferences(
       req.user.id,

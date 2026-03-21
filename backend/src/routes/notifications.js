@@ -8,6 +8,8 @@ const { paginationSchema, paginatedResponse } = require('../utils/pagination');
 const {
   getUserNotificationPreferences,
   updateUserNotificationPreferences,
+  SNOOZE_MIN_MINUTES,
+  SNOOZE_MAX_MINUTES,
 } = require('../services/notificationPreferences');
 const {
   markNotificationAction,
@@ -91,11 +93,35 @@ const digestQuerySchema = analyticsQuerySchema.extend({
 
 const actionSchema = z.object({
   action: z.enum(['MARK_DONE', 'SNOOZE', 'ESCALATE']),
-  minutes: z.number().int().min(5).max(10080).optional(),
+  minutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
 });
 
 const snoozeSchema = z.object({
-  minutes: z.number().int().min(5).max(10080).optional(),
+  minutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
+});
+
+const notificationPreferencesSchema = z.object({
+  soundEnabled: z.boolean().optional(),
+  desktopEnabled: z.boolean().optional(),
+  emailEnabled: z.boolean().optional(),
+  leads: z.boolean().optional(),
+  tasks: z.boolean().optional(),
+  campaigns: z.boolean().optional(),
+  integrations: z.boolean().optional(),
+  team: z.boolean().optional(),
+  system: z.boolean().optional(),
+  emailNewLead: z.boolean().optional(),
+  emailLeadAssigned: z.boolean().optional(),
+  emailTaskDue: z.boolean().optional(),
+  emailWeeklyDigest: z.boolean().optional(),
+  inAppNewLead: z.boolean().optional(),
+  inAppLeadAssigned: z.boolean().optional(),
+  inAppTaskDue: z.boolean().optional(),
+  inAppStatusChange: z.boolean().optional(),
+  escalationEnabled: z.boolean().optional(),
+  digestEnabled: z.boolean().optional(),
+  defaultTaskSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
+  defaultCallbackSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
 });
 
 function resolveRange(query) {
@@ -165,12 +191,24 @@ async function executeNotificationAction(notification, userContext, action, minu
       completedTaskId: result.taskId,
     }, { markRead: true });
   } else if (action === 'SNOOZE') {
-    result = await snoozeNotification(notification, userContext, minutes || 15);
+    const preferenceDefaults = await getUserNotificationPreferences(
+      userContext.id,
+      notification.organizationId || userContext.organizationId
+    );
+    const fallbackMinutes = notification.type.startsWith('CALLBACK_')
+      ? preferenceDefaults.defaultCallbackSnoozeMinutes
+      : preferenceDefaults.defaultTaskSnoozeMinutes;
+    const resolvedMinutes =
+      typeof minutes === 'number' && Number.isFinite(minutes)
+        ? minutes
+        : fallbackMinutes;
+    result = await snoozeNotification(notification, userContext, resolvedMinutes);
     if (!result.ok) {
       return { ok: false, error: result.error || 'Unable to snooze notification' };
     }
     updatedNotification = await markNotificationAction(notification, 'SNOOZE', {
       snoozedUntil: result.snoozedUntil,
+      snoozeMinutes: resolvedMinutes,
     }, { markRead: true, archive: true });
   } else if (action === 'ESCALATE') {
     result = await escalateNotification(notification, userContext.id, 'manual');
@@ -214,7 +252,7 @@ router.get('/preferences', async (req, res) => {
   }
 });
 
-router.put('/preferences', validate(z.record(z.boolean())), async (req, res) => {
+router.put('/preferences', validate(notificationPreferencesSchema), async (req, res) => {
   try {
     const updated = await updateUserNotificationPreferences(req.user.id, req.orgId, req.validated);
     res.json(updated);

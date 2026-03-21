@@ -823,11 +823,11 @@ class ApiClient {
   }
 
   async getNotificationPreferences() {
-    return this.request<any>('/notifications/preferences');
+    return this.request<NotificationPreferences>('/notifications/preferences');
   }
 
-  async updateNotificationPreferences(data: Record<string, boolean>) {
-    return this.request<any>('/notifications/preferences', { method: 'PUT', body: JSON.stringify(data) });
+  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
+    return this.request<NotificationPreferences>('/notifications/preferences', { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async getAuditLog() {
@@ -1113,11 +1113,11 @@ class ApiClient {
   }
 
   async getNotificationPrefs() {
-    return this.request<any>('/notifications/preferences');
+    return this.request<NotificationPreferences>('/notifications/preferences');
   }
 
   async updateNotificationPrefs(data: Partial<NotificationPreferences>) {
-    return this.request<any>('/notifications/preferences', {
+    return this.request<NotificationPreferences>('/notifications/preferences', {
       method: 'PUT',
       body: JSON.stringify(data),
     });

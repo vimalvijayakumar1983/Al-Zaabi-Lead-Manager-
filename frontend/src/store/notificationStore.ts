@@ -155,6 +155,8 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     inAppStatusChange: true,
     escalationEnabled: true,
     digestEnabled: true,
+    defaultTaskSnoozeMinutes: 15,
+    defaultCallbackSnoozeMinutes: 30,
   },
   toasts: [],
 

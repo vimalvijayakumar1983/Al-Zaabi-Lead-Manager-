@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import type { CustomField, FieldType, Organization, BuiltInField } from '@/types';
+import type { CustomField, FieldType, Organization, BuiltInField, NotificationPreferences } from '@/types';
 import { CallDispositionStudioSection } from './call-disposition-studio';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
@@ -874,7 +874,7 @@ function DivisionBrandingSection({ isSuperAdmin }: { isSuperAdmin: boolean }) {
 
 /* ─── Notifications Section ──────────────────────────────────────── */
 function NotificationsSection() {
-  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
+  const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [analytics, setAnalytics] = useState<any | null>(null);
@@ -900,9 +900,17 @@ function NotificationsSection() {
     loadInsights().catch(() => {});
   }, [loadInsights]);
 
-  const toggle = (key: string) => {
+  const toggle = (key: keyof NotificationPreferences) => {
     if (!prefs) return;
-    setPrefs({ ...prefs, [key]: !prefs[key] });
+    setPrefs({ ...prefs, [key]: !(prefs[key] as boolean) });
+  };
+
+  const setSnoozeMinutes = (
+    key: 'defaultTaskSnoozeMinutes' | 'defaultCallbackSnoozeMinutes',
+    value: number
+  ) => {
+    if (!prefs) return;
+    setPrefs({ ...prefs, [key]: value });
   };
 
   const handleSave = async () => {
@@ -924,21 +932,22 @@ function NotificationsSection() {
     { key: 'emailLeadAssigned', label: 'Lead assigned to you', description: 'When a lead is assigned or reassigned to you' },
     { key: 'emailTaskDue', label: 'Task due reminders', description: 'Receive reminders before tasks are due' },
     { key: 'emailWeeklyDigest', label: 'Weekly digest', description: 'Summary of your weekly lead activity and stats' },
-  ];
+  ] as const;
 
   const inAppNotifs = [
     { key: 'inAppNewLead', label: 'New leads', description: 'Show notifications for new leads' },
     { key: 'inAppLeadAssigned', label: 'Lead assignments', description: 'Notify when leads are assigned to you' },
     { key: 'inAppTaskDue', label: 'Task reminders', description: 'Show alerts for upcoming and overdue tasks' },
     { key: 'inAppStatusChange', label: 'Status changes', description: 'When lead status or pipeline stage changes' },
-  ];
+  ] as const;
 
   const experienceNotifs = [
     { key: 'soundEnabled', label: 'Sound alerts', description: 'Play a subtle alert sound for incoming notifications' },
     { key: 'desktopEnabled', label: 'Desktop alerts', description: 'Enable browser desktop notifications when supported' },
     { key: 'digestEnabled', label: 'Smart digest mode', description: 'Bundle low-priority alerts into digest-first delivery' },
     { key: 'escalationEnabled', label: 'Escalation safety net', description: 'Auto-escalate stale critical reminders' },
-  ];
+  ] as const;
+  const snoozeOptions = [5, 15, 30, 60, 120, 240, 1440];
 
   if (!prefs) {
     return (
@@ -1023,6 +1032,51 @@ function NotificationsSection() {
               <ToggleSwitch checked={prefs[notif.key] ?? true} onChange={() => toggle(notif.key)} />
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Snooze Defaults */}
+      <div className="card overflow-hidden">
+        <div className="px-6 py-4 bg-surface-secondary border-b border-border-subtle">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-text-tertiary" />
+            <h3 className="text-sm font-semibold text-text-primary">Default Snooze Durations</h3>
+          </div>
+        </div>
+        <div className="px-4 sm:px-6 py-4 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-text-primary">Task reminders</span>
+              <select
+                className="w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary"
+                value={prefs.defaultTaskSnoozeMinutes ?? 15}
+                onChange={(e) => setSnoozeMinutes('defaultTaskSnoozeMinutes', Number(e.target.value))}
+              >
+                {snoozeOptions.map((minutes) => (
+                  <option key={`task-${minutes}`} value={minutes}>
+                    {minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : `${minutes} min`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-text-primary">Callback reminders</span>
+              <select
+                className="w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary"
+                value={prefs.defaultCallbackSnoozeMinutes ?? 30}
+                onChange={(e) => setSnoozeMinutes('defaultCallbackSnoozeMinutes', Number(e.target.value))}
+              >
+                {snoozeOptions.map((minutes) => (
+                  <option key={`callback-${minutes}`} value={minutes}>
+                    {minutes >= 60 ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : `${minutes} min`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="text-2xs text-text-tertiary">
+            These defaults are applied when you click Snooze on a card. You can still override duration directly from each notification.
+          </p>
         </div>
       </div>
 

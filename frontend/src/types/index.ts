@@ -676,6 +676,8 @@ export interface NotificationPreferences {
   inAppStatusChange?: boolean;
   escalationEnabled?: boolean;
   digestEnabled?: boolean;
+  defaultTaskSnoozeMinutes?: number;
+  defaultCallbackSnoozeMinutes?: number;
 }
 
 export interface Toast {

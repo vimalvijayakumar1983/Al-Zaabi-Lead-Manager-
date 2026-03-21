@@ -49,6 +49,19 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const NOTIFICATION_PAGE_SIZE = 20;
+const SNOOZE_MIN_MINUTES = 5;
+const SNOOZE_MAX_MINUTES = 10080;
+const SNOOZE_PRESETS = [5, 15, 30, 60] as const;
+
+function normalizeSnoozeMinutes(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(
+    SNOOZE_MIN_MINUTES,
+    Math.min(SNOOZE_MAX_MINUTES, Math.floor(value))
+  );
+}
 
 /** Filter tab definitions */
 type FilterTab = 'all' | 'unread' | 'leads' | 'tasks' | 'system';
@@ -353,6 +366,8 @@ interface NotificationItemProps {
   ) => void;
   actionBusy: boolean;
   onClick: (n: AppNotification) => void;
+  taskSnoozeMinutes: number;
+  callbackSnoozeMinutes: number;
 }
 
 function NotificationItem({
@@ -363,6 +378,8 @@ function NotificationItem({
   onAction,
   actionBusy,
   onClick,
+  taskSnoozeMinutes,
+  callbackSnoozeMinutes,
 }: NotificationItemProps) {
   const [showActions, setShowActions] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -382,6 +399,16 @@ function NotificationItem({
     notification.type === 'CALLBACK_REMINDER_HANDOFF' ||
     (notification.type === 'NOTIFICATION_ESCALATED' && isTaskEntity);
   const canEscalate = isReminderNotification;
+  const defaultSnoozeMinutes = notification.type.startsWith('CALLBACK_')
+    ? callbackSnoozeMinutes
+    : taskSnoozeMinutes;
+  const [snoozeChoice, setSnoozeChoice] = useState<string>(
+    String(defaultSnoozeMinutes)
+  );
+
+  useEffect(() => {
+    setSnoozeChoice(String(defaultSnoozeMinutes));
+  }, [notification.id, defaultSnoozeMinutes]);
 
   const handleArchive = useCallback(
     (e: React.MouseEvent) => {
@@ -416,6 +443,25 @@ function NotificationItem({
     },
     [notification.id, onAction]
   );
+
+  const resolveSnoozeMinutes = useCallback(() => {
+    if (snoozeChoice !== 'custom') {
+      return normalizeSnoozeMinutes(Number(snoozeChoice), defaultSnoozeMinutes);
+    }
+    const raw = window.prompt(
+      `Enter snooze time in minutes (${SNOOZE_MIN_MINUTES}-${SNOOZE_MAX_MINUTES})`,
+      String(defaultSnoozeMinutes)
+    );
+    if (raw === null) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      alert('Please enter a valid number of minutes.');
+      return null;
+    }
+    const minutes = normalizeSnoozeMinutes(parsed, defaultSnoozeMinutes);
+    setSnoozeChoice(String(minutes));
+    return minutes;
+  }, [snoozeChoice, defaultSnoozeMinutes]);
 
   return (
     <div
@@ -500,19 +546,34 @@ function NotificationItem({
               </button>
             )}
             {isReminderNotification && (
-              <button
-                onClick={(e) =>
-                  handleAction(
-                    e,
-                    'SNOOZE',
-                    notification.type.startsWith('CALLBACK_') ? 30 : 15
-                  )
-                }
-                disabled={actionBusy}
-                className="h-6 px-2 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50"
-              >
-                Snooze
-              </button>
+              <>
+                <select
+                  value={snoozeChoice}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setSnoozeChoice(e.target.value)}
+                  disabled={actionBusy}
+                  className="h-6 px-1.5 rounded-md text-[10px] font-medium border border-amber-200 bg-white text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-300 disabled:opacity-50"
+                  aria-label="Select snooze duration"
+                >
+                  {SNOOZE_PRESETS.map((option) => (
+                    <option key={option} value={String(option)}>
+                      {option}m
+                    </option>
+                  ))}
+                  <option value="custom">Custom</option>
+                </select>
+                <button
+                  onClick={(e) => {
+                    const minutes = resolveSnoozeMinutes();
+                    if (minutes === null) return;
+                    handleAction(e, 'SNOOZE', minutes);
+                  }}
+                  disabled={actionBusy}
+                  className="h-6 px-2 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50"
+                >
+                  Snooze
+                </button>
+              </>
             )}
             {canEscalate && notification.type !== 'NOTIFICATION_ESCALATED' && (
               <button
@@ -641,6 +702,7 @@ export default function NotificationCenter({
     isLoading,
     isConnected,
     pagination,
+    preferences,
     fetchNotifications,
     markAsRead,
     markAllAsRead,
@@ -648,6 +710,14 @@ export default function NotificationCenter({
     deleteNotification,
     notificationAction,
   } = useNotificationStore();
+  const taskSnoozeMinutes = normalizeSnoozeMinutes(
+    preferences.defaultTaskSnoozeMinutes,
+    15
+  );
+  const callbackSnoozeMinutes = normalizeSnoozeMinutes(
+    preferences.defaultCallbackSnoozeMinutes,
+    30
+  );
 
   // Local state
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -1042,6 +1112,8 @@ export default function NotificationCenter({
                       onAction={handleNotificationAction}
                       actionBusy={actionInFlightId === notif.id}
                       onClick={handleNotificationClick}
+                      taskSnoozeMinutes={taskSnoozeMinutes}
+                      callbackSnoozeMinutes={callbackSnoozeMinutes}
                     />
                   ))}
                 </Fragment>

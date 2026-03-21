@@ -1,6 +1,11 @@
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 
+const SNOOZE_MIN_MINUTES = 5;
+const SNOOZE_MAX_MINUTES = 10080;
+const DEFAULT_TASK_SNOOZE_MINUTES = 15;
+const DEFAULT_CALLBACK_SNOOZE_MINUTES = 30;
+
 const DEFAULT_NOTIFICATION_PREFERENCES = {
   // Client-side UX toggles
   soundEnabled: true,
@@ -32,17 +37,29 @@ const DEFAULT_NOTIFICATION_PREFERENCES = {
   // Phase-2/3 controls
   escalationEnabled: true,
   digestEnabled: true,
+
+  // Default snooze behavior
+  defaultTaskSnoozeMinutes: DEFAULT_TASK_SNOOZE_MINUTES,
+  defaultCallbackSnoozeMinutes: DEFAULT_CALLBACK_SNOOZE_MINUTES,
 };
 
 function asObject(value) {
   return typeof value === 'object' && value !== null ? value : {};
 }
 
-function coerceBooleanKeys(input, base) {
+function normalizeSnoozeMinutes(value, fallback) {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate)) return fallback;
+  return Math.max(SNOOZE_MIN_MINUTES, Math.min(SNOOZE_MAX_MINUTES, Math.floor(candidate)));
+}
+
+function mergeNotificationPreferences(base, input) {
   const output = { ...base };
   for (const [key, value] of Object.entries(asObject(input))) {
     if (typeof output[key] === 'boolean') {
       output[key] = value === true;
+    } else if (key === 'defaultTaskSnoozeMinutes' || key === 'defaultCallbackSnoozeMinutes') {
+      output[key] = normalizeSnoozeMinutes(value, output[key]);
     } else if (typeof value === 'boolean') {
       output[key] = value;
     }
@@ -56,8 +73,8 @@ function getLegacyOrgPreference(settings, userId) {
 }
 
 function normalizeNotificationPreferences(preferences, legacyPreferences = {}) {
-  const withLegacy = coerceBooleanKeys(legacyPreferences, DEFAULT_NOTIFICATION_PREFERENCES);
-  return coerceBooleanKeys(preferences, withLegacy);
+  const withLegacy = mergeNotificationPreferences(DEFAULT_NOTIFICATION_PREFERENCES, legacyPreferences);
+  return mergeNotificationPreferences(withLegacy, preferences);
 }
 
 async function getUserNotificationPreferences(userId, organizationId) {
@@ -195,6 +212,8 @@ function invalidateNotificationPreferenceCache(userId, organizationId) {
 
 module.exports = {
   DEFAULT_NOTIFICATION_PREFERENCES,
+  SNOOZE_MIN_MINUTES,
+  SNOOZE_MAX_MINUTES,
   normalizeNotificationPreferences,
   getUserNotificationPreferences,
   updateUserNotificationPreferences,
