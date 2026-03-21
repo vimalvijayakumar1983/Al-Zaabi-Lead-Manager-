@@ -323,7 +323,7 @@ export default function LeadDetailPage() {
     if (!lead || !noteContent.trim()) return;
     await api.addLeadNote(lead.id, noteContent);
     setNoteContent('');
-    await refreshLead();
+    await Promise.all([refreshLead(), loadLeadAISummary(true)]);
   };
 
   const handleDelete = async () => {
@@ -456,7 +456,7 @@ export default function LeadDetailPage() {
     try {
       await api.createTask({ ...taskData, leadId: lead!.id });
       setShowTaskModal(false);
-      await refreshLead();
+      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Task Created', message: 'New task has been created' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Task Creation Failed', message: err.message });
@@ -467,7 +467,7 @@ export default function LeadDetailPage() {
     try {
       await api.logCommunication({ ...commData, leadId: lead!.id });
       setShowCommModal(false);
-      await refreshLead();
+      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Communication Logged', message: 'Communication has been recorded' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Log Communication Failed', message: err.message });
@@ -491,7 +491,7 @@ export default function LeadDetailPage() {
     try {
       await api.logCall({ ...callData, leadId: lead!.id });
       setShowCallLogModal(false);
-      await Promise.all([refreshLead(), loadCallLogs()]);
+      await Promise.all([refreshLead(), loadCallLogs(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Call Logged', message: 'Call log has been recorded' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Log Call Failed', message: err.message });
@@ -502,7 +502,7 @@ export default function LeadDetailPage() {
     try {
       await api.sendEmail({ leadId: lead!.id, ...emailData });
       setShowEmailComposer(false);
-      await refreshLead();
+      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Email Sent', message: 'Email has been sent successfully' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Send Email Failed', message: err.message });
