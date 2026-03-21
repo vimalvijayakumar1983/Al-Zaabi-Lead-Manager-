@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -246,9 +247,8 @@ function LeadsContent() {
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [stats, setStats] = useState<any>(null);
   const [quickActionId, setQuickActionId] = useState<string | null>(null);
-  const [quickActionDirection, setQuickActionDirection] = useState<'up' | 'down'>('down');
+  const [quickActionPosition, setQuickActionPosition] = useState<{ top: number; left: number; openUp: boolean } | null>(null);
   const quickActionRef = useRef<HTMLDivElement>(null);
-  const leadsScrollRef = useRef<HTMLDivElement>(null);
 
   // Column management
   const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumns());
@@ -531,13 +531,31 @@ function LeadsContent() {
   // Close quick action menu on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (quickActionRef.current && !quickActionRef.current.contains(e.target as Node)) {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-quick-action-trigger="true"]')) return;
+      if (quickActionRef.current && !quickActionRef.current.contains(target)) {
         setQuickActionId(null);
+        setQuickActionPosition(null);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Close floating quick menu on scroll/resize to avoid stale viewport positions
+  useEffect(() => {
+    if (!quickActionId) return;
+    const closeMenu = () => {
+      setQuickActionId(null);
+      setQuickActionPosition(null);
+    };
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    return () => {
+      window.removeEventListener('resize', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
+  }, [quickActionId]);
 
   // ─── Handlers ───────────────────────────────────────────────────
 
@@ -626,6 +644,7 @@ function LeadsContent() {
     try {
       await api.updateLead(leadId, { status });
       setQuickActionId(null);
+      setQuickActionPosition(null);
       fetchLeads();
       fetchStats();
       addToast({ type: 'success', title: 'Status Updated', message: `Lead status changed to ${status}` });
@@ -637,6 +656,7 @@ function LeadsContent() {
     try {
       await api.deleteLead(leadId);
       setQuickActionId(null);
+      setQuickActionPosition(null);
       fetchLeads();
       fetchStats();
       addToast({ type: 'success', title: 'Lead Archived', message: 'Lead has been archived successfully' });
@@ -812,7 +832,7 @@ function LeadsContent() {
 
   // ─── Cell Renderer ──────────────────────────────────────────────
 
-  const renderCell = (col: ColumnDef, lead: Lead, rowIndex: number) => {
+  const renderCell = (col: ColumnDef, lead: Lead) => {
     switch (col.id) {
       case 'select':
         return (
@@ -1020,67 +1040,36 @@ function LeadsContent() {
         return (
           <div className="relative">
             <button
+              data-quick-action-trigger="true"
               onClick={(e) => {
                 if (quickActionId === lead.id) {
                   setQuickActionId(null);
+                  setQuickActionPosition(null);
                   return;
                 }
+                if (typeof window === 'undefined') return;
                 const triggerRect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-                const containerRect = leadsScrollRef.current?.getBoundingClientRect();
-                const fallbackOpenUp = rowIndex >= Math.max(0, leads.length - 4);
-                const reservedBottomSpace = selectedLeads.size > 0 ? 96 : 24;
-                let shouldOpenUp = fallbackOpenUp;
-
-                if (containerRect) {
-                  const availableBelow = containerRect.bottom - triggerRect.bottom - reservedBottomSpace;
-                  const availableAbove = triggerRect.top - containerRect.top - 12;
-                  shouldOpenUp = availableBelow < 260 && availableAbove > availableBelow;
-                } else if (typeof window !== 'undefined') {
-                  const viewportBelow = window.innerHeight - triggerRect.bottom - reservedBottomSpace;
-                  shouldOpenUp = viewportBelow < 260;
-                }
-
-                setQuickActionDirection(shouldOpenUp ? 'up' : 'down');
+                const menuWidth = 192;
+                const sidePadding = 8;
+                const menuGap = 6;
+                const minimumMenuHeight = 220;
+                const reservedBottomSpace = selectedLeads.size > 0 ? 112 : 16;
+                const availableBelow = window.innerHeight - triggerRect.bottom - reservedBottomSpace;
+                const availableAbove = triggerRect.top - 12;
+                const shouldOpenUp = availableBelow < minimumMenuHeight && availableAbove > availableBelow;
+                const left = Math.max(
+                  sidePadding,
+                  Math.min(triggerRect.right - menuWidth, window.innerWidth - menuWidth - sidePadding),
+                );
+                const top = shouldOpenUp
+                  ? Math.max(8, triggerRect.top - menuGap)
+                  : Math.min(window.innerHeight - 8, triggerRect.bottom + menuGap);
+                setQuickActionPosition({ top, left, openUp: shouldOpenUp });
                 setQuickActionId(lead.id);
               }}
               className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
             </button>
-            {quickActionId === lead.id && (
-              <div
-                ref={quickActionRef}
-                className={`absolute right-0 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 max-h-[min(70vh,24rem)] overflow-y-auto ${
-                  quickActionDirection === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
-                }`}
-              >
-                <Link href={`/leads/${lead.id}`} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                  <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                  View Details
-                </Link>
-                <div className="border-t border-gray-100 my-1" />
-                <div className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase">Move to Stage</div>
-                {stages.length > 0
-                  ? stages.filter((s) => s.id !== (lead as any).stageId).map((s) => (
-                      <button key={s.id} onClick={async () => {
-                        try { await api.moveLead(lead.id, s.id, 0); setQuickActionId(null); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
-                      }} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: s.color || '#6B7280' }} />
-                        {s.name}
-                      </button>
-                    ))
-                  : Object.keys(statusColors).filter((s) => s !== lead.status).map((s) => (
-                      <button key={s} onClick={() => handleQuickStatus(lead.id, s)} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-                        <span className={`inline-block w-2 h-2 rounded-full ${statusColors[s].split(' ')[0]}`} />
-                        {getStatusLabel(s)}
-                      </button>
-                    ))}
-                <div className="border-t border-gray-100 my-1" />
-                <button onClick={() => handleQuickDelete(lead.id)} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  Archive Lead
-                </button>
-              </div>
-            )}
           </div>
         );
       }
@@ -1135,6 +1124,8 @@ function LeadsContent() {
         return null;
     }
   };
+
+  const activeQuickLead = quickActionId ? leads.find((lead) => lead.id === quickActionId) || null : null;
 
   // Listen for open-lead-form event from command palette
   useEffect(() => {
@@ -1315,6 +1306,61 @@ function LeadsContent() {
           {/* Active Filter Badges */}
           <FilterBadges filters={filters} onRemove={handleRemoveFilter} stages={stages} />
 
+          {/* Lead quick actions floating menu (portal) */}
+          {quickActionPosition && activeQuickLead && typeof document !== 'undefined' && createPortal(
+            <div
+              ref={quickActionRef}
+              className={`fixed bg-white border border-gray-200 rounded-lg shadow-2xl z-[80] py-1 max-h-[min(70vh,24rem)] overflow-y-auto ${
+                quickActionPosition.openUp ? '-translate-y-full' : ''
+              }`}
+              style={{ top: quickActionPosition.top, left: quickActionPosition.left, width: 192 }}
+            >
+              <Link
+                href={`/leads/${activeQuickLead.id}`}
+                onClick={() => {
+                  setQuickActionId(null);
+                  setQuickActionPosition(null);
+                }}
+                className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                View Details
+              </Link>
+              <div className="border-t border-gray-100 my-1" />
+              <div className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase">Move to Stage</div>
+              {stages.length > 0
+                ? stages.filter((s) => s.id !== (activeQuickLead as any).stageId).map((s) => (
+                    <button key={s.id} onClick={async () => {
+                      try {
+                        await api.moveLead(activeQuickLead.id, s.id, 0);
+                        setQuickActionId(null);
+                        setQuickActionPosition(null);
+                        fetchLeads();
+                        fetchStats();
+                        addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${s.name}` });
+                      } catch (err: any) {
+                        addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' });
+                      }
+                    }} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: s.color || '#6B7280' }} />
+                      {s.name}
+                    </button>
+                  ))
+                : Object.keys(statusColors).filter((s) => s !== activeQuickLead.status).map((s) => (
+                    <button key={s} onClick={() => handleQuickStatus(activeQuickLead.id, s)} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                      <span className={`inline-block w-2 h-2 rounded-full ${statusColors[s].split(' ')[0]}`} />
+                      {getStatusLabel(s)}
+                    </button>
+                  ))}
+              <div className="border-t border-gray-100 my-1" />
+              <button onClick={() => handleQuickDelete(activeQuickLead.id)} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                Archive Lead
+              </button>
+            </div>,
+            document.body
+          )}
+
           {/* Bulk Actions Bar */}
           {selectedLeads.size > 0 && (
             <>
@@ -1369,7 +1415,7 @@ function LeadsContent() {
           {/* ═══════════════════ TABLE VIEW ═══════════════════ */}
           {viewMode === 'table' && (
             <div className="card overflow-hidden flex-1 min-h-0 flex flex-col">
-              <div ref={leadsScrollRef} className="flex-1 min-h-0 overflow-auto leads-scroll">
+              <div className="flex-1 min-h-0 overflow-auto leads-scroll">
                 <table className="min-w-full">
                   <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#e5e7eb]">
                     <tr className="border-b border-border">
@@ -1419,7 +1465,7 @@ function LeadsContent() {
                         </div>
                       </td></tr>
                     ) : (
-                      leads.map((lead, rowIndex) => (
+                      leads.map((lead) => (
                         <tr key={lead.id}
                           className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
                           onClick={(e) => {
@@ -1428,7 +1474,7 @@ function LeadsContent() {
                             router.push(`/leads/${lead.id}`);
                           }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
+                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead)}</td>
                           ))}
                         </tr>
                       ))
