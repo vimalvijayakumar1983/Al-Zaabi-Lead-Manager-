@@ -284,7 +284,14 @@ function LeadsContent() {
   const [showWorkload, setShowWorkload] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [allTags, setAllTags] = useState<{id: string; name: string; color: string}[]>([]);
-  const [stages, setStages] = useState<{id: string; name: string; color?: string; isWonStage?: boolean; isLostStage?: boolean}[]>([]);
+  const [stages, setStages] = useState<{
+    id: string;
+    name: string;
+    color?: string;
+    organizationId?: string;
+    isWonStage?: boolean;
+    isLostStage?: boolean;
+  }[]>([]);
 
   // Custom fields
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
@@ -524,9 +531,41 @@ function LeadsContent() {
   // Auto-refresh when data changes (including the current user marking messages as read)
   useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
   useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     api.getTags().then((data: any) => setAllTags(data || [])).catch(() => {});
-    api.getPipelineStages().then((data: any) => setStages(data.stages || data || [])).catch(() => {});
+    api
+      .getPipelineStages(activeDivisionId || undefined)
+      .then((data: any) => {
+        const rawStages = data.stages || data || [];
+        const seen = new Set<string>();
+        const deduped = rawStages.filter((stage: any) => {
+          const key = `${stage.id || ''}::${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        setStages(deduped);
+      })
+      .catch(() => {});
   }, []);
+
+  const getLeadDivisionId = useCallback((lead: Lead): string | null => {
+    return (lead as any).organizationId || (lead as any).organization?.id || null;
+  }, []);
+
+  const getStagesForLead = useCallback((lead: Lead) => {
+    const leadDivisionId = getLeadDivisionId(lead);
+    const scopedStages = leadDivisionId
+      ? stages.filter((stage) => !stage.organizationId || stage.organizationId === leadDivisionId)
+      : stages;
+    const seen = new Set<string>();
+    return scopedStages.filter((stage) => {
+      const key = stage.id || `${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [stages, getLeadDivisionId]);
 
   // Close quick action menu on outside click
   useEffect(() => {
@@ -860,9 +899,10 @@ function LeadsContent() {
           return <span className={`badge ${statusColors.DO_NOT_CALL}`}>🚫 DO NOT CALL</span>;
         }
         // Show pipeline stage name (e.g., "Proposal Sent") instead of status enum ("QUALIFIED")
-        const useStages = stages.length > 0;
+        const leadStages = getStagesForLead(lead);
+        const useStages = leadStages.length > 0;
         const stageOpts = useStages
-          ? stages.map((s) => ({ value: s.id, label: s.name }))
+          ? leadStages.map((s) => ({ value: s.id, label: s.name }))
           : Object.keys(statusColors).map((s) => ({ value: s, label: getStatusLabel(s) }));
         const currentVal = useStages ? ((lead as any).stageId || lead.status) : lead.status;
         return (
@@ -1032,8 +1072,8 @@ function LeadsContent() {
                 </Link>
                 <div className="border-t border-gray-100 my-1" />
                 <div className="px-3 py-1 text-[10px] font-medium text-gray-400 uppercase">Move to Stage</div>
-                {stages.length > 0
-                  ? stages.filter((s) => s.id !== (lead as any).stageId).map((s) => (
+                {getStagesForLead(lead).length > 0
+                  ? getStagesForLead(lead).filter((s) => s.id !== (lead as any).stageId).map((s) => (
                       <button key={s.id} onClick={async () => {
                         try { await api.moveLead(lead.id, s.id, 0); setQuickActionId(null); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
                       }} className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
