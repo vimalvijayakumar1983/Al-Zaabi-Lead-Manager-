@@ -702,33 +702,97 @@ router.get('/task-sla-report', async (req, res, next) => {
 // ─── Call Disposition Report (Phase A) ───────────────────────────
 router.get('/call-disposition-report', async (req, res, next) => {
   try {
-    const { divisionId, period = '30d' } = req.query;
+    const { divisionId, period = '30d', mode = 'any' } = req.query;
+    const normalizedMode = String(mode).toLowerCase() === 'latest' ? 'latest' : 'any';
     const { start } = getPeriodDates(period);
     const orgFilter = getOrgFilter(req, divisionId);
     const scopedBaseWhere = req.isRestrictedRole
       ? { userId: req.user.id }
       : { lead: { organizationId: orgFilter } };
 
-    const buildReport = async (where, meta = {}) => {
-      const [totalCalls, notReachedCalls, dispositionRows, uniqueLeadRows, durationAgg, notInterestedRows, completedRows, willCallRows] = await Promise.all([
-        prisma.callLog.count({ where }),
-        prisma.callLog.count({ where: { ...where, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
-        prisma.callLog.groupBy({ by: ['disposition'], where, _count: { _all: true } }),
-        prisma.callLog.findMany({ where, select: { leadId: true }, distinct: ['leadId'] }),
-        prisma.callLog.aggregate({ where, _avg: { duration: true } }),
-        prisma.callLog.findMany({
-          where: { ...where, disposition: 'NOT_INTERESTED' },
-          select: { metadata: true, notes: true },
-        }),
-        prisma.callLog.findMany({
-          where: { ...where, disposition: 'ALREADY_COMPLETED_SERVICES' },
-          select: { metadata: true },
-        }),
-        prisma.callLog.findMany({
-          where: { ...where, disposition: 'WILL_CALL_US_AGAIN' },
-          select: { metadata: true },
-        }),
-      ]);
+    const buildReport = async (where, meta = {}, reportMode = 'any') => {
+      const isLatestMode = reportMode === 'latest';
+      let totalCalls = 0;
+      let notReachedCalls = 0;
+      let dispositionRows = [];
+      let uniqueLeadsTouched = 0;
+      let avgDurationSeconds = 0;
+      let notInterestedRows = [];
+      let completedRows = [];
+      let willCallRows = [];
+
+      if (isLatestMode) {
+        const latestCalls = await prisma.callLog.findMany({
+          where,
+          orderBy: [{ leadId: 'asc' }, { createdAt: 'desc' }, { id: 'desc' }],
+          distinct: ['leadId'],
+          select: {
+            leadId: true,
+            disposition: true,
+            duration: true,
+            metadata: true,
+          },
+        });
+
+        totalCalls = latestCalls.length;
+        uniqueLeadsTouched = latestCalls.length;
+        notReachedCalls = latestCalls.filter((row) => NOT_REACHED_DISPOSITIONS.includes(row.disposition)).length;
+
+        const dispMap = new Map();
+        let durationTotal = 0;
+        let durationCount = 0;
+        for (const row of latestCalls) {
+          dispMap.set(row.disposition, (dispMap.get(row.disposition) || 0) + 1);
+          const dur = Number(row.duration);
+          if (Number.isFinite(dur) && dur > 0) {
+            durationTotal += dur;
+            durationCount += 1;
+          }
+        }
+        avgDurationSeconds = durationCount > 0 ? Math.round(durationTotal / durationCount) : 0;
+        dispositionRows = Array.from(dispMap.entries()).map(([disposition, count]) => ({
+          disposition,
+          _count: { _all: count },
+        }));
+
+        notInterestedRows = latestCalls
+          .filter((row) => row.disposition === 'NOT_INTERESTED')
+          .map((row) => ({ metadata: row.metadata, notes: null }));
+        completedRows = latestCalls
+          .filter((row) => row.disposition === 'ALREADY_COMPLETED_SERVICES')
+          .map((row) => ({ metadata: row.metadata }));
+        willCallRows = latestCalls
+          .filter((row) => row.disposition === 'WILL_CALL_US_AGAIN')
+          .map((row) => ({ metadata: row.metadata }));
+      } else {
+        const [countAll, countNotReached, groupedDisposition, uniqueLeadRows, durationAgg, niRows, compRows, wcRows] = await Promise.all([
+          prisma.callLog.count({ where }),
+          prisma.callLog.count({ where: { ...where, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+          prisma.callLog.groupBy({ by: ['disposition'], where, _count: { _all: true } }),
+          prisma.callLog.findMany({ where, select: { leadId: true }, distinct: ['leadId'] }),
+          prisma.callLog.aggregate({ where, _avg: { duration: true } }),
+          prisma.callLog.findMany({
+            where: { ...where, disposition: 'NOT_INTERESTED' },
+            select: { metadata: true, notes: true },
+          }),
+          prisma.callLog.findMany({
+            where: { ...where, disposition: 'ALREADY_COMPLETED_SERVICES' },
+            select: { metadata: true },
+          }),
+          prisma.callLog.findMany({
+            where: { ...where, disposition: 'WILL_CALL_US_AGAIN' },
+            select: { metadata: true },
+          }),
+        ]);
+        totalCalls = countAll;
+        notReachedCalls = countNotReached;
+        dispositionRows = groupedDisposition;
+        uniqueLeadsTouched = uniqueLeadRows.length;
+        avgDurationSeconds = Math.round(Number(durationAgg._avg.duration || 0));
+        notInterestedRows = niRows;
+        completedRows = compRows;
+        willCallRows = wcRows;
+      }
 
       const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
       const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
@@ -807,11 +871,11 @@ router.get('/call-disposition-report', async (req, res, next) => {
       return {
         summary: {
           totalCalls,
-          uniqueLeadsTouched: uniqueLeadRows.length,
+          uniqueLeadsTouched,
           reachedCalls,
           notReachedCalls,
           reachabilityRatio,
-          avgDurationSeconds: Math.round(Number(durationAgg._avg.duration || 0)),
+          avgDurationSeconds,
         },
         byDisposition,
         notInterested: {
@@ -826,18 +890,22 @@ router.get('/call-disposition-report', async (req, res, next) => {
           total: willCallTotal,
           expectedCallbackWindows,
         },
-        meta,
+        meta: { ...meta, mode: reportMode },
       };
     };
 
     const periodWhere = { ...scopedBaseWhere, createdAt: { gte: start } };
-    const periodReport = await buildReport(periodWhere, { periodFallback: false });
+    const periodReport = await buildReport(periodWhere, { periodFallback: false }, normalizedMode);
     if (periodReport.summary.totalCalls > 0) {
       return res.json(periodReport);
     }
 
     // If period is empty, return all-time scoped report instead of blank zeros.
-    const fallbackReport = await buildReport(scopedBaseWhere, { periodFallback: true, fallbackReason: 'NO_CALLS_IN_SELECTED_PERIOD' });
+    const fallbackReport = await buildReport(
+      scopedBaseWhere,
+      { periodFallback: true, fallbackReason: 'NO_CALLS_IN_SELECTED_PERIOD' },
+      normalizedMode
+    );
     return res.json(fallbackReport);
   } catch (err) { next(err); }
 });

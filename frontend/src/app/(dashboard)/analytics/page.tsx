@@ -498,6 +498,7 @@ export default function AnalyticsPage() {
         period?: Period;
         activeTab?: Tab;
         selectedDivision?: string;
+        callDrillMode?: 'latest' | 'any';
       };
       if (parsed.period && PERIODS.some((p) => p.value === parsed.period)) {
         setPeriod(parsed.period);
@@ -507,6 +508,9 @@ export default function AnalyticsPage() {
       }
       if (typeof parsed.selectedDivision === 'string' && parsed.selectedDivision.trim()) {
         setSelectedDivision(parsed.selectedDivision);
+      }
+      if (parsed.callDrillMode === 'latest' || parsed.callDrillMode === 'any') {
+        setCallDrillMode(parsed.callDrillMode);
       }
     } catch {
       // ignore invalid localStorage state
@@ -519,12 +523,12 @@ export default function AnalyticsPage() {
     try {
       window.localStorage.setItem(
         ANALYTICS_PREFS_KEY,
-        JSON.stringify({ period, activeTab, selectedDivision })
+        JSON.stringify({ period, activeTab, selectedDivision, callDrillMode })
       );
     } catch {
       // ignore storage failures
     }
-  }, [period, activeTab, selectedDivision]);
+  }, [period, activeTab, selectedDivision, callDrillMode]);
 
   const divId = selectedDivision === 'all' ? undefined : selectedDivision;
   const selectedDivName = selectedDivision === 'all'
@@ -548,7 +552,7 @@ export default function AnalyticsPage() {
         api.getActivitiesAnalytics(p, divId),
         api.getScoreDistribution(divId),
         api.getTaskSLAReport(p, divId),
-        api.getCallDispositionReport(p, divId),
+        api.getCallDispositionReport(p, divId, callDrillMode),
         api.getPipelineForecastReport(p, divId),
         api.getPhase1Report(p, divId),
       ]);
@@ -635,7 +639,7 @@ export default function AnalyticsPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [isSuperAdmin, divId]);
+  }, [isSuperAdmin, divId, callDrillMode]);
 
   useEffect(() => { fetchData(); }, [period, selectedDivision, fetchData]);
 

@@ -365,8 +365,8 @@ class ApiClient {
     return this.request<any>(`/analytics/task-sla-report?${q}`);
   }
 
-  async getCallDispositionReport(period = '30d', divisionId?: string) {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+  async getCallDispositionReport(period = '30d', divisionId?: string, mode?: 'latest' | 'any') {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}), ...(mode ? { mode } : {}) });
     return this.request<any>(`/analytics/call-disposition-report?${q}`);
   }
 
