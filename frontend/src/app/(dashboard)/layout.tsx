@@ -51,7 +51,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // called in the same order on every render. Moving this after a
   // conditional return (like `if (!isAuthenticated) return null`) causes
   // "Rendered fewer hooks than expected" crashes during sign-out.
-  const { hasPermission, loaded: permissionsLoaded } = usePermissionsStore();
   const hasNotificationAccess = !user || !permissionsLoaded ||
     hasPermission(user.id, user.role, 'notifications');
 
