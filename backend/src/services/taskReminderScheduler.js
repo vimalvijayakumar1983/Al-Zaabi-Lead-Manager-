@@ -254,7 +254,8 @@ function cleanupNotifiedTasks() {
 /**
  * Start the task reminder scheduler.
  */
-function startTaskReminderScheduler(intervalMs = TASK_CHECK_INTERVAL) {
+function startTaskReminderScheduler(intervalMs = TASK_CHECK_INTERVAL, options = {}) {
+  const { runOnStart = true, initialDelayMs = 0 } = options;
   if (taskReminderInterval) {
     logger.warn('[TaskReminder] Scheduler already running');
     return;
@@ -262,8 +263,11 @@ function startTaskReminderScheduler(intervalMs = TASK_CHECK_INTERVAL) {
 
   logger.info(`[TaskReminder] Starting task reminder scheduler (interval: ${intervalMs / 1000}s)`);
 
-  // Run immediately on start
-  checkTaskReminders().catch((err) => logger.error('[TaskReminder] Initial check failed:', err.message));
+  if (runOnStart) {
+    setTimeout(() => {
+      checkTaskReminders().catch((err) => logger.error('[TaskReminder] Initial check failed:', err.message));
+    }, Math.max(0, Number(initialDelayMs) || 0));
+  }
 
   taskReminderInterval = setInterval(() => {
     checkTaskReminders().catch((err) => logger.error('[TaskReminder] Periodic check failed:', err.message));
