@@ -601,11 +601,16 @@ function OrganizationSection() {
   );
 }
 
-/* ─── WhatsApp Section (admin only) ───────────────────────────────── */
+/* ─── WhatsApp Section (admin only, per division) ───────────────── */
+const WHATSAPP_TOKEN_MASK = '••••••••';
+
 type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; token: string };
 
 function WhatsAppSection() {
-  const [org, setOrg] = useState<{ settings?: Record<string, unknown> } | null>(null);
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const [selectedDivisionId, setSelectedDivisionId] = useState('');
+  const [loading, setLoading] = useState(true);
   const [numbers, setNumbers] = useState<WhatsAppNumberEntry[]>([]);
   const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
   const [whatsappApiUrl, setWhatsappApiUrl] = useState('');
@@ -613,33 +618,46 @@ function WhatsAppSection() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    api.getOrganization().then((data) => {
-      setOrg(data);
-      const settings = (data.settings as Record<string, unknown>) || {};
-      setWebhookVerifyToken((settings.whatsappWebhookVerifyToken as string) || '');
-      setWhatsappApiUrl((settings.whatsappApiUrl as string) || '');
-      const raw = settings.whatsappNumbers;
-      if (Array.isArray(raw) && raw.length > 0) {
+  const effectiveDivisionId = isSuperAdmin ? selectedDivisionId : undefined;
+
+  const loadWhatsAppSettings = useCallback(async () => {
+    if (isSuperAdmin && !selectedDivisionId) return;
+    setLoading(true);
+    setError('');
+    try {
+      const data = await api.getWhatsAppSettings(effectiveDivisionId);
+      setWhatsappApiUrl(data.whatsappApiUrl || '');
+      setWebhookVerifyToken(
+        data.hasWebhookVerifyToken ? WHATSAPP_TOKEN_MASK : (data.whatsappWebhookVerifyToken || ''),
+      );
+      const raw = data.whatsappNumbers || [];
+      if (raw.length > 0) {
         setNumbers(
-          raw.map((n: Record<string, string>, i: number) => ({
-            id: (n as Record<string, string>).id || `n-${i}`,
-            label: (n as Record<string, string>).label || '',
-            phoneNumberId: (n as Record<string, string>).phoneNumberId || '',
-            token: (n as Record<string, string>).token || '',
-          }))
+          raw.map((n, i) => ({
+            id: `n-${i}-${n.phoneNumberId || i}`,
+            label: n.label || '',
+            phoneNumberId: n.phoneNumberId || '',
+            token: n.hasToken ? WHATSAPP_TOKEN_MASK : (n.token || ''),
+          })),
         );
       } else {
-        const singleId = (settings.whatsappPhoneNumberId as string) || '';
-        const singleToken = (settings.whatsappToken as string) || '';
-        if (singleId || singleToken) {
-          setNumbers([{ id: 'n-0', label: '', phoneNumberId: singleId, token: singleToken }]);
-        } else {
-          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
-        }
+        setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
       }
-    });
-  }, []);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load WhatsApp settings');
+      setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
+    } finally {
+      setLoading(false);
+    }
+  }, [isSuperAdmin, selectedDivisionId, effectiveDivisionId]);
+
+  useEffect(() => {
+    if (isSuperAdmin && !selectedDivisionId) {
+      setLoading(false);
+      return;
+    }
+    loadWhatsAppSettings();
+  }, [isSuperAdmin, selectedDivisionId, loadWhatsAppSettings]);
 
   const addNumber = () => {
     setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', token: '' }]);
@@ -661,16 +679,25 @@ function WhatsAppSection() {
     try {
       const payload = numbers
         .filter((n) => n.phoneNumberId.trim() || n.token.trim())
-        .map(({ label, phoneNumberId, token }) => ({ label: label.trim() || undefined, phoneNumberId: phoneNumberId.trim(), token: token.trim() }));
-      await api.updateOrganization({
-        settings: {
+        .map(({ label, phoneNumberId, token }) => {
+          const t = token.trim();
+          return {
+            label: label.trim() || undefined,
+            phoneNumberId: phoneNumberId.trim(),
+            token: t === WHATSAPP_TOKEN_MASK ? WHATSAPP_TOKEN_MASK : (t || undefined),
+          };
+        });
+      await api.saveWhatsAppSettings(
+        {
           whatsappNumbers: payload.length > 0 ? payload : [],
-          whatsappWebhookVerifyToken: webhookVerifyToken.trim() || undefined,
-          whatsappApiUrl: whatsappApiUrl.trim() || undefined,
+          whatsappWebhookVerifyToken: webhookVerifyToken.trim(),
+          whatsappApiUrl: whatsappApiUrl.trim(),
         },
-      });
+        effectiveDivisionId,
+      );
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
+      await loadWhatsAppSettings();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -678,10 +705,17 @@ function WhatsAppSection() {
     }
   };
 
-  if (!org) {
+  if (loading && (!isSuperAdmin || selectedDivisionId)) {
     return (
       <div className="space-y-6">
-        <SectionHeader title="WhatsApp" description="Connect your WhatsApp Business number" />
+        <SectionHeader title="WhatsApp" description="Connect WhatsApp Business per division" />
+        {isSuperAdmin && (
+          <DivisionEmailSelector
+            selectedDivisionId={selectedDivisionId}
+            onSelect={(id) => { setSelectedDivisionId(id); }}
+            hintText="WhatsApp numbers and tokens are stored per division. Select the division to configure."
+          />
+        )}
         <div className="card p-6 space-y-4">
           {[1, 2, 3].map((i) => (
             <div key={i}><div className="skeleton h-4 w-24 mb-2" /><div className="skeleton h-10 w-full rounded-lg" /></div>
@@ -695,9 +729,19 @@ function WhatsAppSection() {
     <div className="space-y-6 animate-fade-in">
       <SectionHeader
         title="WhatsApp"
-        description="Add WhatsApp Business numbers and webhook verify token for Meta."
+        description="Add WhatsApp Business numbers and webhook verify token for Meta (per division)."
       />
 
+      {isSuperAdmin && (
+        <DivisionEmailSelector
+          selectedDivisionId={selectedDivisionId}
+          onSelect={(id) => { setSelectedDivisionId(id); }}
+          hintText="WhatsApp numbers and tokens are stored per division. Select the division to configure."
+        />
+      )}
+
+      {(!isSuperAdmin || selectedDivisionId) && (
+      <>
       <form onSubmit={handleSave} className="space-y-4">
         <div className="card p-5 space-y-4 border border-border-subtle">
           <h3 className="text-sm font-semibold text-text-primary">Webhook verify token (Meta)</h3>
@@ -815,8 +859,11 @@ function WhatsAppSection() {
           <li><strong>Phone number ID</strong> is next to your WhatsApp Business number</li>
           <li><strong>Access token</strong> is under Temporary or system user token</li>
           <li>Use the same <strong>Verify token</strong> in Meta webhook configuration</li>
+          <li>Each division can use its own WhatsApp Business number and tokens.</li>
         </ul>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -4298,7 +4345,16 @@ function CustomFieldModal({
 }
 
 // Internal components - not exported (Next.js page files only allow default export)
-function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivisionId: string; onSelect: (id: string) => void }) {
+function DivisionEmailSelector({
+  selectedDivisionId,
+  onSelect,
+  hintText,
+}: {
+  selectedDivisionId: string;
+  onSelect: (id: string) => void;
+  /** Shown under the dropdown (e.g. per email vs WhatsApp). */
+  hintText?: string;
+}) {
   const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -4337,7 +4393,9 @@ function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivis
           </select>
         </div>
       </div>
-      <p className="text-2xs text-text-tertiary mt-2">Email settings are configured per division. Select the division you want to configure.</p>
+      <p className="text-2xs text-text-tertiary mt-2">
+        {hintText || 'Email settings are configured per division. Select the division you want to configure.'}
+      </p>
     </div>
   );
 }

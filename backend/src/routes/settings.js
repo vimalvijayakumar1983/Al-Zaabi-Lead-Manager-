@@ -725,17 +725,16 @@ router.get('/sla/dashboard', async (req, res, next) => {
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
 
-// Helper: resolve the target division ID for email settings
-// SUPER_ADMIN must specify ?divisionId=<id>; ADMIN uses their own org
-async function resolveEmailOrgId(req, res) {
+// Helper: resolve target organization for division-scoped settings (email, WhatsApp, etc.)
+// SUPER_ADMIN must pass ?divisionId=<uuid>; ADMIN uses their own org (division)
+async function resolveDivisionScopedOrgId(req, res, featureLabel) {
   const { divisionId } = req.query;
 
   if (req.isSuperAdmin) {
     if (!divisionId) {
-      res.status(400).json({ error: 'Please select a division to configure email settings' });
+      res.status(400).json({ error: `Please select a division to configure ${featureLabel}` });
       return null;
     }
-    // Verify divisionId is a valid child division
     if (!req.orgIds.includes(divisionId)) {
       res.status(403).json({ error: 'Division not found or access denied' });
       return null;
@@ -743,14 +742,183 @@ async function resolveEmailOrgId(req, res) {
     return divisionId;
   }
 
-  // ADMIN uses their own orgId (which is already a division)
   return req.orgId;
 }
+
+// ─── WhatsApp (per division; same scoping as email) ────────────
+
+const WHATSAPP_SECRET_MASK = '••••••••';
+
+function trimSettingStr(v) {
+  return String(v ?? '').trim();
+}
+
+function buildWhatsAppNumberLookup(settings) {
+  const byPhoneId = {};
+  const numbers = Array.isArray(settings?.whatsappNumbers) ? settings.whatsappNumbers : [];
+  for (const n of numbers) {
+    const id = trimSettingStr(n?.phoneNumberId);
+    if (id) byPhoneId[id] = n;
+  }
+  const legId = trimSettingStr(settings?.whatsappPhoneNumberId);
+  if (legId && !byPhoneId[legId]) {
+    byPhoneId[legId] = {
+      phoneNumberId: legId,
+      token: settings.whatsappToken,
+      label: '',
+    };
+  }
+  return byPhoneId;
+}
+
+function sanitizeWhatsAppSettingsForClient(settings) {
+  const s = typeof settings === 'object' && settings ? settings : {};
+  const raw = s.whatsappNumbers;
+  let numbers = [];
+  if (Array.isArray(raw) && raw.length > 0) {
+    numbers = raw.map((n) => {
+      const phoneNumberId = trimSettingStr(n?.phoneNumberId);
+      const hasToken = !!trimSettingStr(n?.token);
+      return {
+        label: trimSettingStr(n?.label) || '',
+        phoneNumberId,
+        token: hasToken ? WHATSAPP_SECRET_MASK : '',
+        hasToken,
+      };
+    });
+  } else {
+    const singleId = trimSettingStr(s.whatsappPhoneNumberId);
+    const singleTok = trimSettingStr(s.whatsappToken);
+    if (singleId || singleTok) {
+      numbers = [{
+        label: '',
+        phoneNumberId: singleId,
+        token: singleTok ? WHATSAPP_SECRET_MASK : '',
+        hasToken: !!singleTok,
+      }];
+    }
+  }
+
+  const hasVerify = !!trimSettingStr(s.whatsappWebhookVerifyToken);
+  return {
+    whatsappNumbers: numbers,
+    whatsappWebhookVerifyToken: hasVerify ? WHATSAPP_SECRET_MASK : '',
+    hasWebhookVerifyToken: hasVerify,
+    whatsappApiUrl: trimSettingStr(s.whatsappApiUrl) || '',
+  };
+}
+
+function mergeWhatsAppSettingsFromBody(existingSettings, body) {
+  const existing = typeof existingSettings === 'object' && existingSettings ? existingSettings : {};
+  const byPhoneId = buildWhatsAppNumberLookup(existing);
+
+  const incoming = Array.isArray(body.whatsappNumbers) ? body.whatsappNumbers : [];
+  const mergedNumbers = incoming
+    .map((n) => {
+      const phoneNumberId = trimSettingStr(n?.phoneNumberId);
+      let token = trimSettingStr(n?.token);
+      if (!token || token === WHATSAPP_SECRET_MASK) {
+        const prev = byPhoneId[phoneNumberId];
+        token = prev ? trimSettingStr(prev.token) : '';
+      }
+      return {
+        label: n?.label != null && String(n.label).trim() ? String(n.label).trim() : undefined,
+        phoneNumberId,
+        token: token || undefined,
+      };
+    })
+    .filter((n) => n.phoneNumberId);
+
+  let whatsappWebhookVerifyToken;
+  if (body.whatsappWebhookVerifyToken === undefined || body.whatsappWebhookVerifyToken === null) {
+    whatsappWebhookVerifyToken = trimSettingStr(existing.whatsappWebhookVerifyToken) || '';
+  } else {
+    const t = trimSettingStr(body.whatsappWebhookVerifyToken);
+    if (t === WHATSAPP_SECRET_MASK) {
+      whatsappWebhookVerifyToken = trimSettingStr(existing.whatsappWebhookVerifyToken) || '';
+    } else {
+      whatsappWebhookVerifyToken = t; // allow '' to clear
+    }
+  }
+
+  let whatsappApiUrl;
+  if (body.whatsappApiUrl === undefined || body.whatsappApiUrl === null) {
+    whatsappApiUrl = trimSettingStr(existing.whatsappApiUrl);
+  } else {
+    whatsappApiUrl = trimSettingStr(body.whatsappApiUrl);
+  }
+
+  const nextSettings = { ...existing };
+  nextSettings.whatsappNumbers = mergedNumbers;
+  if (whatsappWebhookVerifyToken) {
+    nextSettings.whatsappWebhookVerifyToken = whatsappWebhookVerifyToken;
+  } else {
+    delete nextSettings.whatsappWebhookVerifyToken;
+  }
+  if (whatsappApiUrl) {
+    nextSettings.whatsappApiUrl = whatsappApiUrl;
+  } else {
+    delete nextSettings.whatsappApiUrl;
+  }
+  delete nextSettings.whatsappPhoneNumberId;
+  delete nextSettings.whatsappToken;
+
+  return nextSettings;
+}
+
+const whatsAppSaveSchema = z.object({
+  whatsappNumbers: z.array(z.object({
+    label: z.string().optional().nullable(),
+    phoneNumberId: z.string(),
+    token: z.string().optional().nullable(),
+  })).optional(),
+  whatsappWebhookVerifyToken: z.string().optional().nullable(),
+  whatsappApiUrl: z.string().optional().nullable(),
+});
+
+router.get('/whatsapp', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp');
+    if (!targetOrgId) return;
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = typeof org?.settings === 'object' ? org.settings : {};
+    res.json(sanitizeWhatsAppSettingsForClient(settings));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/whatsapp', authorize('ADMIN'), validate(whatsAppSaveSchema), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp');
+    if (!targetOrgId) return;
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const current = typeof org?.settings === 'object' ? org.settings : {};
+    const mergedSettings = mergeWhatsAppSettingsFromBody(current, req.validated);
+
+    await prisma.organization.update({
+      where: { id: targetOrgId },
+      data: { settings: mergedSettings },
+    });
+
+    res.json(sanitizeWhatsAppSettingsForClient(mergedSettings));
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Get email config
 router.get('/email', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const org = await prisma.organization.findUnique({
@@ -784,7 +952,7 @@ router.put('/email', authorize('ADMIN'), validate(z.object({
   replyTo: z.string().email().optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -830,7 +998,7 @@ router.post('/email/test-connection', authorize('ADMIN'), validate(z.object({
   smtpPass: z.string().optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -857,7 +1025,7 @@ router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
   toEmail: z.string().email(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { toEmail } = req.validated;
@@ -886,7 +1054,7 @@ const { testImapConnection, testPop3Connection, fetchEmails } = require('../serv
 // Get incoming email config
 router.get('/email/incoming', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const org = await prisma.organization.findUnique({
@@ -935,7 +1103,7 @@ router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
   autoFetch: z.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -1000,7 +1168,7 @@ router.post('/email/incoming/test-imap', authorize('ADMIN'), validate(z.object({
   imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -1031,7 +1199,7 @@ router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
   popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -1056,7 +1224,7 @@ router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
 // Fetch emails from configured incoming server
 router.post('/email/incoming/fetch', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const result = await fetchEmails(targetOrgId, {
@@ -1255,7 +1423,7 @@ Warm regards,
 // Get email templates
 router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const org = await prisma.organization.findUnique({
@@ -1281,7 +1449,7 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
   description: z.string().max(500).optional(),
 }).refine((d) => d.body || d.htmlBody, { message: 'Either body or htmlBody is required' })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { name } = req.params;
@@ -1340,7 +1508,7 @@ router.post('/email/templates/preview', authorize('ADMIN'), validate(z.object({
   htmlBody: z.string().optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { renderTemplate, wrapInHtmlLayout, textToHtml } = require('../services/emailService');
@@ -1386,7 +1554,7 @@ router.post('/email/templates/preview', authorize('ADMIN'), validate(z.object({
 // Delete an email template
 router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { name } = req.params;

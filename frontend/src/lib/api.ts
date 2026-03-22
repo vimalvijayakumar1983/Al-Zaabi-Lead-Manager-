@@ -891,6 +891,34 @@ class ApiClient {
     return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
   }
 
+  /** WhatsApp Cloud API credentials — stored per division (SUPER_ADMIN: pass divisionId). */
+  async getWhatsAppSettings(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+    }>(`/settings/whatsapp${qs}`);
+  }
+
+  async saveWhatsAppSettings(
+    data: {
+      whatsappNumbers: Array<{ label?: string; phoneNumberId: string; token?: string }>;
+      whatsappWebhookVerifyToken?: string;
+      whatsappApiUrl?: string;
+    },
+    divisionId?: string,
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+    }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
   async getNotificationPreferences() {
     return this.request<any>('/settings/notifications');
   }

@@ -8,6 +8,7 @@ const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
 const { regenerateLeadSummaryById } = require('../services/aiService');
+const { sendText: sendWhatsAppText } = require('../services/whatsappService');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {

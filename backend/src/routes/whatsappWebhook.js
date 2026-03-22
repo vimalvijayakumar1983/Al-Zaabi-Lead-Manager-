@@ -24,6 +24,15 @@ router.get('/', async (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
+  // Verbose console trace (use alongside logger) — Meta subscription handshake
+  console.log('[WhatsApp Webhook] GET /api/whatsapp/webhook (verification)', {
+    query: { ...req.query },
+    hubMode: mode,
+    hasVerifyToken: !!token,
+    verifyTokenLength: token ? String(token).length : 0,
+    hasChallenge: !!challenge,
+  });
+
   const valid = mode === 'subscribe' && (await isVerifyTokenValid(token));
   logger.info('[WhatsApp Webhook] GET verification', {
     mode,
@@ -50,6 +59,19 @@ router.get('/', async (req, res) => {
 router.post('/', (req, res) => {
   const body = req.body;
 
+  // Full payload to stdout — use this to map fields → inbox / division routing
+  try {
+    const raw = JSON.stringify(body, null, 2);
+    const maxLen = 120000;
+    console.log(
+      '\n======== [WhatsApp Webhook] POST raw body (/api/whatsapp/webhook) ========\n',
+      raw.length > maxLen ? `${raw.slice(0, maxLen)}\n… [truncated ${raw.length - maxLen} chars]` : raw,
+      '\n========================================================================\n',
+    );
+  } catch (e) {
+    console.log('[WhatsApp Webhook] POST body (could not stringify)', body);
+  }
+
   logger.info('[WhatsApp Webhook] POST received', {
     object: body?.object,
     entryCount: Array.isArray(body?.entry) ? body.entry.length : 0,
@@ -60,7 +82,12 @@ router.post('/', (req, res) => {
 
   if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
     if (body && body.object !== 'whatsapp_business_account') {
+      console.log('[WhatsApp Webhook] Ignoring POST — object is not whatsapp_business_account', {
+        object: body?.object,
+      });
       logger.debug('[WhatsApp Webhook] Ignored payload (not whatsapp_business_account)', { object: body?.object });
+    } else if (!body) {
+      console.log('[WhatsApp Webhook] Ignoring POST — empty body');
     }
     return;
   }
@@ -83,6 +110,17 @@ router.post('/', (req, res) => {
         messageCount: messages.length,
         statusCount: statuses.length,
         errorCount: errors.length,
+      });
+
+      console.log('[WhatsApp Webhook] Parsed change.value summary', {
+        phone_number_id: phoneNumberId,
+        display_phone_number: displayPhoneNumber,
+        field: change.field,
+        messages: messages.length,
+        statuses: statuses.length,
+        errors: errors.length,
+        contactsPreview: value.contacts,
+        metadata: value.metadata,
       });
 
       for (const msg of messages) {
@@ -116,6 +154,17 @@ router.post('/', (req, res) => {
           type: msgType,
           bodyPreview: bodyText ? bodyText.substring(0, 80) + (bodyText.length > 80 ? '...' : '') : '(empty)',
           contactName,
+        });
+
+        console.log('[WhatsApp Webhook] Message → will route by phone_number_id to division settings', {
+          phoneNumberId,
+          displayPhoneNumber,
+          senderWaId: from,
+          messageId,
+          type: msgType,
+          bodyText: bodyText || null,
+          contactName: contactName || null,
+          rawMessageKeys: Object.keys(msg),
         });
 
         setImmediate(() => {

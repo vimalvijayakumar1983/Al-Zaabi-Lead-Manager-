@@ -29,18 +29,41 @@ async function resolveOrganizationId(phoneNumberId) {
     if (Array.isArray(numbers)) {
       for (const entry of numbers) {
         const entryId = String(entry?.phoneNumberId ?? '').trim();
-        if (entryId && entryId === id) return org.id;
+        if (entryId && entryId === id) {
+          console.log('[WhatsApp Inbound] Matched division/org by whatsappNumbers[]', {
+            webhookPhoneNumberId: id,
+            organizationId: org.id,
+            label: entry?.label || null,
+          });
+          return org.id;
+        }
       }
     }
     const singleId = String(settings.whatsappPhoneNumberId ?? '').trim();
-    if (singleId && singleId === id) return org.id;
+    if (singleId && singleId === id) {
+      console.log('[WhatsApp Inbound] Matched division/org by legacy whatsappPhoneNumberId', {
+        webhookPhoneNumberId: id,
+        organizationId: org.id,
+      });
+      return org.id;
+    }
   }
 
   const globalId = config.whatsapp?.phoneNumberId;
   if (globalId && String(globalId).trim() === id) {
     const first = await prisma.organization.findFirst({ select: { id: true } });
+    console.log('[WhatsApp Inbound] Matched org via env WHATSAPP_PHONE_NUMBER_ID → first org fallback', {
+      webhookPhoneNumberId: id,
+      organizationId: first?.id ?? null,
+    });
     return first?.id ?? null;
   }
+
+  console.warn('[WhatsApp Inbound] No division/org for this phone_number_id — message not saved to inbox', {
+    webhookPhoneNumberId: id,
+    scannedOrgs: orgs.length,
+    hint: 'Add this Phone Number ID under Settings → WhatsApp for the correct division.',
+  });
 
   logger.warn('WhatsApp inbound: no organization for phone_number_id', {
     phoneNumberId: id,
@@ -95,8 +118,23 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
     return;
   }
 
+  const orgRow = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { id: true, name: true, type: true, parentId: true },
+  });
+  console.log('[WhatsApp Inbound] Saving to inbox under division/org', {
+    organizationId,
+    organizationName: orgRow?.name,
+    organizationType: orgRow?.type,
+    parentId: orgRow?.parentId,
+    businessPhoneNumberId: phoneNumberId,
+    senderWaId: from,
+    messageId,
+  });
+
   const phoneNormalized = normalizePhone(from);
   if (!phoneNormalized) {
+    console.warn('[WhatsApp Inbound] Missing sender wa_id — not saving', { phoneNumberId, from });
     logger.warn('WhatsApp inbound: missing from (wa_id)', { phoneNumberId });
     return;
   }
@@ -130,6 +168,15 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
     leadId: lead.id,
     organizationId: lead.organizationId,
     from: `+${phoneNormalized}`,
+    messageId,
+  });
+
+  console.log('[WhatsApp Inbound] Inbox row created (Communication)', {
+    leadId: lead.id,
+    organizationId: lead.organizationId,
+    channel: 'WHATSAPP',
+    direction: 'INBOUND',
+    bodyPreview: body.length > 120 ? `${body.slice(0, 120)}…` : body,
     messageId,
   });
 }
