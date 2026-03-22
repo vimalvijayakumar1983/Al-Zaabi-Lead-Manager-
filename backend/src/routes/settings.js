@@ -508,6 +508,115 @@ router.put('/status-stage-mapping', authorize('ADMIN'), validate(z.object({
   }
 });
 
+// POST /status-stage-mapping/clone-to-all — Clone one division mapping to others
+router.post('/status-stage-mapping/clone-to-all', authorize('ADMIN'), validate(z.object({
+  sourceDivisionId: z.string().uuid(),
+  targetDivisionIds: z.array(z.string().uuid()).optional(),
+})), async (req, res, next) => {
+  try {
+    if (!req.isSuperAdmin) {
+      return res.status(403).json({ error: 'Only super admin can clone mapping to all divisions' });
+    }
+
+    const { sourceDivisionId, targetDivisionIds } = req.validated;
+    if (!req.orgIds.includes(sourceDivisionId)) {
+      return res.status(403).json({ error: 'Source division not found or access denied' });
+    }
+
+    const groupOrgId = resolveGroupOrgId(req);
+    const [settingsOrg, sourceStages, allDivisions] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: groupOrgId },
+        select: { settings: true },
+      }),
+      prisma.pipelineStage.findMany({
+        where: { organizationId: sourceDivisionId },
+        orderBy: { order: 'asc' },
+      }),
+      prisma.organization.findMany({
+        where: { id: { in: req.orgIds }, type: 'DIVISION' },
+        select: { id: true, name: true },
+      }),
+    ]);
+
+    const sourceRows = buildStageStatusRows(sourceStages, settingsOrg?.settings || {}, sourceDivisionId);
+    const normalizedNameToStatus = new Map();
+    for (const row of sourceRows) {
+      const normalized = String(row.stageName || '').trim().toLowerCase();
+      if (normalized && !normalizedNameToStatus.has(normalized)) {
+        normalizedNameToStatus.set(normalized, row.mappedStatus);
+      }
+    }
+
+    let targetIds = [];
+    if (Array.isArray(targetDivisionIds) && targetDivisionIds.length > 0) {
+      for (const id of targetDivisionIds) {
+        if (!req.orgIds.includes(id)) {
+          return res.status(403).json({ error: `Division ${id} not found or access denied` });
+        }
+        if (id !== sourceDivisionId) targetIds.push(id);
+      }
+    } else {
+      targetIds = allDivisions.map((d) => d.id).filter((id) => id !== sourceDivisionId);
+    }
+
+    if (targetIds.length === 0) {
+      return res.json({ success: true, clonedTo: 0, divisions: [] });
+    }
+
+    const targetStages = await prisma.pipelineStage.findMany({
+      where: { organizationId: { in: targetIds } },
+      select: { id: true, name: true, organizationId: true, isDefault: true, isWonStage: true, isLostStage: true },
+      orderBy: [{ organizationId: 'asc' }, { order: 'asc' }],
+    });
+
+    const byDivision = new Map();
+    for (const stage of targetStages) {
+      if (!byDivision.has(stage.organizationId)) byDivision.set(stage.organizationId, []);
+      byDivision.get(stage.organizationId).push(stage);
+    }
+
+    const settings = (settingsOrg?.settings || {});
+    if (!settings.statusStageMapping) settings.statusStageMapping = {};
+
+    const clonedDivisions = [];
+    for (const division of allDivisions) {
+      if (!targetIds.includes(division.id)) continue;
+      const stages = byDivision.get(division.id) || [];
+      const mapping = {};
+      for (const stage of stages) {
+        const normalized = String(stage.name || '').trim().toLowerCase();
+        const mapped = normalizedNameToStatus.get(normalized);
+        if (mapped) {
+          mapping[stage.id] = mapped;
+        } else if (stage.isWonStage) {
+          mapping[stage.id] = 'WON';
+        } else if (stage.isLostStage) {
+          mapping[stage.id] = 'LOST';
+        } else if (stage.isDefault) {
+          mapping[stage.id] = 'NEW';
+        }
+      }
+      settings.statusStageMapping[`division_${division.id}`] = mapping;
+      clonedDivisions.push({ id: division.id, name: division.name, mappedStages: Object.keys(mapping).length });
+    }
+
+    await prisma.organization.update({
+      where: { id: groupOrgId },
+      data: { settings },
+    });
+
+    res.json({
+      success: true,
+      sourceDivisionId,
+      clonedTo: clonedDivisions.length,
+      divisions: clonedDivisions,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Custom Fields ─────────────────────────────────────────────
 
 function isAutoSerialField(field) {

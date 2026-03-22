@@ -980,6 +980,18 @@ class ApiClient {
     });
   }
 
+  async cloneStatusStageMappingToAll(sourceDivisionId: string, targetDivisionIds?: string[]) {
+    return this.request<{
+      success: boolean;
+      sourceDivisionId: string;
+      clonedTo: number;
+      divisions: Array<{ id: string; name: string; mappedStages: number }>;
+    }>('/settings/status-stage-mapping/clone-to-all', {
+      method: 'POST',
+      body: JSON.stringify({ sourceDivisionId, ...(targetDivisionIds ? { targetDivisionIds } : {}) }),
+    });
+  }
+
   async saveFieldConfig(divisionId: string | null, fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }>) {
     return this.request<{ success: boolean }>('/settings/field-config', {
       method: 'PUT',

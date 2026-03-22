@@ -2226,6 +2226,7 @@ function CustomFieldsSection() {
   const [statusStageRows, setStatusStageRows] = useState<any[]>([]);
   const [loadingStatusMapping, setLoadingStatusMapping] = useState(false);
   const [savingStatusMapping, setSavingStatusMapping] = useState(false);
+  const [cloningStatusMapping, setCloningStatusMapping] = useState(false);
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('#6366f1');
@@ -2432,6 +2433,41 @@ function CustomFieldsSection() {
       setToast({ type: 'error', message: err.message || 'Failed to save status mapping' });
     }
     setSavingStatusMapping(false);
+  };
+
+  const cloneStatusStageMappingToAllDivisions = async () => {
+    if (!isSuperAdmin) return;
+    if (!effectiveDivisionId) {
+      setToast({ type: 'error', message: 'Please select a source division first' });
+      return;
+    }
+    const sourceDivision = divisions.find((d) => d.id === effectiveDivisionId);
+    const confirmed = await premiumConfirm({
+      title: 'Apply template mapping to all divisions?',
+      message: `This will copy the status-stage mapping from "${sourceDivision?.name || 'selected division'}" to all other divisions.`,
+      confirmText: 'Apply to All Divisions',
+      cancelText: 'Cancel',
+      variant: 'info',
+    });
+    if (!confirmed) return;
+
+    setCloningStatusMapping(true);
+    try {
+      // Persist current source division mapping first, so clone uses latest edits.
+      const currentMappings = statusStageRows.reduce((acc: Record<string, string>, row: any) => {
+        if (row?.stageId && row?.mappedStatus) acc[row.stageId] = row.mappedStatus;
+        return acc;
+      }, {});
+      await api.saveStatusStageMapping(effectiveDivisionId, currentMappings);
+      const result = await api.cloneStatusStageMappingToAll(effectiveDivisionId);
+      setToast({
+        type: 'success',
+        message: `Template mapping applied to ${result.clonedTo} division${result.clonedTo === 1 ? '' : 's'}`,
+      });
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to apply template mapping' });
+    }
+    setCloningStatusMapping(false);
   };
 
   // ─── Pipeline stage handlers ─────────────────────────────────────
@@ -3064,14 +3100,26 @@ function CustomFieldsSection() {
                   <div>
                     <p className="text-xs text-gray-500">Map each pipeline stage to a lead status for this division. Manual mapping overrides keyword/flag fallback.</p>
                   </div>
-                  <button
-                    onClick={saveStatusStageMapping}
-                    disabled={savingStatusMapping || loadingStatusMapping}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                  >
-                    {savingStatusMapping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                    Save Mapping
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {isSuperAdmin && (
+                      <button
+                        onClick={cloneStatusStageMappingToAllDivisions}
+                        disabled={cloningStatusMapping || loadingStatusMapping}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                      >
+                        {cloningStatusMapping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        Apply to All Divisions
+                      </button>
+                    )}
+                    <button
+                      onClick={saveStatusStageMapping}
+                      disabled={savingStatusMapping || loadingStatusMapping}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    >
+                      {savingStatusMapping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      Save Mapping
+                    </button>
+                  </div>
                 </div>
 
                 {loadingStatusMapping ? (
