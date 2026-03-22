@@ -169,6 +169,42 @@ class ApiClient {
     return this.request<any>(`/leads/${id}`);
   }
 
+  async generateLeadAIChat(
+    leadId: string,
+    message: string,
+    history: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  ) {
+    return this.request<{
+      success: boolean;
+      data: {
+        answer: string;
+        intent: string;
+        confidence: number;
+        suggestedPrompts: string[];
+        actions: Array<{
+          type: 'OPEN_TASK_MODAL' | 'OPEN_CALL_LOG_MODAL' | 'OPEN_COMMUNICATIONS_TAB' | 'OPEN_NOTES_TAB';
+          label: string;
+          priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+        }>;
+        context: {
+          stage: string;
+          score: number;
+          conversionProb: number;
+          openTasks: number;
+          overdueTasks: number;
+          staleDays: number | null;
+          recentCallOutcomes: string[];
+          inboundCount: number;
+          outboundCount: number;
+        };
+        generatedAt: string;
+      };
+    }>(`/leads/${leadId}/ai-chat`, {
+      method: 'POST',
+      body: JSON.stringify({ message, history }),
+    });
+  }
+
   async createLead(data: any) {
     return this.request<any>('/leads', { method: 'POST', body: JSON.stringify(data) });
   }

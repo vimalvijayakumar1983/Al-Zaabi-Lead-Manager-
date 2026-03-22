@@ -60,6 +60,22 @@ const getLeadInitials = (obj: { firstName?: string; lastName?: string }) => {
   return (parts[0]?.[0] || '?').toUpperCase();
 };
 
+type LeadAiAction = {
+  type: 'OPEN_TASK_MODAL' | 'OPEN_CALL_LOG_MODAL' | 'OPEN_COMMUNICATIONS_TAB' | 'OPEN_NOTES_TAB';
+  label: string;
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+};
+
+type LeadAiChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  confidence?: number;
+  suggestedPrompts?: string[];
+  actions?: LeadAiAction[];
+};
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -86,6 +102,11 @@ export default function LeadDetailPage() {
   const [fullUsers, setFullUsers] = useState<User[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
+  const [aiLeadChatMessages, setAiLeadChatMessages] = useState<LeadAiChatMessage[]>([]);
+  const [aiLeadChatInput, setAiLeadChatInput] = useState('');
+  const [aiLeadChatLoading, setAiLeadChatLoading] = useState(false);
+  const [aiLeadChatError, setAiLeadChatError] = useState<string | null>(null);
+  const aiLeadChatEndRef = useRef<HTMLDivElement>(null);
   // Chat state
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
@@ -247,6 +268,30 @@ export default function LeadDetailPage() {
     setLead(data);
     setUnreadCommsCount(data.unreadCommunications || 0);
   }, [id]);
+
+  useEffect(() => {
+    setAiLeadChatMessages([]);
+    setAiLeadChatInput('');
+    setAiLeadChatError(null);
+  }, [id]);
+
+  useEffect(() => {
+    if (!lead?.id || aiLeadChatMessages.length > 0) return;
+    setAiLeadChatMessages([
+      {
+        id: `ai-welcome-${lead.id}`,
+        role: 'assistant',
+        content: `I am your AI Lead Copilot for ${getLeadDisplayName(lead)}. Ask me for next-best actions, risks, or follow-up drafts.`,
+        createdAt: new Date().toISOString(),
+        suggestedPrompts: [
+          'What should I do in the next 24 hours for this lead?',
+          'What risks are blocking conversion right now?',
+          'Give me a short WhatsApp follow-up message.',
+          'Suggest 3 follow-up tasks with priority.',
+        ],
+      },
+    ]);
+  }, [lead?.id, aiLeadChatMessages.length, lead]);
 
   useEffect(() => {
     // Fetch lead + pipeline stages in parallel to avoid the stepper
@@ -508,6 +553,74 @@ export default function LeadDetailPage() {
     }
   };
 
+  const handleLeadAiAction = async (action: LeadAiAction) => {
+    switch (action.type) {
+      case 'OPEN_TASK_MODAL':
+        setActiveTab('tasks');
+        setShowTaskModal(true);
+        break;
+      case 'OPEN_CALL_LOG_MODAL':
+        setActiveTab('call_logs');
+        setShowCallLogModal(true);
+        break;
+      case 'OPEN_COMMUNICATIONS_TAB':
+        setActiveTab('communications');
+        break;
+      case 'OPEN_NOTES_TAB':
+        setActiveTab('notes');
+        break;
+      default:
+        break;
+    }
+  };
+
+  const sendLeadAiChatMessage = async (presetMessage?: string) => {
+    if (!lead) return;
+    const content = (presetMessage ?? aiLeadChatInput).trim();
+    if (!content || aiLeadChatLoading) return;
+
+    const userMessage: LeadAiChatMessage = {
+      id: `ai-user-${Date.now()}`,
+      role: 'user',
+      content,
+      createdAt: new Date().toISOString(),
+    };
+
+    const historyPayload = [...aiLeadChatMessages, userMessage]
+      .slice(-12)
+      .map((item) => ({ role: item.role, content: item.content }));
+
+    setAiLeadChatMessages((prev) => [...prev, userMessage].slice(-24));
+    setAiLeadChatInput('');
+    setAiLeadChatLoading(true);
+    setAiLeadChatError(null);
+
+    try {
+      const response = await api.generateLeadAIChat(lead.id, content, historyPayload);
+      const data = response?.data;
+      const assistantMessage: LeadAiChatMessage = {
+        id: `ai-assistant-${Date.now()}`,
+        role: 'assistant',
+        content: data?.answer || 'I could not generate a response right now. Please try again.',
+        createdAt: data?.generatedAt || new Date().toISOString(),
+        confidence: data?.confidence,
+        suggestedPrompts: Array.isArray(data?.suggestedPrompts) ? data.suggestedPrompts.slice(0, 4) : [],
+        actions: Array.isArray(data?.actions) ? data.actions.slice(0, 4) : [],
+      };
+      setAiLeadChatMessages((prev) => [...prev, assistantMessage].slice(-24));
+    } catch (err: any) {
+      const message = err?.message || 'Lead AI chat failed';
+      setAiLeadChatError(message);
+      addToast({ type: 'error', title: 'AI Copilot Error', message });
+    } finally {
+      setAiLeadChatLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    aiLeadChatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [aiLeadChatMessages, aiLeadChatLoading]);
+
   // Load chat messages when Communications tab is active
   // The backend auto-marks unread messages as read when fetched
   const loadChatMessages = useCallback(async () => {
@@ -701,6 +814,11 @@ export default function LeadDetailPage() {
     { key: 'business', label: 'Business' },
     { key: 'system',   label: 'System' },
   ];
+
+  const latestAiPromptSuggestions = [...aiLeadChatMessages]
+    .reverse()
+    .find((item) => item.role === 'assistant' && Array.isArray(item.suggestedPrompts) && item.suggestedPrompts.length > 0)
+    ?.suggestedPrompts || [];
 
 
   if (loading) {
@@ -1145,6 +1263,109 @@ export default function LeadDetailPage() {
                 <p className="text-sm text-gray-600 italic">{lead.aiSummary}</p>
               </div>
             )}
+          </div>
+
+          {/* AI Lead Copilot Chat */}
+          <div className="card p-4">
+            <div className="flex items-start justify-between gap-2 mb-3">
+              <div>
+                <h3 className="font-semibold text-gray-900 flex items-center gap-1.5">
+                  <svg className="h-4 w-4 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16h6m-7 5h8a2 2 0 002-2v-1.586a1 1 0 00-.293-.707l-1.414-1.414A1 1 0 0116 15.586V14a2 2 0 00-2-2H6a2 2 0 00-2 2v1.586a1 1 0 01-.293.707L2.293 17.707A1 1 0 002 18.414V20a2 2 0 002 2h4zm8-13V4a2 2 0 10-4 0v2h4z" />
+                  </svg>
+                  AI Lead Copilot
+                </h3>
+                <p className="text-[11px] text-gray-500 mt-0.5">Ask about next actions, risk, score, and follow-up strategy.</p>
+              </div>
+              <span className="text-[10px] rounded-full bg-brand-50 text-brand-700 px-2 py-0.5 border border-brand-100">Live lead context</span>
+            </div>
+
+            {latestAiPromptSuggestions.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {latestAiPromptSuggestions.map((prompt, idx) => (
+                  <button
+                    key={`ai-prompt-${idx}`}
+                    type="button"
+                    onClick={() => sendLeadAiChatMessage(prompt)}
+                    className="text-[11px] rounded-full border border-gray-200 bg-white px-2.5 py-1 text-gray-600 hover:bg-gray-50"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-2.5 max-h-72 overflow-y-auto space-y-2">
+              {aiLeadChatMessages.map((msg) => {
+                const isAssistant = msg.role === 'assistant';
+                return (
+                  <div key={msg.id} className={`flex ${isAssistant ? 'justify-start' : 'justify-end'}`}>
+                    <div className={`max-w-[92%] rounded-xl px-3 py-2 shadow-sm ${isAssistant ? 'bg-white border border-gray-200 text-gray-700' : 'bg-brand-600 text-white'}`}>
+                      <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                      <div className={`mt-1 flex items-center gap-2 text-[10px] ${isAssistant ? 'text-gray-400' : 'text-brand-100'}`}>
+                        <span>{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        {isAssistant && typeof msg.confidence === 'number' && (
+                          <span>Confidence {Math.round(msg.confidence)}%</span>
+                        )}
+                      </div>
+
+                      {isAssistant && Array.isArray(msg.actions) && msg.actions.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {msg.actions.map((action, actionIdx) => (
+                            <button
+                              key={`${msg.id}-action-${actionIdx}`}
+                              type="button"
+                              onClick={() => handleLeadAiAction(action)}
+                              className="text-[11px] rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-medium text-gray-600 hover:bg-gray-100"
+                            >
+                              {action.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {aiLeadChatLoading && (
+                <div className="flex justify-start">
+                  <div className="rounded-xl bg-white border border-gray-200 px-3 py-2 text-xs text-gray-500">
+                    Thinking...
+                  </div>
+                </div>
+              )}
+              <div ref={aiLeadChatEndRef} />
+            </div>
+
+            {aiLeadChatError && (
+              <p className="mt-2 text-xs text-red-600">{aiLeadChatError}</p>
+            )}
+
+            <div className="mt-3 flex items-end gap-2">
+              <input
+                type="text"
+                value={aiLeadChatInput}
+                onChange={(e) => setAiLeadChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendLeadAiChatMessage();
+                  }
+                }}
+                placeholder="Ask AI Copilot about this lead..."
+                className="flex-1 input text-sm"
+                disabled={aiLeadChatLoading}
+              />
+              <button
+                type="button"
+                onClick={() => sendLeadAiChatMessage()}
+                disabled={aiLeadChatLoading || !aiLeadChatInput.trim()}
+                className="btn-primary text-xs px-3 py-2 disabled:opacity-50"
+              >
+                {aiLeadChatLoading ? 'Sending...' : 'Send'}
+              </button>
+            </div>
           </div>
 
           {/* Quick Actions compact toolbar */}
