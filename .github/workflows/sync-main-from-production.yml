@@ -1,0 +1,41 @@
+name: Sync main from production deployment
+
+on:
+  deployment_status:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-main-from-production
+  cancel-in-progress: false
+
+jobs:
+  sync-main:
+    if: >
+      github.event.deployment_status.state == 'success' &&
+      (github.event.deployment.environment == 'production' || github.event.deployment.environment == 'Production') &&
+      github.event.deployment.ref == 'claude/enterprise-lead-management-czfec'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+      uses: actions/checkout@v4
+      with:
+        ref: main
+        fetch-depth: 0
+
+      - name: Configure git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge production into main
+      run: |
+        git fetch origin main claude/enterprise-lead-management-czfec
+        git checkout main
+        if git merge-base --is-ancestor origin/claude/enterprise-lead-management-czfec HEAD; then
+          echo "main already includes production branch."
+          exit 0
+        fi
+        git merge --no-ff origin/claude/enterprise-lead-management-czfec -m "chore: sync main from production deployment"
+        git push origin main
