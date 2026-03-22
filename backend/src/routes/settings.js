@@ -15,6 +15,11 @@ const router = Router();
 router.use(authenticate, orgScope);
 const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
+function resolveGroupOrgId(req) {
+  if (req?.user?.organization?.type === 'GROUP') return req.user.organizationId;
+  return req?.user?.organization?.parentId || req.user.organizationId;
+}
+
 const notificationPreferencesSchema = z.object({
   soundEnabled: z.boolean().optional(),
   desktopEnabled: z.boolean().optional(),
@@ -315,7 +320,7 @@ router.get('/field-config', async (req, res, next) => {
 
     let customFields = [];
     if (req.isSuperAdmin) {
-      const groupOrgId = req.user.organizationId;
+      const groupOrgId = resolveGroupOrgId(req);
 
       if (divisionId && !req.orgIds.includes(divisionId)) {
         return res.status(403).json({ error: 'Division not found or access denied' });
@@ -485,7 +490,7 @@ router.get('/custom-fields', async (req, res, next) => {
     // - no divisionId ("All Divisions"): return only group-level global fields
     // - with divisionId: return global + selected division fields (division wins on same name)
     if (req.isSuperAdmin) {
-      const groupOrgId = req.user.organizationId;
+      const groupOrgId = resolveGroupOrgId(req);
 
       if (divisionId && !req.orgIds.includes(divisionId)) {
         return res.status(403).json({ error: 'Division not found or access denied' });
@@ -554,7 +559,10 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
 })), async (req, res, next) => {
   try {
     const { label, type, options, isRequired, divisionId, showInList, showInDetail, description, placeholder, defaultValue } = req.validated;
-    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+    const groupOrgId = resolveGroupOrgId(req);
+    const targetOrgId = req.isSuperAdmin
+      ? (divisionId || groupOrgId)
+      : req.orgId;
 
     // Generate name from label (e.g. "Company Size" -> "companySize")
     const name = label
@@ -620,6 +628,23 @@ router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
     }
 
     const data = { ...req.validated };
+
+    if (req.isSuperAdmin && Object.prototype.hasOwnProperty.call(data, 'divisionId')) {
+      const groupOrgId = resolveGroupOrgId(req);
+      if (data.divisionId && !req.orgIds.includes(data.divisionId)) {
+        return res.status(403).json({ error: 'Division not found or access denied' });
+      }
+      if (data.divisionId) {
+        data.organizationId = data.divisionId;
+      } else {
+        data.organizationId = groupOrgId;
+        data.divisionId = null;
+      }
+    }
+
+    if (!req.isSuperAdmin && data.divisionId && data.divisionId !== req.orgId) {
+      return res.status(403).json({ error: 'Division not found or access denied' });
+    }
     // If label changes, update name too
     if (data.label) {
       data.name = data.label
