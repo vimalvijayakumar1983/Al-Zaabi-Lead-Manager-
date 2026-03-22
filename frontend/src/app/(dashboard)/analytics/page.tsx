@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { useNotificationStore } from '@/store/notificationStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   TrendingUp, TrendingDown, Minus, Users, Trophy, BarChart3, DollarSign,
@@ -28,6 +29,36 @@ function fmt(n: number, type: 'number' | 'currency' | 'percent' = 'number') {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toLocaleString();
+}
+
+function csvEscape(value: unknown): string {
+  const str = String(value ?? '');
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function rowsToCsv(rows: Array<Record<string, unknown>>): string {
+  if (!rows.length) return '';
+  const headers = Array.from(
+    rows.reduce((set, row) => {
+      Object.keys(row).forEach((k) => set.add(k));
+      return set;
+    }, new Set<string>())
+  );
+  const lines = [
+    headers.map(csvEscape).join(','),
+    ...rows.map((row) => headers.map((h) => csvEscape(row[h])).join(',')),
+  ];
+  return lines.join('\n');
+}
+
+function htmlEscape(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function fillDates(data: any[], days: number) {
@@ -65,6 +96,11 @@ function roleLabel(r: string) {
 function drillLink(params: Record<string, string>) {
   const q = new URLSearchParams(params).toString();
   return `/leads?${q}`;
+}
+
+function taskDrillLink(params: Record<string, string>) {
+  const q = new URLSearchParams(params).toString();
+  return `/tasks?${q}`;
 }
 
 // ─── SVG Line Chart ───────────────────────────────────────────────
@@ -137,9 +173,9 @@ function LineChart({ data, series, height = 220 }: {
 
 // ─── Bar Chart ────────────────────────────────────────────────────
 
-function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160 }: {
+function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160, onBarClick }: {
   data: any[]; xKey: string; yKey: string; color: string;
-  secondaryKey?: string; secondaryColor?: string; height?: number;
+  secondaryKey?: string; secondaryColor?: string; height?: number; onBarClick?: (row: any) => void;
 }) {
   if (!data.length) return <div className="flex items-center justify-center h-32 text-sm text-text-tertiary">No data</div>;
   const maxVal = Math.max(...data.map(d => Number(d[yKey] || 0)), 1);
@@ -149,7 +185,11 @@ function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, heigh
         const pct = (Number(d[yKey] || 0) / maxVal) * 90;
         const secPct = secondaryKey ? (Number(d[secondaryKey] || 0) / maxVal) * 90 : 0;
         return (
-          <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+          <div
+            key={i}
+            className={`flex-1 flex flex-col items-center gap-1 group relative ${typeof onBarClick === 'function' ? 'cursor-pointer' : ''}`}
+            onClick={() => onBarClick?.(d)}
+          >
             <div className="w-full flex flex-col justify-end" style={{ height: height - 24 }}>
               {secondaryKey && (
                 <div className="w-full rounded-t-sm mb-0.5 transition-all duration-500"
@@ -396,9 +436,12 @@ const TABS: { value: Tab; label: string; icon: any }[] = [
   { value: 'calls', label: 'Call Intelligence', icon: Phone },
 ];
 
+const ANALYTICS_PREFS_KEY = 'analytics:report-prefs:v1';
+
 export default function AnalyticsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
   const isSuperAdmin = (user as any)?.role === 'SUPER_ADMIN';
 
   const [period, setPeriod] = useState<Period>('30d');
@@ -434,6 +477,44 @@ export default function AnalyticsPage() {
       api.getDivisions().then(d => setDivisions(Array.isArray(d) ? d : [])).catch(() => {});
     }
   }, [isSuperAdmin]);
+
+  // Restore saved reporting filters/view (period, tab, division)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ANALYTICS_PREFS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        period?: Period;
+        activeTab?: Tab;
+        selectedDivision?: string;
+      };
+      if (parsed.period && PERIODS.some((p) => p.value === parsed.period)) {
+        setPeriod(parsed.period);
+      }
+      if (parsed.activeTab && TABS.some((t) => t.value === parsed.activeTab)) {
+        setActiveTab(parsed.activeTab);
+      }
+      if (typeof parsed.selectedDivision === 'string' && parsed.selectedDivision.trim()) {
+        setSelectedDivision(parsed.selectedDivision);
+      }
+    } catch {
+      // ignore invalid localStorage state
+    }
+  }, []);
+
+  // Persist current report filters/view so users resume where they left
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        ANALYTICS_PREFS_KEY,
+        JSON.stringify({ period, activeTab, selectedDivision })
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [period, activeTab, selectedDivision]);
 
   const divId = selectedDivision === 'all' ? undefined : selectedDivision;
   const selectedDivName = selectedDivision === 'all'
@@ -495,6 +576,145 @@ export default function AnalyticsPage() {
 
   // ── Drill-down helper ─────────────────────────────────────────────
   const drill = (params: Record<string, string>) => router.push(drillLink(params));
+  const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(params));
+
+  const buildExportPayload = useCallback(() => {
+    const baseMeta = {
+      period: periodLabel,
+      division: selectedDivName,
+      exportedAt: new Date().toISOString(),
+      tab: activeTab,
+    };
+
+    if (activeTab === 'operations') {
+      const summary = taskSlaReport?.summary || {};
+      const taskByStatus = Array.isArray(taskSlaReport?.taskBreakdown?.byStatus) ? taskSlaReport.taskBreakdown.byStatus : [];
+      const taskByPriority = Array.isArray(taskSlaReport?.taskBreakdown?.byPriority) ? taskSlaReport.taskBreakdown.byPriority : [];
+      const taskByType = Array.isArray(taskSlaReport?.taskBreakdown?.byType) ? taskSlaReport.taskBreakdown.byType : [];
+      const slaByStatus = Array.isArray(taskSlaReport?.slaBreakdown?.byStatus) ? taskSlaReport.slaBreakdown.byStatus : [];
+      const breachedAging = Array.isArray(taskSlaReport?.slaBreakdown?.breachedAgingBuckets) ? taskSlaReport.slaBreakdown.breachedAgingBuckets : [];
+      const overdueByOwner = Array.isArray(taskSlaReport?.overdueByOwner) ? taskSlaReport.overdueByOwner : [];
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Summary', metric: 'Open Tasks', value: summary.openTasks || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Overdue Tasks', value: summary.overdueTasks || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Completed In Period', value: summary.completedInPeriod || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Created In Period', value: summary.createdInPeriod || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Completion Rate %', value: summary.completionRate || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Avg Completion Hours', value: summary.avgCompletionHours || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Avg First Response Hours', value: summary.avgFirstResponseHours || 0, ...baseMeta },
+        ...taskByStatus.map((r: any) => ({ section: 'Task Status', metric: r.status, value: r.count, ...baseMeta })),
+        ...taskByPriority.map((r: any) => ({ section: 'Task Priority', metric: r.priority, value: r.count, ...baseMeta })),
+        ...taskByType.map((r: any) => ({ section: 'Task Type', metric: r.type, value: r.count, ...baseMeta })),
+        ...slaByStatus.map((r: any) => ({ section: 'SLA Status', metric: r.status, value: r.count, ...baseMeta })),
+        ...breachedAging.map((r: any) => ({ section: 'SLA Breach Aging', metric: r.bucket, value: r.count, ...baseMeta })),
+        ...overdueByOwner.map((r: any) => ({ section: 'Overdue Owner', metric: r.assigneeName, value: r.overdueCount, ...baseMeta })),
+      ];
+      return { name: 'task-sla-report', rows };
+    }
+
+    if (activeTab === 'calls') {
+      const summary = callDispositionReport?.summary || {};
+      const byDisposition = Array.isArray(callDispositionReport?.byDisposition) ? callDispositionReport.byDisposition : [];
+      const notInterested = callDispositionReport?.notInterested || { reasons: [] };
+      const completed = callDispositionReport?.alreadyCompletedServices || { locations: [] };
+      const willCall = callDispositionReport?.willCallAgain || { expectedCallbackWindows: [] };
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Summary', metric: 'Total Calls', value: summary.totalCalls || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Unique Leads Touched', value: summary.uniqueLeadsTouched || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Reachability Ratio %', value: summary.reachabilityRatio || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Reached Calls', value: summary.reachedCalls || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Not Reached Calls', value: summary.notReachedCalls || 0, ...baseMeta },
+        ...byDisposition.map((r: any) => ({ section: 'Disposition', metric: r.label, value: r.count, percent: r.percent, ...baseMeta })),
+        ...(Array.isArray(notInterested.reasons) ? notInterested.reasons : []).map((r: any) => ({ section: 'Not Interested Reason', metric: r.reason, value: r.count, percent: r.percent, ...baseMeta })),
+        ...(Array.isArray(completed.locations) ? completed.locations : []).map((r: any) => ({ section: 'Completed Service Location', metric: r.location, value: r.count, percent: r.percent, ...baseMeta })),
+        ...(Array.isArray(willCall.expectedCallbackWindows) ? willCall.expectedCallbackWindows : []).map((r: any) => ({ section: 'Will Call Window', metric: r.window, value: r.count, percent: r.percent, ...baseMeta })),
+      ];
+      return { name: 'call-intelligence-report', rows };
+    }
+
+    const rows: Array<Record<string, unknown>> = [
+      { section: 'Overview KPI', metric: 'New Leads', value: overview?.newLeads?.value ?? 0, ...baseMeta },
+      { section: 'Overview KPI', metric: 'Won Leads', value: overview?.wonLeads?.value ?? 0, ...baseMeta },
+      { section: 'Overview KPI', metric: 'Pipeline Value', value: overview?.pipelineValue?.value ?? 0, ...baseMeta },
+      { section: 'Overview KPI', metric: 'Conversion Rate %', value: overview?.conversionRate?.value ?? 0, ...baseMeta },
+      ...funnel.map((s: any) => ({ section: 'Pipeline Stage', metric: s.name, value: s.count, pipelineValue: s.value, ...baseMeta })),
+      ...sources.slice(0, 20).map((s: any) => ({ section: 'Lead Source', metric: s.source, value: s.total, won: s.won, conversionRate: s.conversionRate, ...baseMeta })),
+      ...team.slice(0, 20).map((m: any) => ({ section: 'Team', metric: m.name, value: m.totalLeads, won: m.wonLeads, conversionRate: m.conversionRate, ...baseMeta })),
+    ];
+    return { name: `analytics-${activeTab}`, rows };
+  }, [activeTab, periodLabel, selectedDivName, taskSlaReport, callDispositionReport, overview, funnel, sources, team]);
+
+  const handleExportCsv = useCallback(() => {
+    const payload = buildExportPayload();
+    if (!payload.rows.length) {
+      addToast({ type: 'info', title: 'No data to export', message: 'Try adjusting filters or period.' });
+      return;
+    }
+    const csv = rowsToCsv(payload.rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `${payload.name}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', title: 'CSV exported', message: `${payload.rows.length} rows exported.` });
+  }, [buildExportPayload, addToast]);
+
+  const handleExportPdf = useCallback(() => {
+    const payload = buildExportPayload();
+    if (!payload.rows.length) {
+      addToast({ type: 'info', title: 'No data to export', message: 'Try adjusting filters or period.' });
+      return;
+    }
+    const headers = Array.from(
+      payload.rows.reduce((set, row) => {
+        Object.keys(row).forEach((k) => set.add(k));
+        return set;
+      }, new Set<string>())
+    );
+    const body = payload.rows
+      .map((row) => `<tr>${headers.map((h) => `<td>${htmlEscape(row[h])}</td>`).join('')}</tr>`)
+      .join('');
+
+    const win = window.open('', '_blank', 'noopener,noreferrer,width=1200,height=800');
+    if (!win) {
+      addToast({ type: 'error', title: 'Popup blocked', message: 'Allow popups to export PDF.' });
+      return;
+    }
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>${htmlEscape(payload.name)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #1f2937; }
+            h1 { font-size: 18px; margin: 0 0 4px 0; }
+            p { margin: 0 0 16px 0; color: #6b7280; font-size: 12px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #f9fafb; }
+          </style>
+        </head>
+        <body>
+          <h1>${htmlEscape(payload.name)}</h1>
+          <p>Period: ${htmlEscape(periodLabel)} | Division: ${htmlEscape(selectedDivName)} | Exported: ${htmlEscape(new Date().toLocaleString())}</p>
+          <table>
+            <thead><tr>${headers.map((h) => `<th>${htmlEscape(h)}</th>`).join('')}</tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
+    win.print();
+  }, [buildExportPayload, addToast, periodLabel, selectedDivName]);
 
   // ── Loading Skeleton ──────────────────────────────────────────────
   if (loading) {
@@ -1177,21 +1397,27 @@ export default function AnalyticsPage() {
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Task Status Distribution</h2>
             <BarChart
-              data={taskByStatus.map((row: any) => ({ label: fmtLabel(row.status), count: row.count }))}
+              data={taskByStatus.map((row: any) => ({ key: row.status, label: fmtLabel(row.status), count: row.count }))}
               xKey="label"
               yKey="count"
               color="#6366f1"
               height={180}
+              onBarClick={(row) => {
+                if (row?.key) drillTasks({ status: String(row.key) });
+              }}
             />
           </div>
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Task Priority Distribution</h2>
             <BarChart
-              data={taskByPriority.map((row: any) => ({ label: fmtLabel(row.priority), count: row.count }))}
+              data={taskByPriority.map((row: any) => ({ key: row.priority, label: fmtLabel(row.priority), count: row.count }))}
               xKey="label"
               yKey="count"
               color="#f59e0b"
               height={180}
+              onBarClick={(row) => {
+                if (row?.key) drillTasks({ priority: String(row.key) });
+              }}
             />
           </div>
           <div className="card p-5">
@@ -1223,11 +1449,14 @@ export default function AnalyticsPage() {
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Task Type Mix</h2>
             <BarChart
-              data={taskByType.slice(0, 7).map((row: any) => ({ label: fmtLabel(row.type), count: row.count }))}
+              data={taskByType.slice(0, 7).map((row: any) => ({ key: row.type, label: fmtLabel(row.type), count: row.count }))}
               xKey="label"
               yKey="count"
               color="#0ea5e9"
               height={170}
+              onBarClick={(row) => {
+                if (row?.key) drillTasks({ type: String(row.key) });
+              }}
             />
           </div>
         </div>
@@ -1249,7 +1478,15 @@ export default function AnalyticsPage() {
                 {overdueByOwner.length === 0 ? (
                   <tr><td colSpan={2} className="py-8 text-center text-sm text-text-tertiary">No overdue tasks in this scope</td></tr>
                 ) : overdueByOwner.map((row: any) => (
-                  <tr key={row.assigneeId || row.assigneeName} className="table-row">
+                  <tr
+                    key={row.assigneeId || row.assigneeName}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => {
+                      const params: Record<string, string> = { overdue: '1' };
+                      if (row.assigneeId) params.assigneeId = row.assigneeId;
+                      drillTasks(params);
+                    }}
+                  >
                     <td className="table-cell px-4">{row.assigneeName}</td>
                     <td className="table-cell px-4">
                       <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold bg-red-50 text-red-600">
@@ -1300,6 +1537,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#ef4444"
                 height={180}
+                onBarClick={() => drill({ callOutcome: 'NOT_INTERESTED' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No Not Interested reason data yet</p></div>
@@ -1317,6 +1555,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#10b981"
                 height={170}
+                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
@@ -1331,6 +1570,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#6366f1"
                 height={170}
+                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
@@ -1355,7 +1595,11 @@ export default function AnalyticsPage() {
                 {byDisposition.length === 0 ? (
                   <tr><td colSpan={3} className="py-8 text-center text-sm text-text-tertiary">No call data for selected period</td></tr>
                 ) : byDisposition.map((row: any) => (
-                  <tr key={row.disposition} className="table-row">
+                  <tr
+                    key={row.disposition}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => drill({ callOutcome: row.disposition })}
+                  >
                     <td className="table-cell px-4">{row.label}</td>
                     <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
                     <td className="table-cell px-4"><span className="tabular-nums">{row.percent}%</span></td>
@@ -1437,6 +1681,24 @@ export default function AnalyticsPage() {
               </div>
             )}
           </div>
+
+          <button
+            onClick={handleExportCsv}
+            className="btn-secondary h-9 px-3 text-sm flex items-center gap-1.5"
+            title="Export current report as CSV"
+          >
+            <Download className="h-3.5 w-3.5" />
+            CSV
+          </button>
+
+          <button
+            onClick={handleExportPdf}
+            className="btn-secondary h-9 px-3 text-sm flex items-center gap-1.5"
+            title="Export current report as PDF"
+          >
+            <Download className="h-3.5 w-3.5" />
+            PDF
+          </button>
 
           <button onClick={() => fetchData(true)} disabled={refreshing}
             className="btn-secondary h-9 w-9 flex items-center justify-center p-0">
