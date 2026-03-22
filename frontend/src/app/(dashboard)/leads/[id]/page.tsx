@@ -616,11 +616,6 @@ export default function LeadDetailPage() {
         if (fallbackReply) {
           setAiLeadChatMessages((prev) => [...prev, fallbackReply].slice(-24));
           setAiLeadChatError(null);
-          addToast({
-            type: 'info',
-            title: 'AI Copilot Fallback',
-            message: 'Primary AI route is unavailable. Using in-app copilot fallback.',
-          });
         } else {
           setAiLeadChatError(message);
           addToast({ type: 'error', title: 'AI Copilot Error', message });
