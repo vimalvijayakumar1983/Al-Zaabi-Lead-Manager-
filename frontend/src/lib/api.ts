@@ -3,7 +3,7 @@ import type {
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
   ApiKey, WidgetConfig, Contact, ContactStats, Deal,
-  AppNotification, NotificationPreferences, RecycleBinItem, RecycleBinAccessSettings,
+  AppNotification, NotificationPreferences,
   BuiltInField, CustomField
 } from '@/types';
 
@@ -355,19 +355,19 @@ class ApiClient {
     return this.request<any>(`/analytics/activities?${q}`);
   }
 
-  async getNotInterestedReasonAnalytics(period = '30d', divisionId?: string) {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
-    return this.request<any>(`/analytics/not-interested-reasons?${q}`);
-  }
-
-  async getCompletedServicesLocationAnalytics(period = '30d', divisionId?: string) {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
-    return this.request<any>(`/analytics/completed-services-locations?${q}`);
-  }
-
   async getScoreDistribution(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any>(`/analytics/score-distribution${q}`);
+  }
+
+  async getTaskSLAReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/task-sla-report?${q}`);
+  }
+
+  async getCallDispositionReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/call-disposition-report?${q}`);
   }
 
   async getDivisionComparison() {
@@ -806,23 +806,8 @@ class ApiClient {
     return this.request<any[]>(`/call-logs/lead/${leadId}`);
   }
 
-  async getDispositions(params?: { leadId?: string; divisionId?: string }) {
-    const q = new URLSearchParams();
-    if (params?.leadId) q.set('leadId', params.leadId);
-    if (params?.divisionId) q.set('divisionId', params.divisionId);
-    return this.request<any[]>(`/call-logs/dispositions${q.toString() ? `?${q.toString()}` : ''}`);
-  }
-
-  async getDispositionStudio(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
-    return this.request<{ divisionId: string; dispositions: any[] }>(`/call-logs/dispositions/studio${q}`);
-  }
-
-  async updateDispositionStudio(dispositions: any[], divisionId?: string) {
-    return this.request<{ divisionId: string; dispositions: any[] }>(
-      '/call-logs/dispositions/studio',
-      { method: 'PUT', body: JSON.stringify({ dispositions, divisionId }) }
-    );
+  async getDispositions() {
+    return this.request<any[]>('/call-logs/dispositions');
   }
 
   async getDispositionSettings() {
@@ -858,11 +843,11 @@ class ApiClient {
   }
 
   async getNotificationPreferences() {
-    return this.request<NotificationPreferences>('/notifications/preferences');
+    return this.request<any>('/settings/notifications');
   }
 
-  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
-    return this.request<NotificationPreferences>('/notifications/preferences', { method: 'PUT', body: JSON.stringify(data) });
+  async updateNotificationPreferences(data: Record<string, boolean>) {
+    return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async getAuditLog() {
@@ -1105,22 +1090,12 @@ class ApiClient {
       : '';
     return this.request<{
       data: AppNotification[];
-      pagination: {
-        page: number;
-        limit: number;
-        total: number;
-        totalPages: number;
-        hasNext: boolean;
-        hasPrev: boolean;
-      };
+      pagination: { page: number; limit: number; total: number; totalPages: number };
     }>(`/notifications${query}`);
   }
 
-  async getUnreadCount(params?: { divisionId?: string }) {
-    const query = params?.divisionId
-      ? `?${new URLSearchParams({ divisionId: params.divisionId }).toString()}`
-      : '';
-    return this.request<{ count: number }>(`/notifications/unread-count${query}`);
+  async getUnreadCount() {
+    return this.request<{ count: number }>('/notifications/unread-count');
   }
 
   async markNotificationRead(id: string) {
@@ -1135,13 +1110,6 @@ class ApiClient {
     });
   }
 
-  async clearAllNotifications() {
-    return this.request<{ success: boolean; changed: number; unreadCount: number }>(
-      '/notifications/clear-all',
-      { method: 'POST' }
-    );
-  }
-
   async archiveNotification(id: string) {
     return this.request<{ success: boolean }>(`/notifications/${id}/archive`, {
       method: 'POST',
@@ -1154,164 +1122,15 @@ class ApiClient {
     });
   }
 
-  async getRecycleBinItems(params?: {
-    type?: 'LEAD' | 'CONTACT' | 'TASK' | 'CAMPAIGN';
-    search?: string;
-    divisionId?: string;
-    expiringInDays?: number;
-    page?: number;
-    limit?: number;
-    sortBy?: 'deletedAt' | 'purgeAt' | 'entityLabel';
-    sortOrder?: 'asc' | 'desc';
-  }) {
-    const query = params
-      ? '?' + new URLSearchParams(params as Record<string, string>).toString()
-      : '';
-    return this.request<{
-      data: RecycleBinItem[];
-      pagination: {
-        page: number;
-        limit: number;
-        total: number;
-        totalPages: number;
-        hasNext: boolean;
-        hasPrev: boolean;
-      };
-    }>(`/recycle-bin${query}`);
-  }
-
-  async restoreRecycleBinItem(id: string) {
-    return this.request<{ success: boolean; result: any }>(`/recycle-bin/${id}/restore`, {
-      method: 'POST',
-    });
-  }
-
-  async bulkRestoreRecycleBinItems(ids: string[]) {
-    return this.request<{
-      success: boolean;
-      summary: { requested: number; restored: number; skipped: number; failed: number; missing: number };
-      restored: Array<{ id: string; entityType: string; entityId: string }>;
-      skipped: Array<{ id: string; reason: string }>;
-      failed: Array<{ id: string; reason: string }>;
-      missingIds: string[];
-    }>('/recycle-bin/bulk/restore', {
-      method: 'POST',
-      body: JSON.stringify({ ids }),
-    });
-  }
-
-  async permanentlyDeleteRecycleBinItem(id: string) {
-    return this.request<{ success: boolean; result: any }>(`/recycle-bin/${id}/permanent`, {
-      method: 'DELETE',
-    });
-  }
-
-  async bulkPermanentlyDeleteRecycleBinItems(ids: string[], confirmText: string) {
-    return this.request<{
-      success: boolean;
-      summary: { requested: number; purged: number; failed: number; missing: number };
-      purged: Array<{ id: string; entityType: string; entityId: string }>;
-      failed: Array<{ id: string; reason: string }>;
-      missingIds: string[];
-    }>('/recycle-bin/bulk/permanent-delete', {
-      method: 'POST',
-      body: JSON.stringify({ ids, confirmText }),
-    });
-  }
-
-  async getRecycleBinAccessSettings() {
-    return this.request<{ settings: RecycleBinAccessSettings; availableScopes: string[] }>(
-      '/recycle-bin/access-settings'
-    );
-  }
-
-  async updateRecycleBinAccessSettings(data: Partial<RecycleBinAccessSettings>) {
-    return this.request<{ settings: RecycleBinAccessSettings }>('/recycle-bin/access-settings', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
   async getNotificationPrefs() {
-    return this.request<NotificationPreferences>('/notifications/preferences');
+    return this.request<any>('/notifications/preferences');
   }
 
   async updateNotificationPrefs(data: Partial<NotificationPreferences>) {
-    return this.request<NotificationPreferences>('/notifications/preferences', {
+    return this.request<any>('/notifications/preferences', {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-  }
-
-  async notificationAction(id: string, action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE', minutes?: number) {
-    return this.request<{
-      success: boolean;
-      action: string;
-      result: any;
-      notification: AppNotification;
-      unreadCount: number;
-    }>(`/notifications/${id}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action, ...(typeof minutes === 'number' ? { minutes } : {}) }),
-    });
-  }
-
-  async snoozeNotification(id: string, minutes = 15) {
-    return this.request<{
-      success: boolean;
-      action: string;
-      result: any;
-      notification: AppNotification;
-      unreadCount: number;
-    }>(`/notifications/${id}/snooze`, {
-      method: 'POST',
-      body: JSON.stringify({ minutes }),
-    });
-  }
-
-  async escalateNotification(id: string) {
-    return this.request<{
-      success: boolean;
-      action: string;
-      result: any;
-      notification: AppNotification;
-      unreadCount: number;
-    }>(`/notifications/${id}/escalate`, {
-      method: 'POST',
-    });
-  }
-
-  async getNotificationDigest(params?: {
-    range?: '24h' | '7d' | '30d';
-    dateFrom?: string;
-    dateTo?: string;
-    limit?: number;
-  }) {
-    const query = params
-      ? '?' + new URLSearchParams(
-          Object.entries(params).reduce<Record<string, string>>((acc, [k, v]) => {
-            if (v !== undefined && v !== null) acc[k] = String(v);
-            return acc;
-          }, {})
-        ).toString()
-      : '';
-    return this.request<any>(`/notifications/digest${query}`);
-  }
-
-  async getNotificationAnalytics(params?: {
-    range?: '24h' | '7d' | '30d';
-    dateFrom?: string;
-    dateTo?: string;
-  }) {
-    const query = params
-      ? '?' + new URLSearchParams(
-          Object.entries(params).reduce<Record<string, string>>((acc, [k, v]) => {
-            if (v !== undefined && v !== null) acc[k] = String(v);
-            return acc;
-          }, {})
-        ).toString()
-      : '';
-    return this.request<any>(`/notifications/analytics${query}`);
   }
 
   // ─── Lead Allocation ────────────────────────────────────────────

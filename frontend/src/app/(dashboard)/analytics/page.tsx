@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
+import { useNotificationStore } from '@/store/notificationStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import {
   TrendingUp, TrendingDown, Minus, Users, Trophy, BarChart3, DollarSign,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react';
 
 type Period = '7d' | '30d' | '90d' | '180d' | '365d';
-type Tab = 'overview' | 'pipeline' | 'team' | 'sources' | 'activities';
+type Tab = 'overview' | 'pipeline' | 'team' | 'sources' | 'activities' | 'operations' | 'calls';
 
 // ─── Utility ─────────────────────────────────────────────────────
 
@@ -28,6 +29,36 @@ function fmt(n: number, type: 'number' | 'currency' | 'percent' = 'number') {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toLocaleString();
+}
+
+function csvEscape(value: unknown): string {
+  const str = String(value ?? '');
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function rowsToCsv(rows: Array<Record<string, unknown>>): string {
+  if (!rows.length) return '';
+  const headers = Array.from(
+    rows.reduce((set, row) => {
+      Object.keys(row).forEach((k) => set.add(k));
+      return set;
+    }, new Set<string>())
+  );
+  const lines = [
+    headers.map(csvEscape).join(','),
+    ...rows.map((row) => headers.map((h) => csvEscape(row[h])).join(',')),
+  ];
+  return lines.join('\n');
+}
+
+function htmlEscape(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function fillDates(data: any[], days: number) {
@@ -65,6 +96,11 @@ function roleLabel(r: string) {
 function drillLink(params: Record<string, string>) {
   const q = new URLSearchParams(params).toString();
   return `/leads?${q}`;
+}
+
+function taskDrillLink(params: Record<string, string>) {
+  const q = new URLSearchParams(params).toString();
+  return `/tasks?${q}`;
 }
 
 // ─── SVG Line Chart ───────────────────────────────────────────────
@@ -137,9 +173,9 @@ function LineChart({ data, series, height = 220 }: {
 
 // ─── Bar Chart ────────────────────────────────────────────────────
 
-function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160 }: {
+function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160, onBarClick }: {
   data: any[]; xKey: string; yKey: string; color: string;
-  secondaryKey?: string; secondaryColor?: string; height?: number;
+  secondaryKey?: string; secondaryColor?: string; height?: number; onBarClick?: (row: any) => void;
 }) {
   if (!data.length) return <div className="flex items-center justify-center h-32 text-sm text-text-tertiary">No data</div>;
   const maxVal = Math.max(...data.map(d => Number(d[yKey] || 0)), 1);
@@ -149,7 +185,11 @@ function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, heigh
         const pct = (Number(d[yKey] || 0) / maxVal) * 90;
         const secPct = secondaryKey ? (Number(d[secondaryKey] || 0) / maxVal) * 90 : 0;
         return (
-          <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+          <div
+            key={i}
+            className={`flex-1 flex flex-col items-center gap-1 group relative ${typeof onBarClick === 'function' ? 'cursor-pointer' : ''}`}
+            onClick={() => onBarClick?.(d)}
+          >
             <div className="w-full flex flex-col justify-end" style={{ height: height - 24 }}>
               {secondaryKey && (
                 <div className="w-full rounded-t-sm mb-0.5 transition-all duration-500"
@@ -392,11 +432,16 @@ const TABS: { value: Tab; label: string; icon: any }[] = [
   { value: 'team', label: 'Team', icon: Users },
   { value: 'sources', label: 'Sources & Campaigns', icon: Target },
   { value: 'activities', label: 'Activities', icon: Activity },
+  { value: 'operations', label: 'Task & SLA', icon: CheckCircle2 },
+  { value: 'calls', label: 'Call Intelligence', icon: Phone },
 ];
+
+const ANALYTICS_PREFS_KEY = 'analytics:report-prefs:v1';
 
 export default function AnalyticsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
   const isSuperAdmin = (user as any)?.role === 'SUPER_ADMIN';
 
   const [period, setPeriod] = useState<Period>('30d');
@@ -420,8 +465,11 @@ export default function AnalyticsPage() {
   const [activities, setActivities] = useState<any>(null);
   const [scoreDistrib, setScoreDistrib] = useState<any[]>([]);
   const [divisionComp, setDivisionComp] = useState<any[]>([]);
-  const [notInterestedReasons, setNotInterestedReasons] = useState<any>(null);
-  const [completedServicesLocations, setCompletedServicesLocations] = useState<any>(null);
+  const [taskSlaReport, setTaskSlaReport] = useState<any>(null);
+  const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
+  const [taskSlaUnavailable, setTaskSlaUnavailable] = useState(false);
+  const [callReportUnavailable, setCallReportUnavailable] = useState(false);
+  const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -432,6 +480,44 @@ export default function AnalyticsPage() {
       api.getDivisions().then(d => setDivisions(Array.isArray(d) ? d : [])).catch(() => {});
     }
   }, [isSuperAdmin]);
+
+  // Restore saved reporting filters/view (period, tab, division)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ANALYTICS_PREFS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        period?: Period;
+        activeTab?: Tab;
+        selectedDivision?: string;
+      };
+      if (parsed.period && PERIODS.some((p) => p.value === parsed.period)) {
+        setPeriod(parsed.period);
+      }
+      if (parsed.activeTab && TABS.some((t) => t.value === parsed.activeTab)) {
+        setActiveTab(parsed.activeTab);
+      }
+      if (typeof parsed.selectedDivision === 'string' && parsed.selectedDivision.trim()) {
+        setSelectedDivision(parsed.selectedDivision);
+      }
+    } catch {
+      // ignore invalid localStorage state
+    }
+  }, []);
+
+  // Persist current report filters/view so users resume where they left
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        ANALYTICS_PREFS_KEY,
+        JSON.stringify({ period, activeTab, selectedDivision })
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [period, activeTab, selectedDivision]);
 
   const divId = selectedDivision === 'all' ? undefined : selectedDivision;
   const selectedDivName = selectedDivision === 'all'
@@ -445,7 +531,7 @@ export default function AnalyticsPage() {
     else setRefreshing(true);
     try {
       const p = periodRef.current;
-      const [ov, fn, tr, tm, src, cam, act, sd, nir, csl] = await Promise.allSettled([
+      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp] = await Promise.allSettled([
         api.getAnalyticsOverview(p, divId),
         api.getFunnel(divId),
         api.getTrends(p, divId),
@@ -454,8 +540,8 @@ export default function AnalyticsPage() {
         api.getCampaignPerformance(divId),
         api.getActivitiesAnalytics(p, divId),
         api.getScoreDistribution(divId),
-        api.getNotInterestedReasonAnalytics(p, divId),
-        api.getCompletedServicesLocationAnalytics(p, divId),
+        api.getTaskSLAReport(p, divId),
+        api.getCallDispositionReport(p, divId),
       ]);
 
       if (ov.status === 'fulfilled') setOverview(ov.value);
@@ -466,8 +552,54 @@ export default function AnalyticsPage() {
       if (cam.status === 'fulfilled') setCampaigns(Array.isArray(cam.value) ? cam.value : []);
       if (act.status === 'fulfilled') setActivities(act.value);
       if (sd.status === 'fulfilled') setScoreDistrib(Array.isArray(sd.value) ? sd.value : []);
-      if (nir.status === 'fulfilled') setNotInterestedReasons(nir.value);
-      if (csl.status === 'fulfilled') setCompletedServicesLocations(csl.value);
+      if (taskSla.status === 'fulfilled') {
+        setTaskSlaReport(taskSla.value || null);
+        setTaskSlaUnavailable(false);
+      } else {
+        setTaskSlaReport(null);
+        setTaskSlaUnavailable(true);
+      }
+      if (callDisp.status === 'fulfilled') {
+        setCallDispositionReport(callDisp.value || null);
+        setCallReportUnavailable(false);
+        setCallReportLegacyFallback(false);
+      } else {
+        // Backward-compatible fallback for deployments where the new
+        // call-disposition endpoint is not available yet.
+        const legacy = await api.getDashboardFull(p, divId).catch(() => null);
+        const k = legacy?.kpis || {};
+        const totalCalls = Number(k.totalCalls || 0);
+        const reachedCalls = Number(k.reachedCalls || 0);
+        const notReachedCalls = Number(k.notReachedCalls || 0);
+        const reachabilityRatio = Number(k.reachabilityRatio || 0);
+        if (legacy) {
+          setCallDispositionReport({
+            summary: {
+              totalCalls,
+              reachedCalls,
+              notReachedCalls,
+              reachabilityRatio,
+              uniqueLeadsTouched: 0,
+              avgDurationSeconds: 0,
+            },
+            byDisposition: [],
+            notInterested: { total: 0, reasons: [] },
+            alreadyCompletedServices: { total: 0, locations: [] },
+            willCallAgain: { total: 0, expectedCallbackWindows: [] },
+            meta: {
+              legacyFallback: true,
+              fallbackReason: 'CALL_DISPOSITION_ENDPOINT_UNAVAILABLE',
+              periodFallback: false,
+            },
+          });
+          setCallReportUnavailable(false);
+          setCallReportLegacyFallback(true);
+        } else {
+          setCallDispositionReport(null);
+          setCallReportUnavailable(true);
+          setCallReportLegacyFallback(false);
+        }
+      }
 
       if (isSuperAdmin && !divId) {
         api.getDivisionComparison().then(d => setDivisionComp(Array.isArray(d) ? d : [])).catch(() => {});
@@ -493,6 +625,145 @@ export default function AnalyticsPage() {
 
   // ── Drill-down helper ─────────────────────────────────────────────
   const drill = (params: Record<string, string>) => router.push(drillLink(params));
+  const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(params));
+
+  const buildExportPayload = useCallback(() => {
+    const baseMeta = {
+      period: periodLabel,
+      division: selectedDivName,
+      exportedAt: new Date().toISOString(),
+      tab: activeTab,
+    };
+
+    if (activeTab === 'operations') {
+      const summary = taskSlaReport?.summary || {};
+      const taskByStatus = Array.isArray(taskSlaReport?.taskBreakdown?.byStatus) ? taskSlaReport.taskBreakdown.byStatus : [];
+      const taskByPriority = Array.isArray(taskSlaReport?.taskBreakdown?.byPriority) ? taskSlaReport.taskBreakdown.byPriority : [];
+      const taskByType = Array.isArray(taskSlaReport?.taskBreakdown?.byType) ? taskSlaReport.taskBreakdown.byType : [];
+      const slaByStatus = Array.isArray(taskSlaReport?.slaBreakdown?.byStatus) ? taskSlaReport.slaBreakdown.byStatus : [];
+      const breachedAging = Array.isArray(taskSlaReport?.slaBreakdown?.breachedAgingBuckets) ? taskSlaReport.slaBreakdown.breachedAgingBuckets : [];
+      const overdueByOwner = Array.isArray(taskSlaReport?.overdueByOwner) ? taskSlaReport.overdueByOwner : [];
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Summary', metric: 'Open Tasks', value: summary.openTasks || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Overdue Tasks', value: summary.overdueTasks || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Completed In Period', value: summary.completedInPeriod || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Created In Period', value: summary.createdInPeriod || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Completion Rate %', value: summary.completionRate || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Avg Completion Hours', value: summary.avgCompletionHours || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Avg First Response Hours', value: summary.avgFirstResponseHours || 0, ...baseMeta },
+        ...taskByStatus.map((r: any) => ({ section: 'Task Status', metric: r.status, value: r.count, ...baseMeta })),
+        ...taskByPriority.map((r: any) => ({ section: 'Task Priority', metric: r.priority, value: r.count, ...baseMeta })),
+        ...taskByType.map((r: any) => ({ section: 'Task Type', metric: r.type, value: r.count, ...baseMeta })),
+        ...slaByStatus.map((r: any) => ({ section: 'SLA Status', metric: r.status, value: r.count, ...baseMeta })),
+        ...breachedAging.map((r: any) => ({ section: 'SLA Breach Aging', metric: r.bucket, value: r.count, ...baseMeta })),
+        ...overdueByOwner.map((r: any) => ({ section: 'Overdue Owner', metric: r.assigneeName, value: r.overdueCount, ...baseMeta })),
+      ];
+      return { name: 'task-sla-report', rows };
+    }
+
+    if (activeTab === 'calls') {
+      const summary = callDispositionReport?.summary || {};
+      const byDisposition = Array.isArray(callDispositionReport?.byDisposition) ? callDispositionReport.byDisposition : [];
+      const notInterested = callDispositionReport?.notInterested || { reasons: [] };
+      const completed = callDispositionReport?.alreadyCompletedServices || { locations: [] };
+      const willCall = callDispositionReport?.willCallAgain || { expectedCallbackWindows: [] };
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Summary', metric: 'Total Calls', value: summary.totalCalls || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Unique Leads Touched', value: summary.uniqueLeadsTouched || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Reachability Ratio %', value: summary.reachabilityRatio || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Reached Calls', value: summary.reachedCalls || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Not Reached Calls', value: summary.notReachedCalls || 0, ...baseMeta },
+        ...byDisposition.map((r: any) => ({ section: 'Disposition', metric: r.label, value: r.count, percent: r.percent, ...baseMeta })),
+        ...(Array.isArray(notInterested.reasons) ? notInterested.reasons : []).map((r: any) => ({ section: 'Not Interested Reason', metric: r.reason, value: r.count, percent: r.percent, ...baseMeta })),
+        ...(Array.isArray(completed.locations) ? completed.locations : []).map((r: any) => ({ section: 'Completed Service Location', metric: r.location, value: r.count, percent: r.percent, ...baseMeta })),
+        ...(Array.isArray(willCall.expectedCallbackWindows) ? willCall.expectedCallbackWindows : []).map((r: any) => ({ section: 'Will Call Window', metric: r.window, value: r.count, percent: r.percent, ...baseMeta })),
+      ];
+      return { name: 'call-intelligence-report', rows };
+    }
+
+    const rows: Array<Record<string, unknown>> = [
+      { section: 'Overview KPI', metric: 'New Leads', value: overview?.newLeads?.value ?? 0, ...baseMeta },
+      { section: 'Overview KPI', metric: 'Won Leads', value: overview?.wonLeads?.value ?? 0, ...baseMeta },
+      { section: 'Overview KPI', metric: 'Pipeline Value', value: overview?.pipelineValue?.value ?? 0, ...baseMeta },
+      { section: 'Overview KPI', metric: 'Conversion Rate %', value: overview?.conversionRate?.value ?? 0, ...baseMeta },
+      ...funnel.map((s: any) => ({ section: 'Pipeline Stage', metric: s.name, value: s.count, pipelineValue: s.value, ...baseMeta })),
+      ...sources.slice(0, 20).map((s: any) => ({ section: 'Lead Source', metric: s.source, value: s.total, won: s.won, conversionRate: s.conversionRate, ...baseMeta })),
+      ...team.slice(0, 20).map((m: any) => ({ section: 'Team', metric: m.name, value: m.totalLeads, won: m.wonLeads, conversionRate: m.conversionRate, ...baseMeta })),
+    ];
+    return { name: `analytics-${activeTab}`, rows };
+  }, [activeTab, periodLabel, selectedDivName, taskSlaReport, callDispositionReport, overview, funnel, sources, team]);
+
+  const handleExportCsv = useCallback(() => {
+    const payload = buildExportPayload();
+    if (!payload.rows.length) {
+      addToast({ type: 'info', title: 'No data to export', message: 'Try adjusting filters or period.' });
+      return;
+    }
+    const csv = rowsToCsv(payload.rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `${payload.name}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', title: 'CSV exported', message: `${payload.rows.length} rows exported.` });
+  }, [buildExportPayload, addToast]);
+
+  const handleExportPdf = useCallback(() => {
+    const payload = buildExportPayload();
+    if (!payload.rows.length) {
+      addToast({ type: 'info', title: 'No data to export', message: 'Try adjusting filters or period.' });
+      return;
+    }
+    const headers = Array.from(
+      payload.rows.reduce((set, row) => {
+        Object.keys(row).forEach((k) => set.add(k));
+        return set;
+      }, new Set<string>())
+    );
+    const body = payload.rows
+      .map((row) => `<tr>${headers.map((h) => `<td>${htmlEscape(row[h])}</td>`).join('')}</tr>`)
+      .join('');
+
+    const win = window.open('', '_blank', 'noopener,noreferrer,width=1200,height=800');
+    if (!win) {
+      addToast({ type: 'error', title: 'Popup blocked', message: 'Allow popups to export PDF.' });
+      return;
+    }
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>${htmlEscape(payload.name)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #1f2937; }
+            h1 { font-size: 18px; margin: 0 0 4px 0; }
+            p { margin: 0 0 16px 0; color: #6b7280; font-size: 12px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #f9fafb; }
+          </style>
+        </head>
+        <body>
+          <h1>${htmlEscape(payload.name)}</h1>
+          <p>Period: ${htmlEscape(periodLabel)} | Division: ${htmlEscape(selectedDivName)} | Exported: ${htmlEscape(new Date().toLocaleString())}</p>
+          <table>
+            <thead><tr>${headers.map((h) => `<th>${htmlEscape(h)}</th>`).join('')}</tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
+    win.print();
+  }, [buildExportPayload, addToast, periodLabel, selectedDivName]);
 
   // ── Loading Skeleton ──────────────────────────────────────────────
   if (loading) {
@@ -670,114 +941,6 @@ export default function AnalyticsPage() {
             <div className="empty-state py-6"><p className="text-sm text-text-tertiary">No scored leads yet</p></div>
           )}
         </div>
-      </div>
-
-      {/* Not Interested Reasons */}
-      <div className="card p-5">
-        <div className="flex items-start justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-text-primary">Not Interested Reason Analysis</h2>
-            <p className="text-xs text-text-tertiary mt-0.5">Structured reasons captured from call logs in the selected period</p>
-          </div>
-          <button
-            onClick={() => drill({ callOutcome: 'NOT_INTERESTED' })}
-            className="text-xs text-brand-600 hover:text-brand-700 inline-flex items-center gap-1"
-          >
-            View leads
-            <ExternalLink className="h-3 w-3" />
-          </button>
-        </div>
-
-        {(notInterestedReasons?.totalNotInterested || 0) === 0 ? (
-          <div className="empty-state py-6">
-            <p className="text-sm text-text-tertiary">No "Not Interested" calls in this period.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="rounded-lg border border-border-subtle p-3">
-                <p className="text-xs text-text-tertiary">Total Not Interested</p>
-                <p className="text-lg font-semibold text-text-primary tabular-nums">{fmt(notInterestedReasons.totalNotInterested || 0)}</p>
-              </div>
-              <div className="rounded-lg border border-border-subtle p-3">
-                <p className="text-xs text-text-tertiary">Reason Capture Rate</p>
-                <p className="text-lg font-semibold text-brand-600 tabular-nums">{fmt(notInterestedReasons.captureRate || 0, 'percent')}</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              {(notInterestedReasons.reasons || []).slice(0, 8).map((item: any) => {
-                const maxCount = Math.max(...(notInterestedReasons.reasons || []).map((x: any) => x.count), 1);
-                const width = (item.count / maxCount) * 100;
-                return (
-                  <div key={item.reason} className="flex items-center gap-3">
-                    <span className="text-xs text-text-secondary w-48 truncate">{item.label}</span>
-                    <div className="flex-1 h-2 bg-surface-tertiary rounded-full overflow-hidden">
-                      <div className="h-full bg-red-400 rounded-full" style={{ width: `${width}%` }} />
-                    </div>
-                    <span className="text-xs font-semibold text-text-primary w-16 text-right tabular-nums">
-                      {item.count} ({item.percent}%)
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Already Completed Services Locations */}
-      <div className="card p-5">
-        <div className="flex items-start justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-text-primary">Already Completed Services Analysis</h2>
-            <p className="text-xs text-text-tertiary mt-0.5">Track whether services were completed inside or outside the center</p>
-          </div>
-          <button
-            onClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
-            className="text-xs text-brand-600 hover:text-brand-700 inline-flex items-center gap-1"
-          >
-            View leads
-            <ExternalLink className="h-3 w-3" />
-          </button>
-        </div>
-
-        {(completedServicesLocations?.totalCompletedServices || 0) === 0 ? (
-          <div className="empty-state py-6">
-            <p className="text-sm text-text-tertiary">No "Already Completed Services" calls in this period.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="rounded-lg border border-border-subtle p-3">
-                <p className="text-xs text-text-tertiary">Total Completed-Service Calls</p>
-                <p className="text-lg font-semibold text-text-primary tabular-nums">{fmt(completedServicesLocations.totalCompletedServices || 0)}</p>
-              </div>
-              <div className="rounded-lg border border-border-subtle p-3">
-                <p className="text-xs text-text-tertiary">Location Capture Rate</p>
-                <p className="text-lg font-semibold text-emerald-600 tabular-nums">{fmt(completedServicesLocations.captureRate || 0, 'percent')}</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              {(completedServicesLocations.locations || []).slice(0, 4).map((item: any) => {
-                const maxCount = Math.max(...(completedServicesLocations.locations || []).map((x: any) => x.count), 1);
-                const width = (item.count / maxCount) * 100;
-                return (
-                  <div key={item.location} className="flex items-center gap-3">
-                    <span className="text-xs text-text-secondary w-48 truncate">{item.label}</span>
-                    <div className="flex-1 h-2 bg-surface-tertiary rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${width}%` }} />
-                    </div>
-                    <span className="text-xs font-semibold text-text-primary w-16 text-right tabular-nums">
-                      {item.count} ({item.percent}%)
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Division Comparison (Super Admin, all divisions view) */}
@@ -1257,6 +1420,277 @@ export default function AnalyticsPage() {
     );
   };
 
+  // ── Operations (Task + SLA) Tab ──────────────────────────────────
+  const OperationsTab = () => {
+    const summary = taskSlaReport?.summary || {};
+    const taskByStatus = Array.isArray(taskSlaReport?.taskBreakdown?.byStatus) ? taskSlaReport.taskBreakdown.byStatus : [];
+    const taskByPriority = Array.isArray(taskSlaReport?.taskBreakdown?.byPriority) ? taskSlaReport.taskBreakdown.byPriority : [];
+    const taskByType = Array.isArray(taskSlaReport?.taskBreakdown?.byType) ? taskSlaReport.taskBreakdown.byType : [];
+    const slaByStatus = Array.isArray(taskSlaReport?.slaBreakdown?.byStatus) ? taskSlaReport.slaBreakdown.byStatus : [];
+    const breachedAging = Array.isArray(taskSlaReport?.slaBreakdown?.breachedAgingBuckets) ? taskSlaReport.slaBreakdown.breachedAgingBuckets : [];
+    const overdueByOwner = Array.isArray(taskSlaReport?.overdueByOwner) ? taskSlaReport.overdueByOwner : [];
+
+    const fmtLabel = (value: string) => value?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'N/A';
+    const slaStatusMap = new Map(slaByStatus.map((row: any) => [row.status, row.count]));
+
+    return (
+      <div className="space-y-6">
+        {taskSlaUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Task &amp; SLA report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiCard title="Open Tasks" value={summary.openTasks || 0} icon={Clock} iconBg="bg-amber-50" iconColor="text-amber-600" />
+          <KpiCard title="Overdue Tasks" value={summary.overdueTasks || 0} icon={AlertCircle} iconBg="bg-red-50" iconColor="text-red-500" href="/tasks?filter=overdue" />
+          <KpiCard title="Completion Rate" value={summary.completionRate || 0} format="percent" icon={CheckCircle2} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+          <KpiCard title="Avg First Response" value={summary.avgFirstResponseHours || 0} subtitle="Hours" icon={Activity} iconBg="bg-brand-50" iconColor="text-brand-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Task Status Distribution</h2>
+            <BarChart
+              data={taskByStatus.map((row: any) => ({ key: row.status, label: fmtLabel(row.status), count: row.count }))}
+              xKey="label"
+              yKey="count"
+              color="#6366f1"
+              height={180}
+              onBarClick={(row) => {
+                if (row?.key) drillTasks({ status: String(row.key) });
+              }}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Task Priority Distribution</h2>
+            <BarChart
+              data={taskByPriority.map((row: any) => ({ key: row.priority, label: fmtLabel(row.priority), count: row.count }))}
+              xKey="label"
+              yKey="count"
+              color="#f59e0b"
+              height={180}
+              onBarClick={(row) => {
+                if (row?.key) drillTasks({ priority: String(row.key) });
+              }}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">SLA Status</h2>
+            <DonutChart
+              data={[
+                { label: 'On Time', value: Number(slaStatusMap.get('ON_TIME') || 0) },
+                { label: 'At Risk', value: Number(slaStatusMap.get('AT_RISK') || 0) },
+                { label: 'Breached', value: Number(slaStatusMap.get('BREACHED') || 0) },
+                { label: 'Escalated', value: Number(slaStatusMap.get('ESCALATED') || 0) },
+                { label: 'Responded', value: Number(slaStatusMap.get('RESPONDED') || 0) },
+              ].filter((d) => d.value > 0)}
+              colors={['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4']}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Breached / Escalated Aging</h2>
+            <BarChart
+              data={breachedAging.map((row: any) => ({ bucket: row.bucket, count: row.count }))}
+              xKey="bucket"
+              yKey="count"
+              color="#ef4444"
+              height={170}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Task Type Mix</h2>
+            <BarChart
+              data={taskByType.slice(0, 7).map((row: any) => ({ key: row.type, label: fmtLabel(row.type), count: row.count }))}
+              xKey="label"
+              yKey="count"
+              color="#0ea5e9"
+              height={170}
+              onBarClick={(row) => {
+                if (row?.key) drillTasks({ type: String(row.key) });
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">Overdue Tasks by Owner</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Immediate workload risk visibility</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Owner</th>
+                  <th className="table-header px-4 py-3 text-left">Overdue Tasks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overdueByOwner.length === 0 ? (
+                  <tr><td colSpan={2} className="py-8 text-center text-sm text-text-tertiary">No overdue tasks in this scope</td></tr>
+                ) : overdueByOwner.map((row: any) => (
+                  <tr
+                    key={row.assigneeId || row.assigneeName}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => {
+                      const params: Record<string, string> = { overdue: '1' };
+                      if (row.assigneeId) params.assigneeId = row.assigneeId;
+                      drillTasks(params);
+                    }}
+                  >
+                    <td className="table-cell px-4">{row.assigneeName}</td>
+                    <td className="table-cell px-4">
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold bg-red-50 text-red-600">
+                        {row.overdueCount}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Call Intelligence Tab ───────────────────────────────────────
+  const CallsTab = () => {
+    const summary = callDispositionReport?.summary || {};
+    const byDisposition = Array.isArray(callDispositionReport?.byDisposition) ? callDispositionReport.byDisposition : [];
+    const notInterested = callDispositionReport?.notInterested || { total: 0, reasons: [] };
+    const completed = callDispositionReport?.alreadyCompletedServices || { total: 0, locations: [] };
+    const willCall = callDispositionReport?.willCallAgain || { total: 0, expectedCallbackWindows: [] };
+    const usedPeriodFallback = callDispositionReport?.meta?.periodFallback === true;
+    const usingLegacyFallback =
+      callDispositionReport?.meta?.legacyFallback === true || callReportLegacyFallback;
+
+    return (
+      <div className="space-y-6">
+        {callReportUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Call Intelligence report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
+        {usingLegacyFallback && !callReportUnavailable && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+            Detailed call-disposition analytics are not deployed on this backend yet. Showing available call summary metrics from current deployment.
+          </div>
+        )}
+        {usedPeriodFallback && !callReportUnavailable && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            No calls found in selected period; showing all-time call intelligence for this scope.
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiCard title="Total Calls" value={summary.totalCalls || 0} icon={Phone} iconBg="bg-brand-50" iconColor="text-brand-600" />
+          <KpiCard title="Reachability Ratio" value={summary.reachabilityRatio || 0} format="percent" icon={Target} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+          <KpiCard title="Not Reached Calls" value={summary.notReachedCalls || 0} icon={AlertCircle} iconBg="bg-amber-50" iconColor="text-amber-600" />
+          <KpiCard title="Unique Leads Touched" value={summary.uniqueLeadsTouched || 0} icon={Users} iconBg="bg-violet-50" iconColor="text-violet-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Disposition Mix</h2>
+            <DonutChart
+              data={byDisposition.slice(0, 7).map((row: any) => ({ label: row.label, value: row.count }))}
+              colors={['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#14b8a6']}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Not Interested Reasons</h2>
+            {Array.isArray(notInterested.reasons) && notInterested.reasons.length > 0 ? (
+              <BarChart
+                data={notInterested.reasons.slice(0, 6).map((row: any) => ({ reason: row.reason, count: row.count }))}
+                xKey="reason"
+                yKey="count"
+                color="#ef4444"
+                height={180}
+                onBarClick={() => drill({ callOutcome: 'NOT_INTERESTED' })}
+              />
+            ) : (
+              <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No Not Interested reason data yet</p></div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Already Completed Services</h2>
+            {Array.isArray(completed.locations) && completed.locations.length > 0 ? (
+              <BarChart
+                data={completed.locations.map((row: any) => ({ location: row.location, count: row.count }))}
+                xKey="location"
+                yKey="count"
+                color="#10b981"
+                height={170}
+                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
+              />
+            ) : (
+              <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
+            )}
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Will Call Us Again - Expected Window</h2>
+            {Array.isArray(willCall.expectedCallbackWindows) && willCall.expectedCallbackWindows.length > 0 ? (
+              <BarChart
+                data={willCall.expectedCallbackWindows.map((row: any) => ({ window: row.window, count: row.count }))}
+                xKey="window"
+                yKey="count"
+                color="#6366f1"
+                height={170}
+                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN' })}
+              />
+            ) : (
+              <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
+            )}
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">Disposition Breakdown Table</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Disposition</th>
+                  <th className="table-header px-4 py-3 text-left">Count</th>
+                  <th className="table-header px-4 py-3 text-left">Percent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byDisposition.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="py-8 text-center text-sm text-text-tertiary">
+                      {usingLegacyFallback
+                        ? 'Detailed disposition breakdown will appear after backend update.'
+                        : 'No call data for selected period'}
+                    </td>
+                  </tr>
+                ) : byDisposition.map((row: any) => (
+                  <tr
+                    key={row.disposition}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => drill({ callOutcome: row.disposition })}
+                  >
+                    <td className="table-cell px-4">{row.label}</td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{row.percent}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Render ────────────────────────────────────────────────────────
   return (
     <div className="space-y-5 animate-fade-in">
@@ -1326,6 +1760,24 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          <button
+            onClick={handleExportCsv}
+            className="btn-secondary h-9 px-3 text-sm flex items-center gap-1.5"
+            title="Export current report as CSV"
+          >
+            <Download className="h-3.5 w-3.5" />
+            CSV
+          </button>
+
+          <button
+            onClick={handleExportPdf}
+            className="btn-secondary h-9 px-3 text-sm flex items-center gap-1.5"
+            title="Export current report as PDF"
+          >
+            <Download className="h-3.5 w-3.5" />
+            PDF
+          </button>
+
           <button onClick={() => fetchData(true)} disabled={refreshing}
             className="btn-secondary h-9 w-9 flex items-center justify-center p-0">
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-brand-500' : 'text-text-secondary'}`} />
@@ -1358,6 +1810,8 @@ export default function AnalyticsPage() {
       {activeTab === 'team' && <TeamTab />}
       {activeTab === 'sources' && <SourcesTab />}
       {activeTab === 'activities' && <ActivitiesTab />}
+      {activeTab === 'operations' && <OperationsTab />}
+      {activeTab === 'calls' && <CallsTab />}
     </div>
   );
 }

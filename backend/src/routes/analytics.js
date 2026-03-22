@@ -43,7 +43,12 @@ function getTaskWhere(req, divisionId, extra = {}) {
   if (req.isRestrictedRole) {
     where.assigneeId = req.user.id;
   } else {
-    where.assignee = { organizationId: getOrgFilter(req, divisionId) };
+    // Include tasks by assignee org OR linked lead org to avoid undercounting
+    // historical/cross-division records in reporting.
+    where.OR = [
+      { assignee: { organizationId: getOrgFilter(req, divisionId) } },
+      { lead: { organizationId: getOrgFilter(req, divisionId) } },
+    ];
   }
   return where;
 }
@@ -63,24 +68,39 @@ function pctChange(cur, prev) {
   return Math.round(((cur - prev) / prev) * 100);
 }
 
-const NOT_INTERESTED_REASON_LABELS = {
-  HIGH_PRICE: 'Price too high',
-  BUDGET_NOT_AVAILABLE: 'Budget not available',
-  INSURANCE_NOT_COVERED: 'Insurance/finance not covered',
-  NOT_INTERESTED_IN_SERVICE: 'Not interested in service',
-  SERVICE_MISMATCH: 'Service does not match need',
-  BAD_TIMING: 'Timing not right',
-  CHOSE_COMPETITOR: 'Chose competitor',
-  NO_LONGER_NEEDED: 'No longer required',
-  NOT_DECISION_MAKER: 'Not decision maker',
+const CALL_DISPOSITION_LABELS = {
+  CALLBACK: 'Call Back Requested',
+  CALL_LATER: 'Call Later',
+  CALL_AGAIN: 'Call Again',
+  WILL_CALL_US_AGAIN: 'Will Call Us Again',
+  MEETING_ARRANGED: 'Meeting Arranged',
+  APPOINTMENT_BOOKED: 'Appointment Booked',
+  INTERESTED: 'Interested',
+  NOT_INTERESTED: 'Not Interested',
+  ALREADY_COMPLETED_SERVICES: 'Already Completed Services',
+  NO_ANSWER: 'No Answer',
+  VOICEMAIL_LEFT: 'Voicemail Left',
+  WRONG_NUMBER: 'Wrong Number',
+  BUSY: 'Busy',
+  GATEKEEPER: 'Gatekeeper',
+  FOLLOW_UP_EMAIL: 'Follow-up Email',
+  QUALIFIED: 'Qualified',
+  PROPOSAL_REQUESTED: 'Proposal Requested',
+  DO_NOT_CALL: 'Do Not Call',
   OTHER: 'Other',
-  UNSPECIFIED: 'Unspecified',
 };
-const COMPLETED_SERVICE_LOCATION_LABELS = {
-  INSIDE_CENTER: 'Inside Center',
-  OUTSIDE_CENTER: 'Outside Center',
-  UNSPECIFIED: 'Unspecified',
-};
+
+const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
+
+function parseMetadata(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
 
 // ─── Dashboard Overview ──────────────────────────────────────────
 router.get('/dashboard', async (req, res, next) => {
@@ -476,138 +496,293 @@ router.get('/activities', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Not Interested Reason Analytics ──────────────────────────────
-router.get('/not-interested-reasons', async (req, res, next) => {
+// ─── Task & SLA Report (Phase A) ─────────────────────────────────
+router.get('/task-sla-report', async (req, res, next) => {
   try {
     const { divisionId, period = '30d' } = req.query;
-    const orgFilter = getOrgFilter(req, divisionId);
     const { start } = getPeriodDates(period);
+    const now = new Date();
 
-    const callWhere = req.isRestrictedRole
-      ? {
-          createdAt: { gte: start },
-          disposition: 'NOT_INTERESTED',
-          lead: { assignedToId: req.user.id, isArchived: false },
-        }
-      : {
-          createdAt: { gte: start },
-          disposition: 'NOT_INTERESTED',
-          lead: { organizationId: orgFilter, isArchived: false },
-        };
+    const taskScope = getTaskWhere(req, divisionId);
+    const leadScope = getLeadWhere(req, divisionId);
 
-    const callLogs = await prisma.callLog.findMany({
-      where: callWhere,
-      select: {
-        metadata: true,
-        lead: { select: { source: true } },
-      },
-    });
+    const [
+      openTasks,
+      overdueTasks,
+      completedInPeriod,
+      createdInPeriod,
+      taskStatus,
+      taskPriority,
+      taskType,
+      slaStatus,
+      breachedLeads,
+      completedDurationRows,
+      respondedLeads,
+      overdueOwnerRows,
+    ] = await Promise.all([
+      prisma.task.count({
+        where: { ...taskScope, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+      }),
+      prisma.task.count({
+        where: { ...taskScope, status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } },
+      }),
+      prisma.task.count({
+        where: { ...taskScope, status: 'COMPLETED', completedAt: { gte: start } },
+      }),
+      prisma.task.count({
+        where: { ...taskScope, createdAt: { gte: start } },
+      }),
+      prisma.task.groupBy({ by: ['status'], where: taskScope, _count: { _all: true } }),
+      prisma.task.groupBy({ by: ['priority'], where: taskScope, _count: { _all: true } }),
+      prisma.task.groupBy({ by: ['type'], where: taskScope, _count: { _all: true } }),
+      prisma.lead.groupBy({ by: ['slaStatus'], where: leadScope, _count: { _all: true } }).catch(() => []),
+      prisma.lead.findMany({
+        where: { ...leadScope, slaStatus: { in: ['BREACHED', 'ESCALATED'] } },
+        select: { createdAt: true },
+      }).catch(() => []),
+      prisma.task.findMany({
+        where: {
+          ...taskScope,
+          status: 'COMPLETED',
+          completedAt: { not: null, gte: start },
+        },
+        select: { createdAt: true, completedAt: true },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, createdAt: { gte: start }, firstRespondedAt: { not: null } },
+        select: { createdAt: true, firstRespondedAt: true },
+      }).catch(() => []),
+      prisma.task.findMany({
+        where: { ...taskScope, status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } },
+        select: {
+          assigneeId: true,
+          assignee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+    ]);
 
-    const reasonCounts = {};
-    const sourceCounts = {};
-    let captured = 0;
+    const completionRate = createdInPeriod > 0
+      ? Math.round((completedInPeriod / createdInPeriod) * 10000) / 100
+      : 0;
 
-    for (const log of callLogs) {
-      const md = (typeof log.metadata === 'object' && log.metadata !== null) ? log.metadata : {};
-      const reasonKey = md.notInterestedReason;
-      const normalizedReason = NOT_INTERESTED_REASON_LABELS[reasonKey] ? reasonKey : 'UNSPECIFIED';
-      reasonCounts[normalizedReason] = (reasonCounts[normalizedReason] || 0) + 1;
-      if (normalizedReason !== 'UNSPECIFIED') captured++;
+    const avgCompletionHours = completedDurationRows.length > 0
+      ? Math.round(
+        (
+          completedDurationRows.reduce((sum, row) => {
+            const startTs = new Date(row.createdAt).getTime();
+            const endTs = row.completedAt ? new Date(row.completedAt).getTime() : startTs;
+            return sum + Math.max(0, endTs - startTs);
+          }, 0) / completedDurationRows.length
+        ) / (1000 * 60 * 60)
+      )
+      : 0;
 
-      const source = log.lead?.source || 'UNKNOWN';
-      sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+    const avgFirstResponseHours = respondedLeads.length > 0
+      ? Math.round(
+        (
+          respondedLeads.reduce((sum, row) => {
+            const startTs = new Date(row.createdAt).getTime();
+            const endTs = row.firstRespondedAt ? new Date(row.firstRespondedAt).getTime() : startTs;
+            return sum + Math.max(0, endTs - startTs);
+          }, 0) / respondedLeads.length
+        ) / (1000 * 60 * 60)
+      )
+      : 0;
+
+    const breachedAgingBuckets = [
+      { bucket: '0-1 days', count: 0 },
+      { bucket: '2-3 days', count: 0 },
+      { bucket: '4-7 days', count: 0 },
+      { bucket: '8+ days', count: 0 },
+    ];
+    for (const lead of breachedLeads) {
+      const ageDays = Math.floor((now.getTime() - new Date(lead.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+      if (ageDays <= 1) breachedAgingBuckets[0].count += 1;
+      else if (ageDays <= 3) breachedAgingBuckets[1].count += 1;
+      else if (ageDays <= 7) breachedAgingBuckets[2].count += 1;
+      else breachedAgingBuckets[3].count += 1;
     }
 
-    const totalNotInterested = callLogs.length;
-    const reasons = Object.entries(reasonCounts)
-      .map(([reason, count]) => ({
-        reason,
-        label: NOT_INTERESTED_REASON_LABELS[reason] || reason,
-        count,
-        percent: totalNotInterested > 0 ? Math.round((count / totalNotInterested) * 10000) / 100 : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
-
-    const bySource = Object.entries(sourceCounts)
-      .map(([source, count]) => ({ source, count }))
-      .sort((a, b) => b.count - a.count);
+    const ownerMap = new Map();
+    for (const row of overdueOwnerRows) {
+      const key = row.assigneeId || 'unassigned';
+      if (!ownerMap.has(key)) {
+        ownerMap.set(key, {
+          assigneeId: row.assigneeId || null,
+          assigneeName: row.assignee
+            ? getDisplayName(row.assignee)
+            : 'Unassigned',
+          overdueCount: 0,
+        });
+      }
+      ownerMap.get(key).overdueCount += 1;
+    }
 
     res.json({
-      totalNotInterested,
-      captureRate: totalNotInterested > 0 ? Math.round((captured / totalNotInterested) * 10000) / 100 : 0,
-      reasons,
-      bySource,
+      summary: {
+        openTasks,
+        overdueTasks,
+        completedInPeriod,
+        createdInPeriod,
+        completionRate,
+        avgCompletionHours,
+        avgFirstResponseHours,
+      },
+      taskBreakdown: {
+        byStatus: taskStatus.map((r) => ({ status: r.status, count: r._count._all || 0 })),
+        byPriority: taskPriority.map((r) => ({ priority: r.priority, count: r._count._all || 0 })),
+        byType: taskType.map((r) => ({ type: r.type, count: r._count._all || 0 })),
+      },
+      slaBreakdown: {
+        byStatus: slaStatus.map((r) => ({ status: r.slaStatus, count: r._count._all || 0 })),
+        breachedAgingBuckets,
+      },
+      overdueByOwner: Array.from(ownerMap.values()).sort((a, b) => b.overdueCount - a.overdueCount).slice(0, 12),
     });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-// ─── Already Completed Services Location Analytics ─────────────────
-router.get('/completed-services-locations', async (req, res, next) => {
+// ─── Call Disposition Report (Phase A) ───────────────────────────
+router.get('/call-disposition-report', async (req, res, next) => {
   try {
     const { divisionId, period = '30d' } = req.query;
-    const orgFilter = getOrgFilter(req, divisionId);
     const { start } = getPeriodDates(period);
+    const orgFilter = getOrgFilter(req, divisionId);
+    const scopedBaseWhere = req.isRestrictedRole
+      ? { userId: req.user.id }
+      : { lead: { organizationId: orgFilter } };
 
-    const callWhere = req.isRestrictedRole
-      ? {
-          createdAt: { gte: start },
-          disposition: 'ALREADY_COMPLETED_SERVICES',
-          lead: { assignedToId: req.user.id, isArchived: false },
-        }
-      : {
-          createdAt: { gte: start },
-          disposition: 'ALREADY_COMPLETED_SERVICES',
-          lead: { organizationId: orgFilter, isArchived: false },
-        };
+    const buildReport = async (where, meta = {}) => {
+      const [totalCalls, notReachedCalls, dispositionRows, uniqueLeadRows, durationAgg, notInterestedRows, completedRows, willCallRows] = await Promise.all([
+        prisma.callLog.count({ where }),
+        prisma.callLog.count({ where: { ...where, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+        prisma.callLog.groupBy({ by: ['disposition'], where, _count: { _all: true } }),
+        prisma.callLog.findMany({ where, select: { leadId: true }, distinct: ['leadId'] }),
+        prisma.callLog.aggregate({ where, _avg: { duration: true } }),
+        prisma.callLog.findMany({
+          where: { ...where, disposition: 'NOT_INTERESTED' },
+          select: { metadata: true, notes: true },
+        }),
+        prisma.callLog.findMany({
+          where: { ...where, disposition: 'ALREADY_COMPLETED_SERVICES' },
+          select: { metadata: true },
+        }),
+        prisma.callLog.findMany({
+          where: { ...where, disposition: 'WILL_CALL_US_AGAIN' },
+          select: { metadata: true },
+        }),
+      ]);
 
-    const callLogs = await prisma.callLog.findMany({
-      where: callWhere,
-      select: {
-        metadata: true,
-        lead: { select: { source: true } },
-      },
-    });
+      const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
+      const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
 
-    const locationCounts = {};
-    const sourceCounts = {};
-    let captured = 0;
+      const byDisposition = dispositionRows
+        .map((row) => {
+          const count = row._count._all || 0;
+          return {
+            disposition: row.disposition,
+            label: CALL_DISPOSITION_LABELS[row.disposition] || row.disposition?.replace(/_/g, ' ') || 'Unknown',
+            count,
+            percent: totalCalls > 0 ? Math.round((count / totalCalls) * 10000) / 100 : 0,
+          };
+        })
+        .sort((a, b) => b.count - a.count);
 
-    for (const log of callLogs) {
-      const md = (typeof log.metadata === 'object' && log.metadata !== null) ? log.metadata : {};
-      const locationKey = md.completedServiceLocation;
-      const normalizedLocation = COMPLETED_SERVICE_LOCATION_LABELS[locationKey] ? locationKey : 'UNSPECIFIED';
-      locationCounts[normalizedLocation] = (locationCounts[normalizedLocation] || 0) + 1;
-      if (normalizedLocation !== 'UNSPECIFIED') captured++;
+      const reasonMap = new Map();
+      for (const row of notInterestedRows) {
+        const metadata = parseMetadata(row.metadata);
+        const extractedReason =
+          metadata?.notInterestedReasonLabel ||
+          metadata?.notInterestedReason ||
+          metadata?.reasonLabel ||
+          metadata?.reason ||
+          null;
+        const reason = String(extractedReason || 'Unspecified').trim() || 'Unspecified';
+        reasonMap.set(reason, (reasonMap.get(reason) || 0) + 1);
+      }
+      const notInterestedTotal = notInterestedRows.length;
+      const notInterestedReasons = Array.from(reasonMap.entries())
+        .map(([reason, count]) => ({
+          reason,
+          count,
+          percent: notInterestedTotal > 0 ? Math.round((count / notInterestedTotal) * 10000) / 100 : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
 
-      const source = log.lead?.source || 'UNKNOWN';
-      sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+      const completedLocationMap = new Map();
+      for (const row of completedRows) {
+        const metadata = parseMetadata(row.metadata);
+        const label =
+          metadata?.completedServiceLocationLabel ||
+          metadata?.completedServiceLocation ||
+          'Unspecified';
+        const location = String(label).trim() || 'Unspecified';
+        completedLocationMap.set(location, (completedLocationMap.get(location) || 0) + 1);
+      }
+      const completedTotal = completedRows.length;
+      const completedServiceLocations = Array.from(completedLocationMap.entries())
+        .map(([location, count]) => ({
+          location,
+          count,
+          percent: completedTotal > 0 ? Math.round((count / completedTotal) * 10000) / 100 : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      const callbackWindowMap = new Map();
+      for (const row of willCallRows) {
+        const metadata = parseMetadata(row.metadata);
+        const label =
+          metadata?.expectedCallbackWindowLabel ||
+          metadata?.expectedCallbackWindow ||
+          'Unspecified';
+        const window = String(label).trim() || 'Unspecified';
+        callbackWindowMap.set(window, (callbackWindowMap.get(window) || 0) + 1);
+      }
+      const willCallTotal = willCallRows.length;
+      const expectedCallbackWindows = Array.from(callbackWindowMap.entries())
+        .map(([window, count]) => ({
+          window,
+          count,
+          percent: willCallTotal > 0 ? Math.round((count / willCallTotal) * 10000) / 100 : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      return {
+        summary: {
+          totalCalls,
+          uniqueLeadsTouched: uniqueLeadRows.length,
+          reachedCalls,
+          notReachedCalls,
+          reachabilityRatio,
+          avgDurationSeconds: Math.round(Number(durationAgg._avg.duration || 0)),
+        },
+        byDisposition,
+        notInterested: {
+          total: notInterestedTotal,
+          reasons: notInterestedReasons,
+        },
+        alreadyCompletedServices: {
+          total: completedTotal,
+          locations: completedServiceLocations,
+        },
+        willCallAgain: {
+          total: willCallTotal,
+          expectedCallbackWindows,
+        },
+        meta,
+      };
+    };
+
+    const periodWhere = { ...scopedBaseWhere, createdAt: { gte: start } };
+    const periodReport = await buildReport(periodWhere, { periodFallback: false });
+    if (periodReport.summary.totalCalls > 0) {
+      return res.json(periodReport);
     }
 
-    const totalCompletedServices = callLogs.length;
-    const locations = Object.entries(locationCounts)
-      .map(([location, count]) => ({
-        location,
-        label: COMPLETED_SERVICE_LOCATION_LABELS[location] || location,
-        count,
-        percent: totalCompletedServices > 0 ? Math.round((count / totalCompletedServices) * 10000) / 100 : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
-
-    const bySource = Object.entries(sourceCounts)
-      .map(([source, count]) => ({ source, count }))
-      .sort((a, b) => b.count - a.count);
-
-    res.json({
-      totalCompletedServices,
-      captureRate: totalCompletedServices > 0 ? Math.round((captured / totalCompletedServices) * 10000) / 100 : 0,
-      locations,
-      bySource,
-    });
-  } catch (err) {
-    next(err);
-  }
+    // If period is empty, return all-time scoped report instead of blank zeros.
+    const fallbackReport = await buildReport(scopedBaseWhere, { periodFallback: true, fallbackReason: 'NO_CALLS_IN_SELECTED_PERIOD' });
+    return res.json(fallbackReport);
+  } catch (err) { next(err); }
 });
 
 // ─── Lead Score Distribution ──────────────────────────────────────
