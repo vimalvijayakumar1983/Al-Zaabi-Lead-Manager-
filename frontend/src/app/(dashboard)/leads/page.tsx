@@ -806,10 +806,15 @@ function LeadsContent() {
     saveActiveViewId('all');
   };
 
+  const getDisplaySerialForRow = (rowIndex: number) => {
+    const base = Math.max(0, (pagination.page - 1) * pagination.limit);
+    return base + rowIndex + 1;
+  };
+
   const exportCSV = () => {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
     const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
-    const rows = leads.map((l) =>
+    const rows = leads.map((l, rowIndex) =>
       visibleCols.map((c) => {
         switch (c.id) {
           case 'name': return getDisplayName(l);
@@ -849,6 +854,9 @@ function LeadsContent() {
           case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           default:
             if (c.id.startsWith('cf_')) {
+              if (isAutoSerialCustomField(c)) {
+                return String(getDisplaySerialForRow(rowIndex));
+              }
               const fn = c.id.slice(3);
               const cd = (l.customData || {}) as Record<string, unknown>;
               const v = cd[fn];
@@ -909,7 +917,7 @@ function LeadsContent() {
     if (String(cf?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE) return true;
     const normalizedName = String(fieldName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const normalizedLabel = String(cf?.label || col.label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const serialAliases = new Set(['sno', 'serialno', 'serialnumber', 'srno']);
+    const serialAliases = new Set(['sn', 'sno', 'serialno', 'serialnumber', 'srno']);
     return serialAliases.has(normalizedName) || serialAliases.has(normalizedLabel);
   };
 
@@ -1165,16 +1173,16 @@ function LeadsContent() {
       default:
         // Custom field columns (id starts with cf_)
         if (col.id.startsWith('cf_') && col.isCustom) {
+          if (isAutoSerialCustomField(col)) {
+            return <span className="text-sm text-gray-700 font-medium">{getDisplaySerialForRow(rowIndex)}</span>;
+          }
+
           const fieldName = col.id.slice(3); // remove 'cf_' prefix
           const customData = (lead.customData || {}) as Record<string, unknown>;
           const value = customData[fieldName];
           const cf = customFields.find(f => f.name === fieldName);
 
           if (value === undefined || value === null || value === '') {
-            if (isAutoSerialCustomField(col)) {
-              const base = Math.max(0, (pagination.page - 1) * pagination.limit);
-              return <span className="text-sm text-gray-700 font-medium">{base + rowIndex + 1}</span>;
-            }
             return <span className="text-xs text-gray-400 italic">-</span>;
           }
 
