@@ -610,8 +610,25 @@ export default function LeadDetailPage() {
       setAiLeadChatMessages((prev) => [...prev, assistantMessage].slice(-24));
     } catch (err: any) {
       const message = err?.message || 'Lead AI chat failed';
-      setAiLeadChatError(message);
-      addToast({ type: 'error', title: 'AI Copilot Error', message });
+      const routeMissing = /route not found|404/i.test(message);
+      if (routeMissing) {
+        const fallbackReply = buildLocalCopilotFallback(content);
+        if (fallbackReply) {
+          setAiLeadChatMessages((prev) => [...prev, fallbackReply].slice(-24));
+          setAiLeadChatError(null);
+          addToast({
+            type: 'info',
+            title: 'AI Copilot Fallback',
+            message: 'Primary AI route is unavailable. Using in-app copilot fallback.',
+          });
+        } else {
+          setAiLeadChatError(message);
+          addToast({ type: 'error', title: 'AI Copilot Error', message });
+        }
+      } else {
+        setAiLeadChatError(message);
+        addToast({ type: 'error', title: 'AI Copilot Error', message });
+      }
     } finally {
       setAiLeadChatLoading(false);
     }
@@ -814,6 +831,64 @@ export default function LeadDetailPage() {
     { key: 'business', label: 'Business' },
     { key: 'system',   label: 'System' },
   ];
+
+  const buildLocalCopilotFallback = useCallback((question: string): LeadAiChatMessage | null => {
+    if (!lead) return null;
+
+    const now = Date.now();
+    const tasks = Array.isArray(lead.tasks) ? lead.tasks : [];
+    const communications = Array.isArray(lead.communications) ? lead.communications : [];
+    const callLogs = Array.isArray((lead as any).callLogs) ? (lead as any).callLogs : [];
+    const openTasks = tasks.filter((t: any) => ['PENDING', 'IN_PROGRESS'].includes(t.status)).length;
+    const overdueTasks = tasks.filter((t: any) => ['PENDING', 'IN_PROGRESS'].includes(t.status) && t.dueAt && new Date(t.dueAt).getTime() < now).length;
+    const inbound = communications.filter((c: any) => c.direction === 'INBOUND').length;
+    const outbound = communications.filter((c: any) => c.direction === 'OUTBOUND').length;
+    const stageName = lead.stage?.name || lead.status.replace(/_/g, ' ');
+    const conversionPct = lead.conversionProb != null ? Math.round(lead.conversionProb * 100) : null;
+    const text = question.toLowerCase();
+
+    let answer = `${getLeadDisplayName(lead)} is in ${stageName} with score ${lead.score}/100`;
+    if (conversionPct != null) answer += ` and conversion probability ${conversionPct}%`;
+    answer += '. ';
+
+    if (/(next|action|priority|what should)/.test(text)) {
+      if (overdueTasks > 0) {
+        answer += `Top priority is clearing ${overdueTasks} overdue task(s), then log a follow-up call with a clear next milestone.`;
+      } else {
+        answer += `Recommended next move: schedule a commitment-focused follow-up and confirm timeline + decision owner.`;
+      }
+    } else if (/(risk|block|issue|problem|stuck)/.test(text)) {
+      if (overdueTasks > 0) answer += `Risk signal: ${overdueTasks} overdue task(s). `;
+      if (inbound <= outbound) answer += `Engagement is not strongly inbound yet (${inbound}:${outbound} inbound:outbound). `;
+      answer += `Keep follow-up cadence tight to avoid drop-off.`;
+    } else {
+      answer += `Current signals: ${openTasks} open task(s), ${overdueTasks} overdue, comms ${inbound}:${outbound} inbound:outbound.`;
+    }
+
+    const actions: LeadAiAction[] = [];
+    if (overdueTasks > 0 || /task|follow/.test(text)) {
+      actions.push({ type: 'OPEN_TASK_MODAL', label: 'Create follow-up task', priority: overdueTasks > 0 ? 'URGENT' : 'HIGH' });
+    }
+    if (!['WON', 'LOST'].includes(lead.status)) {
+      actions.push({ type: 'OPEN_CALL_LOG_MODAL', label: 'Log follow-up call', priority: 'HIGH' });
+    }
+    actions.push({ type: 'OPEN_COMMUNICATIONS_TAB', label: 'Open communications', priority: 'MEDIUM' });
+    actions.push({ type: 'OPEN_NOTES_TAB', label: 'Add strategic note', priority: 'LOW' });
+
+    return {
+      id: `ai-assistant-fallback-${Date.now()}`,
+      role: 'assistant',
+      content: answer,
+      createdAt: new Date().toISOString(),
+      confidence: 62,
+      suggestedPrompts: [
+        'What should I do in the next 24 hours for this lead?',
+        'What risks are blocking conversion right now?',
+        'Suggest 3 follow-up tasks with priority.',
+      ],
+      actions: actions.slice(0, 4),
+    };
+  }, [lead]);
 
   const latestAiPromptSuggestions = [...aiLeadChatMessages]
     .reverse()
