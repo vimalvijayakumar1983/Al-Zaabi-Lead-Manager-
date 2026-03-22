@@ -13,6 +13,7 @@ const {
 
 const router = Router();
 router.use(authenticate, orgScope);
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
 const notificationPreferencesSchema = z.object({
   soundEnabled: z.boolean().optional(),
@@ -388,6 +389,74 @@ router.put('/status-labels', authorize('ADMIN'), async (req, res, next) => {
 
 // ─── Custom Fields ─────────────────────────────────────────────
 
+function isAutoSerialField(field) {
+  return field?.type === 'NUMBER' && String(field?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE;
+}
+
+function readNumericCustomValue(customData, key) {
+  if (!customData || typeof customData !== 'object') return null;
+  const value = customData[key];
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num);
+}
+
+async function backfillAutoSerialForField(field) {
+  if (!isAutoSerialField(field)) return;
+
+  await prisma.$transaction(async (tx) => {
+    let targetOrgIds = [field.organizationId];
+
+    // Global fields are stored on group org; apply serials to all child divisions.
+    if (!field.divisionId) {
+      const parent = await tx.organization.findUnique({
+        where: { id: field.organizationId },
+        select: { type: true },
+      });
+      if (parent?.type === 'GROUP') {
+        const divisions = await tx.organization.findMany({
+          where: { parentId: field.organizationId, type: 'DIVISION' },
+          select: { id: true },
+          orderBy: { name: 'asc' },
+        });
+        if (divisions.length > 0) {
+          targetOrgIds = divisions.map((d) => d.id);
+        }
+      }
+    }
+
+    for (const orgId of targetOrgIds) {
+      const leads = await tx.lead.findMany({
+        where: { organizationId: orgId },
+        select: { id: true, customData: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+
+      let maxSerial = 0;
+      for (const lead of leads) {
+        const value = readNumericCustomValue(lead.customData, field.name);
+        if (value !== null && value > maxSerial) maxSerial = value;
+      }
+
+      let nextSerial = maxSerial + 1;
+      for (const lead of leads) {
+        const existingValue = readNumericCustomValue(lead.customData, field.name);
+        if (existingValue !== null) continue;
+        const currentData =
+          lead.customData && typeof lead.customData === 'object'
+            ? { ...lead.customData }
+            : {};
+        currentData[field.name] = nextSerial++;
+        await tx.lead.update({
+          where: { id: lead.id },
+          data: { customData: currentData },
+        });
+      }
+    }
+  });
+}
+
 // List custom fields
 router.get('/custom-fields', async (req, res, next) => {
   try {
@@ -499,6 +568,8 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
       },
     });
 
+    await backfillAutoSerialForField(field);
+
     res.status(201).json(field);
   } catch (err) {
     if (err.code === 'P2002') {
@@ -543,6 +614,8 @@ router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
       where: { id: req.params.id },
       data,
     });
+
+    await backfillAutoSerialForField(field);
 
     res.json(field);
   } catch (err) {

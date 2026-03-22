@@ -17,6 +17,7 @@ const { generateLeadSummaryInsights, regenerateLeadSummaryById } = require('../s
 
 const router = Router();
 router.use(authenticate, orgScope);
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
 function refreshLeadAISummaryAsync(leadId) {
   if (!leadId) return;
@@ -41,6 +42,61 @@ function getDisplayName(obj) {
   if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
   if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
   return `${fn} ${ln}`;
+}
+
+function readNumericCustomValue(customData, key) {
+  if (!customData || typeof customData !== 'object') return null;
+  const value = customData[key];
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num);
+}
+
+async function getNextAutoSerialValue(tx, organizationId, fieldName) {
+  const leads = await tx.lead.findMany({
+    where: { organizationId },
+    select: { customData: true },
+  });
+  let maxValue = 0;
+  for (const lead of leads) {
+    const current = readNumericCustomValue(lead.customData, fieldName);
+    if (current !== null && current > maxValue) maxValue = current;
+  }
+  return maxValue + 1;
+}
+
+async function getApplicableAutoSerialFields(tx, targetOrgId) {
+  const org = await tx.organization.findUnique({
+    where: { id: targetOrgId },
+    select: { id: true, type: true, parentId: true },
+  });
+  const groupOrgId = org?.type === 'GROUP' ? org.id : (org?.parentId || targetOrgId);
+
+  const [globalFields, divisionFields] = await Promise.all([
+    tx.customField.findMany({
+      where: {
+        organizationId: groupOrgId,
+        divisionId: null,
+        type: 'NUMBER',
+        defaultValue: AUTO_SERIAL_DEFAULT_VALUE,
+      },
+      orderBy: { order: 'asc' },
+    }),
+    tx.customField.findMany({
+      where: {
+        organizationId: targetOrgId,
+        type: 'NUMBER',
+        defaultValue: AUTO_SERIAL_DEFAULT_VALUE,
+      },
+      orderBy: { order: 'asc' },
+    }),
+  ]);
+
+  const byName = new Map();
+  for (const field of globalFields) byName.set(field.name, field);
+  for (const field of divisionFields) byName.set(field.name, field);
+  return Array.from(byName.values());
 }
 
 // ─── Schemas ─────────────────────────────────────────────────────
@@ -1023,9 +1079,22 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     const { tags: tagNames, ...leadData } = data;
 
     const lead = await prisma.$transaction(async (tx) => {
+      const customData =
+        leadData.customData && typeof leadData.customData === 'object'
+          ? { ...leadData.customData }
+          : {};
+
+      const autoSerialFields = await getApplicableAutoSerialFields(tx, targetOrgId);
+      for (const field of autoSerialFields) {
+        const existingValue = readNumericCustomValue(customData, field.name);
+        if (existingValue !== null) continue;
+        customData[field.name] = await getNextAutoSerialValue(tx, targetOrgId, field.name);
+      }
+
       const created = await tx.lead.create({
         data: {
           ...leadData,
+          customData: Object.keys(customData).length > 0 ? customData : leadData.customData,
           score,
           conversionProb,
           organizationId: targetOrgId,

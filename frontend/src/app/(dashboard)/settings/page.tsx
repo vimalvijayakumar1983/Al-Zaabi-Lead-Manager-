@@ -1796,6 +1796,7 @@ const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.Componen
   EMAIL:       { label: 'Email',        icon: AtSign,     color: 'bg-indigo-100 text-indigo-700', description: 'Email address' },
   PHONE:       { label: 'Phone',        icon: Phone,      color: 'bg-pink-100 text-pink-700',    description: 'Phone number' },
 };
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
 /* ─── Built-in Field Definitions (fallback if API unavailable) ──────── */
 
@@ -3632,6 +3633,9 @@ function CustomFieldModal({
   const [description, setDescription] = useState(field?.description || '');
   const [placeholder, setPlaceholder] = useState(field?.placeholder || '');
   const [defaultValue, setDefaultValue] = useState(field?.defaultValue || '');
+  const [autoSerial, setAutoSerial] = useState(
+    field?.type === 'NUMBER' && String(field?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE
+  );
   const [divisionId, setDivisionId] = useState<string>(() => {
     if (!allowGlobalScope) {
       return field?.divisionId || selectedDivisionId || divisions[0]?.id || '';
@@ -3653,6 +3657,12 @@ function CustomFieldModal({
       setDivisionId(selectedDivisionId || divisions[0]?.id || '');
     }
   }, [allowGlobalScope, divisionId, divisions, selectedDivisionId]);
+
+  useEffect(() => {
+    if (type !== 'NUMBER' && autoSerial) {
+      setAutoSerial(false);
+    }
+  }, [type, autoSerial]);
 
   const addOption = () => {
     const val = newOption.trim();
@@ -3683,7 +3693,10 @@ function CustomFieldModal({
         showInDetail,
         description: description || undefined,
         placeholder: placeholder || undefined,
-        defaultValue: defaultValue || undefined,
+        defaultValue:
+          type === 'NUMBER' && autoSerial
+            ? AUTO_SERIAL_DEFAULT_VALUE
+            : (defaultValue || undefined),
         divisionId: allowGlobalScope ? divisionId || null : divisionId || selectedDivisionId || null,
       };
 
@@ -3864,6 +3877,17 @@ function CustomFieldModal({
 
               {showAdvanced && (
                 <div className="mt-3 space-y-3 pl-5 border-l-2 border-gray-200">
+                  {type === 'NUMBER' && (
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <label className="text-sm font-medium text-gray-900">Auto-generate serial number</label>
+                          <p className="text-[11px] text-gray-500">Assigns next serial automatically for new leads and backfills empty values.</p>
+                        </div>
+                        <FieldToggle checked={autoSerial} onChange={() => setAutoSerial(!autoSerial)} size="md" />
+                      </div>
+                    </div>
+                  )}
                   {/* Description */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Help Text / Description</label>
@@ -3893,7 +3917,8 @@ function CustomFieldModal({
                       className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       value={defaultValue}
                       onChange={(e) => setDefaultValue(e.target.value)}
-                      placeholder="Auto-filled value for new leads"
+                      placeholder={type === 'NUMBER' && autoSerial ? 'Disabled while auto-serial is enabled' : 'Auto-filled value for new leads'}
+                      disabled={type === 'NUMBER' && autoSerial}
                     />
                   </div>
                 </div>
@@ -3931,8 +3956,8 @@ function CustomFieldModal({
                   <input
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
                     type="number"
-                    placeholder={placeholder || '0'}
-                    defaultValue={defaultValue}
+                    placeholder={type === 'NUMBER' && autoSerial ? 'Auto-generated serial (1, 2, 3...)' : (placeholder || '0')}
+                    defaultValue={type === 'NUMBER' && autoSerial ? '' : defaultValue}
                     disabled
                   />
                 )}

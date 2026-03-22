@@ -53,6 +53,7 @@ const dispositionLabels: Record<string, string> = {
   ALREADY_COMPLETED_SERVICES: 'Already Completed Services',
   WRONG_NUMBER: 'Wrong Number', DO_NOT_CALL: 'Do Not Call', OTHER: 'Other',
 };
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
 // Color-coded outcome groups
 const dispositionColor = (d: string): string => {
@@ -905,6 +906,7 @@ function LeadsContent() {
     if (!col.isCustom || col.customFieldType !== 'NUMBER' || !col.id.startsWith('cf_')) return false;
     const fieldName = col.id.slice(3);
     const cf = customFields.find((f) => f.name === fieldName);
+    if (String(cf?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE) return true;
     const normalizedName = String(fieldName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const normalizedLabel = String(cf?.label || col.label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const serialAliases = new Set(['sno', 'serialno', 'serialnumber', 'srno']);
@@ -2311,6 +2313,7 @@ function CreateLeadModal({
                     }
 
                     if (cf.type === 'NUMBER') {
+                      const isAutoSerial = String(cf.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE;
                       return (
                         <div key={cf.id}>
                           <label className="label">{cf.label}</label>
@@ -2319,7 +2322,12 @@ function CreateLeadModal({
                             value={String(formData[fieldKey] ?? '')}
                             onChange={(e) => updateField(fieldKey, e.target.value)}
                             className="input w-full"
+                            placeholder={isAutoSerial ? 'Auto-generated' : undefined}
+                            disabled={isAutoSerial}
                           />
+                          {isAutoSerial && (
+                            <p className="mt-1 text-[11px] text-gray-500">This serial is assigned automatically when the lead is created.</p>
+                          )}
                         </div>
                       );
                     }
