@@ -284,7 +284,7 @@ const BUILT_IN_FIELDS = [
 // GET /field-config — Get field configuration for a division
 router.get('/field-config', async (req, res, next) => {
   try {
-    const { divisionId } = req.query;
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
     const orgId = req.orgId;
 
     // Get org settings for field config
@@ -313,25 +313,45 @@ router.get('/field-config', async (req, res, next) => {
       isBuiltIn: true,
     }));
 
-    // Get custom fields for this org (optionally filtered by division)
-    if (divisionId) {
-      const customFields = await prisma.customField.findMany({
-        where: {
-          organizationId: orgId,
-          OR: [
-            { divisionId: null },
-            { divisionId },
-          ],
-        },
+    let customFields = [];
+    if (req.isSuperAdmin) {
+      const groupOrgId = req.user.organizationId;
+
+      if (divisionId && !req.orgIds.includes(divisionId)) {
+        return res.status(403).json({ error: 'Division not found or access denied' });
+      }
+
+      if (!divisionId) {
+        customFields = await prisma.customField.findMany({
+          where: { organizationId: groupOrgId, divisionId: null },
+          orderBy: { order: 'asc' },
+        });
+      } else {
+        const [globalFields, divisionFields] = await Promise.all([
+          prisma.customField.findMany({
+            where: { organizationId: groupOrgId, divisionId: null },
+            orderBy: { order: 'asc' },
+          }),
+          prisma.customField.findMany({
+            where: { organizationId: divisionId },
+            orderBy: { order: 'asc' },
+          }),
+        ]);
+        const byName = new Map();
+        for (const field of globalFields) byName.set(field.name, field);
+        for (const field of divisionFields) byName.set(field.name, field);
+        customFields = Array.from(byName.values()).sort((a, b) => {
+          const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+          if (orderDiff !== 0) return orderDiff;
+          return String(a.label || a.name).localeCompare(String(b.label || b.name));
+        });
+      }
+    } else {
+      customFields = await prisma.customField.findMany({
+        where: { organizationId: orgId },
         orderBy: { order: 'asc' },
       });
-      return res.json({ builtInFields, customFields, statusLabels });
     }
-
-    const customFields = await prisma.customField.findMany({
-      where: { organizationId: orgId },
-      orderBy: { order: 'asc' },
-    });
 
     res.json({ builtInFields, customFields, statusLabels });
   } catch (err) { next(err); }
