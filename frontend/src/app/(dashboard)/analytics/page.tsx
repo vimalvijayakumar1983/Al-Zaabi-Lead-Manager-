@@ -2126,6 +2126,7 @@ export default function AnalyticsPage() {
 
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Pipeline Velocity (Stage Aging)</h2>
+            <p className="text-xs text-text-tertiary mb-3">Count is based on current active pipeline leads; age is days since lead creation.</p>
             <BarChart
               data={velocityStages.slice(0, 8).map((row: any) => ({
                 stage: row.stage,
@@ -2141,7 +2142,7 @@ export default function AnalyticsPage() {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
                 if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
-                if (Object.keys(params).length > 0) drillPeriod(params);
+                if (Object.keys(params).length > 0) drill(params);
               }}
             />
             <div className="mt-4 grid grid-cols-2 gap-3">
