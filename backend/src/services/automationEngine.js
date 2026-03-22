@@ -1,6 +1,5 @@
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
-const { notifyUser } = require('../websocket/server');
 const { sendText } = require('./whatsappService');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { sendEmail, sendTemplateEmail } = require('./emailService');
