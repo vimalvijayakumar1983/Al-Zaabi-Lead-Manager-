@@ -476,6 +476,7 @@ export default function AnalyticsPage() {
   const [forecastReportUnavailable, setForecastReportUnavailable] = useState(false);
   const [phase1ReportUnavailable, setPhase1ReportUnavailable] = useState(false);
   const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
+  const [callDrillMode, setCallDrillMode] = useState<'latest' | 'any'>('latest');
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -659,6 +660,8 @@ export default function AnalyticsPage() {
 
   const drill = (params: Record<string, string>) => router.push(drillLink(withDivisionScope(params)));
   const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(withDivisionScope(params)));
+  const drillCalls = (params: Record<string, string>) =>
+    router.push(drillLink(withDivisionScope({ ...params, callOutcomeMode: callDrillMode })));
 
   const buildExportPayload = useCallback(() => {
     const baseMeta = {
@@ -2129,6 +2132,36 @@ export default function AnalyticsPage() {
             No calls found in selected period; showing all-time call intelligence for this scope.
           </div>
         )}
+        <div className="card p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-semibold text-text-primary">Lead drill-down mode</p>
+            <p className="text-2xs text-text-tertiary">
+              Latest only shows current lead state. Any historical call matches chart/event counts.
+            </p>
+          </div>
+          <div className="inline-flex rounded-lg border border-border-subtle overflow-hidden">
+            <button
+              onClick={() => setCallDrillMode('latest')}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                callDrillMode === 'latest'
+                  ? 'bg-brand-600 text-white'
+                  : 'bg-white text-text-secondary hover:bg-surface-secondary'
+              }`}
+            >
+              Latest only
+            </button>
+            <button
+              onClick={() => setCallDrillMode('any')}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                callDrillMode === 'any'
+                  ? 'bg-brand-600 text-white'
+                  : 'bg-white text-text-secondary hover:bg-surface-secondary'
+              }`}
+            >
+              Any historical call
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <KpiCard title="Total Calls" value={summary.totalCalls || 0} icon={Phone} iconBg="bg-brand-50" iconColor="text-brand-600" />
           <KpiCard title="Reachability Ratio" value={summary.reachabilityRatio || 0} format="percent" icon={Target} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
@@ -2155,9 +2188,9 @@ export default function AnalyticsPage() {
                 height={180}
                 onBarClick={(row) => {
                   const reason = String(row?.reason || '').trim();
-                  const params: Record<string, string> = { callOutcome: 'NOT_INTERESTED', callOutcomeMode: 'any' };
+                  const params: Record<string, string> = { callOutcome: 'NOT_INTERESTED' };
                   if (reason) params.callOutcomeReason = reason;
-                  drill(params);
+                  drillCalls(params);
                 }}
               />
             ) : (
@@ -2176,7 +2209,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#10b981"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES', callOutcomeMode: 'any' })}
+                onBarClick={() => drillCalls({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
@@ -2191,7 +2224,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#6366f1"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN', callOutcomeMode: 'any' })}
+                onBarClick={() => drillCalls({ callOutcome: 'WILL_CALL_US_AGAIN' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
@@ -2225,7 +2258,7 @@ export default function AnalyticsPage() {
                   <tr
                     key={row.disposition}
                     className="table-row cursor-pointer hover:bg-surface-secondary"
-                    onClick={() => drill({ callOutcome: row.disposition, callOutcomeMode: 'any' })}
+                    onClick={() => drillCalls({ callOutcome: row.disposition })}
                   >
                     <td className="table-cell px-4">{row.label}</td>
                     <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
