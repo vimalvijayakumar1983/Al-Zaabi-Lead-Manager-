@@ -2227,6 +2227,8 @@ function CustomFieldsSection() {
   const [loadingStatusMapping, setLoadingStatusMapping] = useState(false);
   const [savingStatusMapping, setSavingStatusMapping] = useState(false);
   const [cloningStatusMapping, setCloningStatusMapping] = useState(false);
+  const [showCloneMappingModal, setShowCloneMappingModal] = useState(false);
+  const [selectedCloneDivisionIds, setSelectedCloneDivisionIds] = useState<string[]>([]);
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('#6366f1');
@@ -2464,6 +2466,45 @@ function CustomFieldsSection() {
         type: 'success',
         message: `Template mapping applied to ${result.clonedTo} division${result.clonedTo === 1 ? '' : 's'}`,
       });
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to apply template mapping' });
+    }
+    setCloningStatusMapping(false);
+  };
+
+  const openCloneToSelectedModal = () => {
+    if (!isSuperAdmin) return;
+    if (!effectiveDivisionId) {
+      setToast({ type: 'error', message: 'Please select a source division first' });
+      return;
+    }
+    const targetIds = divisions
+      .filter((d) => d.id !== effectiveDivisionId)
+      .map((d) => d.id);
+    setSelectedCloneDivisionIds(targetIds);
+    setShowCloneMappingModal(true);
+  };
+
+  const applyStatusMappingToSelectedDivisions = async () => {
+    if (!effectiveDivisionId) return;
+    if (selectedCloneDivisionIds.length === 0) {
+      setToast({ type: 'error', message: 'Please select at least one target division' });
+      return;
+    }
+    setCloningStatusMapping(true);
+    try {
+      // Persist current source division mapping first, so clone uses latest edits.
+      const currentMappings = statusStageRows.reduce((acc: Record<string, string>, row: any) => {
+        if (row?.stageId && row?.mappedStatus) acc[row.stageId] = row.mappedStatus;
+        return acc;
+      }, {});
+      await api.saveStatusStageMapping(effectiveDivisionId, currentMappings);
+      const result = await api.cloneStatusStageMappingToAll(effectiveDivisionId, selectedCloneDivisionIds);
+      setToast({
+        type: 'success',
+        message: `Template mapping applied to ${result.clonedTo} division${result.clonedTo === 1 ? '' : 's'}`,
+      });
+      setShowCloneMappingModal(false);
     } catch (err: any) {
       setToast({ type: 'error', message: err.message || 'Failed to apply template mapping' });
     }
@@ -3103,6 +3144,16 @@ function CustomFieldsSection() {
                   <div className="flex items-center gap-2">
                     {isSuperAdmin && (
                       <button
+                        onClick={openCloneToSelectedModal}
+                        disabled={cloningStatusMapping || loadingStatusMapping}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      >
+                        <Filter className="h-3.5 w-3.5" />
+                        Apply to Selected
+                      </button>
+                    )}
+                    {isSuperAdmin && (
+                      <button
                         onClick={cloneStatusStageMappingToAllDivisions}
                         disabled={cloningStatusMapping || loadingStatusMapping}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
@@ -3177,6 +3228,80 @@ function CustomFieldsSection() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Clone to selected divisions modal */}
+                {showCloneMappingModal && (
+                  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+                      <div className="px-6 py-5 border-b border-gray-100">
+                        <h3 className="text-base font-semibold text-gray-900">Apply mapping to selected divisions</h3>
+                        <p className="text-sm text-gray-500 mt-1">Choose target divisions for cloning current status-stage mapping.</p>
+                      </div>
+                      <div className="px-6 py-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <p className="text-xs text-gray-500">
+                            Source: <span className="font-medium text-gray-700">{divisions.find((d) => d.id === effectiveDivisionId)?.name || 'Selected Division'}</span>
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setSelectedCloneDivisionIds(divisions.filter((d) => d.id !== effectiveDivisionId).map((d) => d.id))}
+                              className="text-xs text-indigo-600 hover:text-indigo-700"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              onClick={() => setSelectedCloneDivisionIds([])}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                          {divisions.filter((d) => d.id !== effectiveDivisionId).map((division) => {
+                            const checked = selectedCloneDivisionIds.includes(division.id);
+                            return (
+                              <label key={division.id} className="flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-50">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedCloneDivisionIds((prev) => (prev.includes(division.id) ? prev : [...prev, division.id]));
+                                    } else {
+                                      setSelectedCloneDivisionIds((prev) => prev.filter((id) => id !== division.id));
+                                    }
+                                  }}
+                                  className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                />
+                                <span className="flex-1 text-gray-700">{division.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[11px] text-gray-500 mt-2">
+                          {selectedCloneDivisionIds.length} division{selectedCloneDivisionIds.length === 1 ? '' : 's'} selected
+                        </p>
+                      </div>
+                      <div className="px-6 py-4 bg-gray-50 flex items-center justify-end gap-3">
+                        <button
+                          onClick={() => setShowCloneMappingModal(false)}
+                          className="px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={applyStatusMappingToSelectedDivisions}
+                          disabled={cloningStatusMapping || selectedCloneDivisionIds.length === 0}
+                          className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
+                        >
+                          {cloningStatusMapping && <Loader2 className="h-4 w-4 animate-spin" />}
+                          Apply Mapping
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
