@@ -469,6 +469,7 @@ export default function AnalyticsPage() {
   const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
   const [taskSlaUnavailable, setTaskSlaUnavailable] = useState(false);
   const [callReportUnavailable, setCallReportUnavailable] = useState(false);
+  const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -561,9 +562,43 @@ export default function AnalyticsPage() {
       if (callDisp.status === 'fulfilled') {
         setCallDispositionReport(callDisp.value || null);
         setCallReportUnavailable(false);
+        setCallReportLegacyFallback(false);
       } else {
-        setCallDispositionReport(null);
-        setCallReportUnavailable(true);
+        // Backward-compatible fallback for deployments where the new
+        // call-disposition endpoint is not available yet.
+        const legacy = await api.getDashboardFull(p, divId).catch(() => null);
+        const k = legacy?.kpis || {};
+        const totalCalls = Number(k.totalCalls || 0);
+        const reachedCalls = Number(k.reachedCalls || 0);
+        const notReachedCalls = Number(k.notReachedCalls || 0);
+        const reachabilityRatio = Number(k.reachabilityRatio || 0);
+        if (legacy) {
+          setCallDispositionReport({
+            summary: {
+              totalCalls,
+              reachedCalls,
+              notReachedCalls,
+              reachabilityRatio,
+              uniqueLeadsTouched: 0,
+              avgDurationSeconds: 0,
+            },
+            byDisposition: [],
+            notInterested: { total: 0, reasons: [] },
+            alreadyCompletedServices: { total: 0, locations: [] },
+            willCallAgain: { total: 0, expectedCallbackWindows: [] },
+            meta: {
+              legacyFallback: true,
+              fallbackReason: 'CALL_DISPOSITION_ENDPOINT_UNAVAILABLE',
+              periodFallback: false,
+            },
+          });
+          setCallReportUnavailable(false);
+          setCallReportLegacyFallback(true);
+        } else {
+          setCallDispositionReport(null);
+          setCallReportUnavailable(true);
+          setCallReportLegacyFallback(false);
+        }
       }
 
       if (isSuperAdmin && !divId) {
@@ -1530,12 +1565,19 @@ export default function AnalyticsPage() {
     const completed = callDispositionReport?.alreadyCompletedServices || { total: 0, locations: [] };
     const willCall = callDispositionReport?.willCallAgain || { total: 0, expectedCallbackWindows: [] };
     const usedPeriodFallback = callDispositionReport?.meta?.periodFallback === true;
+    const usingLegacyFallback =
+      callDispositionReport?.meta?.legacyFallback === true || callReportLegacyFallback;
 
     return (
       <div className="space-y-6">
         {callReportUnavailable && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             Call Intelligence report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
+        {usingLegacyFallback && !callReportUnavailable && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+            Detailed call-disposition analytics are not deployed on this backend yet. Showing available call summary metrics from current deployment.
           </div>
         )}
         {usedPeriodFallback && !callReportUnavailable && (
@@ -1623,7 +1665,13 @@ export default function AnalyticsPage() {
               </thead>
               <tbody>
                 {byDisposition.length === 0 ? (
-                  <tr><td colSpan={3} className="py-8 text-center text-sm text-text-tertiary">No call data for selected period</td></tr>
+                  <tr>
+                    <td colSpan={3} className="py-8 text-center text-sm text-text-tertiary">
+                      {usingLegacyFallback
+                        ? 'Detailed disposition breakdown will appear after backend update.'
+                        : 'No call data for selected period'}
+                    </td>
+                  </tr>
                 ) : byDisposition.map((row: any) => (
                   <tr
                     key={row.disposition}
