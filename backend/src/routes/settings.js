@@ -391,28 +391,60 @@ router.put('/status-labels', authorize('ADMIN'), async (req, res, next) => {
 // List custom fields
 router.get('/custom-fields', async (req, res, next) => {
   try {
-    const { divisionId } = req.query;
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
 
-    // For super admin viewing all divisions (no specific divisionId):
-    // return empty array since custom fields are division-specific and
-    // showing all fields from all division templates is confusing
-    if (!divisionId && req.isSuperAdmin) {
-      return res.json([]);
-    }
+    // SUPER_ADMIN model:
+    // - no divisionId ("All Divisions"): return only group-level global fields
+    // - with divisionId: return global + selected division fields (division wins on same name)
+    if (req.isSuperAdmin) {
+      const groupOrgId = req.user.organizationId;
 
-    // If super admin requests fields for a specific division, scope to that division only
-    let orgFilter;
-    if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
-      orgFilter = { organizationId: divisionId };
-    } else {
-      orgFilter = { organizationId: { in: req.orgIds } };
+      if (divisionId && !req.orgIds.includes(divisionId)) {
+        return res.status(403).json({ error: 'Division not found or access denied' });
+      }
+
+      if (!divisionId) {
+        const globalFields = await prisma.customField.findMany({
+          where: {
+            organizationId: groupOrgId,
+            divisionId: null,
+          },
+          orderBy: { order: 'asc' },
+        });
+        return res.json(globalFields);
+      }
+
+      const [globalFields, divisionFields] = await Promise.all([
+        prisma.customField.findMany({
+          where: {
+            organizationId: groupOrgId,
+            divisionId: null,
+          },
+          orderBy: { order: 'asc' },
+        }),
+        prisma.customField.findMany({
+          where: { organizationId: divisionId },
+          orderBy: { order: 'asc' },
+        }),
+      ]);
+
+      const byName = new Map();
+      for (const field of globalFields) byName.set(field.name, field);
+      for (const field of divisionFields) byName.set(field.name, field);
+
+      return res.json(
+        Array.from(byName.values()).sort((a, b) => {
+          const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+          if (orderDiff !== 0) return orderDiff;
+          return String(a.label || a.name).localeCompare(String(b.label || b.name));
+        })
+      );
     }
 
     const fields = await prisma.customField.findMany({
-      where: orgFilter,
+      where: { organizationId: req.orgId },
       orderBy: { order: 'asc' },
     });
-
     res.json(fields);
   } catch (err) {
     next(err);
