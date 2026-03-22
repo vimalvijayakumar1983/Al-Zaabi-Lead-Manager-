@@ -1606,7 +1606,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -1627,7 +1626,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -1796,7 +1794,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -1882,7 +1879,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
