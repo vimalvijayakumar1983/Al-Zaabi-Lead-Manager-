@@ -85,17 +85,21 @@ router.get('/', validateQuery(paginationSchema.extend({
   priority: z.string().optional(),
   priorities: z.string().optional(),
   type: z.string().optional(),
+  divisionId: z.string().optional(),
   assigneeId: z.string().optional(),
   leadId: z.string().optional(),
   overdue: z.coerce.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, type, assigneeId, leadId, overdue } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, type, divisionId, assigneeId, leadId, overdue } = req.validatedQuery;
 
     const where = {};
     const allowedStatuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
     const allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
     const allowedTypes = ['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'];
+    const scopedOrgIds = (req.isSuperAdmin && divisionId)
+      ? [divisionId]
+      : req.orgIds;
 
     const parsedStatuses = (statuses || '')
       .split(',')
@@ -113,11 +117,10 @@ router.get('/', validateQuery(paginationSchema.extend({
     if (req.isRestrictedRole) {
       // SALES_REP / VIEWER only sees their own tasks
       where.assigneeId = req.user.id;
-    } else if (assigneeId) {
-      where.assigneeId = assigneeId;
     } else {
-      // Default: show tasks for users in the accessible orgs
-      where.assignee = { organizationId: { in: req.orgIds } };
+      // Always scope tasks to accessible orgs; optionally narrow by assignee.
+      where.assignee = { organizationId: { in: scopedOrgIds } };
+      if (assigneeId) where.assigneeId = assigneeId;
     }
 
     if (parsedStatuses.length > 1) {

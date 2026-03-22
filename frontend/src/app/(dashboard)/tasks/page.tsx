@@ -269,6 +269,7 @@ export default function TasksPage() {
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
+  const [divisionFilter, setDivisionFilter] = useState('');
   const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   // ── Sort & View ───────────────────────────────────────────────────
@@ -292,6 +293,7 @@ export default function TasksPage() {
     const assigneeId = searchParams.get('assigneeId');
     const overdue = searchParams.get('overdue');
     const search = searchParams.get('search');
+    const divisionId = searchParams.get('divisionId');
 
     if (status) setStatusFilters([status]);
     else if (statuses) setStatusFilters(statuses.split(',').map((s) => s.trim()).filter(Boolean));
@@ -302,6 +304,7 @@ export default function TasksPage() {
     if (type) setTypeFilter(type);
     if (assigneeId) setAssigneeFilter(assigneeId);
     if (overdue === '1' || overdue === 'true') setDatePreset('overdue');
+    if (divisionId) setDivisionFilter(divisionId);
     if (search) {
       setSearchInput(search);
       setSearchQuery(search);
@@ -374,6 +377,7 @@ export default function TasksPage() {
 
       if (sortField) params.sortBy = sortField;
       if (sortDir) params.sortOrder = sortDir;
+      if (divisionFilter) params.divisionId = divisionFilter;
 
       // Check if overdue-only filter
       if (datePreset === 'overdue') {
@@ -388,7 +392,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, currentUser?.id, sortField, sortDir, datePreset]);
+  }, [page, searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, divisionFilter, currentUser?.id, sortField, sortDir, datePreset]);
 
   useEffect(() => {
     fetchTasks();

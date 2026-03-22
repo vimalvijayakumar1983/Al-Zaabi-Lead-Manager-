@@ -711,8 +711,15 @@ export default function AnalyticsPage() {
   const periodLabel = PERIODS.find(p => p.value === period)?.label ?? '';
 
   // ── Drill-down helper ─────────────────────────────────────────────
-  const drill = (params: Record<string, string>) => router.push(drillLink(params));
-  const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(params));
+  const withDivisionScope = useCallback((params: Record<string, string>) => {
+    if (selectedDivision && selectedDivision !== 'all') {
+      return { ...params, divisionId: selectedDivision };
+    }
+    return params;
+  }, [selectedDivision]);
+
+  const drill = (params: Record<string, string>) => router.push(drillLink(withDivisionScope(params)));
+  const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(withDivisionScope(params)));
 
   const buildExportPayload = useCallback(() => {
     const baseMeta = {
