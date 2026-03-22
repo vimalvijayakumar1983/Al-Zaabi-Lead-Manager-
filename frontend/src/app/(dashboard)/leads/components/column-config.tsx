@@ -6,6 +6,7 @@ import type { CustomField } from '@/types';
 export interface ColumnDef {
   id: string;
   label: string;
+  customLabel?: string;
   visible: boolean;
   sortable: boolean;
   sortField?: string;
@@ -30,20 +31,31 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
   { id: 'productInterest', label: 'Product Interest', visible: false, sortable: false },
   { id: 'campaign', label: 'Campaign', visible: false, sortable: false },
   { id: 'conversionProb', label: 'Conversion %', visible: false, sortable: false },
+  { id: 'division', label: 'Division', visible: false, sortable: false },
   { id: 'assignedTo', label: 'Assigned To', visible: true, sortable: false },
   { id: 'tags', label: 'Tags', visible: false, sortable: false },
+  { id: 'callCount', label: 'Calls', visible: true, sortable: false },
+  { id: 'lastCallOutcome', label: 'Last Call Outcome', visible: true, sortable: false },
+  { id: 'channels', label: 'Channels', visible: true, sortable: false },
+  { id: 'sla', label: 'SLA', visible: true, sortable: true, sortField: 'slaStatus' },
   { id: 'createdAt', label: 'Created', visible: true, sortable: true, sortField: 'createdAt' },
-  { id: 'updatedAt', label: 'Updated', visible: false, sortable: true, sortField: 'updatedAt' },
+  { id: 'updatedAt', label: 'Updated', visible: true, sortable: true, sortField: 'updatedAt' },
   { id: 'actions', label: '', visible: true, sortable: false, width: 'w-10', locked: true },
 ];
 
-const STORAGE_KEY = 'leads-column-config';
+const STORAGE_KEY_PREFIX = 'leads-column-config';
+
+function getStorageKey(): string {
+  if (typeof window === 'undefined') return STORAGE_KEY_PREFIX;
+  const divisionId = localStorage.getItem('activeDivisionId');
+  return divisionId ? `${STORAGE_KEY_PREFIX}-${divisionId}` : STORAGE_KEY_PREFIX;
+}
 
 export function customFieldToColumn(cf: CustomField): ColumnDef {
   return {
     id: `cf_${cf.name}`,
     label: cf.label,
-    visible: false,
+    visible: true,
     sortable: false,
     isCustom: true,
     customFieldType: cf.type,
@@ -64,7 +76,7 @@ export function loadColumns(customFields?: CustomField[]): ColumnDef[] {
   if (typeof window === 'undefined') return allColumns;
 
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(getStorageKey());
     if (saved) {
       const parsed: ColumnDef[] = JSON.parse(saved);
       const savedIds = new Set(parsed.map((c) => c.id));
@@ -99,7 +111,7 @@ export function loadColumns(customFields?: CustomField[]): ColumnDef[] {
 
 export function saveColumns(columns: ColumnDef[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(columns));
+  localStorage.setItem(getStorageKey(), JSON.stringify(columns));
 }
 
 interface ColumnManagerProps {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { premiumAlert } from '@/lib/premiumDialogs';
 
 interface InlineEditProps {
   value: string;
@@ -45,7 +46,12 @@ export function InlineEdit({
       await onSave(editValue);
       setEditing(false);
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Update failed',
+        message: err?.message || 'Unable to save changes.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }
@@ -106,7 +112,7 @@ export function InlineEdit({
       className={`cursor-pointer hover:bg-brand-50 hover:text-brand-700 rounded px-1 py-0.5 -mx-1 transition-colors ${displayClassName}`}
       title="Click to edit"
     >
-      {value || <span className="text-gray-400 italic">{placeholder}</span>}
+      {(options?.length ? options.find(o => o.value === value)?.label || value : value) || <span className="text-gray-400 italic">{placeholder}</span>}
     </span>
   );
 }

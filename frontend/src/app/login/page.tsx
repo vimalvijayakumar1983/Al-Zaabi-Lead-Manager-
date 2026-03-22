@@ -1,14 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
-const REMEMBER_KEY = 'lf_remembered_credentials';
-
 const features = [
-  { icon: Zap, title: 'Advance Automations', description: 'Automate follow-ups, assignments, and scoring' },
+  { icon: Zap, title: 'Smart Automation', description: 'Automate follow-ups, assignments, and scoring' },
   { icon: BarChart3, title: 'Advanced Analytics', description: 'Real-time insights and conversion funnels' },
   { icon: Shield, title: 'Enterprise Security', description: 'Role-based access and audit logging' },
 ];
@@ -25,21 +24,6 @@ export default function LoginPage() {
   const [lastName, setLastName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(REMEMBER_KEY);
-      if (stored) {
-        const { email: savedEmail, password: savedPassword } = JSON.parse(atob(stored));
-        if (savedEmail) setEmail(savedEmail);
-        if (savedPassword) setPassword(savedPassword);
-        setRememberMe(true);
-      }
-    } catch {
-      // ignore corrupt data
-    }
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,12 +34,19 @@ export default function LoginPage() {
       if (isRegister) {
         await register({ email, password, firstName, lastName, organizationName: orgName });
       } else {
-        if (rememberMe) {
-          localStorage.setItem(REMEMBER_KEY, btoa(JSON.stringify({ email, password })));
-        } else {
-          localStorage.removeItem(REMEMBER_KEY);
+        const response = await login(email, password);
+        // Store division data for SUPER_ADMIN users
+        if (response && typeof response === 'object') {
+          const authResponse = response as any;
+          // Store organization branding data
+          if (authResponse.user?.organization) {
+            localStorage.setItem('organization', JSON.stringify(authResponse.user.organization));
+          }
+          // Store divisions list for SUPER_ADMIN
+          if (authResponse.user?.role === 'SUPER_ADMIN' && authResponse.divisions) {
+            localStorage.setItem('divisions', JSON.stringify(authResponse.divisions));
+          }
         }
-        await login(email, password);
       }
       router.push('/dashboard');
     } catch (err: any) {
@@ -88,7 +79,7 @@ export default function LoginPage() {
             <div className="h-10 w-10 rounded-xl bg-white/10 backdrop-blur flex items-center justify-center border border-white/20">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
-            <span className="text-xl font-bold tracking-tight">LeadFlow</span>
+            <span className="text-xl font-bold tracking-tight">Al-Zaabi Lead Manager</span>
           </div>
 
           {/* Main content */}
@@ -156,7 +147,7 @@ export default function LoginPage() {
             <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-soft">
               <Sparkles className="h-4.5 w-4.5 text-white" />
             </div>
-            <span className="text-xl font-bold text-text-primary tracking-tight">LeadFlow</span>
+            <span className="text-xl font-bold text-text-primary tracking-tight">Al-Zaabi Lead Manager</span>
           </div>
 
           <div className="animate-fade-in-up">
@@ -166,7 +157,7 @@ export default function LoginPage() {
             <p className="text-sm text-text-secondary mt-1.5 mb-8">
               {isRegister
                 ? 'Start managing your leads in minutes'
-                : 'Sign in to your LeadFlow account'}
+                : 'Sign in to your Al-Zaabi Lead Manager account'}
             </p>
           </div>
 
@@ -216,9 +207,9 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-sm font-medium text-text-primary">Password</label>
                 {!isRegister && (
-                  <button type="button" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
+                  <Link href="/forgot-password" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
                     Forgot password?
-                  </button>
+                  </Link>
                 )}
               </div>
               <div className="relative">
@@ -229,6 +220,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={isRegister ? 'Min 8 characters' : 'Enter your password'}
                   required
+                  minLength={isRegister ? 8 : undefined}
                 />
                 <button
                   type="button"
@@ -239,21 +231,6 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
-
-            {!isRegister && (
-              <div className="flex items-center gap-2.5">
-                <input
-                  id="remember-me"
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="h-4 w-4 rounded border-border-subtle text-brand-600 accent-brand-600 cursor-pointer"
-                />
-                <label htmlFor="remember-me" className="text-sm text-text-secondary cursor-pointer select-none">
-                  Remember password
-                </label>
-              </div>
-            )}
 
             <button
               type="submit"
