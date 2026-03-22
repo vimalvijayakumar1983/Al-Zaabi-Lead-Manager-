@@ -144,18 +144,29 @@ router.post('/', (req, res) => {
         const msgType = msg.type;
 
         let bodyText = '';
+        let mediaInfo = null;
+
         if (msg.type === 'text' && msg.text) {
           bodyText = msg.text.body || '';
-        }
-        if (msg.type === 'button' && msg.button?.text) {
+        } else if (msg.type === 'button' && msg.button?.text) {
           bodyText = msg.button.text;
-        }
-        if (msg.type === 'interactive') {
+        } else if (msg.type === 'interactive') {
           if (msg.interactive?.button_reply?.title) {
             bodyText = msg.interactive.button_reply.title;
           } else if (msg.interactive?.list_reply?.title) {
             bodyText = msg.interactive.list_reply.title;
           }
+        } else if (['image', 'video', 'audio', 'voice', 'document', 'sticker'].includes(msg.type)) {
+          const media = msg[msg.type] || {};
+          mediaInfo = {
+            type: msg.type,
+            mediaId: media.id,
+            mimeType: media.mime_type || null,
+            sha256: media.sha256 || null,
+            caption: media.caption || null,
+            filename: media.filename || null,
+          };
+          bodyText = media.caption || '';
         }
 
         const contactName = resolveContactProfileName(value, from);
@@ -167,6 +178,7 @@ router.post('/', (req, res) => {
           fromFormatted: from ? `+${from}` : undefined,
           messageId,
           type: msgType,
+          hasMedia: !!mediaInfo,
           bodyPreview: bodyText ? bodyText.substring(0, 80) + (bodyText.length > 80 ? '...' : '') : '(empty)',
           contactName,
         });
@@ -178,6 +190,7 @@ router.post('/', (req, res) => {
           messageId,
           type: msgType,
           bodyText: bodyText || null,
+          mediaInfo: mediaInfo || null,
           contactName: contactName || null,
           rawMessageKeys: Object.keys(msg),
         });
@@ -190,6 +203,7 @@ router.post('/', (req, res) => {
             messageId,
             bodyText,
             contactName,
+            mediaInfo,
           }).catch((err) => {
             logger.error('[WhatsApp Webhook] Inbound processing failed', {
               err: err.message,

@@ -7,6 +7,7 @@ const {
   canonicalPhoneDigitsForWhatsApp,
   buildWhatsAppPhoneLookupVariants,
 } = require('../utils/phoneWhatsApp');
+const { downloadMedia } = require('./whatsappService');
 
 /**
  * Normalize phone to digits-only (wa_id format). WhatsApp "from" is already digits.
@@ -228,6 +229,29 @@ async function findOrCreateLead(organizationId, phoneDigits, contactName) {
  * Process one inbound WhatsApp message: resolve org, find-or-create lead, log communication + activity.
  * Idempotent on Meta message id. Bumps lead.updatedAt so inbox conversation ordering refreshes.
  */
+const MEDIA_TYPE_LABELS = {
+  image: 'Photo',
+  video: 'Video',
+  audio: 'Voice message',
+  voice: 'Voice message',
+  document: 'Document',
+  sticker: 'Sticker',
+};
+
+function mediaExtension(mimeType) {
+  const map = {
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
+    'video/mp4': '.mp4', 'video/3gpp': '.3gp',
+    'audio/ogg': '.ogg', 'audio/ogg; codecs=opus': '.ogg', 'audio/mpeg': '.mp3', 'audio/amr': '.amr', 'audio/aac': '.aac',
+    'application/pdf': '.pdf',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  };
+  return map[mimeType] || '';
+}
+
 async function processInboundWhatsAppMessage({
   phoneNumberId,
   displayPhoneNumber,
@@ -235,6 +259,7 @@ async function processInboundWhatsAppMessage({
   messageId,
   bodyText,
   contactName,
+  mediaInfo,
 }) {
   const organizationId = await resolveOrganizationId(phoneNumberId, displayPhoneNumber);
   if (!organizationId) {
@@ -254,6 +279,7 @@ async function processInboundWhatsAppMessage({
     display_phone_number: displayPhoneNumber || null,
     senderWaId: from,
     messageId,
+    hasMedia: !!mediaInfo,
   });
 
   const phoneNormalized = normalizePhone(from);
@@ -281,7 +307,77 @@ async function processInboundWhatsAppMessage({
   }
 
   const lead = await findOrCreateLead(organizationId, phoneCanon, contactName);
-  const body = bodyText || '(no text)';
+
+  // ─── Handle media download & storage ─────────────────────────
+  let attachmentMeta = null;
+  if (mediaInfo && mediaInfo.mediaId) {
+    try {
+      console.log('[WhatsApp Inbound] Downloading media', {
+        mediaType: mediaInfo.type,
+        mediaId: mediaInfo.mediaId,
+        mimeType: mediaInfo.mimeType,
+      });
+
+      const { buffer, mimeType, fileSize } = await downloadMedia(mediaInfo.mediaId, organizationId);
+      const ext = mediaExtension(mimeType) || mediaExtension(mediaInfo.mimeType) || '';
+      const filename = mediaInfo.filename || `whatsapp-${mediaInfo.type}-${Date.now()}${ext}`;
+      const base64Data = `data:${mimeType};base64,${buffer.toString('base64')}`;
+
+      const attachment = await prisma.attachment.create({
+        data: {
+          leadId: lead.id,
+          filename,
+          mimeType,
+          size: fileSize || buffer.length,
+          url: '',
+          data: base64Data,
+        },
+      });
+      const url = `/inbox/attachments/file/${attachment.id}`;
+      await prisma.attachment.update({ where: { id: attachment.id }, data: { url } });
+
+      attachmentMeta = {
+        id: attachment.id,
+        filename,
+        mimeType,
+        size: fileSize || buffer.length,
+        url,
+        mediaType: mediaInfo.type,
+      };
+
+      console.log('[WhatsApp Inbound] Media saved as attachment', {
+        attachmentId: attachment.id,
+        filename,
+        mimeType,
+        size: fileSize || buffer.length,
+      });
+    } catch (mediaErr) {
+      logger.error('WhatsApp inbound: media download/save failed', {
+        err: mediaErr.message,
+        mediaId: mediaInfo.mediaId,
+        mediaType: mediaInfo.type,
+      });
+      console.error('[WhatsApp Inbound] Media download failed — saving message without media', {
+        err: mediaErr.message,
+        mediaId: mediaInfo.mediaId,
+      });
+    }
+  }
+
+  const typeLabel = mediaInfo ? MEDIA_TYPE_LABELS[mediaInfo.type] || '' : '';
+  const captionText = bodyText || mediaInfo?.caption || '';
+  const body = captionText || (typeLabel ? `[${typeLabel}]` : '(no text)');
+
+  const commMetadata = {
+    messageId: messageId || undefined,
+    from: `+${phoneCanon}`,
+  };
+  if (mediaInfo) {
+    commMetadata.mediaType = mediaInfo.type;
+  }
+  if (attachmentMeta) {
+    commMetadata.attachments = [attachmentMeta];
+  }
 
   await prisma.communication.create({
     data: {
@@ -289,10 +385,7 @@ async function processInboundWhatsAppMessage({
       channel: 'WHATSAPP',
       direction: 'INBOUND',
       body,
-      metadata: {
-        messageId: messageId || undefined,
-        from: `+${phoneCanon}`,
-      },
+      metadata: commMetadata,
       userId: null,
     },
   });
@@ -318,6 +411,7 @@ async function processInboundWhatsAppMessage({
     organizationId: lead.organizationId,
     from: `+${phoneCanon}`,
     messageId,
+    hasMedia: !!attachmentMeta,
   });
 
   console.log('[WhatsApp Inbound] Inbox row created (Communication) + lead.updatedAt bumped', {
@@ -327,6 +421,8 @@ async function processInboundWhatsAppMessage({
     direction: 'INBOUND',
     bodyPreview: body.length > 120 ? `${body.slice(0, 120)}…` : body,
     messageId,
+    hasMedia: !!attachmentMeta,
+    mediaType: mediaInfo?.type || null,
   });
 }
 

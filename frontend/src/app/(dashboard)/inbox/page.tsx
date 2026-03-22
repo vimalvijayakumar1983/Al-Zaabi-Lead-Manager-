@@ -14,7 +14,7 @@ import {
   Archive, Tag, Filter, MoreHorizontal, Bookmark, Pin,
   ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase, Paperclip,
   Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft, FileText, Image, Download,
-  Pencil, Trash2, Ban, ArrowUpDown,
+  Pencil, Trash2, Ban, ArrowUpDown, Mic, Square,
 } from 'lucide-react';
 
 // ─── Platform Icons (SVG) ───────────────────────────────────────────
@@ -118,6 +118,7 @@ interface Conversation {
     platform: string;
     platformInfo: { label: string; color: string; icon: string };
     createdAt: string;
+    metadata?: any;
   } | null;
 }
 
@@ -253,6 +254,11 @@ function InboxContent() {
   // Attachments
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Pipeline stages for stage editing
@@ -572,22 +578,126 @@ function InboxContent() {
   }
 
   function isImageFile(mimeType: string) {
-    return mimeType.startsWith('image/');
+    return mimeType?.startsWith('image/') && !mimeType?.includes('webp');
+  }
+
+  function isImageOrSticker(mimeType: string) {
+    return mimeType?.startsWith('image/');
+  }
+
+  function isAudioFile(mimeType: string) {
+    return mimeType?.startsWith('audio/');
+  }
+
+  function isVideoFile(mimeType: string) {
+    return mimeType?.startsWith('video/');
   }
 
   function getFileIcon(mimeType: string) {
-    if (mimeType.startsWith('image/')) return '🖼';
+    if (mimeType?.startsWith('image/')) return '🖼';
     if (mimeType === 'application/pdf') return '📄';
-    if (mimeType.startsWith('video/')) return '🎬';
-    if (mimeType.startsWith('audio/')) return '🎵';
-    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return '📊';
-    if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📽';
-    if (mimeType.includes('document') || mimeType.includes('word')) return '📝';
+    if (mimeType?.startsWith('video/')) return '🎬';
+    if (mimeType?.startsWith('audio/')) return '🎵';
+    if (mimeType?.includes('spreadsheet') || mimeType?.includes('excel')) return '📊';
+    if (mimeType?.includes('presentation') || mimeType?.includes('powerpoint')) return '📽';
+    if (mimeType?.includes('document') || mimeType?.includes('word')) return '📝';
     return '📎';
+  }
+
+  function isMediaPlaceholderBody(body: string) {
+    if (!body) return false;
+    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio)\]$/.test(body.trim()) || body.trim() === '(no text)';
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recordingChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordingChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+        setRecordingTime(0);
+      };
+
+      recorder.start(100);
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
+    } catch (err) {
+      console.error('Microphone access denied:', err);
+    }
+  };
+
+  const stopAndSendRecording = async () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+
+    return new Promise<void>((resolve) => {
+      const prevOnStop = recorder.onstop;
+      recorder.onstop = async (e) => {
+        if (prevOnStop) (prevOnStop as any).call(recorder, e);
+        setIsRecording(false);
+
+        const chunks = recordingChunksRef.current;
+        if (chunks.length === 0 || !selectedLeadId) { resolve(); return; }
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        const ext = (recorder.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
+        const file = new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type });
+
+        setSending(true);
+        try {
+          let channel = sendChannel;
+          let platform: string | undefined;
+          if (['FACEBOOK', 'INSTAGRAM', 'GOOGLE', 'WEBCHAT'].includes(sendChannel)) {
+            channel = 'CHAT';
+            platform = sendChannel.toLowerCase();
+          }
+          await api.sendInboxMessageWithAttachments({
+            leadId: selectedLeadId, channel, body: '', platform, files: [file],
+          });
+          await loadMessages(selectedLeadId, { background: true });
+          loadConversations();
+        } catch (err) {
+          console.error('Failed to send voice note:', err);
+        } finally {
+          setSending(false);
+        }
+        resolve();
+      };
+      recorder.stop();
+    });
+  };
+
+  const cancelRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+    setIsRecording(false);
+    recordingChunksRef.current = [];
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    setRecordingTime(0);
+  };
+
+  const formatRecordingTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   // ─── Save internal note ───────────────────────────────────────────
@@ -930,7 +1040,15 @@ function InboxContent() {
                                 <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
                               </span>
                             )}
-                            {convo.lastMessage.body}
+                            {convo.lastMessage.metadata?.mediaType === 'image' || convo.lastMessage.metadata?.mediaType === 'sticker' ? (
+                              <span className="italic">📷 Photo{convo.lastMessage.metadata?.attachments?.[0]?.caption ? `: ${convo.lastMessage.metadata.attachments[0].caption}` : ''}</span>
+                            ) : convo.lastMessage.metadata?.mediaType === 'video' ? (
+                              <span className="italic">🎬 Video</span>
+                            ) : convo.lastMessage.metadata?.mediaType === 'audio' || convo.lastMessage.metadata?.mediaType === 'voice' ? (
+                              <span className="italic">🎤 Voice message</span>
+                            ) : convo.lastMessage.metadata?.mediaType === 'document' ? (
+                              <span className="italic">📄 {convo.lastMessage.metadata?.attachments?.[0]?.filename || 'Document'}</span>
+                            ) : convo.lastMessage.body}
                           </p>
                         )}
 
@@ -1255,36 +1373,73 @@ function InboxContent() {
                                         Re: {msg.subject}
                                       </p>
                                     )}
-                                    {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
-
-                                    {/* Attachments in message */}
+                                    {/* Media attachments (images, audio, video, documents) */}
                                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
-                                      <div className="mt-2 space-y-1.5">
-                                        {msg.metadata.attachments.map((att: any, ai: number) => (
-                                          <a
-                                            key={ai}
-                                            href={`/api${att.url}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
-                                          >
-                                            {isImageFile(att.mimeType) ? (
-                                              <img
-                                                src={`/api${att.url}`}
-                                                alt={att.filename}
-                                                className="h-16 w-16 rounded object-cover flex-shrink-0"
-                                              />
-                                            ) : (
+                                      <div className="space-y-1.5">
+                                        {msg.metadata.attachments.map((att: any, ai: number) => {
+                                          const url = att.url ? `/api${att.url}` : null;
+                                          if (!url) return null;
+
+                                          if (isImageOrSticker(att.mimeType)) {
+                                            return (
+                                              <a key={ai} href={url} target="_blank" rel="noopener noreferrer" className="block">
+                                                <img
+                                                  src={url}
+                                                  alt={att.filename || 'Image'}
+                                                  className="max-w-[280px] max-h-[300px] rounded-lg object-contain cursor-pointer"
+                                                  loading="lazy"
+                                                />
+                                              </a>
+                                            );
+                                          }
+
+                                          if (isAudioFile(att.mimeType)) {
+                                            return (
+                                              <div key={ai} className="flex items-center gap-2 min-w-[200px] max-w-[300px]">
+                                                <audio controls preload="none" className="w-full h-8 [&::-webkit-media-controls-panel]:bg-transparent">
+                                                  <source src={url} type={att.mimeType} />
+                                                </audio>
+                                              </div>
+                                            );
+                                          }
+
+                                          if (isVideoFile(att.mimeType)) {
+                                            return (
+                                              <div key={ai} className="max-w-[300px]">
+                                                <video
+                                                  controls
+                                                  preload="metadata"
+                                                  className="rounded-lg max-w-full max-h-[240px]"
+                                                >
+                                                  <source src={url} type={att.mimeType} />
+                                                </video>
+                                              </div>
+                                            );
+                                          }
+
+                                          return (
+                                            <a
+                                              key={ai}
+                                              href={url}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
+                                            >
                                               <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
-                                            )}
-                                            <div className="min-w-0 flex-1">
-                                              <p className="text-2xs font-medium truncate text-gray-800">{att.filename}</p>
-                                              <p className="text-2xs text-gray-500">{formatFileSize(att.size)}</p>
-                                            </div>
-                                            <Download className="h-3 w-3 flex-shrink-0 text-gray-400" />
-                                          </a>
-                                        ))}
+                                              <div className="min-w-0 flex-1">
+                                                <p className="text-2xs font-medium truncate text-gray-800">{att.filename}</p>
+                                                <p className="text-2xs text-gray-500">{formatFileSize(att.size)}</p>
+                                              </div>
+                                              <Download className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                                            </a>
+                                          );
+                                        })}
                                       </div>
+                                    )}
+
+                                    {/* Text body — hide placeholder labels when media is present */}
+                                    {msg.body && !(msg.metadata?.attachments?.length > 0 && isMediaPlaceholderBody(msg.body)) && (
+                                      <p className={`whitespace-pre-wrap break-words ${msg.metadata?.attachments?.length > 0 ? 'mt-1' : ''}`}>{msg.body}</p>
                                     )}
                                   </>
                                 )}
@@ -1455,42 +1610,79 @@ function InboxContent() {
 
               {/* Input area */}
               <div className="flex items-end gap-2 px-3 sm:px-4 pb-3">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-all"
-                  title="Attach file"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-                <textarea
-                  ref={inputRef}
-                  value={messageText}
-                  onChange={(e) => setMessageText(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={`Message via ${PLATFORM_LABELS[sendChannel]?.split(' ')[0] || sendChannel}...`}
-                  rows={1}
-                  className="flex-1 resize-none rounded-xl border border-border bg-surface-secondary/50 px-3.5 py-2.5 text-sm
-                    placeholder:text-text-tertiary focus:bg-white focus:border-brand-400 focus:ring-2 focus:ring-brand-500/15
-                    focus:outline-none transition-all max-h-28 min-h-[40px]"
-                  onInput={(e) => {
-                    const el = e.target as HTMLTextAreaElement;
-                    el.style.height = 'auto';
-                    el.style.height = Math.min(el.scrollHeight, 112) + 'px';
-                  }}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
-                  className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
-                  style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
-                  title="Send"
-                >
-                  {sending ? (
-                    <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4 text-white" />
-                  )}
-                </button>
+                {isRecording ? (
+                  <>
+                    <button
+                      onClick={cancelRecording}
+                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-red-50 hover:bg-red-100 text-red-500 transition-all"
+                      title="Cancel recording"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                    <div className="flex-1 flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-red-200 bg-red-50/50 min-h-[40px]">
+                      <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                      <span className="text-sm text-red-600 font-medium tabular-nums">{formatRecordingTime(recordingTime)}</span>
+                      <span className="text-xs text-red-400">Recording...</span>
+                    </div>
+                    <button
+                      onClick={stopAndSendRecording}
+                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-green-500 hover:bg-green-600 text-white transition-all"
+                      title="Send voice note"
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-all"
+                      title="Attach file"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </button>
+                    <textarea
+                      ref={inputRef}
+                      value={messageText}
+                      onChange={(e) => setMessageText(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={`Message via ${PLATFORM_LABELS[sendChannel]?.split(' ')[0] || sendChannel}...`}
+                      rows={1}
+                      className="flex-1 resize-none rounded-xl border border-border bg-surface-secondary/50 px-3.5 py-2.5 text-sm
+                        placeholder:text-text-tertiary focus:bg-white focus:border-brand-400 focus:ring-2 focus:ring-brand-500/15
+                        focus:outline-none transition-all max-h-28 min-h-[40px]"
+                      onInput={(e) => {
+                        const el = e.target as HTMLTextAreaElement;
+                        el.style.height = 'auto';
+                        el.style.height = Math.min(el.scrollHeight, 112) + 'px';
+                      }}
+                    />
+                    {!messageText.trim() && attachedFiles.length === 0 ? (
+                      <button
+                        onClick={startRecording}
+                        disabled={sending}
+                        className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-green-50 text-text-tertiary hover:text-green-600 transition-all disabled:opacity-40"
+                        title="Record voice note"
+                      >
+                        <Mic className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSend}
+                        disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
+                        className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
+                        style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
+                        title="Send"
+                      >
+                        {sending ? (
+                          <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4 text-white" />
+                        )}
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </>

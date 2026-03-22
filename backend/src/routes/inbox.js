@@ -4,11 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { prisma } = require('../config/database');
+const { logger } = require('../config/logger');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
 const { regenerateLeadSummaryById } = require('../services/aiService');
-const { sendText: sendWhatsAppText } = require('../services/whatsappService');
+const { sendText: sendWhatsAppText, sendMedia: sendWhatsAppMedia, uploadMedia: uploadWhatsAppMedia } = require('../services/whatsappService');
 const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
 
 // ─── Display name helper (deduplication) ─────────────────────────
@@ -251,6 +252,7 @@ router.get('/conversations', async (req, res, next) => {
           platform,
           platformInfo: PLATFORM_MAP[platform] || PLATFORM_MAP.CHAT,
           createdAt: lastMsg.createdAt,
+          metadata: lastMsg.metadata || {},
         } : null,
       };
     });
@@ -558,8 +560,9 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     }
 
     // Update communication metadata with persistent URLs
+    let finalMetadata = msgMetadata;
     if (savedAttachments.length > 0) {
-      const updatedMeta = {
+      finalMetadata = {
         ...msgMetadata,
         attachments: savedAttachments.map(a => ({
           id: a.id,
@@ -571,8 +574,44 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       };
       await prisma.communication.update({
         where: { id: communication.id },
-        data: { metadata: updatedMeta },
+        data: { metadata: finalMetadata },
       });
+      communication.metadata = finalMetadata;
+    }
+
+    // ─── Send via WhatsApp API if channel is WHATSAPP ───────────
+    if (channel === 'WHATSAPP' && lead.phone) {
+      const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
+      if (phone) {
+        // Send each attachment as a separate WhatsApp media message
+        for (const att of savedAttachments) {
+          try {
+            const waMediaType = att.mimeType.startsWith('image/') ? 'image'
+              : att.mimeType.startsWith('video/') ? 'video'
+              : att.mimeType.startsWith('audio/') ? 'audio'
+              : 'document';
+            const buf = Buffer.from(att.data.replace(/^data:[^;]+;base64,/, ''), 'base64');
+            const { mediaId } = await uploadWhatsAppMedia(buf, att.mimeType, att.filename, lead.organizationId);
+            const caption = (savedAttachments.length === 1 && body) ? body : undefined;
+            await sendWhatsAppMedia(phone, waMediaType, mediaId, caption, att.filename, lead.organizationId);
+          } catch (waErr) {
+            logger.error('WhatsApp media send failed for attachment', { err: waErr.message, filename: att.filename });
+          }
+        }
+        // If there's a text body and either no attachments or multiple attachments (caption only sent with single), send text separately
+        if (body && (savedAttachments.length !== 1)) {
+          try {
+            await sendWhatsAppText(phone, body, lead.organizationId);
+          } catch (waErr) {
+            logger.error('WhatsApp text send failed', { err: waErr.message });
+          }
+        }
+        // Normalize lead phone if needed
+        const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+        if (rawDigits && rawDigits !== phone) {
+          await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
+      }
     }
 
     // Activity log
