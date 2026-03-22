@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 type Period = '7d' | '30d' | '90d' | '180d' | '365d';
-type Tab = 'overview' | 'pipeline' | 'team' | 'sources' | 'activities';
+type Tab = 'overview' | 'pipeline' | 'team' | 'sources' | 'activities' | 'operations' | 'calls';
 
 // ─── Utility ─────────────────────────────────────────────────────
 
@@ -392,6 +392,8 @@ const TABS: { value: Tab; label: string; icon: any }[] = [
   { value: 'team', label: 'Team', icon: Users },
   { value: 'sources', label: 'Sources & Campaigns', icon: Target },
   { value: 'activities', label: 'Activities', icon: Activity },
+  { value: 'operations', label: 'Task & SLA', icon: CheckCircle2 },
+  { value: 'calls', label: 'Call Intelligence', icon: Phone },
 ];
 
 export default function AnalyticsPage() {
@@ -420,6 +422,8 @@ export default function AnalyticsPage() {
   const [activities, setActivities] = useState<any>(null);
   const [scoreDistrib, setScoreDistrib] = useState<any[]>([]);
   const [divisionComp, setDivisionComp] = useState<any[]>([]);
+  const [taskSlaReport, setTaskSlaReport] = useState<any>(null);
+  const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -443,7 +447,7 @@ export default function AnalyticsPage() {
     else setRefreshing(true);
     try {
       const p = periodRef.current;
-      const [ov, fn, tr, tm, src, cam, act, sd] = await Promise.allSettled([
+      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp] = await Promise.allSettled([
         api.getAnalyticsOverview(p, divId),
         api.getFunnel(divId),
         api.getTrends(p, divId),
@@ -452,6 +456,8 @@ export default function AnalyticsPage() {
         api.getCampaignPerformance(divId),
         api.getActivitiesAnalytics(p, divId),
         api.getScoreDistribution(divId),
+        api.getTaskSLAReport(p, divId),
+        api.getCallDispositionReport(p, divId),
       ]);
 
       if (ov.status === 'fulfilled') setOverview(ov.value);
@@ -462,6 +468,8 @@ export default function AnalyticsPage() {
       if (cam.status === 'fulfilled') setCampaigns(Array.isArray(cam.value) ? cam.value : []);
       if (act.status === 'fulfilled') setActivities(act.value);
       if (sd.status === 'fulfilled') setScoreDistrib(Array.isArray(sd.value) ? sd.value : []);
+      if (taskSla.status === 'fulfilled') setTaskSlaReport(taskSla.value || null);
+      if (callDisp.status === 'fulfilled') setCallDispositionReport(callDisp.value || null);
 
       if (isSuperAdmin && !divId) {
         api.getDivisionComparison().then(d => setDivisionComp(Array.isArray(d) ? d : [])).catch(() => {});
@@ -1143,6 +1151,224 @@ export default function AnalyticsPage() {
     );
   };
 
+  // ── Operations (Task + SLA) Tab ──────────────────────────────────
+  const OperationsTab = () => {
+    const summary = taskSlaReport?.summary || {};
+    const taskByStatus = Array.isArray(taskSlaReport?.taskBreakdown?.byStatus) ? taskSlaReport.taskBreakdown.byStatus : [];
+    const taskByPriority = Array.isArray(taskSlaReport?.taskBreakdown?.byPriority) ? taskSlaReport.taskBreakdown.byPriority : [];
+    const taskByType = Array.isArray(taskSlaReport?.taskBreakdown?.byType) ? taskSlaReport.taskBreakdown.byType : [];
+    const slaByStatus = Array.isArray(taskSlaReport?.slaBreakdown?.byStatus) ? taskSlaReport.slaBreakdown.byStatus : [];
+    const breachedAging = Array.isArray(taskSlaReport?.slaBreakdown?.breachedAgingBuckets) ? taskSlaReport.slaBreakdown.breachedAgingBuckets : [];
+    const overdueByOwner = Array.isArray(taskSlaReport?.overdueByOwner) ? taskSlaReport.overdueByOwner : [];
+
+    const fmtLabel = (value: string) => value?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'N/A';
+    const slaStatusMap = new Map(slaByStatus.map((row: any) => [row.status, row.count]));
+
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiCard title="Open Tasks" value={summary.openTasks || 0} icon={Clock} iconBg="bg-amber-50" iconColor="text-amber-600" />
+          <KpiCard title="Overdue Tasks" value={summary.overdueTasks || 0} icon={AlertCircle} iconBg="bg-red-50" iconColor="text-red-500" href="/tasks?filter=overdue" />
+          <KpiCard title="Completion Rate" value={summary.completionRate || 0} format="percent" icon={CheckCircle2} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+          <KpiCard title="Avg First Response" value={summary.avgFirstResponseHours || 0} subtitle="Hours" icon={Activity} iconBg="bg-brand-50" iconColor="text-brand-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Task Status Distribution</h2>
+            <BarChart
+              data={taskByStatus.map((row: any) => ({ label: fmtLabel(row.status), count: row.count }))}
+              xKey="label"
+              yKey="count"
+              color="#6366f1"
+              height={180}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Task Priority Distribution</h2>
+            <BarChart
+              data={taskByPriority.map((row: any) => ({ label: fmtLabel(row.priority), count: row.count }))}
+              xKey="label"
+              yKey="count"
+              color="#f59e0b"
+              height={180}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">SLA Status</h2>
+            <DonutChart
+              data={[
+                { label: 'On Time', value: Number(slaStatusMap.get('ON_TIME') || 0) },
+                { label: 'At Risk', value: Number(slaStatusMap.get('AT_RISK') || 0) },
+                { label: 'Breached', value: Number(slaStatusMap.get('BREACHED') || 0) },
+                { label: 'Escalated', value: Number(slaStatusMap.get('ESCALATED') || 0) },
+                { label: 'Responded', value: Number(slaStatusMap.get('RESPONDED') || 0) },
+              ].filter((d) => d.value > 0)}
+              colors={['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4']}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Breached / Escalated Aging</h2>
+            <BarChart
+              data={breachedAging.map((row: any) => ({ bucket: row.bucket, count: row.count }))}
+              xKey="bucket"
+              yKey="count"
+              color="#ef4444"
+              height={170}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Task Type Mix</h2>
+            <BarChart
+              data={taskByType.slice(0, 7).map((row: any) => ({ label: fmtLabel(row.type), count: row.count }))}
+              xKey="label"
+              yKey="count"
+              color="#0ea5e9"
+              height={170}
+            />
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">Overdue Tasks by Owner</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Immediate workload risk visibility</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Owner</th>
+                  <th className="table-header px-4 py-3 text-left">Overdue Tasks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overdueByOwner.length === 0 ? (
+                  <tr><td colSpan={2} className="py-8 text-center text-sm text-text-tertiary">No overdue tasks in this scope</td></tr>
+                ) : overdueByOwner.map((row: any) => (
+                  <tr key={row.assigneeId || row.assigneeName} className="table-row">
+                    <td className="table-cell px-4">{row.assigneeName}</td>
+                    <td className="table-cell px-4">
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold bg-red-50 text-red-600">
+                        {row.overdueCount}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Call Intelligence Tab ───────────────────────────────────────
+  const CallsTab = () => {
+    const summary = callDispositionReport?.summary || {};
+    const byDisposition = Array.isArray(callDispositionReport?.byDisposition) ? callDispositionReport.byDisposition : [];
+    const notInterested = callDispositionReport?.notInterested || { total: 0, reasons: [] };
+    const completed = callDispositionReport?.alreadyCompletedServices || { total: 0, locations: [] };
+    const willCall = callDispositionReport?.willCallAgain || { total: 0, expectedCallbackWindows: [] };
+
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiCard title="Total Calls" value={summary.totalCalls || 0} icon={Phone} iconBg="bg-brand-50" iconColor="text-brand-600" />
+          <KpiCard title="Reachability Ratio" value={summary.reachabilityRatio || 0} format="percent" icon={Target} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+          <KpiCard title="Not Reached Calls" value={summary.notReachedCalls || 0} icon={AlertCircle} iconBg="bg-amber-50" iconColor="text-amber-600" />
+          <KpiCard title="Unique Leads Touched" value={summary.uniqueLeadsTouched || 0} icon={Users} iconBg="bg-violet-50" iconColor="text-violet-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Disposition Mix</h2>
+            <DonutChart
+              data={byDisposition.slice(0, 7).map((row: any) => ({ label: row.label, value: row.count }))}
+              colors={['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#14b8a6']}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Not Interested Reasons</h2>
+            {Array.isArray(notInterested.reasons) && notInterested.reasons.length > 0 ? (
+              <BarChart
+                data={notInterested.reasons.slice(0, 6).map((row: any) => ({ reason: row.reason, count: row.count }))}
+                xKey="reason"
+                yKey="count"
+                color="#ef4444"
+                height={180}
+              />
+            ) : (
+              <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No Not Interested reason data yet</p></div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Already Completed Services</h2>
+            {Array.isArray(completed.locations) && completed.locations.length > 0 ? (
+              <BarChart
+                data={completed.locations.map((row: any) => ({ location: row.location, count: row.count }))}
+                xKey="location"
+                yKey="count"
+                color="#10b981"
+                height={170}
+              />
+            ) : (
+              <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
+            )}
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Will Call Us Again - Expected Window</h2>
+            {Array.isArray(willCall.expectedCallbackWindows) && willCall.expectedCallbackWindows.length > 0 ? (
+              <BarChart
+                data={willCall.expectedCallbackWindows.map((row: any) => ({ window: row.window, count: row.count }))}
+                xKey="window"
+                yKey="count"
+                color="#6366f1"
+                height={170}
+              />
+            ) : (
+              <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
+            )}
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">Disposition Breakdown Table</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Disposition</th>
+                  <th className="table-header px-4 py-3 text-left">Count</th>
+                  <th className="table-header px-4 py-3 text-left">Percent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byDisposition.length === 0 ? (
+                  <tr><td colSpan={3} className="py-8 text-center text-sm text-text-tertiary">No call data for selected period</td></tr>
+                ) : byDisposition.map((row: any) => (
+                  <tr key={row.disposition} className="table-row">
+                    <td className="table-cell px-4">{row.label}</td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{row.percent}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Render ────────────────────────────────────────────────────────
   return (
     <div className="space-y-5 animate-fade-in">
@@ -1244,6 +1470,8 @@ export default function AnalyticsPage() {
       {activeTab === 'team' && <TeamTab />}
       {activeTab === 'sources' && <SourcesTab />}
       {activeTab === 'activities' && <ActivitiesTab />}
+      {activeTab === 'operations' && <OperationsTab />}
+      {activeTab === 'calls' && <CallsTab />}
     </div>
   );
 }

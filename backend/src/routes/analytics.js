@@ -63,6 +63,40 @@ function pctChange(cur, prev) {
   return Math.round(((cur - prev) / prev) * 100);
 }
 
+const CALL_DISPOSITION_LABELS = {
+  CALLBACK: 'Call Back Requested',
+  CALL_LATER: 'Call Later',
+  CALL_AGAIN: 'Call Again',
+  WILL_CALL_US_AGAIN: 'Will Call Us Again',
+  MEETING_ARRANGED: 'Meeting Arranged',
+  APPOINTMENT_BOOKED: 'Appointment Booked',
+  INTERESTED: 'Interested',
+  NOT_INTERESTED: 'Not Interested',
+  ALREADY_COMPLETED_SERVICES: 'Already Completed Services',
+  NO_ANSWER: 'No Answer',
+  VOICEMAIL_LEFT: 'Voicemail Left',
+  WRONG_NUMBER: 'Wrong Number',
+  BUSY: 'Busy',
+  GATEKEEPER: 'Gatekeeper',
+  FOLLOW_UP_EMAIL: 'Follow-up Email',
+  QUALIFIED: 'Qualified',
+  PROPOSAL_REQUESTED: 'Proposal Requested',
+  DO_NOT_CALL: 'Do Not Call',
+  OTHER: 'Other',
+};
+
+const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
+
+function parseMetadata(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
 // ─── Dashboard Overview ──────────────────────────────────────────
 router.get('/dashboard', async (req, res, next) => {
   try {
@@ -453,6 +487,283 @@ router.get('/activities', async (req, res, next) => {
       taskStats: taskStats.map(t => ({ status: t.status, count: t._count })),
       communicationStats: communicationStats.map(c => ({ channel: c.channel, count: c._count })),
       totalActivities: allActivities.length,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── Task & SLA Report (Phase A) ─────────────────────────────────
+router.get('/task-sla-report', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const { start } = getPeriodDates(period);
+    const now = new Date();
+
+    const taskScope = getTaskWhere(req, divisionId);
+    const leadScope = getLeadWhere(req, divisionId);
+
+    const [
+      openTasks,
+      overdueTasks,
+      completedInPeriod,
+      createdInPeriod,
+      taskStatus,
+      taskPriority,
+      taskType,
+      slaStatus,
+      breachedLeads,
+      completedDurationRows,
+      respondedLeads,
+      overdueOwnerRows,
+    ] = await Promise.all([
+      prisma.task.count({
+        where: { ...taskScope, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+      }),
+      prisma.task.count({
+        where: { ...taskScope, status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } },
+      }),
+      prisma.task.count({
+        where: { ...taskScope, status: 'COMPLETED', completedAt: { gte: start } },
+      }),
+      prisma.task.count({
+        where: { ...taskScope, createdAt: { gte: start } },
+      }),
+      prisma.task.groupBy({ by: ['status'], where: taskScope, _count: { _all: true } }),
+      prisma.task.groupBy({ by: ['priority'], where: taskScope, _count: { _all: true } }),
+      prisma.task.groupBy({ by: ['type'], where: taskScope, _count: { _all: true } }),
+      prisma.lead.groupBy({ by: ['slaStatus'], where: leadScope, _count: { _all: true } }).catch(() => []),
+      prisma.lead.findMany({
+        where: { ...leadScope, slaStatus: { in: ['BREACHED', 'ESCALATED'] } },
+        select: { createdAt: true },
+      }).catch(() => []),
+      prisma.task.findMany({
+        where: {
+          ...taskScope,
+          status: 'COMPLETED',
+          completedAt: { not: null, gte: start },
+        },
+        select: { createdAt: true, completedAt: true },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, createdAt: { gte: start }, firstRespondedAt: { not: null } },
+        select: { createdAt: true, firstRespondedAt: true },
+      }).catch(() => []),
+      prisma.task.findMany({
+        where: { ...taskScope, status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } },
+        select: {
+          assigneeId: true,
+          assignee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+    ]);
+
+    const completionRate = createdInPeriod > 0
+      ? Math.round((completedInPeriod / createdInPeriod) * 10000) / 100
+      : 0;
+
+    const avgCompletionHours = completedDurationRows.length > 0
+      ? Math.round(
+        (
+          completedDurationRows.reduce((sum, row) => {
+            const startTs = new Date(row.createdAt).getTime();
+            const endTs = row.completedAt ? new Date(row.completedAt).getTime() : startTs;
+            return sum + Math.max(0, endTs - startTs);
+          }, 0) / completedDurationRows.length
+        ) / (1000 * 60 * 60)
+      )
+      : 0;
+
+    const avgFirstResponseHours = respondedLeads.length > 0
+      ? Math.round(
+        (
+          respondedLeads.reduce((sum, row) => {
+            const startTs = new Date(row.createdAt).getTime();
+            const endTs = row.firstRespondedAt ? new Date(row.firstRespondedAt).getTime() : startTs;
+            return sum + Math.max(0, endTs - startTs);
+          }, 0) / respondedLeads.length
+        ) / (1000 * 60 * 60)
+      )
+      : 0;
+
+    const breachedAgingBuckets = [
+      { bucket: '0-1 days', count: 0 },
+      { bucket: '2-3 days', count: 0 },
+      { bucket: '4-7 days', count: 0 },
+      { bucket: '8+ days', count: 0 },
+    ];
+    for (const lead of breachedLeads) {
+      const ageDays = Math.floor((now.getTime() - new Date(lead.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+      if (ageDays <= 1) breachedAgingBuckets[0].count += 1;
+      else if (ageDays <= 3) breachedAgingBuckets[1].count += 1;
+      else if (ageDays <= 7) breachedAgingBuckets[2].count += 1;
+      else breachedAgingBuckets[3].count += 1;
+    }
+
+    const ownerMap = new Map();
+    for (const row of overdueOwnerRows) {
+      const key = row.assigneeId || 'unassigned';
+      if (!ownerMap.has(key)) {
+        ownerMap.set(key, {
+          assigneeId: row.assigneeId || null,
+          assigneeName: row.assignee
+            ? getDisplayName(row.assignee)
+            : 'Unassigned',
+          overdueCount: 0,
+        });
+      }
+      ownerMap.get(key).overdueCount += 1;
+    }
+
+    res.json({
+      summary: {
+        openTasks,
+        overdueTasks,
+        completedInPeriod,
+        createdInPeriod,
+        completionRate,
+        avgCompletionHours,
+        avgFirstResponseHours,
+      },
+      taskBreakdown: {
+        byStatus: taskStatus.map((r) => ({ status: r.status, count: r._count._all || 0 })),
+        byPriority: taskPriority.map((r) => ({ priority: r.priority, count: r._count._all || 0 })),
+        byType: taskType.map((r) => ({ type: r.type, count: r._count._all || 0 })),
+      },
+      slaBreakdown: {
+        byStatus: slaStatus.map((r) => ({ status: r.slaStatus, count: r._count._all || 0 })),
+        breachedAgingBuckets,
+      },
+      overdueByOwner: Array.from(ownerMap.values()).sort((a, b) => b.overdueCount - a.overdueCount).slice(0, 12),
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── Call Disposition Report (Phase A) ───────────────────────────
+router.get('/call-disposition-report', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const { start } = getPeriodDates(period);
+    const orgFilter = getOrgFilter(req, divisionId);
+
+    const callWhere = req.isRestrictedRole
+      ? { userId: req.user.id, createdAt: { gte: start } }
+      : { lead: { organizationId: orgFilter, isArchived: false }, createdAt: { gte: start } };
+
+    const [totalCalls, notReachedCalls, dispositionRows, uniqueLeadRows, durationAgg, notInterestedRows, completedRows, willCallRows] = await Promise.all([
+      prisma.callLog.count({ where: callWhere }),
+      prisma.callLog.count({ where: { ...callWhere, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+      prisma.callLog.groupBy({ by: ['disposition'], where: callWhere, _count: { _all: true } }),
+      prisma.callLog.findMany({ where: callWhere, select: { leadId: true }, distinct: ['leadId'] }),
+      prisma.callLog.aggregate({ where: callWhere, _avg: { duration: true } }),
+      prisma.callLog.findMany({
+        where: { ...callWhere, disposition: 'NOT_INTERESTED' },
+        select: { metadata: true, notes: true },
+      }),
+      prisma.callLog.findMany({
+        where: { ...callWhere, disposition: 'ALREADY_COMPLETED_SERVICES' },
+        select: { metadata: true },
+      }),
+      prisma.callLog.findMany({
+        where: { ...callWhere, disposition: 'WILL_CALL_US_AGAIN' },
+        select: { metadata: true },
+      }),
+    ]);
+
+    const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
+    const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
+
+    const byDisposition = dispositionRows
+      .map((row) => {
+        const count = row._count._all || 0;
+        return {
+          disposition: row.disposition,
+          label: CALL_DISPOSITION_LABELS[row.disposition] || row.disposition?.replace(/_/g, ' ') || 'Unknown',
+          count,
+          percent: totalCalls > 0 ? Math.round((count / totalCalls) * 10000) / 100 : 0,
+        };
+      })
+      .sort((a, b) => b.count - a.count);
+
+    const reasonMap = new Map();
+    for (const row of notInterestedRows) {
+      const metadata = parseMetadata(row.metadata);
+      const extractedReason =
+        metadata?.notInterestedReasonLabel ||
+        metadata?.notInterestedReason ||
+        metadata?.reasonLabel ||
+        metadata?.reason ||
+        null;
+      const reason = String(extractedReason || 'Unspecified').trim() || 'Unspecified';
+      reasonMap.set(reason, (reasonMap.get(reason) || 0) + 1);
+    }
+    const notInterestedTotal = notInterestedRows.length;
+    const notInterestedReasons = Array.from(reasonMap.entries())
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        percent: notInterestedTotal > 0 ? Math.round((count / notInterestedTotal) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const completedLocationMap = new Map();
+    for (const row of completedRows) {
+      const metadata = parseMetadata(row.metadata);
+      const label =
+        metadata?.completedServiceLocationLabel ||
+        metadata?.completedServiceLocation ||
+        'Unspecified';
+      const location = String(label).trim() || 'Unspecified';
+      completedLocationMap.set(location, (completedLocationMap.get(location) || 0) + 1);
+    }
+    const completedTotal = completedRows.length;
+    const completedServiceLocations = Array.from(completedLocationMap.entries())
+      .map(([location, count]) => ({
+        location,
+        count,
+        percent: completedTotal > 0 ? Math.round((count / completedTotal) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const callbackWindowMap = new Map();
+    for (const row of willCallRows) {
+      const metadata = parseMetadata(row.metadata);
+      const label =
+        metadata?.expectedCallbackWindowLabel ||
+        metadata?.expectedCallbackWindow ||
+        'Unspecified';
+      const window = String(label).trim() || 'Unspecified';
+      callbackWindowMap.set(window, (callbackWindowMap.get(window) || 0) + 1);
+    }
+    const willCallTotal = willCallRows.length;
+    const expectedCallbackWindows = Array.from(callbackWindowMap.entries())
+      .map(([window, count]) => ({
+        window,
+        count,
+        percent: willCallTotal > 0 ? Math.round((count / willCallTotal) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      summary: {
+        totalCalls,
+        uniqueLeadsTouched: uniqueLeadRows.length,
+        reachedCalls,
+        notReachedCalls,
+        reachabilityRatio,
+        avgDurationSeconds: Math.round(Number(durationAgg._avg.duration || 0)),
+      },
+      byDisposition,
+      notInterested: {
+        total: notInterestedTotal,
+        reasons: notInterestedReasons,
+      },
+      alreadyCompletedServices: {
+        total: completedTotal,
+        locations: completedServiceLocations,
+      },
+      willCallAgain: {
+        total: willCallTotal,
+        expectedCallbackWindows,
+      },
     });
   } catch (err) { next(err); }
 });

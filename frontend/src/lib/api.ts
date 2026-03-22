@@ -360,6 +360,16 @@ class ApiClient {
     return this.request<any>(`/analytics/score-distribution${q}`);
   }
 
+  async getTaskSLAReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/task-sla-report?${q}`);
+  }
+
+  async getCallDispositionReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/call-disposition-report?${q}`);
+  }
+
   async getDivisionComparison() {
     return this.request<any>('/analytics/division-comparison');
   }
