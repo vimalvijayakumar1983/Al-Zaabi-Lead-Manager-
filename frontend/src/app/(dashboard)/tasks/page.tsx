@@ -246,6 +246,7 @@ function StatCard({
 // ═══════════════════════════════════════════════════════════════════
 export default function TasksPage() {
   const searchParams = useSearchParams();
+  const analyticsScope = searchParams.get('analyticsScope');
   const { user: currentUser } = useAuthStore();
   const addToast = useNotificationStore((s) => s.addToast);
 
@@ -393,7 +394,7 @@ export default function TasksPage() {
       if (sortField) params.sortBy = sortField;
       if (sortDir) params.sortOrder = sortDir;
       const effectiveDivisionId = currentUser?.role === 'SUPER_ADMIN'
-        ? (divisionFilter || scopedDivisionId)
+        ? (divisionFilter || (analyticsScope === 'all' ? null : scopedDivisionId))
         : scopedDivisionId;
       if (effectiveDivisionId) params.divisionId = effectiveDivisionId;
 
@@ -410,7 +411,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, divisionFilter, currentUser?.id, sortField, sortDir, datePreset, scopedDivisionId]);
+  }, [page, searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, divisionFilter, currentUser?.id, sortField, sortDir, datePreset, scopedDivisionId, analyticsScope]);
 
   useEffect(() => {
     fetchTasks();

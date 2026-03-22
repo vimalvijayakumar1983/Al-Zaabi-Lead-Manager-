@@ -195,6 +195,7 @@ function LeadsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const addToast = useNotificationStore((s) => s.addToast);
+  const analyticsScope = searchParams.get('analyticsScope');
 
   // ─── State ──────────────────────────────────────────────────────
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -314,9 +315,14 @@ function LeadsContent() {
         sortBy,
         sortOrder,
       };
-      // Scope leads to the active division for super admin
+      // Scope leads to active division unless analytics drill explicitly
+      // requests an all-division context.
       const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      if (activeDivisionId) params.divisionId = activeDivisionId;
+      if (filters.divisionId && filters.divisionId !== 'all') {
+        params.divisionId = filters.divisionId;
+      } else if (activeDivisionId && analyticsScope !== 'all') {
+        params.divisionId = activeDivisionId;
+      }
       if (filters.search) params.search = filters.search;
       if (filters.status) params.status = filters.status;
       if (filters.source) params.source = filters.source;
@@ -367,7 +373,7 @@ function LeadsContent() {
     } finally {
       setLoading(false);
     }
-  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser]);
+  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]);
 
   const fetchStats = useCallback(async () => {
     try {

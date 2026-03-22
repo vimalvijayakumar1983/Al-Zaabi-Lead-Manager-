@@ -650,9 +650,11 @@ export default function AnalyticsPage() {
   // ── Drill-down helper ─────────────────────────────────────────────
   const withDivisionScope = useCallback((params: Record<string, string>) => {
     if (selectedDivision && selectedDivision !== 'all') {
-      return { ...params, divisionId: selectedDivision };
+      return { ...params, divisionId: selectedDivision, analyticsScope: 'division' };
     }
-    return params;
+    // Explicitly preserve all-division context so destination pages
+    // do not fallback to a locally selected division.
+    return { ...params, analyticsScope: 'all' };
   }, [selectedDivision]);
 
   const drill = (params: Record<string, string>) => router.push(drillLink(withDivisionScope(params)));
