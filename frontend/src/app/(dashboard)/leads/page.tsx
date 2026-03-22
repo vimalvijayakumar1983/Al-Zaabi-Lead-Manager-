@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
@@ -66,6 +66,11 @@ const dispositionColor = (d: string): string => {
 };
 
 type ViewMode = 'table' | 'cards' | 'kanban';
+const DRILLDOWN_FILTER_KEYS: (keyof FilterState)[] = [
+  'status', 'source', 'assignedToId', 'stageId', 'campaign',
+  'minScore', 'maxScore', 'search', 'company', 'location',
+  'callOutcome', 'divisionId',
+];
 
 // ─── Phone formatting - auto-add UAE country code if missing ────
 const formatPhone = (phone: string | null | undefined): string => {
@@ -195,6 +200,7 @@ export default function LeadsPage() {
 function LeadsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const pathname = usePathname();
   const addToast = useNotificationStore((s) => s.addToast);
   const analyticsScope = searchParams.get('analyticsScope');
 
@@ -230,13 +236,8 @@ function LeadsContent() {
   const [filters, setFilters] = useState<FilterState>(() => {
     // URL params take priority (for drill-down from analytics)
     const initial = { ...emptyFilters };
-    const paramKeys: (keyof FilterState)[] = [
-      'status', 'source', 'assignedToId', 'stageId', 'campaign',
-      'minScore', 'maxScore', 'search', 'company', 'location',
-      'callOutcome', 'divisionId',
-    ];
     let hasUrlParams = false;
-    for (const key of paramKeys) {
+    for (const key of DRILLDOWN_FILTER_KEYS) {
       const val = searchParams.get(key);
       if (val) { initial[key] = val; hasUrlParams = true; }
     }
@@ -445,12 +446,7 @@ function LeadsContent() {
         // 3. Restore active view filters (skip if already restored from sessionStorage)
         const savedViewId = loadActiveViewId();
         const hasSessionState = restoredViewState.current !== null;
-        const urlFilterKeys = [
-          'status', 'source', 'assignedToId', 'stageId', 'campaign',
-          'minScore', 'maxScore', 'search', 'company', 'location',
-          'callOutcome', 'divisionId',
-        ];
-        const hasUrlDrilldownParams = urlFilterKeys.some((key) => !!searchParams.get(key));
+        const hasUrlDrilldownParams = DRILLDOWN_FILTER_KEYS.some((key) => !!searchParams.get(key));
         if (savedViewId && savedViewId !== 'all' && !hasSessionState && !hasUrlDrilldownParams) {
           const allViews = [...SYSTEM_VIEWS, ...serverViews];
           const view = allViews.find(v => v.id === savedViewId);
@@ -480,6 +476,36 @@ function LeadsContent() {
   useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
+
+  // One-time drill-down params should not keep applying by default
+  // on subsequent division loads/navigation.
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    let changed = false;
+    for (const key of DRILLDOWN_FILTER_KEYS) {
+      if (params.has(key)) {
+        params.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  }, [searchParams, router, pathname]);
+
+  // Clean stale stage filters restored from old session/drill-down context
+  // (e.g. stage IDs from a different division).
+  useEffect(() => {
+    if (!filters.stageId || stages.length === 0) return;
+    const validStageIds = new Set(stages.map((s) => s.id));
+    const requested = String(filters.stageId).split(',').map((s) => s.trim()).filter(Boolean);
+    const stillValid = requested.filter((id) => validStageIds.has(id));
+    if (stillValid.length === requested.length) return;
+    setFilters((prev) => ({ ...prev, stageId: stillValid.join(',') }));
+    setPagination((p) => ({ ...p, page: 1 }));
+    setActiveViewId('all');
+    saveActiveViewId('all');
+  }, [filters.stageId, stages]);
 
   // ─── Store lead navigation data for detail page ← → navigation ─────
   useEffect(() => {
