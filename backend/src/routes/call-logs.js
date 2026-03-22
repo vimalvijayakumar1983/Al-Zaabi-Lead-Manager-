@@ -16,6 +16,7 @@ const {
   actionMatchesConditions,
   labelForFieldOption,
 } = require('../services/dispositionStudio');
+const { findStageForStatus } = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -33,43 +34,25 @@ function getDisplayName(obj) {
   return `${fn} ${ln}`;
 }
 
-// ─── Sync pipeline stage when status changes (mirrors leads.js logic) ──
-const STATUS_TO_KEYWORDS = {
-  NEW:           ['new', 'untouched', 'fresh', 'incoming', 'inquiry'],
-  CONTACTED:     ['contact', 'touched', 'follow', 'reach', 'called', 'engaged', 'assessment'],
-  QUALIFIED:     ['qualif', 'interested', 'hot', 'warm', 'ready'],
-  PROPOSAL_SENT: ['proposal', 'quote', 'offer', 'sent'],
-  WON:           ['won', 'converted', 'signed', 'closed won', 'completed', 'confirmed'],
-  LOST:          ['lost', 'dead', 'rejected', 'disqualif', 'closed lost', 'cancelled'],
-};
-
 async function syncPipelineStage(leadId, orgId, newStatus, currentStageId, userId) {
   try {
-    const keywords = STATUS_TO_KEYWORDS[newStatus] || [];
-    if (keywords.length === 0) return null;
+    const [orgStages, org] = await Promise.all([
+      prisma.pipelineStage.findMany({
+        where: { organizationId: orgId },
+        orderBy: { order: 'asc' },
+      }),
+      prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { settings: true },
+      }),
+    ]);
 
-    const orgStages = await prisma.pipelineStage.findMany({
-      where: { organizationId: orgId },
-      orderBy: { order: 'asc' },
+    const matchedStage = findStageForStatus({
+      targetStatus: newStatus,
+      stages: orgStages,
+      settings: org?.settings || {},
+      divisionId: orgId,
     });
-
-    // Find best matching stage by keyword
-    let matchedStage = null;
-    for (const stage of orgStages) {
-      const sName = stage.name.toLowerCase();
-      if (keywords.some(kw => sName.includes(kw))) {
-        matchedStage = stage;
-        break;
-      }
-    }
-
-    // Also check isWonStage / isLostStage flags
-    if (!matchedStage && newStatus === 'WON') {
-      matchedStage = orgStages.find(s => s.isWonStage);
-    }
-    if (!matchedStage && newStatus === 'LOST') {
-      matchedStage = orgStages.find(s => s.isLostStage);
-    }
 
     if (matchedStage && matchedStage.id !== currentStageId) {
       await prisma.lead.update({

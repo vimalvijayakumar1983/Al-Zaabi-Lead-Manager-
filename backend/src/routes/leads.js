@@ -14,6 +14,7 @@ const { executeAutomations } = require('../services/automationEngine');
 const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 const { upsertRecycleBinItem } = require('../services/recycleBinService');
 const { generateLeadSummaryInsights, regenerateLeadSummaryById } = require('../services/aiService');
+const { findStageForStatus } = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -1245,42 +1246,24 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     // ── Reverse sync: status change → find matching pipeline stage ──
     if (updateData.status && updateData.status !== existing.status && !updateData.stageId) {
-      const statusToKeywords = {
-        NEW:       ['new', 'untouched', 'fresh', 'incoming'],
-        CONTACTED: ['contact', 'touched', 'follow', 'reach', 'called', 'engaged'],
-        QUALIFIED: ['qualif', 'interested', 'hot', 'warm', 'ready'],
-        WON:       ['won', 'converted', 'signed', 'closed won'],
-        LOST:      ['lost', 'dead', 'rejected', 'disqualif', 'closed lost'],
-      };
-
-      const keywords = statusToKeywords[updateData.status] || [];
-      if (keywords.length > 0) {
-        const orgStages = await prisma.pipelineStage.findMany({
+      const [orgStages, org] = await Promise.all([
+        prisma.pipelineStage.findMany({
           where: { organizationId: existing.organizationId },
           orderBy: { order: 'asc' },
-        });
-
-        // Find best matching stage by keyword
-        let matchedStage = null;
-        for (const stage of orgStages) {
-          const sName = stage.name.toLowerCase();
-          if (keywords.some(kw => sName.includes(kw))) {
-            matchedStage = stage;
-            break;
-          }
-        }
-
-        // Also check isWonStage / isLostStage flags
-        if (!matchedStage && updateData.status === 'WON') {
-          matchedStage = orgStages.find(s => s.isWonStage);
-        }
-        if (!matchedStage && updateData.status === 'LOST') {
-          matchedStage = orgStages.find(s => s.isLostStage);
-        }
-
-        if (matchedStage && matchedStage.id !== existing.stageId) {
-          updateData.stageId = matchedStage.id;
-        }
+        }),
+        prisma.organization.findUnique({
+          where: { id: existing.organizationId },
+          select: { settings: true },
+        }),
+      ]);
+      const matchedStage = findStageForStatus({
+        targetStatus: updateData.status,
+        stages: orgStages,
+        settings: org?.settings || {},
+        divisionId: existing.organizationId,
+      });
+      if (matchedStage && matchedStage.id !== existing.stageId) {
+        updateData.stageId = matchedStage.id;
       }
     }
 

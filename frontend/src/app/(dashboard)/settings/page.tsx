@@ -2194,7 +2194,7 @@ function CustomFieldsSection() {
   const [editingField, setEditingField] = useState<CustomField | null>(null);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'pipelineStages' | 'tags'>('builtin');
+  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'statusMapping' | 'pipelineStages' | 'tags'>('builtin');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
   const [editingStatusKey, setEditingStatusKey] = useState<string | null>(null);
   const [statusUnsaved, setStatusUnsaved] = useState(false);
@@ -2223,6 +2223,9 @@ function CustomFieldsSection() {
   // Pipeline Stages
   const [pipelineStages, setPipelineStages] = useState<any[]>([]);
   const [loadingStages, setLoadingStages] = useState(false);
+  const [statusStageRows, setStatusStageRows] = useState<any[]>([]);
+  const [loadingStatusMapping, setLoadingStatusMapping] = useState(false);
+  const [savingStatusMapping, setSavingStatusMapping] = useState(false);
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('#6366f1');
@@ -2317,10 +2320,26 @@ function CustomFieldsSection() {
     setLoadingStages(false);
   }, [effectiveDivisionId]);
 
+  const fetchStatusStageMapping = useCallback(async () => {
+    if (!effectiveDivisionId) {
+      setStatusStageRows([]);
+      return;
+    }
+    setLoadingStatusMapping(true);
+    try {
+      const data = await api.getStatusStageMapping(effectiveDivisionId);
+      setStatusStageRows(Array.isArray((data as any)?.rows) ? (data as any).rows : []);
+    } catch {
+      setStatusStageRows([]);
+    }
+    setLoadingStatusMapping(false);
+  }, [effectiveDivisionId]);
+
   useEffect(() => {
     if (activeSection === 'pipelineStages') fetchPipelineStages();
+    if (activeSection === 'statusMapping') fetchStatusStageMapping();
     if (activeSection === 'tags') fetchTags();
-  }, [activeSection, fetchPipelineStages, effectiveDivisionId]);
+  }, [activeSection, fetchPipelineStages, fetchStatusStageMapping, effectiveDivisionId]);
 
   // ─── Computed stats ────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -2393,6 +2412,26 @@ function CustomFieldsSection() {
       setToast({ type: 'error', message: err.message || 'Failed to save status labels' });
     }
     setSavingStatus(false);
+  };
+
+  const saveStatusStageMapping = async () => {
+    if (!effectiveDivisionId) {
+      setToast({ type: 'error', message: 'Please select a division to save mapping' });
+      return;
+    }
+    setSavingStatusMapping(true);
+    try {
+      const mappings = statusStageRows.reduce((acc: Record<string, string>, row: any) => {
+        if (row?.stageId && row?.mappedStatus) acc[row.stageId] = row.mappedStatus;
+        return acc;
+      }, {});
+      await api.saveStatusStageMapping(effectiveDivisionId, mappings);
+      setToast({ type: 'success', message: 'Status mapping saved successfully' });
+      await fetchStatusStageMapping();
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to save status mapping' });
+    }
+    setSavingStatusMapping(false);
   };
 
   // ─── Pipeline stage handlers ─────────────────────────────────────
@@ -2537,6 +2576,7 @@ function CustomFieldsSection() {
     return groups;
   }, [filteredBuiltInFields]);
   const statusLabelCount = LEAD_STATUS_OPTIONS.length;
+  const statusMappingTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(statusStageRows.length);
   const pipelineStagesTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(pipelineStages.length);
   const tagsTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(tags.length);
 
@@ -2720,6 +2760,22 @@ function CustomFieldsSection() {
               activeSection === 'pipelineStages' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
             }`}>
               {pipelineStagesTabCount}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveSection('statusMapping')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'statusMapping'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <ArrowUpDown className="h-4 w-4" />
+            Status Mapping
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'statusMapping' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {statusMappingTabCount}
             </span>
           </button>
           <button
@@ -2989,6 +3045,94 @@ function CustomFieldsSection() {
                   Save Status Labels
                 </button>
               </div>
+            )}
+          </div>
+        ) : activeSection === 'statusMapping' ? (
+          /* ═══ STATUS ↔ PIPELINE MAPPING TAB ═══════════════════════ */
+          <div>
+            {!effectiveDivisionId ? (
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                  <ArrowUpDown className="h-7 w-7 text-amber-500" />
+                </div>
+                <p className="text-sm font-medium text-gray-700">Select a Division</p>
+                <p className="text-xs text-gray-400 mt-1">Status mapping is managed per division. Please select a specific division from Scope.</p>
+              </div>
+            ) : (
+              <>
+                <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-gray-500">Map each pipeline stage to a lead status for this division. Manual mapping overrides keyword/flag fallback.</p>
+                  </div>
+                  <button
+                    onClick={saveStatusStageMapping}
+                    disabled={savingStatusMapping || loadingStatusMapping}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    {savingStatusMapping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save Mapping
+                  </button>
+                </div>
+
+                {loadingStatusMapping ? (
+                  <div className="p-10 text-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-indigo-500 mx-auto" />
+                    <p className="text-sm text-gray-500 mt-2">Loading mapping...</p>
+                  </div>
+                ) : statusStageRows.length === 0 ? (
+                  <div className="p-10 text-center">
+                    <div className="h-14 w-14 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                      <ArrowUpDown className="h-7 w-7 text-gray-400" />
+                    </div>
+                    <p className="text-sm font-medium text-gray-700">No pipeline stages found</p>
+                    <p className="text-xs text-gray-400 mt-1">Create pipeline stages first, then map them to statuses.</p>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50">
+                      <div className="grid grid-cols-12 gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        <div className="col-span-4">Pipeline Stage</div>
+                        <div className="col-span-2 text-center">Source</div>
+                        <div className="col-span-3 text-center">Mapped Status</div>
+                        <div className="col-span-3 text-center">Fallback</div>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {statusStageRows.map((row: any, idx: number) => (
+                        <div key={row.stageId} className={`grid grid-cols-12 gap-2 items-center px-5 py-3 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                          <div className="col-span-4">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-medium text-gray-900">{row.stageName}</p>
+                              {row.isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">Default</span>}
+                              {row.isWonStage && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Won</span>}
+                              {row.isLostStage && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Lost</span>}
+                            </div>
+                          </div>
+                          <div className="col-span-2 text-center">
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${row.source === 'manual' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
+                              {row.source === 'manual' ? 'Manual' : 'Fallback'}
+                            </span>
+                          </div>
+                          <div className="col-span-3">
+                            <select
+                              value={row.mappedStatus}
+                              onChange={(e) => setStatusStageRows((prev) => prev.map((r: any) => r.stageId === row.stageId ? { ...r, mappedStatus: e.target.value, source: 'manual' } : r))}
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                              {LEAD_STATUS_OPTIONS.map((s) => (
+                                <option key={s.key} value={s.key}>{s.default}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-3 text-center">
+                            <span className="text-xs text-gray-500">{row.fallbackStatus?.replace(/_/g, ' ') || '-'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : activeSection === 'pipelineStages' ? (

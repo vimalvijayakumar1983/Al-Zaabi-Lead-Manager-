@@ -954,6 +954,32 @@ class ApiClient {
     });
   }
 
+  async getStatusStageMapping(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{
+      divisionId: string;
+      divisionName: string;
+      statuses: string[];
+      rows: Array<{
+        stageId: string;
+        stageName: string;
+        isDefault: boolean;
+        isWonStage: boolean;
+        isLostStage: boolean;
+        mappedStatus: string;
+        source: 'manual' | 'fallback';
+        fallbackStatus: string;
+      }>;
+    }>(`/settings/status-stage-mapping${q}`);
+  }
+
+  async saveStatusStageMapping(divisionId: string | null, mappings: Record<string, string>) {
+    return this.request<{ success: boolean }>('/settings/status-stage-mapping', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, mappings }),
+    });
+  }
+
   async saveFieldConfig(divisionId: string | null, fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }>) {
     return this.request<{ success: boolean }>('/settings/field-config', {
       method: 'PUT',

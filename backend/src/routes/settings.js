@@ -10,6 +10,11 @@ const {
   SNOOZE_MIN_MINUTES,
   SNOOZE_MAX_MINUTES,
 } = require('../services/notificationPreferences');
+const {
+  LEAD_STATUS_VALUES,
+  normalizeLeadStatus,
+  buildStageStatusRows,
+} = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -409,6 +414,98 @@ router.put('/status-labels', authorize('ADMIN'), async (req, res, next) => {
 
     res.json({ success: true });
   } catch (err) { next(err); }
+});
+
+// GET /status-stage-mapping — View stage-to-status mapping for a division
+router.get('/status-stage-mapping', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
+    const targetDivisionId = req.isSuperAdmin ? divisionId : req.orgId;
+    const settingsOrgId = req.isSuperAdmin ? resolveGroupOrgId(req) : req.orgId;
+
+    if (!targetDivisionId) {
+      return res.status(400).json({ error: 'Please select a division to view mapping' });
+    }
+    if (!req.orgIds.includes(targetDivisionId)) {
+      return res.status(403).json({ error: 'Division not found or access denied' });
+    }
+
+    const [divisionOrg, settingsOrg, stages] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: targetDivisionId },
+        select: { id: true, name: true },
+      }),
+      prisma.organization.findUnique({
+        where: { id: settingsOrgId },
+        select: { settings: true },
+      }),
+      prisma.pipelineStage.findMany({
+        where: { organizationId: targetDivisionId },
+        orderBy: { order: 'asc' },
+      }),
+    ]);
+
+    const rows = buildStageStatusRows(stages, settingsOrg?.settings || {}, targetDivisionId);
+    res.json({
+      divisionId: targetDivisionId,
+      divisionName: divisionOrg?.name || 'Division',
+      statuses: LEAD_STATUS_VALUES,
+      rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /status-stage-mapping — Save manual stage-to-status mapping for a division
+router.put('/status-stage-mapping', authorize('ADMIN'), validate(z.object({
+  divisionId: z.string().uuid().optional().nullable(),
+  mappings: z.record(z.string(), z.string()).default({}),
+})), async (req, res, next) => {
+  try {
+    const { divisionId, mappings } = req.validated;
+    const targetDivisionId = req.isSuperAdmin ? divisionId : req.orgId;
+
+    if (!targetDivisionId) {
+      return res.status(400).json({ error: 'Please select a division to save mapping' });
+    }
+    if (!req.orgIds.includes(targetDivisionId)) {
+      return res.status(403).json({ error: 'Division not found or access denied' });
+    }
+
+    const stageIds = Object.keys(mappings || {});
+    const validStages = await prisma.pipelineStage.findMany({
+      where: { organizationId: targetDivisionId, ...(stageIds.length > 0 ? { id: { in: stageIds } } : {}) },
+      select: { id: true },
+    });
+    const validStageIdSet = new Set(validStages.map((s) => s.id));
+
+    const normalizedMapping = {};
+    for (const [stageId, status] of Object.entries(mappings || {})) {
+      if (!validStageIdSet.has(stageId)) continue;
+      const normalized = normalizeLeadStatus(status);
+      if (!normalized) continue;
+      normalizedMapping[stageId] = normalized;
+    }
+
+    const targetOrgForSettings = req.isSuperAdmin ? resolveGroupOrgId(req) : req.orgId;
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgForSettings },
+      select: { settings: true },
+    });
+    const settings = (org?.settings || {});
+    if (!settings.statusStageMapping) settings.statusStageMapping = {};
+    settings.statusStageMapping[`division_${targetDivisionId}`] = normalizedMapping;
+
+    await prisma.organization.update({
+      where: { id: targetOrgForSettings },
+      data: { settings },
+    });
+
+    res.json({ success: true, divisionId: targetDivisionId, mappings: normalizedMapping });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ─── Custom Fields ─────────────────────────────────────────────
