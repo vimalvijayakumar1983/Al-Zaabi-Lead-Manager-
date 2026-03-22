@@ -901,7 +901,17 @@ function LeadsContent() {
 
   // ─── Cell Renderer ──────────────────────────────────────────────
 
-  const renderCell = (col: ColumnDef, lead: Lead) => {
+  const isAutoSerialCustomField = (col: ColumnDef) => {
+    if (!col.isCustom || col.customFieldType !== 'NUMBER' || !col.id.startsWith('cf_')) return false;
+    const fieldName = col.id.slice(3);
+    const cf = customFields.find((f) => f.name === fieldName);
+    const normalizedName = String(fieldName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedLabel = String(cf?.label || col.label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const serialAliases = new Set(['sno', 'serialno', 'serialnumber', 'srno']);
+    return serialAliases.has(normalizedName) || serialAliases.has(normalizedLabel);
+  };
+
+  const renderCell = (col: ColumnDef, lead: Lead, rowIndex: number) => {
     switch (col.id) {
       case 'select':
         return (
@@ -1159,6 +1169,10 @@ function LeadsContent() {
           const cf = customFields.find(f => f.name === fieldName);
 
           if (value === undefined || value === null || value === '') {
+            if (isAutoSerialCustomField(col)) {
+              const base = Math.max(0, (pagination.page - 1) * pagination.limit);
+              return <span className="text-sm text-gray-700 font-medium">{base + rowIndex + 1}</span>;
+            }
             return <span className="text-xs text-gray-400 italic">-</span>;
           }
 
@@ -1562,7 +1576,7 @@ function LeadsContent() {
                         </div>
                       </td></tr>
                     ) : (
-                      leads.map((lead) => (
+                      leads.map((lead, rowIndex) => (
                         <tr key={lead.id}
                           className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
                           onClick={(e) => {
@@ -1571,7 +1585,7 @@ function LeadsContent() {
                             router.push(`/leads/${lead.id}`);
                           }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead)}</td>
+                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
                           ))}
                         </tr>
                       ))
