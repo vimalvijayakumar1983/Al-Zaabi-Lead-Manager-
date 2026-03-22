@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 type Period = '7d' | '30d' | '90d' | '180d' | '365d';
-type Tab = 'overview' | 'pipeline' | 'team' | 'sources' | 'activities' | 'operations' | 'calls';
+type Tab = 'overview' | 'pipeline' | 'forecast' | 'team' | 'sources' | 'activities' | 'operations' | 'calls';
 
 // ─── Utility ─────────────────────────────────────────────────────
 
@@ -429,6 +429,7 @@ const PERIODS: { value: Period; label: string }[] = [
 const TABS: { value: Tab; label: string; icon: any }[] = [
   { value: 'overview', label: 'Overview', icon: BarChart3 },
   { value: 'pipeline', label: 'Pipeline', icon: TrendingUp },
+  { value: 'forecast', label: 'Forecast & Health', icon: Flame },
   { value: 'team', label: 'Team', icon: Users },
   { value: 'sources', label: 'Sources & Campaigns', icon: Target },
   { value: 'activities', label: 'Activities', icon: Activity },
@@ -467,8 +468,10 @@ export default function AnalyticsPage() {
   const [divisionComp, setDivisionComp] = useState<any[]>([]);
   const [taskSlaReport, setTaskSlaReport] = useState<any>(null);
   const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
+  const [pipelineForecastReport, setPipelineForecastReport] = useState<any>(null);
   const [taskSlaUnavailable, setTaskSlaUnavailable] = useState(false);
   const [callReportUnavailable, setCallReportUnavailable] = useState(false);
+  const [forecastReportUnavailable, setForecastReportUnavailable] = useState(false);
   const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
 
   const periodRef = useRef(period);
@@ -531,7 +534,7 @@ export default function AnalyticsPage() {
     else setRefreshing(true);
     try {
       const p = periodRef.current;
-      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp] = await Promise.allSettled([
+      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp, forecast] = await Promise.allSettled([
         api.getAnalyticsOverview(p, divId),
         api.getFunnel(divId),
         api.getTrends(p, divId),
@@ -542,6 +545,7 @@ export default function AnalyticsPage() {
         api.getScoreDistribution(divId),
         api.getTaskSLAReport(p, divId),
         api.getCallDispositionReport(p, divId),
+        api.getPipelineForecastReport(p, divId),
       ]);
 
       if (ov.status === 'fulfilled') setOverview(ov.value);
@@ -599,6 +603,14 @@ export default function AnalyticsPage() {
           setCallReportUnavailable(true);
           setCallReportLegacyFallback(false);
         }
+      }
+
+      if (forecast.status === 'fulfilled') {
+        setPipelineForecastReport(forecast.value || null);
+        setForecastReportUnavailable(false);
+      } else {
+        setPipelineForecastReport(null);
+        setForecastReportUnavailable(true);
       }
 
       if (isSuperAdmin && !divId) {
@@ -683,6 +695,54 @@ export default function AnalyticsPage() {
       return { name: 'call-intelligence-report', rows };
     }
 
+    if (activeTab === 'forecast') {
+      const summary = pipelineForecastReport?.summary || {};
+      const momentum = pipelineForecastReport?.momentum || {};
+      const stageForecast = Array.isArray(pipelineForecastReport?.stageForecast) ? pipelineForecastReport.stageForecast : [];
+      const ageBuckets = Array.isArray(pipelineForecastReport?.ageBuckets) ? pipelineForecastReport.ageBuckets : [];
+      const ownerForecast = Array.isArray(pipelineForecastReport?.ownerForecast) ? pipelineForecastReport.ownerForecast : [];
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Summary', metric: 'Active Leads', value: summary.activeLeads || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Active Pipeline Value', value: summary.activePipelineValue || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Weighted Pipeline Value', value: summary.weightedPipelineValue || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Forecast Coverage Ratio %', value: summary.forecastCoverageRatio || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Win Rate %', value: summary.winRate || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Won Revenue In Period', value: summary.wonRevenueInPeriod || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Avg Sales Cycle Days', value: summary.avgSalesCycleDays || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Stale Active Leads', value: summary.staleActiveLeads || 0, ...baseMeta },
+        { section: 'Momentum', metric: 'Active Leads Growth %', value: momentum.activeLeadsGrowth || 0, ...baseMeta },
+        { section: 'Momentum', metric: 'Won Deals Growth %', value: momentum.wonGrowth || 0, ...baseMeta },
+        ...stageForecast.map((r: any) => ({
+          section: 'Stage Forecast',
+          metric: r.stage,
+          value: r.count,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          avgProbability: r.avgProbability,
+          avgAgeDays: r.avgAgeDays,
+          ...baseMeta,
+        })),
+        ...ageBuckets.map((r: any) => ({
+          section: 'Aging Bucket',
+          metric: r.bucket,
+          value: r.count,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          ...baseMeta,
+        })),
+        ...ownerForecast.map((r: any) => ({
+          section: 'Owner Forecast',
+          metric: r.assigneeName,
+          value: r.count,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          ...baseMeta,
+        })),
+      ];
+      return { name: 'pipeline-forecast-report', rows };
+    }
+
     const rows: Array<Record<string, unknown>> = [
       { section: 'Overview KPI', metric: 'New Leads', value: overview?.newLeads?.value ?? 0, ...baseMeta },
       { section: 'Overview KPI', metric: 'Won Leads', value: overview?.wonLeads?.value ?? 0, ...baseMeta },
@@ -693,7 +753,7 @@ export default function AnalyticsPage() {
       ...team.slice(0, 20).map((m: any) => ({ section: 'Team', metric: m.name, value: m.totalLeads, won: m.wonLeads, conversionRate: m.conversionRate, ...baseMeta })),
     ];
     return { name: `analytics-${activeTab}`, rows };
-  }, [activeTab, periodLabel, selectedDivName, taskSlaReport, callDispositionReport, overview, funnel, sources, team]);
+  }, [activeTab, periodLabel, selectedDivName, taskSlaReport, callDispositionReport, pipelineForecastReport, overview, funnel, sources, team]);
 
   const handleExportCsv = useCallback(() => {
     const payload = buildExportPayload();
@@ -1420,6 +1480,158 @@ export default function AnalyticsPage() {
     );
   };
 
+  // ── Forecast & Pipeline Health Tab ───────────────────────────────
+  const ForecastTab = () => {
+    const summary = pipelineForecastReport?.summary || {};
+    const momentum = pipelineForecastReport?.momentum || {};
+    const stageForecast = Array.isArray(pipelineForecastReport?.stageForecast) ? pipelineForecastReport.stageForecast : [];
+    const ageBuckets = Array.isArray(pipelineForecastReport?.ageBuckets) ? pipelineForecastReport.ageBuckets : [];
+    const ownerForecast = Array.isArray(pipelineForecastReport?.ownerForecast) ? pipelineForecastReport.ownerForecast : [];
+
+    return (
+      <div className="space-y-6">
+        {forecastReportUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Forecast report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiCard title="Active Pipeline" value={summary.activePipelineValue || 0} format="currency" icon={DollarSign} iconBg="bg-amber-50" iconColor="text-amber-600" />
+          <KpiCard title="Weighted Forecast" value={summary.weightedPipelineValue || 0} format="currency" icon={Target} iconBg="bg-brand-50" iconColor="text-brand-600" />
+          <KpiCard title="Win Rate" value={summary.winRate || 0} format="percent" icon={Trophy} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+          <KpiCard title="Stale Active Leads" value={summary.staleActiveLeads || 0} icon={AlertCircle} iconBg="bg-red-50" iconColor="text-red-500" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Stage Pipeline Value</h2>
+            <BarChart
+              data={stageForecast.slice(0, 8).map((row: any) => ({
+                stage: row.stage,
+                value: row.pipelineValue,
+                stageIds: row.stageIds || [],
+                statusHints: row.statusHints || [],
+              }))}
+              xKey="stage"
+              yKey="value"
+              color="#f59e0b"
+              height={190}
+              onBarClick={(row) => {
+                const params: Record<string, string> = {};
+                if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
+                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
+                if (Object.keys(params).length > 0) drill(params);
+              }}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Stage Weighted Forecast</h2>
+            <BarChart
+              data={stageForecast.slice(0, 8).map((row: any) => ({
+                stage: row.stage,
+                value: row.weightedValue,
+                stageIds: row.stageIds || [],
+                statusHints: row.statusHints || [],
+              }))}
+              xKey="stage"
+              yKey="value"
+              color="#6366f1"
+              height={190}
+              onBarClick={(row) => {
+                const params: Record<string, string> = {};
+                if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
+                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
+                if (Object.keys(params).length > 0) drill(params);
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Pipeline Aging Risk</h2>
+            <BarChart
+              data={ageBuckets.map((row: any) => ({ bucket: row.bucket, count: row.count }))}
+              xKey="bucket"
+              yKey="count"
+              color="#ef4444"
+              height={170}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Momentum</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Active Leads Growth</p>
+                <p className={`text-xl font-semibold tabular-nums ${(momentum.activeLeadsGrowth || 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {fmt(momentum.activeLeadsGrowth || 0, 'percent')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Won Growth</p>
+                <p className={`text-xl font-semibold tabular-nums ${(momentum.wonGrowth || 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {fmt(momentum.wonGrowth || 0, 'percent')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Won Revenue (Period)</p>
+                <p className="text-lg font-semibold text-text-primary tabular-nums">
+                  {fmt(summary.wonRevenueInPeriod || 0, 'currency')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Avg Sales Cycle</p>
+                <p className="text-lg font-semibold text-text-primary tabular-nums">
+                  {summary.avgSalesCycleDays || 0} days
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">Owner Forecast Load</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Weighted pipeline distribution by owner</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Owner</th>
+                  <th className="table-header px-4 py-3 text-left">Active Leads</th>
+                  <th className="table-header px-4 py-3 text-left">Pipeline Value</th>
+                  <th className="table-header px-4 py-3 text-left">Weighted Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ownerForecast.length === 0 ? (
+                  <tr><td colSpan={4} className="py-8 text-center text-sm text-text-tertiary">No owner forecast data available</td></tr>
+                ) : ownerForecast.map((row: any) => (
+                  <tr
+                    key={row.assigneeId || row.assigneeName}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => {
+                      const params: Record<string, string> = { status: 'NEW,CONTACTED,QUALIFIED,PROPOSAL_SENT,NEGOTIATION' };
+                      if (row.assigneeId) params.assignedToId = row.assigneeId;
+                      drill(params);
+                    }}
+                  >
+                    <td className="table-cell px-4">{row.assigneeName}</td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{fmt(row.pipelineValue || 0, 'currency')}</span></td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{fmt(row.weightedValue || 0, 'currency')}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Operations (Task + SLA) Tab ──────────────────────────────────
   const OperationsTab = () => {
     const summary = taskSlaReport?.summary || {};
@@ -1807,6 +2019,7 @@ export default function AnalyticsPage() {
       {/* Tab content */}
       {activeTab === 'overview' && <OverviewTab />}
       {activeTab === 'pipeline' && <PipelineTab />}
+      {activeTab === 'forecast' && <ForecastTab />}
       {activeTab === 'team' && <TeamTab />}
       {activeTab === 'sources' && <SourcesTab />}
       {activeTab === 'activities' && <ActivitiesTab />}

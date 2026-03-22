@@ -91,6 +91,7 @@ const CALL_DISPOSITION_LABELS = {
 };
 
 const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
+const ACTIVE_PIPELINE_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION'];
 
 function parseMetadata(value) {
   if (!value) return {};
@@ -100,6 +101,23 @@ function parseMetadata(value) {
   } catch {
     return {};
   }
+}
+
+function normalizeProbability(rawProb, status) {
+  if (typeof rawProb === 'number' && Number.isFinite(rawProb)) {
+    const normalized = rawProb > 1 ? rawProb / 100 : rawProb;
+    return Math.min(1, Math.max(0, normalized));
+  }
+  const defaults = {
+    NEW: 0.1,
+    CONTACTED: 0.25,
+    QUALIFIED: 0.5,
+    PROPOSAL_SENT: 0.7,
+    NEGOTIATION: 0.85,
+    WON: 1,
+    LOST: 0,
+  };
+  return defaults[status] ?? 0.25;
 }
 
 // ─── Dashboard Overview ──────────────────────────────────────────
@@ -782,6 +800,215 @@ router.get('/call-disposition-report', async (req, res, next) => {
     // If period is empty, return all-time scoped report instead of blank zeros.
     const fallbackReport = await buildReport(scopedBaseWhere, { periodFallback: true, fallbackReason: 'NO_CALLS_IN_SELECTED_PERIOD' });
     return res.json(fallbackReport);
+  } catch (err) { next(err); }
+});
+
+// ─── Pipeline Forecast & Health Report (Phase B) ─────────────────
+router.get('/pipeline-forecast-report', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const { now, start, prevStart, prevEnd } = getPeriodDates(period);
+    const leadScope = getLeadWhere(req, divisionId);
+
+    const [activeLeads, curActive, prevActive, wonPeriodCount, prevWonCount, lostPeriodCount, wonPeriodRows] = await Promise.all([
+      prisma.lead.findMany({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES } },
+        select: {
+          id: true,
+          status: true,
+          budget: true,
+          conversionProb: true,
+          createdAt: true,
+          updatedAt: true,
+          stageId: true,
+          stage: { select: { id: true, name: true, color: true, order: true } },
+          assignedToId: true,
+          assignedTo: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES }, createdAt: { gte: start } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES }, createdAt: { gte: prevStart, lt: prevEnd } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: start } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: 'LOST', updatedAt: { gte: start } },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: start } },
+        select: { budget: true, createdAt: true, wonAt: true, updatedAt: true },
+      }),
+    ]);
+
+    const staleThresholdDays = 14;
+    const stageMap = new Map();
+    const ageBuckets = [
+      { bucket: '0-7 days', count: 0, pipelineValue: 0, weightedValue: 0 },
+      { bucket: '8-14 days', count: 0, pipelineValue: 0, weightedValue: 0 },
+      { bucket: '15-30 days', count: 0, pipelineValue: 0, weightedValue: 0 },
+      { bucket: '31+ days', count: 0, pipelineValue: 0, weightedValue: 0 },
+    ];
+    const ownerMap = new Map();
+
+    let activePipelineValue = 0;
+    let weightedPipelineValue = 0;
+    let staleActiveLeads = 0;
+
+    for (const lead of activeLeads) {
+      const budget = Number(lead.budget || 0);
+      const probability = normalizeProbability(lead.conversionProb, lead.status);
+      const weighted = budget * probability;
+      const ageDays = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(lead.createdAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+      const staleDays = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(lead.updatedAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+
+      activePipelineValue += budget;
+      weightedPipelineValue += weighted;
+      if (staleDays > staleThresholdDays) staleActiveLeads += 1;
+
+      const stageLabel = lead.stage?.name || lead.status.replace(/_/g, ' ');
+      const stageKey = stageLabel.trim().toLowerCase();
+      if (!stageMap.has(stageKey)) {
+        stageMap.set(stageKey, {
+          stage: stageLabel,
+          color: lead.stage?.color || '#6366f1',
+          order: lead.stage?.order ?? 9999,
+          count: 0,
+          pipelineValue: 0,
+          weightedValue: 0,
+          totalProbability: 0,
+          totalAgeDays: 0,
+          stageIds: new Set(),
+          statusHints: new Set(),
+        });
+      }
+      const stageRow = stageMap.get(stageKey);
+      stageRow.count += 1;
+      stageRow.pipelineValue += budget;
+      stageRow.weightedValue += weighted;
+      stageRow.totalProbability += probability;
+      stageRow.totalAgeDays += ageDays;
+      if (lead.stageId) stageRow.stageIds.add(lead.stageId);
+      if (lead.status) stageRow.statusHints.add(lead.status);
+
+      if (ageDays <= 7) {
+        ageBuckets[0].count += 1;
+        ageBuckets[0].pipelineValue += budget;
+        ageBuckets[0].weightedValue += weighted;
+      } else if (ageDays <= 14) {
+        ageBuckets[1].count += 1;
+        ageBuckets[1].pipelineValue += budget;
+        ageBuckets[1].weightedValue += weighted;
+      } else if (ageDays <= 30) {
+        ageBuckets[2].count += 1;
+        ageBuckets[2].pipelineValue += budget;
+        ageBuckets[2].weightedValue += weighted;
+      } else {
+        ageBuckets[3].count += 1;
+        ageBuckets[3].pipelineValue += budget;
+        ageBuckets[3].weightedValue += weighted;
+      }
+
+      const ownerKey = lead.assignedToId || 'unassigned';
+      if (!ownerMap.has(ownerKey)) {
+        ownerMap.set(ownerKey, {
+          assigneeId: lead.assignedToId || null,
+          assigneeName: lead.assignedTo ? getDisplayName(lead.assignedTo) : 'Unassigned',
+          count: 0,
+          pipelineValue: 0,
+          weightedValue: 0,
+        });
+      }
+      const ownerRow = ownerMap.get(ownerKey);
+      ownerRow.count += 1;
+      ownerRow.pipelineValue += budget;
+      ownerRow.weightedValue += weighted;
+    }
+
+    const stageForecast = Array.from(stageMap.values())
+      .map((row) => ({
+        stage: row.stage,
+        color: row.color,
+        count: row.count,
+        pipelineValue: Math.round(row.pipelineValue),
+        weightedValue: Math.round(row.weightedValue),
+        avgProbability: row.count > 0 ? Math.round((row.totalProbability / row.count) * 10000) / 100 : 0,
+        avgAgeDays: row.count > 0 ? Math.round(row.totalAgeDays / row.count) : 0,
+        stageIds: Array.from(row.stageIds),
+        statusHints: Array.from(row.statusHints),
+      }))
+      .sort((a, b) => a.avgAgeDays - b.avgAgeDays || b.weightedValue - a.weightedValue);
+
+    const ownerForecast = Array.from(ownerMap.values())
+      .map((row) => ({
+        ...row,
+        pipelineValue: Math.round(row.pipelineValue),
+        weightedValue: Math.round(row.weightedValue),
+      }))
+      .sort((a, b) => b.weightedValue - a.weightedValue)
+      .slice(0, 15);
+
+    const wonRevenueInPeriod = Math.round(
+      wonPeriodRows.reduce((sum, row) => sum + Number(row.budget || 0), 0)
+    );
+    const avgSalesCycleDays = wonPeriodRows.length > 0
+      ? Math.round(
+        wonPeriodRows.reduce((sum, row) => {
+          const endDate = row.wonAt || row.updatedAt || row.createdAt;
+          const days = Math.max(
+            0,
+            (new Date(endDate).getTime() - new Date(row.createdAt).getTime()) / (24 * 60 * 60 * 1000)
+          );
+          return sum + days;
+        }, 0) / wonPeriodRows.length
+      )
+      : 0;
+
+    const closedInPeriod = wonPeriodCount + lostPeriodCount;
+    const winRate = closedInPeriod > 0 ? Math.round((wonPeriodCount / closedInPeriod) * 10000) / 100 : 0;
+
+    res.json({
+      summary: {
+        activeLeads: activeLeads.length,
+        activePipelineValue: Math.round(activePipelineValue),
+        weightedPipelineValue: Math.round(weightedPipelineValue),
+        forecastCoverageRatio: activePipelineValue > 0
+          ? Math.round((weightedPipelineValue / activePipelineValue) * 10000) / 100
+          : 0,
+        wonRevenueInPeriod,
+        avgSalesCycleDays,
+        staleActiveLeads,
+        staleThresholdDays,
+        winRate,
+      },
+      momentum: {
+        activeLeadsCurrent: curActive,
+        activeLeadsPrevious: prevActive,
+        activeLeadsGrowth: pctChange(curActive, prevActive),
+        wonCurrent: wonPeriodCount,
+        wonPrevious: prevWonCount,
+        wonGrowth: pctChange(wonPeriodCount, prevWonCount),
+      },
+      stageForecast,
+      ageBuckets: ageBuckets.map((bucket) => ({
+        ...bucket,
+        pipelineValue: Math.round(bucket.pipelineValue),
+        weightedValue: Math.round(bucket.weightedValue),
+      })),
+      ownerForecast,
+    });
   } catch (err) { next(err); }
 });
 
