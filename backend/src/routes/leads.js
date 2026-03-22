@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { z } = require('zod');
+const { Prisma } = require('@prisma/client');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
@@ -43,6 +44,35 @@ function getDisplayName(obj) {
   if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
   if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
   return `${fn} ${ln}`;
+}
+
+async function getLatestCallsByLead({ orgIds, assignedToId, leadIds } = {}) {
+  const conditions = [Prisma.sql`l.is_archived = false`];
+
+  if (Array.isArray(orgIds) && orgIds.length > 0) {
+    conditions.push(Prisma.sql`l.organization_id IN (${Prisma.join(orgIds)})`);
+  }
+  if (assignedToId) {
+    conditions.push(Prisma.sql`l.assigned_to_id = ${assignedToId}`);
+  }
+  if (Array.isArray(leadIds)) {
+    if (leadIds.length === 0) return [];
+    conditions.push(Prisma.sql`cl.lead_id IN (${Prisma.join(leadIds)})`);
+  }
+
+  const rows = await prisma.$queryRaw`
+    SELECT DISTINCT ON (cl.lead_id)
+      cl.lead_id AS "leadId",
+      cl.disposition::text AS "disposition",
+      cl.notes AS "notes",
+      cl.created_at AS "createdAt",
+      cl.metadata AS "metadata"
+    FROM call_logs cl
+    JOIN leads l ON l.id = cl.lead_id
+    WHERE ${Prisma.join(conditions, Prisma.sql` AND `)}
+    ORDER BY cl.lead_id, cl.created_at DESC, cl.id DESC
+  `;
+  return Array.isArray(rows) ? rows : [];
 }
 
 function readNumericCustomValue(customData, key) {
@@ -312,29 +342,39 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
       if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
     }
-    // Call outcome filtering (filter leads by their last/any call disposition)
+    // Call outcome filtering (match against each lead's latest call only)
     if (callOutcome) {
       const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
       if (outcomes.length > 0) {
-        const builtinOutcomes = outcomes.filter(o => BUILTIN_CALL_OUTCOMES.has(o));
-        const customOutcomes = outcomes.filter(o => !builtinOutcomes.includes(o));
-        const callOutcomeOr = [];
-        if (builtinOutcomes.length > 0) {
-          callOutcomeOr.push({
-            disposition: builtinOutcomes.length === 1 ? builtinOutcomes[0] : { in: builtinOutcomes },
-          });
+        let scopedOrgIds = req.orgIds;
+        if (typeof where.organizationId === 'string') {
+          scopedOrgIds = [where.organizationId];
+        } else if (where.organizationId && Array.isArray(where.organizationId.in)) {
+          scopedOrgIds = where.organizationId.in;
         }
-        if (customOutcomes.length > 0) {
-          callOutcomeOr.push({
-            OR: customOutcomes.map((key) => ({
-              disposition: 'OTHER',
-              metadata: { path: ['dispositionKey'], equals: key },
-            })),
-          });
-        }
-        if (callOutcomeOr.length > 0) {
-          where.callLogs = { some: callOutcomeOr.length === 1 ? callOutcomeOr[0] : { OR: callOutcomeOr } };
-        }
+
+        const builtinOutcomes = new Set(outcomes.filter((o) => BUILTIN_CALL_OUTCOMES.has(o)));
+        const customOutcomes = new Set(outcomes.filter((o) => !BUILTIN_CALL_OUTCOMES.has(o)));
+
+        const lastCalls = await getLatestCallsByLead({
+          orgIds: scopedOrgIds,
+          assignedToId: req.isRestrictedRole ? req.user.id : undefined,
+        });
+
+        const matchedLeadIds = lastCalls
+          .filter((row) => {
+            if (builtinOutcomes.has(row.disposition)) return true;
+            if (row.disposition !== 'OTHER') return false;
+            const md = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
+            const key = typeof md.dispositionKey === 'string' ? md.dispositionKey : '';
+            return key ? customOutcomes.has(key) : false;
+          })
+          .map((row) => row.leadId);
+
+        where.AND = [
+          ...(where.AND || []),
+          { id: { in: matchedLeadIds.length > 0 ? matchedLeadIds : ['__none__'] } },
+        ];
       }
     }
     // Custom field filtering (JSON encoded)
@@ -411,11 +451,8 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     let lastCallOutcomeMap = {};
     if (leadIds.length > 0) {
       // Fetch last call log per lead (most recent call's disposition + date)
-      const lastCallLogs = await prisma.callLog.findMany({
-        where: { leadId: { in: leadIds } },
-        orderBy: { createdAt: 'desc' },
-        distinct: ['leadId'],
-        select: { leadId: true, disposition: true, notes: true, createdAt: true, metadata: true },
+      const lastCallLogs = await getLatestCallsByLead({
+        leadIds,
       });
       for (const cl of lastCallLogs) {
         const md = (typeof cl.metadata === 'object' && cl.metadata !== null) ? cl.metadata : {};
