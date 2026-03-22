@@ -1,6 +1,7 @@
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
+const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
 
 function trimStr(v) {
   return String(v ?? '').trim();
@@ -76,7 +77,7 @@ async function sendText(to, body, organizationId = null) {
   }
 
   const url = `${apiUrl}/${String(phoneNumberId).trim()}/messages`;
-  const normalizedTo = String(to).replace(/\D/g, '');
+  const normalizedTo = canonicalPhoneDigitsForWhatsApp(String(to).replace(/\D/g, ''));
 
   // Meta Cloud API format: https://graph.facebook.com/v22.0/{phone-number-id}/messages
   const payload = {
@@ -134,7 +135,7 @@ async function sendTemplate(to, templateName, languageCode, organizationId = nul
   }
 
   const url = `${apiUrl}/${String(phoneNumberId).trim()}/messages`;
-  const normalizedTo = String(to).replace(/\D/g, '');
+  const normalizedTo = canonicalPhoneDigitsForWhatsApp(String(to).replace(/\D/g, ''));
 
   const payload = {
     messaging_product: 'whatsapp',

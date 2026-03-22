@@ -2,12 +2,17 @@ const { prisma } = require('../config/database');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { broadcastDataChange } = require('../websocket/server');
+const {
+  digitsOnly,
+  canonicalPhoneDigitsForWhatsApp,
+  buildWhatsAppPhoneLookupVariants,
+} = require('../utils/phoneWhatsApp');
 
 /**
  * Normalize phone to digits-only (wa_id format). WhatsApp "from" is already digits.
  */
 function normalizePhone(waId) {
-  return String(waId || '').replace(/\D/g, '');
+  return digitsOnly(waId);
 }
 
 /** Meta phone_number_id values are numeric; normalize so JSON number vs string still matches. */
@@ -126,16 +131,39 @@ async function resolveOrganizationId(phoneNumberId, displayPhoneNumber) {
 
 /**
  * Find or create lead by phone + org. Returns lead.
+ * @param {string} phoneDigits - digits from wa_id (or already canonical)
  */
-async function findOrCreateLead(organizationId, phoneNormalized, contactName) {
+async function findOrCreateLead(organizationId, phoneDigits, contactName) {
+  const canon = canonicalPhoneDigitsForWhatsApp(phoneDigits);
+  if (!canon) {
+    throw new Error('findOrCreateLead: empty phone');
+  }
+
+  const lookupVariants = buildWhatsAppPhoneLookupVariants(canon);
   const existing = await prisma.lead.findFirst({
     where: {
       organizationId,
-      phone: { in: [phoneNormalized, `+${phoneNormalized}`] },
+      phone: { in: lookupVariants },
       isArchived: false,
     },
   });
-  if (existing) return existing;
+  if (existing) {
+    const storedDigits = digitsOnly(existing.phone);
+    const storedCanon = canonicalPhoneDigitsForWhatsApp(storedDigits);
+    if (storedCanon === canon && storedDigits !== canon) {
+      await prisma.lead.update({
+        where: { id: existing.id },
+        data: { phone: `+${canon}` },
+      });
+      logger.info('Lead phone normalized to match WhatsApp wa_id', {
+        leadId: existing.id,
+        before: existing.phone,
+        after: `+${canon}`,
+      });
+      return prisma.lead.findUnique({ where: { id: existing.id } });
+    }
+    return existing;
+  }
 
   const defaultStage = await prisma.pipelineStage.findFirst({
     where: { organizationId, isDefault: true },
@@ -150,14 +178,14 @@ async function findOrCreateLead(organizationId, phoneNormalized, contactName) {
       organizationId,
       firstName,
       lastName,
-      phone: `+${phoneNormalized}`,
+      phone: `+${canon}`,
       email: null,
       source: 'WHATSAPP',
       stageId: defaultStage?.id,
     },
   });
 
-  logger.info('Lead created from WhatsApp', { leadId: lead.id, phone: phoneNormalized });
+  logger.info('Lead created from WhatsApp', { leadId: lead.id, phone: canon });
   return lead;
 }
 
@@ -194,7 +222,8 @@ async function processInboundWhatsAppMessage({
   });
 
   const phoneNormalized = normalizePhone(from);
-  if (!phoneNormalized) {
+  const phoneCanon = canonicalPhoneDigitsForWhatsApp(phoneNormalized);
+  if (!phoneCanon) {
     console.warn('[WhatsApp Inbound] Missing sender wa_id — not saving', { phoneNumberId, from });
     logger.warn('WhatsApp inbound: missing from (wa_id)', { phoneNumberId });
     return;
@@ -216,7 +245,7 @@ async function processInboundWhatsAppMessage({
     }
   }
 
-  const lead = await findOrCreateLead(organizationId, phoneNormalized, contactName);
+  const lead = await findOrCreateLead(organizationId, phoneCanon, contactName);
   const body = bodyText || '(no text)';
 
   await prisma.communication.create({
@@ -227,7 +256,7 @@ async function processInboundWhatsAppMessage({
       body,
       metadata: {
         messageId: messageId || undefined,
-        from: `+${phoneNormalized}`,
+        from: `+${phoneCanon}`,
       },
       userId: null,
     },
@@ -252,7 +281,7 @@ async function processInboundWhatsAppMessage({
   logger.info('WhatsApp inbound: lead and message saved', {
     leadId: lead.id,
     organizationId: lead.organizationId,
-    from: `+${phoneNormalized}`,
+    from: `+${phoneCanon}`,
     messageId,
   });
 
@@ -272,4 +301,5 @@ module.exports = {
   findOrCreateLead,
   normalizePhone,
   canonicalWaPhoneNumberId,
+  canonicalPhoneDigitsForWhatsApp,
 };

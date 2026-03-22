@@ -9,6 +9,7 @@ const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
 const { regenerateLeadSummaryById } = require('../services/aiService');
 const { sendText: sendWhatsAppText } = require('../services/whatsappService');
+const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -431,7 +432,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
 
     // Dispatch to WhatsApp when channel is WHATSAPP
     if (channel === 'WHATSAPP') {
-      const phone = lead.phone?.replace(/\D/g, '');
+      const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
       if (!phone) {
         await prisma.communication.update({
           where: { id: communication.id },
@@ -441,6 +442,10 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
       }
       try {
         await sendWhatsAppText(phone, body, lead.organizationId);
+        const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+        if (rawDigits && rawDigits !== phone) {
+          await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
       } catch (sendErr) {
         await prisma.communication.update({
           where: { id: communication.id },

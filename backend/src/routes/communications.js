@@ -4,6 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { sendText, sendTemplate } = require('../services/whatsappService');
+const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
 const { sendEmail } = require('../services/emailService');
 const { logger } = require('../config/logger');
 const { regenerateLeadSummaryById } = require('../services/aiService');
@@ -200,7 +201,7 @@ router.post('/send-whatsapp', validate(z.object({
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-    const phone = lead.phone?.replace(/\D/g, '');
+    const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
     if (!phone) {
       return res.status(400).json({ error: 'Lead has no phone number' });
     }
@@ -231,6 +232,10 @@ router.post('/send-whatsapp', validate(z.object({
 
     try {
       await sendText(phone, body, req.orgId);
+      const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+      if (rawDigits && rawDigits !== phone) {
+        await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+      }
     } catch (sendErr) {
       await prisma.communication.update({
         where: { id: communication.id },
@@ -259,12 +264,16 @@ router.post('/send-whatsapp-template', validate(z.object({
     });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-    const phone = lead.phone?.replace(/\D/g, '');
+    const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
     if (!phone) {
       return res.status(400).json({ error: 'Lead has no phone number' });
     }
 
     await sendTemplate(phone, templateName, languageCode, req.orgId);
+    const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+    if (rawDigits && rawDigits !== phone) {
+      await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+    }
 
     const communication = await prisma.communication.create({
       data: {
