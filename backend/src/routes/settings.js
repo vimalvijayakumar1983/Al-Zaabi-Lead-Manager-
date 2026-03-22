@@ -322,8 +322,9 @@ router.get('/field-config', async (req, res, next) => {
       }
 
       if (!divisionId) {
+        // Field Manager "All Divisions" should show everything with division badges.
         customFields = await prisma.customField.findMany({
-          where: { organizationId: groupOrgId, divisionId: null },
+          where: { organizationId: { in: req.orgIds } },
           orderBy: { order: 'asc' },
         });
       } else {
@@ -337,10 +338,8 @@ router.get('/field-config', async (req, res, next) => {
             orderBy: { order: 'asc' },
           }),
         ]);
-        const byName = new Map();
-        for (const field of globalFields) byName.set(field.name, field);
-        for (const field of divisionFields) byName.set(field.name, field);
-        customFields = Array.from(byName.values()).sort((a, b) => {
+
+        customFields = [...globalFields, ...divisionFields].sort((a, b) => {
           const orderDiff = (a.order ?? 0) - (b.order ?? 0);
           if (orderDiff !== 0) return orderDiff;
           return String(a.label || a.name).localeCompare(String(b.label || b.name));
