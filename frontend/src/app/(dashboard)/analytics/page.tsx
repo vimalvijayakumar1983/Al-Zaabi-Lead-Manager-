@@ -149,6 +149,13 @@ function formatDateRangeShort(start?: string, end?: string): string {
   return `${f(s)} - ${f(e)}`;
 }
 
+function getPeriodStartDate(period: Period): string {
+  const days = { '7d': 7, '30d': 30, '90d': 90, '180d': 180, '365d': 365 }[period] || 30;
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  return start.toISOString().split('T')[0];
+}
+
 // ─── Drill-down link builder ──────────────────────────────────────
 
 function drillLink(params: Record<string, string>) {
@@ -718,7 +725,13 @@ export default function AnalyticsPage() {
     return params;
   }, [selectedDivision]);
 
+  const withPeriodScope = useCallback((params: Record<string, string>) => {
+    // Keep drill-down results aligned with the selected analytics period.
+    return { ...params, dateFrom: getPeriodStartDate(period) };
+  }, [period]);
+
   const drill = (params: Record<string, string>) => router.push(drillLink(withDivisionScope(params)));
+  const drillPeriod = (params: Record<string, string>) => router.push(drillLink(withDivisionScope(withPeriodScope(params))));
   const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(withDivisionScope(params)));
 
   const buildExportPayload = useCallback(() => {
@@ -1148,7 +1161,7 @@ export default function AnalyticsPage() {
           change={overview?.newLeads?.change} icon={TrendingUp}
           iconBg="bg-brand-50" iconColor="text-brand-600"
           subtitle={`In last ${periodLabel}`}
-          href={drillLink({ status: 'NEW' })} />
+          href={drillLink(withDivisionScope(withPeriodScope({ status: 'NEW' })))} />
         <KpiCard title="Deals Won" value={overview?.wonLeads?.value ?? 0}
           change={overview?.wonLeads?.change} icon={Trophy}
           iconBg="bg-emerald-50" iconColor="text-emerald-600"
@@ -1552,7 +1565,7 @@ export default function AnalyticsPage() {
                 <tr><td colSpan={9} className="py-10 text-center text-sm text-text-tertiary">No source data available</td></tr>
               ) : sources.map((s: any) => (
                 <tr key={s.source} className="table-row cursor-pointer hover:bg-brand-50/50 transition-colors"
-                  onClick={() => drill({ source: s.source })}>
+                  onClick={() => drillPeriod({ source: s.source })}>
                   <td className="table-cell px-4">
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: sourceColor(s.source) }} />
@@ -1815,7 +1828,7 @@ export default function AnalyticsPage() {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
                 if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
-                if (Object.keys(params).length > 0) drill(params);
+                if (Object.keys(params).length > 0) drillPeriod(params);
               }}
             />
           </div>
@@ -1836,7 +1849,7 @@ export default function AnalyticsPage() {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
                 if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
-                if (Object.keys(params).length > 0) drill(params);
+                if (Object.keys(params).length > 0) drillPeriod(params);
               }}
             />
           </div>
@@ -1909,7 +1922,7 @@ export default function AnalyticsPage() {
                     onClick={() => {
                       const params: Record<string, string> = { status: 'NEW,CONTACTED,QUALIFIED,PROPOSAL_SENT,NEGOTIATION' };
                       if (row.assigneeId) params.assignedToId = row.assigneeId;
-                      drill(params);
+                      drillPeriod(params);
                     }}
                   >
                     <td className="table-cell px-4">{row.assigneeName}</td>
@@ -2128,7 +2141,7 @@ export default function AnalyticsPage() {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
                 if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
-                if (Object.keys(params).length > 0) drill(params);
+                if (Object.keys(params).length > 0) drillPeriod(params);
               }}
             />
             <div className="mt-4 grid grid-cols-2 gap-3">
@@ -2193,7 +2206,7 @@ export default function AnalyticsPage() {
               color="#ef4444"
               height={170}
               onBarClick={(row) => {
-                if (row?.source) drill({ source: String(row.source) });
+                if (row?.source) drillPeriod({ source: String(row.source) });
               }}
             />
           </div>
@@ -2214,7 +2227,7 @@ export default function AnalyticsPage() {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
                 if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
-                if (Object.keys(params).length > 0) drill(params);
+                if (Object.keys(params).length > 0) drillPeriod(params);
               }}
             />
           </div>
@@ -2282,7 +2295,7 @@ export default function AnalyticsPage() {
                     key={row.assigneeId || row.assigneeName}
                     className="table-row cursor-pointer hover:bg-surface-secondary"
                     onClick={() => {
-                      if (row.assigneeId) drill({ assignedToId: row.assigneeId });
+                      if (row.assigneeId) drillPeriod({ assignedToId: row.assigneeId });
                     }}
                   >
                     <td className="table-cell px-4">{row.assigneeName}</td>
@@ -2488,7 +2501,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#ef4444"
                 height={180}
-                onBarClick={() => drill({ callOutcome: 'NOT_INTERESTED' })}
+                onBarClick={() => drillPeriod({ callOutcome: 'NOT_INTERESTED' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No Not Interested reason data yet</p></div>
@@ -2506,7 +2519,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#10b981"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
+                onBarClick={() => drillPeriod({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
@@ -2521,7 +2534,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#6366f1"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN' })}
+                onBarClick={() => drillPeriod({ callOutcome: 'WILL_CALL_US_AGAIN' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
@@ -2555,7 +2568,7 @@ export default function AnalyticsPage() {
                   <tr
                     key={row.disposition}
                     className="table-row cursor-pointer hover:bg-surface-secondary"
-                    onClick={() => drill({ callOutcome: row.disposition })}
+                    onClick={() => drillPeriod({ callOutcome: row.disposition })}
                   >
                     <td className="table-cell px-4">{row.label}</td>
                     <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
