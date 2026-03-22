@@ -1797,6 +1797,15 @@ const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.Componen
   PHONE:       { label: 'Phone',        icon: Phone,      color: 'bg-pink-100 text-pink-700',    description: 'Phone number' },
 };
 const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
+const LEAD_STATUS_OPTIONS = [
+  { key: 'NEW', default: 'New', color: 'bg-indigo-100 text-indigo-800' },
+  { key: 'CONTACTED', default: 'Contacted', color: 'bg-blue-100 text-blue-800' },
+  { key: 'QUALIFIED', default: 'Qualified', color: 'bg-cyan-100 text-cyan-800' },
+  { key: 'PROPOSAL_SENT', default: 'Proposal Sent', color: 'bg-amber-100 text-amber-800' },
+  { key: 'NEGOTIATION', default: 'Negotiation', color: 'bg-purple-100 text-purple-800' },
+  { key: 'WON', default: 'Won', color: 'bg-green-100 text-green-800' },
+  { key: 'LOST', default: 'Lost', color: 'bg-red-100 text-red-800' },
+];
 
 /* ─── Built-in Field Definitions (fallback if API unavailable) ──────── */
 
@@ -2199,7 +2208,10 @@ function CustomFieldsSection() {
   const [showAddTag, setShowAddTag] = useState(false);
 
   const fetchTags = async () => {
-    if (!effectiveDivisionId) return;
+    if (!effectiveDivisionId) {
+      setTags([]);
+      return;
+    }
     setLoadingTags(true);
     try {
       const data: any = await api.getTags(effectiveDivisionId);
@@ -2524,6 +2536,9 @@ function CustomFieldsSection() {
     });
     return groups;
   }, [filteredBuiltInFields]);
+  const statusLabelCount = LEAD_STATUS_OPTIONS.length;
+  const pipelineStagesTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(pipelineStages.length);
+  const tagsTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(tags.length);
 
   // ─── Division selector label ───────────────────────────────────────
   const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
@@ -2685,6 +2700,11 @@ function CustomFieldsSection() {
           >
             <Tag className="h-4 w-4" />
             Status Labels
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'statusLabels' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {statusLabelCount}
+            </span>
           </button>
           <button
             onClick={() => setActiveSection('pipelineStages')}
@@ -2699,7 +2719,7 @@ function CustomFieldsSection() {
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
               activeSection === 'pipelineStages' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
             }`}>
-              {pipelineStages.length}
+              {pipelineStagesTabCount}
             </span>
           </button>
           <button
@@ -2715,7 +2735,7 @@ function CustomFieldsSection() {
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
               activeSection === 'tags' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
             }`}>
-              {tags.length}
+              {tagsTabCount}
             </span>
           </button>
         </div>
@@ -2882,19 +2902,27 @@ function CustomFieldsSection() {
         ) : activeSection === 'statusLabels' ? (
           /* ═══ STATUS LABELS TAB ═══════════════════════════════════ */
           <div>
-            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
               <p className="text-xs text-gray-500">Customize how pipeline statuses are displayed. Changes apply to stat cards, badges, filters, and dropdowns.</p>
+              <button
+                onClick={() => {
+                  setActiveSection('pipelineStages');
+                  if (effectiveDivisionId) setShowAddStage(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors whitespace-nowrap"
+                title="Create a new workflow status via Pipeline Stage"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Create New Status
+              </button>
             </div>
+            {!effectiveDivisionId && isSuperAdmin && (
+              <div className="px-5 py-3 border-b border-amber-200 bg-amber-50 text-[11px] text-amber-700">
+                Select a specific division from Scope to create new workflow statuses (pipeline stages).
+              </div>
+            )}
             <div className="divide-y divide-gray-100">
-              {[
-                { key: 'NEW', default: 'New', color: 'bg-indigo-100 text-indigo-800' },
-                { key: 'CONTACTED', default: 'Contacted', color: 'bg-blue-100 text-blue-800' },
-                { key: 'QUALIFIED', default: 'Qualified', color: 'bg-cyan-100 text-cyan-800' },
-                { key: 'PROPOSAL_SENT', default: 'Proposal Sent', color: 'bg-amber-100 text-amber-800' },
-                { key: 'NEGOTIATION', default: 'Negotiation', color: 'bg-purple-100 text-purple-800' },
-                { key: 'WON', default: 'Won', color: 'bg-green-100 text-green-800' },
-                { key: 'LOST', default: 'Lost', color: 'bg-red-100 text-red-800' },
-              ].map(status => (
+              {LEAD_STATUS_OPTIONS.map(status => (
                 <div key={status.key} className="flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition-colors">
                   <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.color}`}>
                     {statusLabels[status.key] || status.default}

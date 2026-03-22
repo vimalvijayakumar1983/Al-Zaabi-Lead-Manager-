@@ -335,7 +335,7 @@ router.get('/field-config', async (req, res, next) => {
       } else {
         const [globalFields, divisionFields] = await Promise.all([
           prisma.customField.findMany({
-            where: { organizationId: groupOrgId, divisionId: null },
+            where: { organizationId: { in: req.orgIds }, divisionId: null },
             orderBy: { order: 'asc' },
           }),
           prisma.customField.findMany({
@@ -510,7 +510,7 @@ router.get('/custom-fields', async (req, res, next) => {
       const [globalFields, divisionFields] = await Promise.all([
         prisma.customField.findMany({
           where: {
-            organizationId: groupOrgId,
+            organizationId: { in: req.orgIds },
             divisionId: null,
           },
           orderBy: { order: 'asc' },
