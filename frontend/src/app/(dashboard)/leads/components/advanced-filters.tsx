@@ -28,6 +28,7 @@ export interface FilterState {
   stageId: string;
   callOutcome: string;      // comma-separated CallDisposition values
   callOutcomeReason: string; // comma-separated latest-call reason labels/keys
+  callOutcomeMode: string;   // latest | any (analytics drill-down)
   minCallCount: string;
   maxCallCount: string;
   divisionId: string;
@@ -58,6 +59,7 @@ export const emptyFilters: FilterState = {
   stageId: '',
   callOutcome: '',
   callOutcomeReason: '',
+  callOutcomeMode: '',
   minCallCount: '',
   maxCallCount: '',
   divisionId: '',

@@ -69,7 +69,7 @@ type ViewMode = 'table' | 'cards' | 'kanban';
 const DRILLDOWN_FILTER_KEYS: (keyof FilterState)[] = [
   'status', 'source', 'assignedToId', 'stageId', 'campaign',
   'minScore', 'maxScore', 'search', 'company', 'location',
-  'callOutcome', 'callOutcomeReason', 'divisionId',
+  'callOutcome', 'callOutcomeReason', 'callOutcomeMode', 'divisionId',
 ];
 
 // ─── Phone formatting - auto-add UAE country code if missing ────
@@ -354,6 +354,7 @@ function LeadsContent() {
       if (filters.stageId) params.stageId = filters.stageId;
       if (filters.callOutcome) params.callOutcome = filters.callOutcome;
       if (filters.callOutcomeReason) params.callOutcomeReason = filters.callOutcomeReason;
+      if (filters.callOutcomeMode) params.callOutcomeMode = filters.callOutcomeMode;
       if (filters.minCallCount) params.minCallCount = filters.minCallCount;
       if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
       if (filters.divisionId) params.divisionId = filters.divisionId;

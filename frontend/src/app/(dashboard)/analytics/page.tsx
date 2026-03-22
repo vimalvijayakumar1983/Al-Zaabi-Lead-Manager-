@@ -2155,7 +2155,7 @@ export default function AnalyticsPage() {
                 height={180}
                 onBarClick={(row) => {
                   const reason = String(row?.reason || '').trim();
-                  const params: Record<string, string> = { callOutcome: 'NOT_INTERESTED' };
+                  const params: Record<string, string> = { callOutcome: 'NOT_INTERESTED', callOutcomeMode: 'any' };
                   if (reason) params.callOutcomeReason = reason;
                   drill(params);
                 }}
@@ -2176,7 +2176,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#10b981"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
+                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES', callOutcomeMode: 'any' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
@@ -2191,7 +2191,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#6366f1"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN' })}
+                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN', callOutcomeMode: 'any' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
@@ -2225,7 +2225,7 @@ export default function AnalyticsPage() {
                   <tr
                     key={row.disposition}
                     className="table-row cursor-pointer hover:bg-surface-secondary"
-                    onClick={() => drill({ callOutcome: row.disposition })}
+                    onClick={() => drill({ callOutcome: row.disposition, callOutcomeMode: 'any' })}
                   >
                     <td className="table-cell px-4">{row.label}</td>
                     <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
