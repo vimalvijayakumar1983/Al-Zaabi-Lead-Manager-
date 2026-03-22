@@ -272,7 +272,8 @@ async function checkCallbackReminders() {
 /**
  * Start the callback reminder scheduler.
  */
-function startCallbackReminderScheduler(intervalMs = REMINDER_CHECK_INTERVAL) {
+function startCallbackReminderScheduler(intervalMs = REMINDER_CHECK_INTERVAL, options = {}) {
+  const { runOnStart = true, initialDelayMs = 0 } = options;
   if (reminderInterval) {
     logger.warn('[CallbackReminder] Scheduler already running');
     return;
@@ -280,8 +281,11 @@ function startCallbackReminderScheduler(intervalMs = REMINDER_CHECK_INTERVAL) {
 
   logger.info(`[CallbackReminder] Starting callback reminder scheduler (interval: ${intervalMs / 1000}s)`);
 
-  // Run immediately on start
-  checkCallbackReminders();
+  if (runOnStart) {
+    setTimeout(() => {
+      checkCallbackReminders().catch((err) => logger.error('[CallbackReminder] Initial check failed:', err.message));
+    }, Math.max(0, Number(initialDelayMs) || 0));
+  }
 
   reminderInterval = setInterval(() => {
     checkCallbackReminders();

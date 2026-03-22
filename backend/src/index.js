@@ -152,31 +152,52 @@ setupWebSocket(server);
 
 // ─── Start Server ────────────────────────────────────────────────
 const PORT = config.port || 4000;
+const ENABLE_BACKGROUND_JOBS = process.env.ENABLE_BACKGROUND_JOBS !== 'false';
 
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
 
-  // Start the SLA monitoring service
-  startSLAMonitor();
+  if (!ENABLE_BACKGROUND_JOBS) {
+    logger.warn('Background schedulers are disabled (ENABLE_BACKGROUND_JOBS=false)');
+    return;
+  }
 
-  // Start the time-based automation scheduler
-  startTimeBasedScheduler();
+  const schedulerStarts = [
+    { name: 'SLA', fn: () => startSLAMonitor(undefined, { runOnStart: true, initialDelayMs: 5000 }) },
+    { name: 'TimeBased', fn: () => startTimeBasedScheduler(undefined, { runOnStart: true, initialDelayMs: 20000 }) },
+    { name: 'CallbackReminder', fn: () => startCallbackReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 35000 }) },
+    { name: 'TaskReminder', fn: () => startTaskReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 50000 }) },
+    { name: 'WillCallAgainSafetyNet', fn: () => startWillCallAgainSafetyNetScheduler(undefined, { runOnStart: true, initialDelayMs: 65000 }) },
+  ];
+  for (const scheduler of schedulerStarts) {
+    try {
+      scheduler.fn();
+      logger.info(`[Startup] ${scheduler.name} scheduler initialized`);
+    } catch (err) {
+      logger.error(`[Startup] Failed to initialize ${scheduler.name} scheduler:`, err.message);
+    }
+  }
 
-  // Start the callback reminder scheduler (Call Later pop-ups)
-  startCallbackReminderScheduler();
+  // Start unread reminder escalation monitor after core schedulers
+  setTimeout(() => {
+    try {
+      startNotificationEscalationScheduler();
+      logger.info('[Startup] NotificationEscalation scheduler initialized');
+    } catch (err) {
+      logger.error('[Startup] Failed to initialize NotificationEscalation scheduler:', err.message);
+    }
+  }, 80000);
 
-  // Start the task reminder scheduler (due-soon & overdue pop-ups)
-  startTaskReminderScheduler();
-
-  // Start soft-loop inactivity safety net (Will Call Us Again)
-  startWillCallAgainSafetyNetScheduler();
-
-  // Start unread reminder escalation monitor
-  startNotificationEscalationScheduler();
-
-  // Purge recycle bin records that crossed retention window
-  startRecycleBinPurgeScheduler();
+  // Purge recycle bin records after startup load settles
+  setTimeout(() => {
+    try {
+      startRecycleBinPurgeScheduler();
+      logger.info('[Startup] RecycleBinPurge scheduler initialized');
+    } catch (err) {
+      logger.error('[Startup] Failed to initialize RecycleBinPurge scheduler:', err.message);
+    }
+  }, 95000);
 });
 
 // Graceful shutdown
