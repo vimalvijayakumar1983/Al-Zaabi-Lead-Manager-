@@ -242,11 +242,34 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
       if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
     }
-    // Call outcome filtering (filter leads by their last/any call disposition)
+    // Call outcome filtering
+    // Important: this should match the "Last Call" column semantics, i.e.
+    // filter by each lead's most recent call disposition (not any historical one).
     if (callOutcome) {
       const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
       if (outcomes.length > 0) {
-        where.callLogs = { some: { disposition: outcomes.length === 1 ? outcomes[0] : { in: outcomes } } };
+        const outcomeSet = new Set(outcomes);
+        const lastCalls = await prisma.callLog.findMany({
+          where: {
+            lead: {
+              organizationId: where.organizationId,
+              isArchived: false,
+              ...(req.isRestrictedRole ? { assignedToId: req.user.id } : {}),
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          distinct: ['leadId'],
+          select: { leadId: true, disposition: true },
+        });
+
+        const matchedLeadIds = lastCalls
+          .filter((row) => outcomeSet.has(row.disposition))
+          .map((row) => row.leadId);
+
+        where.AND = [
+          ...(where.AND || []),
+          { id: { in: matchedLeadIds.length > 0 ? matchedLeadIds : ['__none__'] } },
+        ];
       }
     }
     // Custom field filtering (JSON encoded)
