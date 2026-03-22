@@ -231,6 +231,7 @@ function LeadsContent() {
     const paramKeys: (keyof FilterState)[] = [
       'status', 'source', 'assignedToId', 'stageId', 'campaign',
       'minScore', 'maxScore', 'search', 'company', 'location',
+      'callOutcome',
     ];
     let hasUrlParams = false;
     for (const key of paramKeys) {

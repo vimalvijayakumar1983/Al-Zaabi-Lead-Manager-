@@ -373,6 +373,20 @@ export default function TasksPage() {
         params.priorities = priorityFilters.join(',');
       }
 
+      if (typeFilter !== 'ALL') {
+        params.type = typeFilter;
+      }
+
+      if (assigneeFilter === '__mine__' && currentUser?.id) {
+        params.assigneeId = currentUser.id;
+      } else if (
+        assigneeFilter !== 'ALL' &&
+        assigneeFilter !== '__mine__' &&
+        assigneeFilter !== '__unassigned__'
+      ) {
+        params.assigneeId = assigneeFilter;
+      }
+
       if (sortField) params.sortBy = sortField;
       if (sortDir) params.sortOrder = sortDir;
       if (scopedDivisionId) params.divisionId = scopedDivisionId;
@@ -390,7 +404,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, searchQuery, statusFilters, priorityFilters, sortField, sortDir, datePreset, scopedDivisionId]);
+  }, [page, searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, currentUser?.id, sortField, sortDir, datePreset, scopedDivisionId]);
 
   useEffect(() => {
     fetchTasks();
