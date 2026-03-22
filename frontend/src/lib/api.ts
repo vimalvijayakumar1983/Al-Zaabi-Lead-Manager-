@@ -806,8 +806,12 @@ class ApiClient {
     return this.request<any[]>(`/call-logs/lead/${leadId}`);
   }
 
-  async getDispositions() {
-    return this.request<any[]>('/call-logs/dispositions');
+  async getDispositions(params?: { leadId?: string; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.leadId) q.set('leadId', params.leadId);
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<any[]>(`/call-logs/dispositions${query ? `?${query}` : ''}`);
   }
 
   async getDispositionSettings() {
@@ -819,6 +823,18 @@ class ApiClient {
       '/call-logs/dispositions/settings',
       { method: 'PUT', body: JSON.stringify({ settings }) }
     );
+  }
+
+  async getDispositionStudio(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ divisionId: string; dispositions: any[] }>(`/call-logs/dispositions/studio${q}`);
+  }
+
+  async updateDispositionStudio(dispositions: any[], divisionId?: string) {
+    return this.request<{ divisionId: string; dispositions: any[] }>('/call-logs/dispositions/studio', {
+      method: 'PUT',
+      body: JSON.stringify({ dispositions, ...(divisionId ? { divisionId } : {}) }),
+    });
   }
 
   // Settings
@@ -846,7 +862,7 @@ class ApiClient {
     return this.request<any>('/settings/notifications');
   }
 
-  async updateNotificationPreferences(data: Record<string, boolean>) {
+  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
     return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
   }
 
@@ -1082,6 +1098,52 @@ class ApiClient {
     return this.request<any>(`/users/${userId}/divisions/${divisionId}`, { method: 'DELETE' });
   }
 
+  // ─── Recycle Bin ────────────────────────────────────────────────
+  async getRecycleBinItems(params?: Record<string, string | number>) {
+    const q = new URLSearchParams();
+    if (params) {
+      for (const [key, value] of Object.entries(params)) {
+        if (value === undefined || value === null || value === '') continue;
+        q.set(key, String(value));
+      }
+    }
+    const query = q.toString();
+    return this.request<any>(`/recycle-bin${query ? `?${query}` : ''}`);
+  }
+
+  async restoreRecycleBinItem(id: string) {
+    return this.request<any>(`/recycle-bin/${id}/restore`, { method: 'POST' });
+  }
+
+  async permanentlyDeleteRecycleBinItem(id: string) {
+    return this.request<any>(`/recycle-bin/${id}/permanent`, { method: 'DELETE' });
+  }
+
+  async bulkRestoreRecycleBinItems(ids: string[]) {
+    return this.request<any>('/recycle-bin/bulk/restore', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  async bulkPermanentlyDeleteRecycleBinItems(ids: string[], confirmText = 'DELETE') {
+    return this.request<any>('/recycle-bin/bulk/permanent-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids, confirmText }),
+    });
+  }
+
+  async getRecycleBinAccessSettings() {
+    return this.request<any>('/recycle-bin/access-settings');
+  }
+
+  async updateRecycleBinAccessSettings(data: { roleScopes?: Record<string, any>; userOverrides?: Record<string, any> }) {
+    return this.request<any>('/recycle-bin/access-settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
   // ─── Notifications ───────────────────────────────────────────────
 
   async getNotifications(params?: Record<string, string | number>) {
@@ -1090,12 +1152,22 @@ class ApiClient {
       : '';
     return this.request<{
       data: AppNotification[];
-      pagination: { page: number; limit: number; total: number; totalPages: number };
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+      };
     }>(`/notifications${query}`);
   }
 
-  async getUnreadCount() {
-    return this.request<{ count: number }>('/notifications/unread-count');
+  async getUnreadCount(params?: { divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<{ count: number }>(`/notifications/unread-count${query ? `?${query}` : ''}`);
   }
 
   async markNotificationRead(id: string) {
@@ -1110,6 +1182,12 @@ class ApiClient {
     });
   }
 
+  async clearAllNotifications() {
+    return this.request<{ success: boolean; changed?: number; unreadCount?: number }>('/notifications/clear-all', {
+      method: 'POST',
+    });
+  }
+
   async archiveNotification(id: string) {
     return this.request<{ success: boolean }>(`/notifications/${id}/archive`, {
       method: 'POST',
@@ -1120,6 +1198,53 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/notifications/${id}`, {
       method: 'DELETE',
     });
+  }
+
+  async notificationAction(
+    id: string,
+    action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
+    minutes?: number
+  ) {
+    return this.request<any>(`/notifications/${id}/action`, {
+      method: 'POST',
+      body: JSON.stringify(
+        typeof minutes === 'number' ? { action, minutes } : { action }
+      ),
+    });
+  }
+
+  async snoozeNotification(id: string, minutes = 15) {
+    return this.request<any>(`/notifications/${id}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ minutes }),
+    });
+  }
+
+  async escalateNotification(id: string) {
+    return this.request<any>(`/notifications/${id}/escalate`, {
+      method: 'POST',
+    });
+  }
+
+  async getNotificationDigest(params?: { range?: string; from?: string; to?: string; limit?: number; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.range) q.set('range', params.range);
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (typeof params?.limit === 'number') q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<any>(`/notifications/digest${query ? `?${query}` : ''}`);
+  }
+
+  async getNotificationAnalytics(params?: { range?: string; from?: string; to?: string; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.range) q.set('range', params.range);
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<any>(`/notifications/analytics${query ? `?${query}` : ''}`);
   }
 
   async getNotificationPrefs() {
