@@ -627,8 +627,18 @@ router.get('/filter-values', async (req, res, next) => {
 // ─── Tags List ──────────────────────────────────────────────────
 router.get('/tags', async (req, res, next) => {
   try {
+    const organizationId = typeof req.query.organizationId === 'string' ? req.query.organizationId : undefined;
+
+    let orgScope = req.orgIds;
+    if (organizationId) {
+      if (!req.orgIds.includes(organizationId)) {
+        return res.status(403).json({ error: 'Access denied to this division' });
+      }
+      orgScope = [organizationId];
+    }
+
     const tags = await prisma.tag.findMany({
-      where: { organizationId: { in: req.orgIds } },
+      where: { organizationId: { in: orgScope } },
       select: { id: true, name: true, color: true },
       orderBy: { name: 'asc' },
     });
