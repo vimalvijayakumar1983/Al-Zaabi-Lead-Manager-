@@ -6,6 +6,20 @@ const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { broadcastDataChange } = require('../websocket/server');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
+
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
 
 const router = Router();
 
@@ -394,7 +408,7 @@ router.post('/', validate(createCampaignSchema), async (req, res, next) => {
     notifyOrgAdmins(targetOrgId, {
       type: NOTIFICATION_TYPES.CAMPAIGN_STARTED,
       title: 'New Campaign Created',
-      message: `${req.user.firstName} ${req.user.lastName} created campaign: ${name}`,
+      message: `${getDisplayName(req.user)} created campaign: ${name}`,
       entityType: 'campaign',
       entityId: campaign.id,
     }, req.user.id).catch(() => {});
@@ -452,7 +466,18 @@ router.post('/bulk-update', validate(bulkUpdateSchema), async (req, res, next) =
 
     const existing = await prisma.campaign.findMany({
       where: { id: { in: ids }, organizationId: { in: req.orgIds } },
-      select: { id: true },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        status: true,
+        budget: true,
+        description: true,
+        startDate: true,
+        endDate: true,
+        metadata: true,
+        organizationId: true,
+      },
     });
 
     const existingIds = existing.map((c) => c.id);
@@ -502,11 +527,33 @@ router.post('/bulk-delete', validate(bulkDeleteSchema), async (req, res, next) =
       });
     }
 
+    await Promise.all(
+      existing.map((campaign) =>
+        upsertRecycleBinItem({
+          entityType: 'CAMPAIGN',
+          entityId: campaign.id,
+          entityLabel: campaign.name,
+          organizationId: campaign.organizationId,
+          deletedById: req.user.id,
+          snapshot: {
+            name: campaign.name,
+            type: campaign.type,
+            status: campaign.status,
+            budget: campaign.budget ? Number(campaign.budget) : null,
+            description: campaign.description,
+            startDate: campaign.startDate,
+            endDate: campaign.endDate,
+            metadata: campaign.metadata,
+          },
+        })
+      )
+    );
+
     const result = await prisma.campaign.deleteMany({
       where: { id: { in: ids }, organizationId: { in: req.orgIds } },
     });
 
-    res.json({ deleted: result.count, message: `${result.count} campaign(s) deleted` });
+    res.json({ deleted: result.count, message: `${result.count} campaign(s) moved to recycle bin` });
 
     broadcastDataChange(req.user.organizationId, 'campaign', 'deleted', req.user.id).catch(() => {});
   } catch (err) {
@@ -612,9 +659,27 @@ router.delete('/:id', async (req, res, next) => {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
+    await upsertRecycleBinItem({
+      entityType: 'CAMPAIGN',
+      entityId: existing.id,
+      entityLabel: existing.name,
+      organizationId: existing.organizationId,
+      deletedById: req.user.id,
+      snapshot: {
+        name: existing.name,
+        type: existing.type,
+        status: existing.status,
+        budget: existing.budget ? Number(existing.budget) : null,
+        description: existing.description,
+        startDate: existing.startDate,
+        endDate: existing.endDate,
+        metadata: existing.metadata,
+      },
+    });
+
     await prisma.campaign.delete({ where: { id } });
 
-    res.json({ message: 'Campaign deleted successfully' });
+    res.json({ message: 'Campaign moved to recycle bin successfully' });
 
     broadcastDataChange(existing.organizationId, 'campaign', 'deleted', req.user.id, { entityId: id }).catch(() => {});
   } catch (err) {

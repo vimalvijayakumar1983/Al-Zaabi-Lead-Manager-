@@ -6,18 +6,49 @@ const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { broadcastDataChange } = require('../websocket/server');
+const { sendInviteEmail } = require('../email');
+
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
 
 const router = Router();
 router.use(authenticate, orgScope);
 
 // Default permission matrix
 const DEFAULT_PERMISSIONS = {
-  SUPER_ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true, divisions: true },
-  ADMIN: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: true, invite: true, deleteData: true, exportData: true },
-  MANAGER: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, team: true, settings: false, invite: true, deleteData: false, exportData: true },
-  SALES_REP: { dashboard: true, leads: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
-  VIEWER: { dashboard: true, leads: true, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, team: false, settings: false, invite: false, deleteData: false, exportData: false },
+  SUPER_ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, recycleBin: true, deleteData: true, exportData: true, divisions: true },
+  ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, recycleBin: true, deleteData: true, exportData: true, divisions: false },
+  MANAGER: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: false, import: false, team: true, roles: false, settings: false, invite: true, notifications: true, recycleBin: true, deleteData: false, exportData: true, divisions: false },
+  SALES_REP: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, recycleBin: true, deleteData: false, exportData: false, divisions: false },
+  VIEWER: { dashboard: true, leads: true, contacts: true, inbox: false, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, recycleBin: false, deleteData: false, exportData: false, divisions: false },
 };
+
+function mergeRolePermissions(input) {
+  const incoming = input && typeof input === 'object' ? input : {};
+  const merged = {};
+
+  for (const [role, defaults] of Object.entries(DEFAULT_PERMISSIONS)) {
+    merged[role] = { ...defaults, ...(incoming[role] || {}) };
+  }
+
+  for (const [role, perms] of Object.entries(incoming)) {
+    if (!merged[role]) {
+      merged[role] = perms;
+    }
+  }
+
+  return merged;
+}
 
 // ─── Get Permissions Config ─────────────────────────────────────
 router.get('/permissions', async (req, res, next) => {
@@ -27,7 +58,7 @@ router.get('/permissions', async (req, res, next) => {
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
-    const rolePermissions = settings.rolePermissions || DEFAULT_PERMISSIONS;
+    const rolePermissions = mergeRolePermissions(settings.rolePermissions);
     const userOverrides = settings.userPermissionOverrides || {};
     res.json({ rolePermissions, userOverrides, defaults: DEFAULT_PERMISSIONS });
   } catch (err) {
@@ -45,12 +76,13 @@ router.put('/permissions/roles', authorize('ADMIN'), validate(z.object({
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' && org.settings !== null ? org.settings : {};
-    const updated = { ...settings, rolePermissions: req.validated.rolePermissions };
+    const normalizedRolePermissions = mergeRolePermissions(req.validated.rolePermissions);
+    const updated = { ...settings, rolePermissions: normalizedRolePermissions };
     await prisma.organization.update({
       where: { id: req.orgId },
       data: { settings: updated },
     });
-    res.json({ rolePermissions: req.validated.rolePermissions });
+    res.json({ rolePermissions: normalizedRolePermissions });
   } catch (err) {
     next(err);
   }
@@ -146,11 +178,19 @@ router.post('/invite', authorize('ADMIN', 'MANAGER'), validate(z.object({
 
     res.status(201).json(user);
 
+    // ── Fire-and-forget: Send invitation email with credentials ──
+    const orgInfo = await prisma.organization.findUnique({ where: { id: targetOrgId }, select: { name: true, parentId: true } });
+    const emailOrgId = orgInfo?.parentId || targetOrgId;
+    const inviterName = getDisplayName(req.user);
+    sendInviteEmail(email, password, getDisplayName({ firstName, lastName }), orgInfo?.name, role, inviterName, emailOrgId).catch((err) => {
+      console.error('Failed to send invite email:', err.message);
+    });
+
     // ── Fire-and-forget notification — notify org admins ──
     notifyOrgAdmins(targetOrgId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED,
       title: 'New Team Member',
-      message: `${req.user.firstName} ${req.user.lastName} invited ${email}`,
+      message: `${getDisplayName(req.user)} invited ${email}`,
       entityType: 'user',
       entityId: user.id,
     }, req.user.id).catch(() => {});
@@ -274,7 +314,7 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
     notifyOrgAdmins(existing.organizationId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_DEACTIVATED,
       title: 'Team Member Deactivated',
-      message: `${req.user.firstName} ${req.user.lastName} deactivated ${existing.firstName} ${existing.lastName}`,
+      message: `${getDisplayName(req.user)} deactivated ${getDisplayName(existing)}`,
       entityType: 'user',
       entityId: existing.id,
     }, req.user.id).catch(() => {});
@@ -282,5 +322,249 @@ router.delete('/:id', authorize('ADMIN'), async (req, res, next) => {
     next(err);
   }
 });
+
+
+
+
+// ─── Permanent Delete ────────────────────────────────────────────
+// DELETE /users/:id/permanent - Permanently delete a user and all associated data
+router.delete('/:id/permanent', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ error: 'Cannot delete yourself' });
+    }
+
+    const existing = await prisma.user.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      include: {
+        _count: { select: { assignedLeads: true, tasks: true } },
+      },
+    });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
+    const { reassignTo } = req.body || {};
+
+    // If user has leads, they must be reassigned
+    if (existing._count.assignedLeads > 0 && !reassignTo) {
+      return res.status(400).json({
+        error: 'User has assigned leads. Provide reassignTo userId or reassign leads first.',
+        leadsCount: existing._count.assignedLeads,
+        tasksCount: existing._count.tasks,
+      });
+    }
+
+    // Reassign leads and tasks if specified
+    if (reassignTo) {
+      const reassignUser = await prisma.user.findFirst({
+        where: { id: reassignTo, organizationId: { in: req.orgIds }, isActive: true },
+      });
+      if (!reassignUser) {
+        return res.status(400).json({ error: 'Reassign target user not found or inactive' });
+      }
+
+      await prisma.lead.updateMany({
+        where: { assignedToId: req.params.id },
+        data: { assignedToId: reassignTo },
+      });
+
+      await prisma.task.updateMany({
+        where: { assigneeId: req.params.id },
+        data: { assigneeId: reassignTo },
+      });
+    }
+
+    // Delete related records in order (handle foreign key constraints)
+    await prisma.$transaction(async (tx) => {
+      // Delete division memberships
+      await tx.divisionMembership.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete notifications
+      await tx.notification.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete notification preferences
+      await tx.notificationPreference.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete lead activities by user
+      await tx.leadActivity.deleteMany({ where: { userId: req.params.id } });
+
+      // Delete the user
+      await tx.user.delete({ where: { id: req.params.id } });
+    });
+
+    res.json({
+      message: `User ${getDisplayName(existing)} permanently deleted`,
+      reassignedLeads: existing._count.assignedLeads,
+      reassignedTasks: existing._count.tasks,
+    });
+
+    // Fire-and-forget notification
+    notifyOrgAdmins(existing.organizationId, {
+      type: NOTIFICATION_TYPES.TEAM_MEMBER_DEACTIVATED || 'TEAM_MEMBER_DEACTIVATED',
+      title: 'Team Member Deleted',
+      message: `${getDisplayName(req.user)} permanently deleted ${getDisplayName(existing)}`,
+      entityType: 'user',
+      entityId: existing.id,
+    }, req.user.id).catch(() => {});
+
+    broadcastDataChange(existing.organizationId, 'user', 'deleted', req.user.id, { entityId: existing.id }).catch(() => {});
+  } catch (err) {
+    // Handle foreign key constraint errors gracefully
+    if (err.code === 'P2003') {
+      return res.status(400).json({
+        error: 'Cannot delete user: they have associated records. Try deactivating instead, or reassign all their data first.',
+      });
+    }
+    next(err);
+  }
+});
+
+
+// ─── Division Memberships ─────────────────────────────────────
+
+
+// GET /users/:userId/divisions - Get user's division memberships
+router.get('/:userId/divisions', async (req, res) => {
+  try {
+    const memberships = await prisma.divisionMembership.findMany({
+      where: { userId: req.params.userId },
+      include: {
+        division: {
+          select: { id: true, name: true, tradeName: true, logo: true, primaryColor: true, type: true }
+        }
+      },
+      orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }]
+    });
+    res.json({ memberships });
+  } catch (error) {
+    console.error('Get user divisions error:', error);
+    res.status(500).json({ error: 'Failed to fetch division memberships' });
+  }
+});
+
+// POST /users/:userId/divisions - Add user to a division with role
+router.post('/:userId/divisions', async (req, res) => {
+  try {
+    const { divisionId, role } = req.body;
+    if (!divisionId) return res.status(400).json({ error: 'divisionId is required' });
+
+    // Check if membership already exists
+    const existing = await prisma.divisionMembership.findUnique({
+      where: { userId_divisionId: { userId: req.params.userId, divisionId } }
+    });
+    if (existing) return res.status(409).json({ error: 'User already belongs to this division' });
+
+    // Check if user has any memberships (first one becomes primary)
+    const count = await prisma.divisionMembership.count({
+      where: { userId: req.params.userId }
+    });
+
+    const membership = await prisma.divisionMembership.create({
+      data: {
+        userId: req.params.userId,
+        divisionId,
+        role: role || 'SALES_REP',
+        isPrimary: count === 0
+      },
+      include: {
+        division: {
+          select: { id: true, name: true, tradeName: true, logo: true, primaryColor: true, type: true }
+        }
+      }
+    });
+
+    res.status(201).json({ membership });
+  } catch (error) {
+    console.error('Add division membership error:', error);
+    res.status(500).json({ error: 'Failed to add division membership' });
+  }
+});
+
+// PUT /users/:userId/divisions/:divisionId - Update role in division
+router.put('/:userId/divisions/:divisionId', async (req, res) => {
+  try {
+    const { role, isPrimary } = req.body;
+
+    const updateData = {};
+    if (role) updateData.role = role;
+    if (typeof isPrimary === 'boolean') {
+      updateData.isPrimary = isPrimary;
+      // If setting as primary, unset other primaries
+      if (isPrimary) {
+        await prisma.divisionMembership.updateMany({
+          where: { userId: req.params.userId, NOT: { divisionId: req.params.divisionId } },
+          data: { isPrimary: false }
+        });
+      }
+    }
+
+    const membership = await prisma.divisionMembership.update({
+      where: {
+        userId_divisionId: {
+          userId: req.params.userId,
+          divisionId: req.params.divisionId
+        }
+      },
+      data: { ...updateData, updatedAt: new Date() },
+      include: {
+        division: {
+          select: { id: true, name: true, tradeName: true, logo: true, primaryColor: true, type: true }
+        }
+      }
+    });
+
+    res.json({ membership });
+  } catch (error) {
+    console.error('Update division membership error:', error);
+    res.status(500).json({ error: 'Failed to update division membership' });
+  }
+});
+
+// DELETE /users/:userId/divisions/:divisionId - Remove from division
+router.delete('/:userId/divisions/:divisionId', async (req, res) => {
+  try {
+    // Don't allow removing the primary division (or the last one)
+    const memberships = await prisma.divisionMembership.findMany({
+      where: { userId: req.params.userId }
+    });
+
+    if (memberships.length <= 1) {
+      return res.status(400).json({ error: 'Cannot remove user from their only division' });
+    }
+
+    const target = memberships.find(m => m.divisionId === req.params.divisionId);
+    if (!target) return res.status(404).json({ error: 'Membership not found' });
+
+    await prisma.divisionMembership.delete({
+      where: {
+        userId_divisionId: {
+          userId: req.params.userId,
+          divisionId: req.params.divisionId
+        }
+      }
+    });
+
+    // If we deleted the primary, make the first remaining one primary
+    if (target.isPrimary) {
+      const remaining = memberships.filter(m => m.divisionId !== req.params.divisionId);
+      if (remaining.length > 0) {
+        await prisma.divisionMembership.update({
+          where: {
+            userId_divisionId: {
+              userId: req.params.userId,
+              divisionId: remaining[0].divisionId
+            }
+          },
+          data: { isPrimary: true }
+        });
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete division membership error:', error);
+    res.status(500).json({ error: 'Failed to remove division membership' });
+  }
+});
+
 
 module.exports = router;

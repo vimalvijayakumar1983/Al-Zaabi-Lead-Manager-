@@ -2,7 +2,10 @@ const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 const { notifyUser } = require('../websocket/server');
 const { sendText } = require('./whatsappService');
+const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { sendEmail, sendTemplateEmail } = require('./emailService');
+const { getNextAssignee } = require('./leadAssignment');
+const { createNotification, notifyOrgAdmins, NOTIFICATION_TYPES } = require('./notificationService');
 
 /**
  * Evaluate and execute automation rules for a given trigger event.
@@ -97,20 +100,71 @@ const executeAutomations = async (trigger, context) => {
 };
 
 /**
- * Evaluate conditions against lead data
+ * Resolve a field value from lead data.
+ * Supports standard fields (e.g. "status"), relational fields (e.g. "assignedTo", "tags"),
+ * and custom fields (e.g. "custom.propertyType" stored in lead.customData).
+ */
+const resolveFieldValue = (field, lead, previousData) => {
+  // Custom fields from customData JSON
+  if (field && field.startsWith('custom.')) {
+    const customKey = field.slice(7); // strip "custom."
+    const customData = typeof lead.customData === 'string'
+      ? JSON.parse(lead.customData || '{}')
+      : (lead.customData || {});
+    const prevCustomData = previousData
+      ? (typeof previousData.customData === 'string'
+          ? JSON.parse(previousData.customData || '{}')
+          : (previousData.customData || {}))
+      : {};
+    return customData[customKey] ?? prevCustomData[customKey];
+  }
+
+  // Relational / computed fields
+  switch (field) {
+    case 'assignedTo':
+      return lead.assignedToId ?? previousData?.assignedToId;
+    case 'tags': {
+      // Return comma-separated tag names for contains/equals matching
+      const tags = lead.tags || previousData?.tags || [];
+      return tags.map((t) => (t.tag ? t.tag.name : t.name || t)).join(', ');
+    }
+    default:
+      return lead[field] ?? previousData?.[field];
+  }
+};
+
+/**
+ * Evaluate conditions against lead data.
+ * Supports both standard lead fields and custom fields (prefixed with "custom.").
  */
 const evaluateConditions = (conditions, lead, previousData) => {
   if (!Array.isArray(conditions) || conditions.length === 0) return true;
 
   return conditions.every((cond) => {
-    const value = lead[cond.field] ?? previousData?.[cond.field];
+    const value = resolveFieldValue(cond.field, lead, previousData);
+    // Detect date fields for proper comparison
+    const isDateField = ['createdAt', 'updatedAt', 'wonAt', 'lostAt'].includes(cond.field)
+      || (cond.field?.startsWith('custom.') && cond.value && /^\d{4}-\d{2}-\d{2}/.test(String(cond.value)));
+
+    if (isDateField && value) {
+      const dateVal = new Date(value).getTime();
+      const condDate = new Date(cond.value).getTime();
+      if (isNaN(dateVal) || isNaN(condDate)) return false;
+      switch (cond.operator) {
+        case 'equals': return new Date(value).toDateString() === new Date(cond.value).toDateString();
+        case 'gt': return dateVal > condDate;
+        case 'lt': return dateVal < condDate;
+        default: return false;
+      }
+    }
+
     switch (cond.operator) {
-      case 'equals': return value === cond.value;
-      case 'not_equals': return value !== cond.value;
+      case 'equals': return String(value) === String(cond.value);
+      case 'not_equals': return String(value) !== String(cond.value);
       case 'contains': return String(value).toLowerCase().includes(String(cond.value).toLowerCase());
       case 'gt': return Number(value) > Number(cond.value);
       case 'lt': return Number(value) < Number(cond.value);
-      case 'in': return Array.isArray(cond.value) && cond.value.includes(value);
+      case 'in': return Array.isArray(cond.value) && cond.value.includes(String(value));
       default: return false;
     }
   });
@@ -167,10 +221,14 @@ const executeSingleAction = async (action, context) => {
       });
       break;
 
-    case 'create_task':
+    case 'create_task': {
+      const taskTitle = (action.config.title || `Follow up with ${context.lead.firstName}`)
+        .replace(/\{\{firstName\}\}/g, context.lead.firstName || '')
+        .replace(/\{\{lastName\}\}/g, context.lead.lastName || '')
+        .replace(/\{\{company\}\}/g, context.lead.company || '');
       await prisma.task.create({
         data: {
-          title: action.config.title || `Follow up with ${context.lead.firstName}`,
+          title: taskTitle,
           type: action.config.taskType || 'FOLLOW_UP_CALL',
           priority: action.config.priority || 'MEDIUM',
           dueAt: new Date(Date.now() + (action.config.dueInHours || 24) * 3600000),
@@ -180,38 +238,98 @@ const executeSingleAction = async (action, context) => {
         },
       });
       break;
+    }
 
-    case 'notify_user':
-      const userId = action.config.userId || context.lead.assignedToId;
-      if (userId) {
-        notifyUser(userId, {
+    case 'notify_user': {
+      const notifyUserId = action.config.userId || context.lead.assignedToId;
+      const notifyMsg = (action.config.message || 'Automation triggered')
+        .replace(/\{\{firstName\}\}/g, context.lead.firstName || '')
+        .replace(/\{\{lastName\}\}/g, context.lead.lastName || '')
+        .replace(/\{\{source\}\}/g, context.lead.source || '')
+        .replace(/\{\{company\}\}/g, context.lead.company || '')
+        .replace(/\{\{status\}\}/g, context.lead.status || '');
+      if (notifyUserId) {
+        notifyUser(notifyUserId, {
           type: 'automation_notification',
-          message: action.config.message || 'Automation triggered',
+          message: notifyMsg,
           lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
         });
       }
       break;
+    }
 
     case 'send_email': {
-      const leadEmail = context.lead.email;
-      if (!leadEmail) {
-        logger.warn(`[Automation] No email address for lead ${context.lead.id}`);
+      // Determine recipient: custom email, assigned user, or lead email
+      let recipientEmail = null;
+      const recipientType = action.config.recipientType || 'lead';
+
+      if (recipientType === 'custom' && action.config.recipientEmail) {
+        recipientEmail = action.config.recipientEmail;
+      } else if (recipientType === 'assigned_user' && context.lead.assignedToId) {
+        try {
+          const assignedUser = await prisma.user.findUnique({
+            where: { id: context.lead.assignedToId },
+            select: { email: true, firstName: true, lastName: true },
+          });
+          recipientEmail = assignedUser?.email;
+        } catch (err) {
+          logger.warn('[Automation] Failed to lookup assigned user email:', err.message);
+        }
+      } else {
+        recipientEmail = context.lead.email;
+      }
+
+      if (!recipientEmail) {
+        logger.warn(`[Automation] No email address for ${recipientType} on lead ${context.lead.id}`);
         break;
+      }
+
+      // Build comprehensive variables for template rendering
+      const variables = {
+        firstName: context.lead.firstName || '',
+        lastName: context.lead.lastName || '',
+        email: context.lead.email || '',
+        phone: context.lead.phone || '',
+        company: context.lead.company || '',
+        jobTitle: context.lead.jobTitle || '',
+        source: context.lead.source || '',
+        status: context.lead.status || '',
+        location: context.lead.location || '',
+        score: String(context.lead.score || 0),
+        companyName: 'Al-Zaabi Group',
+        senderName: 'Al-Zaabi Team',
+        assignedTo: '',
+      };
+
+      // Fetch org name and assigned user name for variables
+      try {
+        const [org, assignedUser] = await Promise.all([
+          prisma.organization.findUnique({
+            where: { id: context.organizationId },
+            select: { name: true, tradeName: true },
+          }),
+          context.lead.assignedToId
+            ? prisma.user.findUnique({
+                where: { id: context.lead.assignedToId },
+                select: { firstName: true, lastName: true },
+              })
+            : null,
+        ]);
+        if (org) {
+          variables.companyName = org.tradeName || org.name;
+          variables.senderName = org.tradeName || org.name;
+        }
+        if (assignedUser) {
+          variables.assignedTo = `${assignedUser.firstName} ${assignedUser.lastName}`.trim();
+        }
+      } catch (err) {
+        logger.warn('[Automation] Failed to enrich email variables:', err.message);
       }
 
       if (action.config.template) {
         // Use a named template
-        const variables = {
-          firstName: context.lead.firstName || '',
-          lastName: context.lead.lastName || '',
-          email: leadEmail,
-          phone: context.lead.phone || '',
-          company: context.lead.company || '',
-          companyName: 'Al-Zaabi Group',
-          senderName: 'Al-Zaabi Team',
-        };
         const result = await sendTemplateEmail({
-          to: leadEmail,
+          to: recipientEmail,
           templateName: action.config.template,
           variables,
           organizationId: context.organizationId,
@@ -220,11 +338,12 @@ const executeSingleAction = async (action, context) => {
           throw new Error(result.error || 'Failed to send template email');
         }
       } else {
-        // Direct email with subject/body from config
+        // Direct email with subject/body from config — interpolate template variables
+        const interpolate = (str) => (str || '').replace(/\{\{(\w+)\}\}/g, (_, key) => variables[key] || '');
         const result = await sendEmail({
-          to: leadEmail,
-          subject: action.config.subject || 'Notification from Al-Zaabi CRM',
-          html: action.config.body || action.config.message || '',
+          to: recipientEmail,
+          subject: interpolate(action.config.subject) || 'Notification from Al-Zaabi CRM',
+          html: interpolate(action.config.body || action.config.message || ''),
           organizationId: context.organizationId,
         });
         if (!result.success) {
@@ -241,56 +360,242 @@ const executeSingleAction = async (action, context) => {
             direction: 'OUTBOUND',
             subject: action.config.subject || action.config.template || 'Automation Email',
             body: action.config.body || `Template: ${action.config.template}`,
-            metadata: { source: 'automation' },
+            metadata: { source: 'automation', recipientType, recipientEmail },
           },
         });
       } catch (logErr) {
         logger.warn('Failed to log automation email communication:', logErr.message);
       }
+
+      logger.info(`[Automation] Email sent to ${recipientEmail} (${recipientType})`);
       break;
     }
 
     case 'send_whatsapp': {
-        const message = action.config?.message;
-        const phone = context.lead.phone?.replace(/\D/g, '');
-        if (!phone) {
-          logger.warn(`[Automation] Send WhatsApp skipped: lead ${context.lead.id} has no phone`);
-          break;
-        }
-        if (!message) {
-          logger.warn('[Automation] Send WhatsApp skipped: no message in action config');
-          break;
-        }
-        try {
-          await sendText(phone, message, context.organizationId);
-          await prisma.communication.create({
-            data: {
-              leadId: context.lead.id,
-              channel: 'WHATSAPP',
-              direction: 'OUTBOUND',
-              body: message,
-              metadata: { automation: true },
-              userId: null,
-            },
-          });
-          await prisma.leadActivity.create({
-            data: {
-              leadId: context.lead.id,
-              userId: null,
-              type: 'WHATSAPP_SENT',
-              description: `WhatsApp (automation): ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`,
-            },
-          });
-        } catch (err) {
-          logger.error(`[Automation] Send WhatsApp failed for lead ${context.lead.id}:`, err.message);
-        }
+      const phone = context.lead.phone;
+      if (!phone) {
+        logger.warn(`[Automation] No phone number for lead ${context.lead.id} — skipping WhatsApp`);
         break;
       }
 
-      case 'webhook':
-        // Integration point: fire webhook
-        logger.info(`[Automation] Fire webhook: ${action.config.url}`);
+      // Interpolate template variables in the message
+      let whatsappMsg = action.config.message || '';
+      whatsappMsg = whatsappMsg
+        .replace(/\{\{firstName\}\}/g, context.lead.firstName || '')
+        .replace(/\{\{lastName\}\}/g, context.lead.lastName || '')
+        .replace(/\{\{email\}\}/g, context.lead.email || '')
+        .replace(/\{\{company\}\}/g, context.lead.company || '')
+        .replace(/\{\{source\}\}/g, context.lead.source || '');
+
+      // Attempt to send via WhatsApp integration if configured
+      try {
+        const orgSettings = await prisma.organization.findUnique({
+          where: { id: context.organizationId },
+          select: { settings: true },
+        });
+        const whatsappConfig = orgSettings?.settings?.whatsapp;
+
+        if (whatsappConfig?.apiUrl && whatsappConfig?.apiKey) {
+          const response = await fetch(whatsappConfig.apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${whatsappConfig.apiKey}`,
+            },
+            body: JSON.stringify({
+              phone: phone,
+              message: whatsappMsg,
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(`WhatsApp API returned ${response.status}`);
+          }
+          logger.info(`[Automation] WhatsApp sent to ${phone}`);
+        } else {
+          logger.info(`[Automation] WhatsApp not configured — logging message to ${phone}: ${whatsappMsg}`);
+        }
+      } catch (waErr) {
+        logger.warn(`[Automation] WhatsApp send failed: ${waErr.message}`);
+        throw waErr;
+      }
+
+      // Log the communication
+      try {
+        await prisma.communication.create({
+          data: {
+            leadId: context.lead.id,
+            channel: 'WHATSAPP',
+            direction: 'OUTBOUND',
+            body: whatsappMsg,
+            metadata: { source: 'automation' },
+          },
+        });
+      } catch (logErr) {
+        logger.warn('Failed to log WhatsApp communication:', logErr.message);
+      }
+      break;
+    }
+
+    case 'webhook': {
+      const webhookUrl = action.config.url;
+      if (!webhookUrl) {
+        logger.warn('[Automation] Webhook URL not configured — skipping');
         break;
+      }
+
+      const webhookMethod = (action.config.method || 'POST').toUpperCase();
+      const webhookPayload = {
+        event: context.trigger || 'automation',
+        timestamp: new Date().toISOString(),
+        lead: {
+          id: context.lead.id,
+          firstName: context.lead.firstName,
+          lastName: context.lead.lastName,
+          email: context.lead.email,
+          phone: context.lead.phone,
+          company: context.lead.company,
+          status: context.lead.status,
+          source: context.lead.source,
+          score: context.lead.score,
+        },
+        organizationId: context.organizationId,
+      };
+
+      // Merge any custom headers from config
+      const headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'AlZaabi-CRM-Automation/1.0',
+        ...(action.config.headers || {}),
+      };
+
+      try {
+        const fetchOpts = { method: webhookMethod, headers };
+        if (webhookMethod !== 'GET') {
+          fetchOpts.body = JSON.stringify(webhookPayload);
+        }
+        const response = await fetch(webhookUrl, fetchOpts);
+
+        if (!response.ok) {
+          throw new Error(`Webhook returned HTTP ${response.status}`);
+        }
+        logger.info(`[Automation] Webhook fired: ${webhookMethod} ${webhookUrl} — ${response.status}`);
+      } catch (whErr) {
+        logger.error(`[Automation] Webhook failed: ${whErr.message}`);
+        throw whErr;
+      }
+      break;
+    }
+
+    case 'reassign_lead_round_robin': {
+      // Auto-reassign lead to next available rep via round-robin
+      const previousAssigneeId = context.lead.assignedToId;
+      const newAssigneeId = await getNextAssignee(context.organizationId, context.lead);
+
+      if (!newAssigneeId || newAssigneeId === previousAssigneeId) {
+        // Cannot reassign — notify admins
+        await notifyOrgAdmins(context.organizationId, {
+          type: 'SLA_REASSIGN_FAILED',
+          title: 'SLA Auto-Reassign Failed',
+          message: `Could not find an available team member to reassign ${context.lead.firstName} ${context.lead.lastName}`,
+          entityType: 'lead',
+          entityId: context.lead.id,
+        });
+        logger.warn(`[Automation] No eligible user to reassign lead ${context.lead.id}`);
+        break;
+      }
+
+      // Get names for logging
+      const [newAssignee, previousAssignee] = await Promise.all([
+        prisma.user.findUnique({ where: { id: newAssigneeId }, select: { firstName: true, lastName: true } }),
+        previousAssigneeId
+          ? prisma.user.findUnique({ where: { id: previousAssigneeId }, select: { firstName: true, lastName: true } })
+          : null,
+      ]);
+      const newName = newAssignee ? `${newAssignee.firstName} ${newAssignee.lastName}`.trim() : 'Unknown';
+      const prevName = previousAssignee ? `${previousAssignee.firstName} ${previousAssignee.lastName}`.trim() : 'Unassigned';
+      const leadName = `${context.lead.firstName} ${context.lead.lastName}`.trim();
+      const minutes = context.lead.slaElapsedMinutes || 0;
+
+      // Perform reassignment
+      await prisma.$transaction(async (tx) => {
+        await tx.lead.update({
+          where: { id: context.lead.id },
+          data: {
+            assignedToId: newAssigneeId,
+            slaStatus: 'ESCALATED',
+            escalationLevel: 3,
+            lastEscalatedAt: new Date(),
+          },
+        });
+        await tx.leadActivity.create({
+          data: {
+            leadId: context.lead.id,
+            type: 'SLA_REASSIGNED',
+            description: `Auto-reassigned from ${prevName} to ${newName} via automation (${minutes} min unattended)`,
+            metadata: {
+              elapsedMinutes: minutes,
+              escalationLevel: 3,
+              previousAssigneeId,
+              newAssigneeId,
+              reason: 'automation_sla_reassign',
+            },
+          },
+        });
+      });
+
+      // Notify new assignee
+      await createNotification({
+        type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
+        title: 'Lead Auto-Assigned (SLA)',
+        message: `${leadName} has been automatically assigned to you via SLA automation`,
+        userId: newAssigneeId,
+        entityType: 'lead',
+        entityId: context.lead.id,
+        organizationId: context.organizationId,
+        metadata: { slaElapsedMinutes: minutes, autoReassigned: true },
+      });
+      notifyUser(newAssigneeId, {
+        type: 'sla_reassignment',
+        severity: 'info',
+        lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
+        message: `${leadName} auto-assigned to you (SLA automation)`,
+      });
+
+      // Notify previous assignee
+      if (previousAssigneeId) {
+        notifyUser(previousAssigneeId, {
+          type: 'sla_reassignment',
+          severity: 'warning',
+          lead: { id: context.lead.id, firstName: context.lead.firstName, lastName: context.lead.lastName },
+          message: `${leadName} was reassigned to ${newName} — SLA automation`,
+        });
+      }
+
+      // Broadcast for real-time UI
+      broadcastDataChange(context.organizationId, 'lead', 'updated', null, { entityId: context.lead.id }).catch(() => {});
+
+      logger.info(`[Automation] Lead ${context.lead.id} reassigned: ${prevName} → ${newName}`);
+      break;
+    }
+
+    case 'update_sla_status': {
+      // Manually update a lead's SLA status via automation
+      const newSlaStatus = action.config.slaStatus;
+      const newEscalationLevel = action.config.escalationLevel;
+      const updateFields = {};
+
+      if (newSlaStatus) updateFields.slaStatus = newSlaStatus;
+      if (newEscalationLevel !== undefined) updateFields.escalationLevel = Number(newEscalationLevel);
+
+      if (Object.keys(updateFields).length > 0) {
+        await prisma.lead.update({
+          where: { id: context.lead.id },
+          data: updateFields,
+        });
+        logger.info(`[Automation] Updated SLA status for lead ${context.lead.id}: ${JSON.stringify(updateFields)}`);
+      }
+      break;
+    }
 
       default:
         logger.warn(`Unknown automation action type: ${action.type}`);

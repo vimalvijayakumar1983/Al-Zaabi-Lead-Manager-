@@ -1,36 +1,59 @@
 const { logger } = require('../config/logger');
+const { prisma } = require('../config/database');
 
 /**
  * AI Service - generates lead summaries, suggestions, and scores
  * Uses OpenAI-compatible API (can be swapped for Claude/local LLM)
  */
 
+function toSafeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function getDisplayName(lead) {
+  const fn = (lead?.firstName || '').trim();
+  const ln = (lead?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown lead';
+  if (!ln || fn.toLowerCase() === ln.toLowerCase()) return fn || ln;
+  return `${fn} ${ln}`.trim();
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function summarizeRelativeTime(timestamp) {
+  if (!timestamp) return 'No recent activity';
+  const date = new Date(timestamp);
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function mapPriority(score, staleDays, overdueTasks) {
+  if (overdueTasks > 0 || staleDays >= 4) return 'URGENT';
+  if (score >= 70 || staleDays >= 2) return 'HIGH';
+  if (score >= 40) return 'MEDIUM';
+  return 'LOW';
+}
+
 /**
  * Generate AI summary for a lead based on their activity and communications
  */
 const generateLeadSummary = async (lead, activities, communications) => {
   try {
-    const context = buildLeadContext(lead, activities, communications);
-
-    // In production, call LLM API:
-    // const response = await callLLM(prompt);
-
-    // For now, generate a structured summary
-    const summary = [];
-    summary.push(`${lead.firstName} ${lead.lastName}`);
-    if (lead.company) summary.push(`from ${lead.company}`);
-    if (lead.productInterest) summary.push(`interested in ${lead.productInterest}`);
-    if (lead.budget) summary.push(`with a budget of $${lead.budget}`);
-    summary.push(`(Score: ${lead.score}/100)`);
-
-    if (communications.length > 0) {
-      summary.push(`| ${communications.length} communications logged`);
-    }
-    if (activities.length > 0) {
-      summary.push(`| ${activities.length} activities tracked`);
-    }
-
-    return summary.join(' ');
+    const insights = generateLeadSummaryInsights(lead, {
+      activities,
+      communications,
+      tasks: [],
+      notes: [],
+      callLogs: [],
+    });
+    return insights.summary;
   } catch (err) {
     logger.error('AI summary generation failed:', err);
     return null;
@@ -104,6 +127,206 @@ const suggestNextAction = (lead, lastActivity) => {
   }];
 };
 
+function generateLeadSummaryInsights(lead, { activities = [], communications = [], tasks = [], notes = [], callLogs = [] } = {}) {
+  const safeActivities = toSafeArray(activities);
+  const safeCommunications = toSafeArray(communications);
+  const safeTasks = toSafeArray(tasks);
+  const safeNotes = toSafeArray(notes);
+  const safeCallLogs = toSafeArray(callLogs);
+
+  const now = Date.now();
+  const score = Number(lead?.score || 0);
+  const conversionProb = Number(lead?.conversionProb || 0);
+  const status = lead?.status || 'NEW';
+
+  const openTasks = safeTasks.filter((task) => ['PENDING', 'IN_PROGRESS'].includes(task.status)).length;
+  const overdueTasks = safeTasks.filter(
+    (task) => ['PENDING', 'IN_PROGRESS'].includes(task.status) && task.dueAt && new Date(task.dueAt).getTime() < now
+  ).length;
+
+  const inboundComms = safeCommunications.filter((c) => c.direction === 'INBOUND').length;
+  const outboundComms = safeCommunications.filter((c) => c.direction === 'OUTBOUND').length;
+  const recentCallOutcomes = safeCallLogs.slice(0, 6).map((log) => log.disposition).filter(Boolean);
+  const hasWillCallAgain = recentCallOutcomes.includes('WILL_CALL_US_AGAIN');
+  const hasNotInterested = recentCallOutcomes.includes('NOT_INTERESTED');
+
+  const latestTimestamps = [
+    ...safeActivities.map((a) => a.createdAt),
+    ...safeCommunications.map((c) => c.createdAt),
+    ...safeNotes.map((n) => n.createdAt),
+    ...safeCallLogs.map((c) => c.createdAt),
+    ...safeTasks.map((t) => t.updatedAt || t.createdAt),
+  ]
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value));
+
+  const lastTouchTs = latestTimestamps.length > 0 ? Math.max(...latestTimestamps) : null;
+  const staleDays = lastTouchTs ? Math.floor((now - lastTouchTs) / (24 * 60 * 60 * 1000)) : 999;
+
+  const risks = [];
+  if (overdueTasks > 0) risks.push(`${overdueTasks} overdue follow-up task${overdueTasks === 1 ? '' : 's'}.`);
+  if (staleDays >= 3 && staleDays < 999) risks.push(`No meaningful activity in ${staleDays} day${staleDays === 1 ? '' : 's'}.`);
+  if (hasNotInterested) risks.push('Recent call outcomes include "Not Interested".');
+  if (status === 'NEGOTIATION' && staleDays >= 2) risks.push('Negotiation is active but follow-up pace has slowed.');
+  if (conversionProb < 0.25 && ['QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION'].includes(status)) {
+    risks.push('Low conversion probability for the current stage.');
+  }
+
+  const opportunities = [];
+  if (score >= 70) opportunities.push('High lead score indicates strong conversion potential.');
+  if (conversionProb >= 0.6) opportunities.push('Conversion probability is healthy for this pipeline position.');
+  if (inboundComms >= outboundComms && inboundComms > 0) opportunities.push('Prospect engagement is active with inbound communication.');
+  if (hasWillCallAgain) opportunities.push('"Will Call Us Again" signal suggests warm re-engagement potential.');
+  if (status === 'QUALIFIED' || status === 'PROPOSAL_SENT') opportunities.push('Lead is in a conversion-ready stage.');
+
+  const recommendedActions = [];
+  const priority = mapPriority(score, staleDays, overdueTasks);
+  if (overdueTasks > 0) {
+    recommendedActions.push({
+      title: 'Resolve overdue tasks first',
+      reason: 'Clearing overdue commitments restores SLA confidence and momentum.',
+      priority: 'URGENT',
+    });
+  }
+  if (staleDays >= 2 && staleDays < 999) {
+    recommendedActions.push({
+      title: 'Run immediate re-engagement touchpoint',
+      reason: `Last activity was ${staleDays} day${staleDays === 1 ? '' : 's'} ago.`,
+      priority: priority === 'URGENT' ? 'HIGH' : priority,
+    });
+  }
+  if (score >= 70 || conversionProb >= 0.55) {
+    recommendedActions.push({
+      title: 'Push for commitment milestone',
+      reason: 'Lead quality and intent signals support a conversion-focused follow-up.',
+      priority: 'HIGH',
+    });
+  }
+  if (recommendedActions.length === 0) {
+    recommendedActions.push({
+      title: 'Continue structured nurture cadence',
+      reason: 'Maintain regular follow-ups while collecting additional qualification signals.',
+      priority: 'MEDIUM',
+    });
+  }
+
+  const highlights = [
+    `Stage: ${lead?.stage?.name || status.replace(/_/g, ' ')}`,
+    `Score: ${score}/100`,
+    `Conversion: ${Math.round(conversionProb * 100)}%`,
+    `Tasks open: ${openTasks}`,
+    `Inbound vs outbound comms: ${inboundComms}:${outboundComms}`,
+    `Last touch: ${summarizeRelativeTime(lastTouchTs)}`,
+  ];
+
+  const confidenceBase = 52 + Math.min(18, safeActivities.length) + Math.min(14, safeCommunications.length) + Math.min(10, safeCallLogs.length);
+  const confidence = clamp(confidenceBase - Math.min(12, Math.max(0, staleDays - 1) * 2), 42, 96);
+
+  const leadName = getDisplayName(lead);
+  const summarySentences = [];
+  summarySentences.push(
+    `${leadName} is currently in ${lead?.stage?.name || status.replace(/_/g, ' ').toLowerCase()} with a score of ${score}/100 and ${Math.round(
+      conversionProb * 100
+    )}% conversion probability.`
+  );
+  if (staleDays < 999) {
+    summarySentences.push(`Most recent activity was ${summarizeRelativeTime(lastTouchTs)}.`);
+  } else {
+    summarySentences.push('There is limited recent activity history for this lead.');
+  }
+  if (overdueTasks > 0) {
+    summarySentences.push(`There ${overdueTasks === 1 ? 'is' : 'are'} ${overdueTasks} overdue task${overdueTasks === 1 ? '' : 's'} that should be addressed first.`);
+  } else if (score >= 70 || conversionProb >= 0.55) {
+    summarySentences.push('Signals indicate this lead can be advanced with a timely commitment-focused follow-up.');
+  } else {
+    summarySentences.push('Maintain consistent follow-up cadence and gather stronger qualification signals.');
+  }
+
+  return {
+    summary: summarySentences.join(' '),
+    highlights,
+    risks,
+    opportunities,
+    recommendedActions: recommendedActions.slice(0, 3),
+    confidence,
+    generatedAt: new Date().toISOString(),
+    signals: {
+      score,
+      conversionProb,
+      status,
+      openTasks,
+      overdueTasks,
+      staleDays: staleDays < 999 ? staleDays : null,
+      communications: safeCommunications.length,
+      calls: safeCallLogs.length,
+      notes: safeNotes.length,
+      hasWillCallAgain,
+      hasNotInterested,
+    },
+  };
+}
+
+async function fetchLeadSummaryContext(leadId) {
+  if (!leadId) return null;
+  return prisma.lead.findUnique({
+    where: { id: leadId },
+    include: {
+      stage: { select: { id: true, name: true, color: true } },
+      activities: {
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        select: { id: true, type: true, description: true, createdAt: true },
+      },
+      notes: {
+        orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
+        take: 20,
+        select: { id: true, content: true, createdAt: true },
+      },
+      tasks: {
+        orderBy: { dueAt: 'asc' },
+        take: 30,
+        select: { id: true, title: true, status: true, priority: true, dueAt: true, createdAt: true, updatedAt: true },
+      },
+      communications: {
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        select: { id: true, channel: true, direction: true, subject: true, body: true, createdAt: true },
+      },
+      callLogs: {
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { id: true, disposition: true, notes: true, createdAt: true, metadata: true },
+      },
+    },
+  });
+}
+
+async function regenerateLeadSummaryById(leadId) {
+  try {
+    const lead = await fetchLeadSummaryContext(leadId);
+    if (!lead || lead.isArchived) return null;
+
+    const insights = generateLeadSummaryInsights(lead, {
+      activities: lead.activities,
+      communications: lead.communications,
+      tasks: lead.tasks,
+      notes: lead.notes,
+      callLogs: lead.callLogs,
+    });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { aiSummary: insights.summary },
+    });
+
+    return insights;
+  } catch (error) {
+    logger.warn('Failed to regenerate lead AI summary', { leadId, error: error.message });
+    return null;
+  }
+}
+
 /**
  * Build context string for LLM prompts
  */
@@ -132,4 +355,9 @@ const buildLeadContext = (lead, activities, communications) => {
   };
 };
 
-module.exports = { generateLeadSummary, suggestNextAction };
+module.exports = {
+  generateLeadSummary,
+  suggestNextAction,
+  generateLeadSummaryInsights,
+  regenerateLeadSummaryById,
+};

@@ -14,7 +14,27 @@ import {
   BarChart3, TrendingUp, Clock, Hash, LayoutGrid, List, Columns,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 import { ContactColumnManager, loadContactColumns, saveContactColumns, type ContactColumnDef } from './components/column-config';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
+
+// ─── Name Helpers ────────────────────────────────────────────────
+
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -44,12 +64,13 @@ const typeLabels: Record<ContactType, { label: string; icon: any }> = {
 
 export default function ContactsPage() {
   const router = useRouter();
+  const addToast = useNotificationStore((s) => s.addToast);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<ContactStats | null>(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ lifecycle: '', type: '', source: '', ownerId: '', company: '' });
+  const [filters, setFilters] = useState({ lifecycle: '', type: '', source: '', ownerId: '', company: '', divisionId: '' });
   const [sortBy, setSortBy] = useState('updatedAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -64,6 +85,7 @@ export default function ContactsPage() {
   const [showViewSidebar, setShowViewSidebar] = useState(false);
   const [columns, setColumns] = useState<ContactColumnDef[]>(() => loadContactColumns());
   const [showColumnManager, setShowColumnManager] = useState(false);
+  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
   const visibleColumns = columns.filter(c => c.visible);
 
   const fetchContacts = useCallback(async () => {
@@ -81,6 +103,7 @@ export default function ContactsPage() {
       if (filters.source) params.source = filters.source;
       if (filters.ownerId) params.ownerId = filters.ownerId;
       if (filters.company) params.company = filters.company;
+      if (filters.divisionId) params.divisionId = filters.divisionId;
 
       const res = await api.getContacts(params);
       setContacts(res.data);
@@ -106,6 +129,10 @@ export default function ContactsPage() {
   useEffect(() => {
     fetchStats();
     api.getContactFilterValues().then(setFilterValues).catch(() => {});
+    try {
+      const raw = localStorage.getItem('divisions');
+      if (raw) setDivisions(JSON.parse(raw));
+    } catch { /* ignore */ }
   }, [fetchStats]);
 
   // Auto-refresh when another user modifies contact/deal data
@@ -135,14 +162,23 @@ export default function ContactsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Archive this contact?')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this contact?',
+      message: 'The contact will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     await api.deleteContact(id);
+    addToast({ type: 'success', title: 'Contact Moved', message: 'Contact moved to Recycle Bin' });
     fetchContacts();
     fetchStats();
   };
 
   const handleBulkUpdate = async (data: Record<string, any>) => {
     await api.bulkUpdateContacts(Array.from(selectedIds), data);
+    addToast({ type: 'success', title: 'Bulk Update Complete', message: `${selectedIds.size} contacts updated successfully` });
     setSelectedIds(new Set());
     fetchContacts();
     fetchStats();
@@ -167,17 +203,19 @@ export default function ContactsPage() {
       if (filters.type) params.type = filters.type;
       if (filters.source) params.source = filters.source;
       if (filters.company) params.company = filters.company;
+      if (filters.divisionId) params.divisionId = filters.divisionId;
       // If specific contacts are selected, export only those
       if (selectedIds.size > 0) params.ids = Array.from(selectedIds).join(',');
       await api.exportContacts(params);
+      addToast({ type: 'success', title: 'Export Complete', message: 'Contacts exported successfully' });
     } catch (err: any) {
-      alert(err.message || 'Export failed');
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Export failed' });
     } finally {
       setExporting(false);
     }
   };
 
-  const activeFilterCount = [filters.type, filters.source, filters.ownerId, filters.company].filter(v => v !== '').length;
+  const activeFilterCount = [filters.type, filters.source, filters.ownerId, filters.company, filters.divisionId].filter(v => v !== '').length;
 
   const handleFormClose = () => {
     setShowForm(false);
@@ -187,8 +225,10 @@ export default function ContactsPage() {
   const handleFormSubmit = async (data: any) => {
     if (editingContact) {
       await api.updateContact(editingContact.id, data);
+      addToast({ type: 'success', title: 'Contact Updated', message: 'Contact has been updated successfully' });
     } else {
       await api.createContact(data);
+      addToast({ type: 'success', title: 'Contact Created', message: 'New contact has been created successfully' });
     }
     setShowForm(false);
     setEditingContact(null);
@@ -324,8 +364,17 @@ export default function ContactsPage() {
                 </select>
               </div>
             )}
+            {divisions.length > 0 && (
+              <div>
+                <label className="text-2xs font-medium text-text-tertiary uppercase mb-1 block">Division</label>
+                <select className="input text-sm" value={filters.divisionId} onChange={(e) => { setFilters(f => ({ ...f, divisionId: e.target.value })); setPagination(p => ({ ...p, page: 1 })); }}>
+                  <option value="">All Divisions</option>
+                  {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            )}
             <div className="flex items-end">
-              <button onClick={() => { setFilters({ lifecycle: '', type: '', source: '', ownerId: '', company: '' }); setPagination(p => ({ ...p, page: 1 })); }}
+              <button onClick={() => { setFilters({ lifecycle: '', type: '', source: '', ownerId: '', company: '', divisionId: '' }); setPagination(p => ({ ...p, page: 1 })); }}
                 className="btn-secondary text-xs">
                 <X className="h-3 w-3" /> Clear All
               </button>
@@ -359,6 +408,12 @@ export default function ContactsPage() {
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
               Owner filter active
               <button onClick={() => { setFilters(f => ({ ...f, ownerId: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
+            </span>
+          )}
+          {filters.divisionId && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200">
+              Division: {divisions.find(d => d.id === filters.divisionId)?.name || filters.divisionId}
+              <button onClick={() => { setFilters(f => ({ ...f, divisionId: '' })); setPagination(p => ({ ...p, page: 1 })); }} className="hover:text-red-500"><X className="h-3 w-3" /></button>
             </span>
           )}
         </div>
@@ -441,11 +496,11 @@ export default function ContactsPage() {
                           return <td key={col.id} className="px-3 py-3">
                             <div className="flex items-center gap-2.5">
                               <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                                {contact.firstName[0]}{contact.lastName[0]}
+                                {getDisplayInitials(contact.firstName, contact.lastName)}
                               </div>
                               <div className="min-w-0">
                                 <p className="text-sm font-medium text-text-primary truncate">
-                                  {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
+                                  {contact.salutation ? `${contact.salutation} ` : ''}{getDisplayName(contact.firstName, contact.lastName)}
                                 </p>
                                 {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
                               </div>
@@ -484,10 +539,16 @@ export default function ContactsPage() {
                               {contactType.label}
                             </span>
                           </td>;
+                        case 'division':
+                          return <td key={col.id} className="px-3 py-3">
+                            {contact.organization ? (
+                              <span className="text-xs text-text-secondary">{contact.organization.name}</span>
+                            ) : <span className="text-2xs text-text-tertiary">-</span>}
+                          </td>;
                         case 'owner':
                           return <td key={col.id} className="px-3 py-3">
                             {contact.owner && (
-                              <span className="text-xs text-text-secondary">{contact.owner.firstName} {contact.owner.lastName[0]}.</span>
+                              <span className="text-xs text-text-secondary">{getDisplayName(contact.owner.firstName, contact.owner.lastName)}</span>
                             )}
                           </td>;
                         case 'score':
@@ -583,11 +644,11 @@ export default function ContactsPage() {
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                            {contact.firstName[0]}{contact.lastName[0]}
+                            {getDisplayInitials(contact.firstName, contact.lastName)}
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-text-primary truncate">
-                              {contact.salutation ? `${contact.salutation} ` : ''}{contact.firstName} {contact.lastName}
+                              {contact.salutation ? `${contact.salutation} ` : ''}{getDisplayName(contact.firstName, contact.lastName)}
                             </p>
                             {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
                           </div>
@@ -669,10 +730,10 @@ export default function ContactsPage() {
                           <div key={contact.id} className="card p-3 hover:shadow-md transition-shadow cursor-pointer" onClick={() => router.push(`/contacts/${contact.id}`)}>
                             <div className="flex items-center gap-2 mb-2">
                               <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                                {contact.firstName[0]}{contact.lastName[0]}
+                                {getDisplayInitials(contact.firstName, contact.lastName)}
                               </div>
                               <div className="min-w-0 flex-1">
-                                <p className="text-xs font-semibold text-text-primary truncate">{contact.firstName} {contact.lastName}</p>
+                                <p className="text-xs font-semibold text-text-primary truncate">{getDisplayName(contact.firstName, contact.lastName)}</p>
                                 {contact.jobTitle && <p className="text-2xs text-text-tertiary truncate">{contact.jobTitle}</p>}
                               </div>
                             </div>
@@ -821,6 +882,7 @@ function SortHeader({ label, field, sortBy, sortOrder, onSort }: { label: string
 
 function ContactFormModal({ contact, onClose, onSubmit }: { contact: Contact | null; onClose: () => void; onSubmit: (data: any) => void }) {
   const isEditing = !!contact;
+  const addToast = useNotificationStore((s) => s.addToast);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'basic' | 'details' | 'address' | 'social' | 'preferences'>('basic');
   const [form, setForm] = useState({
@@ -855,7 +917,15 @@ function ContactFormModal({ contact, onClose, onSubmit }: { contact: Contact | n
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.firstName || !form.lastName) return alert('First and Last name are required');
+    if (!form.firstName || !form.lastName) {
+      await premiumAlert({
+        title: 'Missing required fields',
+        message: 'First and Last name are required.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
     setSaving(true);
     try {
       const payload: any = { ...form };
@@ -864,7 +934,7 @@ function ContactFormModal({ contact, onClose, onSubmit }: { contact: Contact | n
       if (!payload.dateOfBirth) payload.dateOfBirth = null;
       await onSubmit(payload);
     } catch (err: any) {
-      alert(err.message || 'Failed to save');
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to save' });
     } finally {
       setSaving(false);
     }

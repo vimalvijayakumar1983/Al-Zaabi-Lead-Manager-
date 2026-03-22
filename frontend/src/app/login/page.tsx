@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
@@ -207,9 +209,9 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-sm font-medium text-text-primary">Password</label>
                 {!isRegister && (
-                  <button type="button" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
+                  <Link href="/forgot-password" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
                     Forgot password?
-                  </button>
+                  </Link>
                 )}
               </div>
               <div className="relative">

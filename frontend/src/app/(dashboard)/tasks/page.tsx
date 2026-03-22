@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
-import type { Task, PaginatedResponse } from '@/types';
+import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
+import type { Task, PaginatedResponse, TaskStatus, Priority, TaskType } from '@/types';
 import {
   CheckCircle2,
-  Circle,
   Clock,
   AlertTriangle,
   Plus,
@@ -22,14 +24,14 @@ import {
   LayoutList,
   LayoutGrid,
   Loader2,
-  Filter,
   ListTodo,
   CalendarDays,
   Target,
-  ChevronDown,
-  Hash,
   RefreshCw,
-  Timer,
+  Bell,
+  Trash2,
+  Pencil,
+  Columns3,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -60,7 +62,7 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 type SortField = 'dueAt' | 'createdAt' | 'priority' | 'status' | 'title';
-type ViewMode = 'list' | 'card';
+type ViewMode = 'list' | 'card' | 'board';
 type DatePreset = 'all' | 'today' | 'tomorrow' | 'this-week' | 'next-week' | 'this-month' | 'overdue' | 'custom';
 
 // ─── Helper Functions ───────────────────────────────────────────────
@@ -110,8 +112,39 @@ function formatDateShort(dateStr: string): string {
   });
 }
 
+function toDateTimeLocalValue(date?: string | null): string {
+  if (!date) return '';
+  const dt = new Date(date);
+  if (Number.isNaN(dt.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+function combineDateAndTimeToISO(date?: string, time?: string): string | null {
+  if (!date || !time) return null;
+  const combined = new Date(`${date}T${time}`);
+  if (Number.isNaN(combined.getTime())) return null;
+  return combined.toISOString();
+}
+
 function isOverdue(task: Task): boolean {
   return new Date(task.dueAt) < new Date() && task.status !== 'COMPLETED';
+}
+
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
 }
 
 // ─── Filter Badge ───────────────────────────────────────────────────
@@ -212,7 +245,10 @@ function StatCard({
 // ─── Main Tasks Page ────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 export default function TasksPage() {
+  const searchParams = useSearchParams();
+  const analyticsScope = searchParams.get('analyticsScope');
   const { user: currentUser } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // ── Data ──────────────────────────────────────────────────────────
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -220,6 +256,7 @@ export default function TasksPage() {
   const [totalFromApi, setTotalFromApi] = useState(0);
   const [page, setPage] = useState(1);
   const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
 
   // ── Search (debounced) ────────────────────────────────────────────
   const [searchInput, setSearchInput] = useState('');
@@ -235,15 +272,47 @@ export default function TasksPage() {
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
+  const [divisionFilter, setDivisionFilter] = useState('');
   const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   // ── Sort & View ───────────────────────────────────────────────────
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // ── Task Form ─────────────────────────────────────────────────────
   const [showForm, setShowForm] = useState(false);
+
+  // ── Hydrate filters from URL (for report drill-down links) ───────
+  useEffect(() => {
+    const status = searchParams.get('status');
+    const statuses = searchParams.get('statuses');
+    const priority = searchParams.get('priority');
+    const priorities = searchParams.get('priorities');
+    const type = searchParams.get('type');
+    const assigneeId = searchParams.get('assigneeId');
+    const overdue = searchParams.get('overdue');
+    const search = searchParams.get('search');
+    const divisionId = searchParams.get('divisionId');
+
+    if (status) setStatusFilters([status]);
+    else if (statuses) setStatusFilters(statuses.split(',').map((s) => s.trim()).filter(Boolean));
+
+    if (priority) setPriorityFilters([priority]);
+    else if (priorities) setPriorityFilters(priorities.split(',').map((p) => p.trim()).filter(Boolean));
+
+    if (type) setTypeFilter(type);
+    if (assigneeId) setAssigneeFilter(assigneeId);
+    if (overdue === '1' || overdue === 'true') setDatePreset('overdue');
+    if (divisionId) setDivisionFilter(divisionId);
+    if (search) {
+      setSearchInput(search);
+      setSearchQuery(search);
+    }
+  }, [searchParams]);
 
   // ── Debounced search ──────────────────────────────────────────────
   useEffect(() => {
@@ -256,10 +325,36 @@ export default function TasksPage() {
     };
   }, [searchInput]);
 
+  useEffect(() => {
+    const savedMode = typeof window !== 'undefined' ? localStorage.getItem('tasks:view-mode') : null;
+    if (savedMode === 'list' || savedMode === 'card' || savedMode === 'board') {
+      setViewMode(savedMode);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tasks:view-mode', viewMode);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setActiveDivisionId(localStorage.getItem('activeDivisionId'));
+    }
+  }, []);
+
+  const scopedDivisionId = useMemo(() => {
+    if (!currentUser) return null;
+    return currentUser.role === 'SUPER_ADMIN'
+      ? activeDivisionId
+      : currentUser.organizationId;
+  }, [currentUser, activeDivisionId]);
+
   // ── Fetch team members ────────────────────────────────────────────
   useEffect(() => {
-    api.getUsers().then(setTeamMembers).catch(() => {});
-  }, []);
+    api.getUsers(scopedDivisionId || undefined).then(setTeamMembers).catch(() => {});
+  }, [scopedDivisionId]);
 
   // ── Build API params & fetch ──────────────────────────────────────
   const fetchTasks = useCallback(async () => {
@@ -270,17 +365,38 @@ export default function TasksPage() {
       // API-supported filters
       if (searchQuery) params.search = searchQuery;
 
-      // If only one status selected, send to API
       if (statusFilters.length === 1) {
         params.status = statusFilters[0];
+      } else if (statusFilters.length > 1) {
+        params.statuses = statusFilters.join(',');
       }
 
       if (priorityFilters.length === 1) {
         params.priority = priorityFilters[0];
+      } else if (priorityFilters.length > 1) {
+        params.priorities = priorityFilters.join(',');
+      }
+
+      if (typeFilter !== 'ALL') {
+        params.type = typeFilter;
+      }
+
+      if (assigneeFilter === '__mine__' && currentUser?.id) {
+        params.assigneeId = currentUser.id;
+      } else if (
+        assigneeFilter !== 'ALL' &&
+        assigneeFilter !== '__mine__' &&
+        assigneeFilter !== '__unassigned__'
+      ) {
+        params.assigneeId = assigneeFilter;
       }
 
       if (sortField) params.sortBy = sortField;
       if (sortDir) params.sortOrder = sortDir;
+      const effectiveDivisionId = currentUser?.role === 'SUPER_ADMIN'
+        ? (divisionFilter || (analyticsScope === 'all' ? null : scopedDivisionId))
+        : scopedDivisionId;
+      if (effectiveDivisionId) params.divisionId = effectiveDivisionId;
 
       // Check if overdue-only filter
       if (datePreset === 'overdue') {
@@ -295,7 +411,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, searchQuery, statusFilters, priorityFilters, sortField, sortDir, datePreset]);
+  }, [page, searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, divisionFilter, currentUser?.id, sortField, sortDir, datePreset, scopedDivisionId, analyticsScope]);
 
   useEffect(() => {
     fetchTasks();
@@ -391,7 +507,7 @@ export default function TasksPage() {
       const q = leadSearch.toLowerCase();
       result = result.filter((t) => {
         if (!t.lead) return false;
-        const name = `${t.lead.firstName || ''} ${t.lead.lastName || ''}`.toLowerCase();
+        const name = getDisplayName(t.lead.firstName, t.lead.lastName).toLowerCase();
         return name.includes(q);
       });
     }
@@ -403,7 +519,7 @@ export default function TasksPage() {
         (t) =>
           t.title.toLowerCase().includes(q) ||
           (t.description && t.description.toLowerCase().includes(q)) ||
-          (t.lead && `${t.lead.firstName || ''} ${t.lead.lastName || ''}`.toLowerCase().includes(q))
+          (t.lead && getDisplayName(t.lead.firstName, t.lead.lastName).toLowerCase().includes(q))
       );
     }
 
@@ -445,6 +561,15 @@ export default function TasksPage() {
   }, [searchQuery, statusFilters, priorityFilters, typeFilter, assigneeFilter, datePreset, leadSearch]);
 
   const hasAnyFilter = activeFilterCount > 0;
+  const selectedInViewCount = useMemo(
+    () => filteredTasks.filter((task) => selectedTaskIds.includes(task.id)).length,
+    [filteredTasks, selectedTaskIds]
+  );
+  const allVisibleSelected = filteredTasks.length > 0 && selectedInViewCount === filteredTasks.length;
+
+  useEffect(() => {
+    setSelectedTaskIds((prev) => prev.filter((id) => filteredTasks.some((task) => task.id === id)));
+  }, [filteredTasks]);
 
   const clearAllFilters = () => {
     setSearchInput('');
@@ -457,6 +582,7 @@ export default function TasksPage() {
     setCustomDateFrom('');
     setCustomDateTo('');
     setLeadSearch('');
+    setSelectedTaskIds([]);
   };
 
   // ── Toggle helpers ────────────────────────────────────────────────
@@ -468,10 +594,73 @@ export default function TasksPage() {
     setPriorityFilters((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]);
   };
 
+  const toggleTaskSelection = (taskId: string) => {
+    setSelectedTaskIds((prev) => prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]);
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedTaskIds((prev) => prev.filter((id) => !filteredTasks.some((task) => task.id === id)));
+      return;
+    }
+    const visibleIds = filteredTasks.map((task) => task.id);
+    setSelectedTaskIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+  };
+
   // ── Task actions ──────────────────────────────────────────────────
   const handleComplete = async (taskId: string) => {
-    await api.completeTask(taskId);
-    fetchTasks();
+    try {
+      await api.completeTask(taskId);
+      addToast({ type: 'success', title: 'Task Completed', message: 'Task has been marked as completed' });
+      fetchTasks();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to complete task' });
+    }
+  };
+
+  const handleUpdateTask = async (taskId: string, data: Record<string, any>, successMessage = 'Task updated') => {
+    try {
+      await api.updateTask(taskId, data);
+      addToast({ type: 'success', title: 'Success', message: successMessage });
+      fetchTasks();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update task' });
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    const confirmed = await premiumConfirm({
+      title: 'Delete this task permanently?',
+      message: 'This action cannot be undone.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.deleteTask(taskId);
+      addToast({ type: 'success', title: 'Task deleted', message: 'Task removed successfully' });
+      setSelectedTaskIds((prev) => prev.filter((id) => id !== taskId));
+      fetchTasks();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete task' });
+    }
+  };
+
+  const handleBulkAction = async (data: Record<string, any>, successMessage: string) => {
+    if (!selectedTaskIds.length) return;
+    setBulkBusy(true);
+    try {
+      await api.bulkUpdateTasks(selectedTaskIds, data);
+      addToast({ type: 'success', title: 'Bulk update complete', message: successMessage });
+      setSelectedTaskIds([]);
+      fetchTasks();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Bulk update failed' });
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   // ── Sort label ────────────────────────────────────────────────────
@@ -509,6 +698,11 @@ export default function TasksPage() {
           <p className="text-text-secondary text-sm mt-0.5">
             Manage and track your team&apos;s tasks
           </p>
+          {currentUser?.role === 'SUPER_ADMIN' && !scopedDivisionId && (
+            <p className="text-xs text-amber-700 mt-1">
+              Select a division from the top switcher to create and assign tasks.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -518,7 +712,12 @@ export default function TasksPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={() => setShowForm(true)} className="btn-primary">
+          <button
+            onClick={() => setShowForm(true)}
+            className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={currentUser?.role === 'SUPER_ADMIN' && !scopedDivisionId}
+            title={currentUser?.role === 'SUPER_ADMIN' && !scopedDivisionId ? 'Select a division first' : 'New Task'}
+          >
             <Plus className="h-4 w-4" />
             New Task
           </button>
@@ -678,6 +877,15 @@ export default function TasksPage() {
               >
                 <LayoutGrid className="h-4 w-4" />
               </button>
+              <button
+                onClick={() => setViewMode('board')}
+                className={`p-2 transition-colors ${
+                  viewMode === 'board' ? 'bg-brand-50 text-brand-700' : 'bg-white text-text-tertiary hover:text-text-primary'
+                }`}
+                title="Board view"
+              >
+                <Columns3 className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -693,6 +901,7 @@ export default function TasksPage() {
                   { key: 'PENDING', label: 'Pending' },
                   { key: 'IN_PROGRESS', label: 'In Progress' },
                   { key: 'COMPLETED', label: 'Completed' },
+                  { key: 'CANCELLED', label: 'Cancelled' },
                 ]}
                 selected={statusFilters}
                 onToggle={toggleStatus}
@@ -744,7 +953,7 @@ export default function TasksPage() {
                   <option value="UNASSIGNED">Unassigned</option>
                   {teamMembers.map((u: any) => (
                     <option key={u.id} value={u.id}>
-                      {u.firstName} {u.lastName}
+                      {getDisplayName(u.firstName, u.lastName)}
                     </option>
                   ))}
                 </select>
@@ -842,7 +1051,7 @@ export default function TasksPage() {
                 label={`Assignee: ${
                   assigneeFilter === 'ME' ? 'Me' :
                   assigneeFilter === 'UNASSIGNED' ? 'Unassigned' :
-                  teamMembers.find((u: any) => u.id === assigneeFilter)?.firstName || assigneeFilter
+                  (() => { const u = teamMembers.find((u: any) => u.id === assigneeFilter); return u ? getDisplayName(u.firstName, u.lastName) : assigneeFilter; })()
                 }`}
                 onRemove={() => setAssigneeFilter('ALL')}
               />
@@ -875,11 +1084,29 @@ export default function TasksPage() {
           {!loading && (
             <p className="text-xs text-text-tertiary font-medium flex-shrink-0">
               Showing <span className="text-text-primary font-semibold">{filteredTasks.length}</span> of{' '}
-              <span className="text-text-primary font-semibold">{tasks.length}</span> tasks
+              <span className="text-text-primary font-semibold">{totalFromApi || tasks.length}</span> tasks
             </p>
           )}
         </div>
       </div>
+
+      {/* ═══ Bulk Actions ═════════════════════════════════════════════ */}
+      {filteredTasks.length > 0 && (
+        <div className="rounded-lg border border-border-subtle bg-white/75 backdrop-blur px-3 py-2 flex items-center justify-between gap-3">
+          <label className="inline-flex items-center gap-2 text-xs sm:text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAllVisible}
+            />
+            Select all in view
+          </label>
+          <span className="text-[11px] sm:text-xs text-text-tertiary">
+            {selectedTaskIds.length > 0 ? `${selectedTaskIds.length} selected` : 'Select tasks to enable bulk actions'}
+          </span>
+        </div>
+      )}
 
       {/* ═══ Task List / Grid ═════════════════════════════════════════ */}
       {loading ? (
@@ -934,49 +1161,61 @@ export default function TasksPage() {
             return (
               <div
                 key={task.id}
-                className={`card p-4 flex items-center gap-4 transition-all duration-150 group ${
+                className={`card p-4 flex items-start gap-3 transition-all duration-150 group ${
                   taskOverdue
                     ? 'border-red-200 bg-red-50/30'
                     : isCompleted
-                    ? 'opacity-60'
+                    ? 'opacity-70'
                     : 'hover:shadow-card-hover'
                 }`}
               >
-                {/* Completion Toggle */}
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                  checked={selectedTaskIds.includes(task.id)}
+                  onChange={() => toggleTaskSelection(task.id)}
+                />
+
                 <button
                   onClick={() => handleComplete(task.id)}
-                  className={`h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                  className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
                     isCompleted
                       ? 'bg-emerald-500 border-emerald-500 text-white'
                       : 'border-border-strong hover:border-brand-500 hover:bg-brand-50'
                   }`}
+                  title="Mark as completed"
                 >
                   {isCompleted && <CheckCircle2 className="h-3 w-3" />}
                 </button>
 
-                {/* Content */}
                 <div className="flex-1 min-w-0">
-                  <p
-                    className={`text-sm font-medium ${
-                      isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'
-                    }`}
-                  >
+                  <p className={`text-sm font-medium ${isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'}`}>
                     {task.title}
                   </p>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  {task.description && (
+                    <p className="text-xs text-text-tertiary mt-1 line-clamp-2">{task.description}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
                     <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
                       <Calendar className="h-3 w-3" />
                       {TYPE_LABELS[task.type] || task.type.replace(/_/g, ' ')}
                     </span>
                     {task.lead && (
                       <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
-                        <User2 className="h-3 w-3" />
-                        {task.lead.firstName} {task.lead.lastName}
+                        <Target className="h-3 w-3" />
+                        {getDisplayName(task.lead.firstName, task.lead.lastName)}
                       </span>
                     )}
                     {task.assignee && (
-                      <span className="text-xs text-text-tertiary">
-                        &middot; {task.assignee.firstName}
+                      <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
+                        <User2 className="h-3 w-3" />
+                        {getDisplayName(task.assignee.firstName, task.assignee.lastName)}
+                      </span>
+                    )}
+                    {task.reminder && (
+                      <span className="inline-flex items-center gap-1 text-xs text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded">
+                        <Bell className="h-3 w-3" />
+                        Reminder {formatDateShort(task.reminder)}
                       </span>
                     )}
                     {status && (
@@ -987,29 +1226,50 @@ export default function TasksPage() {
                   </div>
                 </div>
 
-                {/* Priority Badge */}
-                <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
-                  {priority.label}
-                </span>
-
-                {/* Due Date */}
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {taskOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500" />}
-                  <Clock className={`h-3.5 w-3.5 ${taskOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
-                  <span
-                    className={`text-xs font-medium ${
-                      taskOverdue ? 'text-red-600' : 'text-text-secondary'
-                    }`}
-                  >
-                    {formatDateShort(task.dueAt)}
+                <div className="flex flex-col items-end gap-2">
+                  <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
+                    {priority.label}
                   </span>
+                  <select
+                    className="input py-1 px-2 text-xs min-w-[126px]"
+                    value={task.status}
+                    onChange={(e) => handleUpdateTask(task.id, { status: e.target.value }, 'Task status updated')}
+                  >
+                    {Object.keys(statusConfig).map((statusKey) => (
+                      <option key={statusKey} value={statusKey}>
+                        {statusConfig[statusKey]?.label || statusKey}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col items-end gap-2 min-w-[152px]">
+                  <div className="flex items-center gap-1.5">
+                    {taskOverdue && <AlertTriangle className="h-3.5 w-3.5 text-red-500" />}
+                    <Clock className={`h-3.5 w-3.5 ${taskOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
+                    <span className={`text-xs font-medium ${taskOverdue ? 'text-red-600' : 'text-text-secondary'}`}>
+                      {formatDateShort(task.dueAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setEditingTask(task)} className="btn-icon h-8 w-8" title="Edit task">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTask(task.id)}
+                      className="h-8 w-8 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 flex items-center justify-center"
+                      title="Delete task"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
-      ) : (
+      ) : viewMode === 'card' ? (
         /* ── Card View ──────────────────────────────────────────────── */
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filteredTasks.map((task) => {
@@ -1025,45 +1285,51 @@ export default function TasksPage() {
                   taskOverdue
                     ? 'border-red-200 bg-red-50/30'
                     : isCompleted
-                    ? 'border-border-subtle bg-white opacity-60'
+                    ? 'border-border-subtle bg-white opacity-70'
                     : 'border-border-subtle bg-white hover:shadow-md'
                 }`}
               >
-                {/* Card Header */}
                 <div className="flex items-start justify-between gap-2 mb-3">
-                  <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring} text-[10px]`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
-                    {priority.label}
-                  </span>
-                  <button
-                    onClick={() => handleComplete(task.id)}
-                    className={`h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
-                      isCompleted
-                        ? 'bg-emerald-500 border-emerald-500 text-white'
-                        : 'border-border-strong hover:border-brand-500 hover:bg-brand-50'
-                    }`}
-                  >
-                    {isCompleted && <CheckCircle2 className="h-3 w-3" />}
-                  </button>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                      checked={selectedTaskIds.includes(task.id)}
+                      onChange={() => toggleTaskSelection(task.id)}
+                    />
+                    <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring} text-[10px]`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
+                      {priority.label}
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setEditingTask(task)} className="btn-icon h-8 w-8" title="Edit task">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTask(task.id)}
+                      className="h-8 w-8 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 flex items-center justify-center"
+                      title="Delete task"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleComplete(task.id)}
+                      className={`h-8 w-8 rounded-lg border flex items-center justify-center transition-all ${
+                        isCompleted ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-border-strong hover:border-brand-500 hover:bg-brand-50'
+                      }`}
+                      title="Mark complete"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
 
-                {/* Title */}
-                <p
-                  className={`text-sm font-medium mb-2 line-clamp-2 ${
-                    isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'
-                  }`}
-                >
+                <p className={`text-sm font-medium mb-2 line-clamp-2 ${isCompleted ? 'line-through text-text-tertiary' : 'text-text-primary'}`}>
                   {task.title}
                 </p>
+                {task.description && <p className="text-xs text-text-tertiary line-clamp-2 mb-3">{task.description}</p>}
 
-                {/* Description snippet */}
-                {task.description && (
-                  <p className="text-xs text-text-tertiary line-clamp-2 mb-3">
-                    {task.description}
-                  </p>
-                )}
-
-                {/* Meta */}
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                     <Calendar className="h-3 w-3 flex-shrink-0" />
@@ -1072,24 +1338,35 @@ export default function TasksPage() {
                   {task.lead && (
                     <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                       <Target className="h-3 w-3 flex-shrink-0" />
-                      <span className="truncate">{task.lead.firstName} {task.lead.lastName}</span>
+                      <span className="truncate">{getDisplayName(task.lead.firstName, task.lead.lastName)}</span>
                     </div>
                   )}
                   {task.assignee && (
                     <div className="flex items-center gap-1.5 text-xs text-text-secondary">
                       <User2 className="h-3 w-3 flex-shrink-0" />
-                      <span>{task.assignee.firstName} {task.assignee.lastName}</span>
+                      <span>{getDisplayName(task.assignee.firstName, task.assignee.lastName)}</span>
+                    </div>
+                  )}
+                  {task.reminder && (
+                    <div className="flex items-center gap-1.5 text-xs text-violet-700">
+                      <Bell className="h-3 w-3 flex-shrink-0" />
+                      <span>Reminder {formatDateShort(task.reminder)}</span>
                     </div>
                   )}
                 </div>
 
-                {/* Footer */}
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-border-subtle">
-                  {status && (
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${status.bg} ${status.text}`}>
-                      {status.label}
-                    </span>
-                  )}
+                  <select
+                    className="input py-1 px-2 text-xs w-[130px]"
+                    value={task.status}
+                    onChange={(e) => handleUpdateTask(task.id, { status: e.target.value }, 'Task status updated')}
+                  >
+                    {Object.keys(statusConfig).map((statusKey) => (
+                      <option key={statusKey} value={statusKey}>
+                        {statusConfig[statusKey]?.label || statusKey}
+                      </option>
+                    ))}
+                  </select>
                   <div className="flex items-center gap-1">
                     {taskOverdue && <AlertTriangle className="h-3 w-3 text-red-500" />}
                     <Clock className={`h-3 w-3 ${taskOverdue ? 'text-red-500' : 'text-text-tertiary'}`} />
@@ -1098,14 +1375,187 @@ export default function TasksPage() {
                     </span>
                   </div>
                 </div>
+                {status && <div className={`mt-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${status.bg} ${status.text}`}>{status.label}</div>}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* ── Board View ─────────────────────────────────────────────── */
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+          {(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'] as const).map((columnStatus) => {
+            const columnTasks = filteredTasks.filter((task) => task.status === columnStatus);
+            return (
+              <div key={columnStatus} className="rounded-xl border border-border-subtle bg-surface-secondary/40 min-h-[400px]">
+                <div className="px-3 py-2.5 border-b border-border-subtle flex items-center justify-between">
+                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${statusConfig[columnStatus].bg} ${statusConfig[columnStatus].text}`}>
+                    {statusConfig[columnStatus].label}
+                  </span>
+                  <span className="text-xs text-text-tertiary">{columnTasks.length}</span>
+                </div>
+                <div className="p-2.5 space-y-2 max-h-[70vh] overflow-auto">
+                  {columnTasks.map((task) => {
+                    const priority = priorityConfig[task.priority] || priorityConfig.MEDIUM;
+                    const taskOverdue = isOverdue(task);
+                    return (
+                      <div key={task.id} className={`rounded-lg border bg-white p-3 space-y-2 ${taskOverdue ? 'border-red-200' : 'border-border-subtle'}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                              checked={selectedTaskIds.includes(task.id)}
+                              onChange={() => toggleTaskSelection(task.id)}
+                            />
+                            <span className={`badge ${priority.bg} ${priority.text} ring-1 ${priority.ring} text-[10px]`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${priority.dot}`} />
+                              {priority.label}
+                            </span>
+                          </label>
+                          <button onClick={() => setEditingTask(task)} className="btn-icon h-7 w-7" title="Edit task">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-sm font-medium text-text-primary line-clamp-2">{task.title}</p>
+                        <div className="flex items-center justify-between text-[11px] text-text-secondary">
+                          <span className="inline-flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {formatDateShort(task.dueAt)}
+                          </span>
+                          <button
+                            onClick={() => handleComplete(task.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border-subtle hover:bg-surface-secondary"
+                          >
+                            <CheckCircle2 className="h-3 w-3" />
+                            Complete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {columnTasks.length === 0 && (
+                    <div className="text-center py-8 text-xs text-text-tertiary">No tasks</div>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
       )}
 
+      {/* ═══ Compact Floating Bulk Toolbar ═════════════════════════════ */}
+      {selectedTaskIds.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-1.5rem)] max-w-5xl">
+          <div className="rounded-2xl border border-border-subtle bg-white/95 backdrop-blur-xl shadow-xl">
+            <div className="px-2.5 py-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-brand-50 text-brand-700 text-xs font-semibold">
+                {selectedTaskIds.length} selected
+              </span>
+              <button
+                onClick={() => setSelectedTaskIds([])}
+                className="h-8 px-2 rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary text-xs inline-flex items-center gap-1"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </button>
+              <div className="h-6 w-px bg-border-subtle hidden sm:block" />
+              <button
+                onClick={() => handleBulkAction({ status: 'COMPLETED' }, 'Selected tasks marked as completed')}
+                disabled={bulkBusy}
+                className="h-8 px-2.5 rounded-lg border border-border-subtle text-xs font-medium text-text-primary hover:bg-surface-secondary disabled:opacity-50 inline-flex items-center gap-1"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Complete
+              </button>
+              <button
+                onClick={() => handleBulkAction({ status: 'IN_PROGRESS' }, 'Selected tasks moved to in progress')}
+                disabled={bulkBusy}
+                className="h-8 px-2.5 rounded-lg border border-border-subtle text-xs font-medium text-text-primary hover:bg-surface-secondary disabled:opacity-50"
+              >
+                In Progress
+              </button>
+              <select
+                className="h-8 rounded-lg border border-border-subtle px-2 text-xs bg-white min-w-[110px]"
+                disabled={bulkBusy}
+                defaultValue=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  handleBulkAction({ priority: e.target.value }, `Priority changed to ${priorityConfig[e.target.value]?.label || e.target.value}`);
+                  e.currentTarget.value = '';
+                }}
+              >
+                <option value="">Priority</option>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
+                  <option key={p} value={p}>{priorityConfig[p]?.label || p}</option>
+                ))}
+              </select>
+              <select
+                className="h-8 rounded-lg border border-border-subtle px-2 text-xs bg-white min-w-[150px]"
+                disabled={bulkBusy}
+                defaultValue=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  handleBulkAction({ assigneeId: e.target.value }, 'Selected tasks reassigned');
+                  e.currentTarget.value = '';
+                }}
+              >
+                <option value="">Reassign</option>
+                {teamMembers.map((u: any) => (
+                  <option key={u.id} value={u.id}>
+                    {getDisplayName(u.firstName, u.lastName)}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={async () => {
+                  const confirmed = await premiumConfirm({
+                    title: `Delete ${selectedTaskIds.length} selected task(s)?`,
+                    message: 'This action cannot be undone.',
+                    confirmText: 'Delete Permanently',
+                    cancelText: 'Cancel',
+                    variant: 'danger',
+                  });
+                  if (confirmed) {
+                    handleBulkAction({ delete: true }, `${selectedTaskIds.length} tasks deleted`);
+                  }
+                }}
+                disabled={bulkBusy}
+                className="ml-auto h-8 px-2.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium inline-flex items-center gap-1 disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete
+              </button>
+              {bulkBusy && (
+                <span className="inline-flex items-center gap-1 text-xs text-text-tertiary">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Applying...
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ═══ Create Task Modal ════════════════════════════════════════ */}
-      {showForm && <CreateTaskModal onClose={() => setShowForm(false)} onCreated={fetchTasks} />}
+      {showForm && (
+        <CreateTaskModal
+          onClose={() => setShowForm(false)}
+          onCreated={fetchTasks}
+          divisionId={scopedDivisionId}
+          requireDivisionSelection={currentUser?.role === 'SUPER_ADMIN'}
+        />
+      )}
+      {editingTask && (
+        <EditTaskModal
+          task={editingTask}
+          teamMembers={teamMembers}
+          onClose={() => setEditingTask(null)}
+          onSaved={() => {
+            setEditingTask(null);
+            fetchTasks();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1113,7 +1563,19 @@ export default function TasksPage() {
 // ═══════════════════════════════════════════════════════════════════
 // ─── Create Task Modal ──────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
-function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateTaskModal({
+  onClose,
+  onCreated,
+  divisionId,
+  requireDivisionSelection,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  divisionId?: string | null;
+  requireDivisionSelection?: boolean;
+}) {
+  const addToast = useNotificationStore((s) => s.addToast);
+  const { user: currentUser } = useAuthStore();
   const [form, setForm] = useState({
     title: '',
     type: 'FOLLOW_UP_CALL',
@@ -1121,26 +1583,129 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
     dueAt: '',
     assigneeId: '',
     description: '',
+    isRecurring: false,
+    recurRule: '',
   });
+  const [reminderDate, setReminderDate] = useState('');
+  const [reminderTime, setReminderTime] = useState('');
   const [users, setUsers] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveAndCreateAnother, setSaveAndCreateAnother] = useState(false);
+  const canCreateForDivision = !requireDivisionSelection || !!divisionId;
 
   useEffect(() => {
-    api.getUsers().then(setUsers).catch(() => {});
-  }, []);
+    if (!canCreateForDivision) {
+      setUsers([]);
+      return;
+    }
+    api.getUsers(divisionId || undefined).then(setUsers).catch(() => {});
+  }, [divisionId, canCreateForDivision]);
+
+  const dueAtDate = useMemo(() => {
+    if (!form.dueAt) return null;
+    const parsed = new Date(form.dueAt);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, [form.dueAt]);
+
+  const reminderIso = useMemo(
+    () => combineDateAndTimeToISO(reminderDate, reminderTime),
+    [reminderDate, reminderTime]
+  );
+
+  const applyDuePreset = (minutesFromNow: number) => {
+    const dt = new Date(Date.now() + minutesFromNow * 60_000);
+    setForm((prev) => ({ ...prev, dueAt: toDateTimeLocalValue(dt.toISOString()) }));
+  };
+
+  const applyReminderBeforeDue = (minutesBeforeDue: number) => {
+    if (!dueAtDate) {
+      addToast({
+        type: 'info',
+        title: 'Set due date first',
+        message: 'Please set due date/time before applying reminder presets.',
+      });
+      return;
+    }
+    const reminderDt = new Date(dueAtDate.getTime() - minutesBeforeDue * 60_000);
+    setReminderDate(toDateTimeLocalValue(reminderDt.toISOString()).split('T')[0] || '');
+    setReminderTime(toDateTimeLocalValue(reminderDt.toISOString()).split('T')[1] || '');
+  };
+
+  const selectedAssignee = users.find((u: any) => u.id === form.assigneeId);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
+      if (!canCreateForDivision) {
+        addToast({
+          type: 'error',
+          title: 'Division required',
+          message: 'Please select a division before creating a task.',
+        });
+        return;
+      }
+      if (!form.title.trim() || form.title.trim().length < 3) {
+        addToast({ type: 'error', title: 'Invalid title', message: 'Please enter at least 3 characters.' });
+        return;
+      }
+      if (!form.assigneeId) {
+        addToast({ type: 'error', title: 'Assignee required', message: 'Please assign this task to a team member.' });
+        return;
+      }
+      if (!dueAtDate) {
+        addToast({ type: 'error', title: 'Due date required', message: 'Please set a valid due date and time.' });
+        return;
+      }
+      if (dueAtDate < new Date()) {
+        addToast({ type: 'error', title: 'Invalid due date', message: 'Due date cannot be in the past.' });
+        return;
+      }
+      if (form.isRecurring && !form.recurRule) {
+        addToast({ type: 'error', title: 'Recurrence missing', message: 'Select a recurrence pattern or turn off recurrence.' });
+        return;
+      }
+      const reminder = reminderIso;
+      if ((reminderDate || reminderTime) && !reminder) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Please provide both reminder date and time.' });
+        return;
+      }
+      if (reminder && new Date(reminder) > dueAtDate) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be after the task due date.' });
+        return;
+      }
+      if (reminder && new Date(reminder) < new Date()) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be in the past.' });
+        return;
+      }
+
       await api.createTask({
         ...form,
-        dueAt: new Date(form.dueAt).toISOString(),
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        dueAt: dueAtDate.toISOString(),
+        reminder,
+        divisionId,
+        recurRule: form.isRecurring ? form.recurRule : null,
       });
-      onClose();
+      addToast({ type: 'success', title: 'Task Created', message: 'New task has been created successfully.' });
       onCreated();
+      if (saveAndCreateAnother) {
+        setForm((prev) => ({
+          ...prev,
+          title: '',
+          dueAt: '',
+          description: '',
+          isRecurring: false,
+          recurRule: '',
+        }));
+        setReminderDate('');
+        setReminderTime('');
+      } else {
+        onClose();
+      }
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to create task' });
     } finally {
       setSaving(false);
     }
@@ -1149,14 +1714,64 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
   return (
     <div className="modal">
       <div className="overlay" onClick={onClose} />
-      <div className="modal-panel w-full max-w-md relative z-50">
+      <div className="modal-panel w-full max-w-2xl relative z-50">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
-          <h2 className="text-lg font-semibold text-text-primary">New Task</h2>
+          <div>
+            <h2 className="text-xl font-semibold text-text-primary">Create Smart Task</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Capture details once. Schedule right. Never miss a follow-up.</p>
+          </div>
           <button onClick={onClose} className="btn-icon">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
+          {!canCreateForDivision && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Select a division from the top switcher to load members and create tasks.
+            </div>
+          )}
+
+          {divisionId && (
+            <div className="rounded-lg border border-border-subtle bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary">
+              Assignees are scoped to this division.
+            </div>
+          )}
+
+          <div>
+            <label className="label">Quick Start</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle text-xs font-medium hover:bg-surface-secondary"
+                onClick={() => setForm((prev) => ({ ...prev, type: 'FOLLOW_UP_CALL', priority: 'MEDIUM', title: prev.title || 'Follow-up call' }))}
+              >
+                Follow-up
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle text-xs font-medium hover:bg-surface-secondary"
+                onClick={() => setForm((prev) => ({ ...prev, type: 'MEETING', priority: 'HIGH', title: prev.title || 'Client meeting' }))}
+              >
+                Meeting
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle text-xs font-medium hover:bg-surface-secondary"
+                onClick={() => setForm((prev) => ({ ...prev, type: 'PROPOSAL', priority: 'HIGH', title: prev.title || 'Send proposal' }))}
+              >
+                Proposal
+              </button>
+              <button
+                type="button"
+                className="px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50"
+                onClick={() => setForm((prev) => ({ ...prev, priority: 'URGENT', title: prev.title || 'Urgent follow-up' }))}
+              >
+                Urgent
+              </button>
+            </div>
+          </div>
+
           <div>
             <label className="label">Title *</label>
             <input
@@ -1166,7 +1781,12 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="Follow up with client"
             />
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-[11px] text-text-tertiary">Use action-focused titles (e.g., &quot;Call client for final quote&quot;).</p>
+              <p className="text-[11px] text-text-tertiary">{form.title.length}/120</p>
+            </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Type</label>
@@ -1197,6 +1817,7 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               </select>
             </div>
           </div>
+
           <div>
             <label className="label">Due Date & Time *</label>
             <input
@@ -1206,7 +1827,51 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               value={form.dueAt}
               onChange={(e) => setForm({ ...form, dueAt: e.target.value })}
             />
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(60)}>In 1 hour</button>
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(180)}>In 3 hours</button>
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(24 * 60)}>Tomorrow</button>
+              <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyDuePreset(2 * 24 * 60)}>In 2 days</button>
+            </div>
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Reminder Date</label>
+              <input
+                type="date"
+                className="input"
+                value={reminderDate}
+                onChange={(e) => setReminderDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Reminder Time</label>
+              <input
+                type="time"
+                className="input"
+                value={reminderTime}
+                onChange={(e) => setReminderTime(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyReminderBeforeDue(15)}>15 min before</button>
+            <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyReminderBeforeDue(60)}>1 hour before</button>
+            <button type="button" className="px-2 py-1 rounded-md border border-border-subtle text-xs hover:bg-surface-secondary" onClick={() => applyReminderBeforeDue(24 * 60)}>1 day before</button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-surface-secondary"
+              onClick={() => {
+                setReminderDate('');
+                setReminderTime('');
+              }}
+            >
+              Clear reminder
+            </button>
+          </div>
+
           <div>
             <label className="label">Assign To *</label>
             <select
@@ -1218,21 +1883,266 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
               <option value="">Select team member...</option>
               {users.map((u: any) => (
                 <option key={u.id} value={u.id}>
-                  {u.firstName} {u.lastName}
+                  {getDisplayName(u.firstName, u.lastName)}
                 </option>
               ))}
             </select>
+            {currentUser && (
+              <button
+                type="button"
+                onClick={() => setForm((prev) => ({ ...prev, assigneeId: currentUser.id }))}
+                className="mt-2 text-xs text-brand-600 hover:text-brand-700 font-medium"
+              >
+                Assign to me
+              </button>
+            )}
           </div>
+
+          <div className="rounded-lg border border-border-subtle p-3 space-y-2">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-text-primary">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                checked={form.isRecurring}
+                onChange={(e) => setForm((prev) => ({ ...prev, isRecurring: e.target.checked, recurRule: e.target.checked ? prev.recurRule || 'weekly' : '' }))}
+              />
+              Recurring task
+            </label>
+            {form.isRecurring && (
+              <select
+                className="input"
+                value={form.recurRule}
+                onChange={(e) => setForm((prev) => ({ ...prev, recurRule: e.target.value }))}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            )}
+          </div>
+
           <div>
             <label className="label">Description</label>
             <textarea
               className="input"
-              rows={2}
+              rows={3}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="Optional notes..."
             />
           </div>
+
+          <div className="rounded-lg bg-surface-secondary/60 border border-border-subtle px-3 py-2 text-xs text-text-secondary space-y-1">
+            <p className="font-medium text-text-primary">Live summary</p>
+            <p>Type: {TYPE_LABELS[form.type] || form.type.replace(/_/g, ' ')} • Priority: {priorityConfig[form.priority]?.label || form.priority}</p>
+            <p>Due: {dueAtDate ? formatDateTime(dueAtDate.toISOString()) : 'Not set'}</p>
+            <p>Reminder: {reminderIso ? formatDateTime(reminderIso) : 'No reminder'}</p>
+            <p>Assignee: {selectedAssignee ? getDisplayName(selectedAssignee.firstName, selectedAssignee.lastName) : 'Not selected'}</p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
+            <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-border-strong text-brand-600 focus:ring-brand-500"
+                checked={saveAndCreateAnother}
+                onChange={(e) => setSaveAndCreateAnother(e.target.checked)}
+              />
+              Save and create another
+            </label>
+            <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} className="btn-secondary">
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary flex items-center gap-2" disabled={saving || !canCreateForDivision}>
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Creating...
+                </>
+              ) : (
+                'Create Task'
+              )}
+            </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EditTaskModal({
+  task,
+  teamMembers,
+  onClose,
+  onSaved,
+}: {
+  task: Task;
+  teamMembers: any[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const addToast = useNotificationStore((s) => s.addToast);
+  const initialReminder = toDateTimeLocalValue(task.reminder || null);
+  const [form, setForm] = useState({
+    title: task.title,
+    description: task.description || '',
+    type: task.type,
+    priority: task.priority,
+    status: task.status,
+    dueAt: toDateTimeLocalValue(task.dueAt),
+    assigneeId: task.assigneeId || task.assignee?.id || '',
+    reminderDate: initialReminder.split('T')[0] || '',
+    reminderTime: initialReminder.split('T')[1] || '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const dueAt = new Date(form.dueAt).toISOString();
+      const reminder = combineDateAndTimeToISO(form.reminderDate, form.reminderTime);
+      if ((form.reminderDate || form.reminderTime) && !reminder) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Please provide both reminder date and time.' });
+        return;
+      }
+      if (reminder && new Date(reminder) > new Date(dueAt)) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be after due date.' });
+        return;
+      }
+
+      await api.updateTask(task.id, {
+        title: form.title,
+        description: form.description || null,
+        type: form.type,
+        priority: form.priority,
+        status: form.status,
+        dueAt,
+        assigneeId: form.assigneeId,
+        reminder,
+      });
+
+      addToast({ type: 'success', title: 'Task updated', message: 'Task details saved successfully' });
+      onSaved();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update task' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal">
+      <div className="overlay" onClick={onClose} />
+      <div className="modal-panel w-full max-w-lg relative z-50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+          <h2 className="text-lg font-semibold text-text-primary">Edit Task</h2>
+          <button onClick={onClose} className="btn-icon">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="label">Title *</label>
+            <input
+              className="input"
+              required
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Status</label>
+              <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}>
+                {Object.keys(statusConfig).map((statusKey) => (
+                  <option key={statusKey} value={statusKey}>
+                    {statusConfig[statusKey]?.label || statusKey}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Priority</label>
+              <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as Priority })}>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
+                  <option key={p} value={p}>
+                    {priorityConfig[p]?.label || p}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Type</label>
+              <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as TaskType })}>
+                {TASK_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {TYPE_LABELS[t] || t.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Assignee</label>
+              <select className="input" value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
+                <option value="">Select team member...</option>
+                {teamMembers.map((u: any) => (
+                  <option key={u.id} value={u.id}>
+                    {getDisplayName(u.firstName, u.lastName)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Due Date & Time *</label>
+            <input
+              type="datetime-local"
+              className="input"
+              required
+              value={form.dueAt}
+              onChange={(e) => setForm({ ...form, dueAt: e.target.value })}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Reminder Date</label>
+              <input
+                type="date"
+                className="input"
+                value={form.reminderDate}
+                onChange={(e) => setForm({ ...form, reminderDate: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Reminder Time</label>
+              <input
+                type="time"
+                className="input"
+                value={form.reminderTime}
+                onChange={(e) => setForm({ ...form, reminderTime: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Description</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="Optional notes..."
+            />
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">
               Cancel
@@ -1240,10 +2150,10 @@ function CreateTaskModal({ onClose, onCreated }: { onClose: () => void; onCreate
             <button type="submit" className="btn-primary flex items-center gap-2" disabled={saving}>
               {saving ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Creating...
+                  <Loader2 className="h-4 w-4 animate-spin" /> Saving...
                 </>
               ) : (
-                'Create Task'
+                'Save Changes'
               )}
             </button>
           </div>

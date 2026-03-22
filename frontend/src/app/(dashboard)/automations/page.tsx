@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import { api } from '@/lib/api';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
 import type { AutomationRule } from '@/types';
 import {
   Zap, Plus, X, Hash, Clock, Play, Pause, MoreHorizontal,
@@ -12,6 +14,7 @@ import {
   ListTodo, Globe, TrendingUp, Shield, BarChart3,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -22,8 +25,13 @@ const triggerLabels: Record<string, { label: string; description: string; icon: 
   LEAD_ASSIGNED: { label: 'Lead Assigned', description: 'When a lead is assigned to someone', icon: UserPlus, color: 'text-amber-600 bg-amber-50' },
   LEAD_SCORE_CHANGED: { label: 'Score Changed', description: 'When lead score is updated', icon: TrendingUp, color: 'text-rose-600 bg-rose-50' },
   LEAD_INACTIVE: { label: 'Lead Inactive', description: 'When a lead becomes inactive', icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' },
+  LEAD_SLA_WARNING: { label: 'SLA Warning', description: 'When a lead is approaching SLA breach', icon: Shield, color: 'text-amber-600 bg-amber-50' },
+  LEAD_SLA_BREACHED: { label: 'SLA Breached', description: 'When a lead has breached SLA response time', icon: Shield, color: 'text-red-600 bg-red-50' },
+  LEAD_SLA_ESCALATED: { label: 'SLA Escalated', description: 'When a lead SLA breach is escalated', icon: Shield, color: 'text-rose-700 bg-rose-50' },
   TASK_DUE: { label: 'Task Due', description: 'When a task reaches its due date', icon: Clock, color: 'text-sky-600 bg-sky-50' },
   TASK_OVERDUE: { label: 'Task Overdue', description: 'When a task passes its due date', icon: XCircle, color: 'text-red-600 bg-red-50' },
+  LEAD_CREATED_TIME_ELAPSED: { label: 'Time After Creation', description: 'Trigger X time after lead is created', icon: Clock, color: 'text-teal-600 bg-teal-50' },
+  LEAD_UPDATED_TIME_ELAPSED: { label: 'Time After Last Update', description: 'Trigger X time after lead is last updated', icon: Clock, color: 'text-cyan-600 bg-cyan-50' },
 };
 
 const actionLabels: Record<string, { label: string; icon: any; color: string }> = {
@@ -36,6 +44,8 @@ const actionLabels: Record<string, { label: string; icon: any; color: string }> 
   create_task: { label: 'Create Task', icon: ListTodo, color: 'text-cyan-600 bg-cyan-50' },
   notify_user: { label: 'Notify User', icon: Bell, color: 'text-yellow-600 bg-yellow-50' },
   webhook: { label: 'Fire Webhook', icon: Globe, color: 'text-gray-600 bg-gray-50' },
+  reassign_lead_round_robin: { label: 'Reassign Lead (Round Robin)', icon: UserPlus, color: 'text-rose-600 bg-rose-50' },
+  update_sla_status: { label: 'Update SLA Status', icon: Shield, color: 'text-orange-600 bg-orange-50' },
 };
 
 const operatorLabels: Record<string, string> = {
@@ -91,36 +101,133 @@ const taskTypeOptions = [
   { value: 'OTHER', label: 'Other' },
 ];
 
-const conditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text'> = {
+// Static value options for standard fields (assignedTo populated dynamically)
+const standardConditionFieldValueOptions: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'time' | 'boolean' | 'user'> = {
   status: statusOptions,
   source: sourceOptions,
   score: 'number',
   budget: 'number',
+  conversionProb: 'number',
   productInterest: 'text',
   location: 'text',
   company: 'text',
   email: 'text',
+  phone: 'text',
+  jobTitle: 'text',
+  campaign: 'text',
+  website: 'text',
+  firstName: 'text',
+  lastName: 'text',
+  assignedTo: 'user', // dynamically populated with team members
+  tags: 'text',       // match by tag name
+  createdAt: 'date',
+  updatedAt: 'date',
+  time: 'time',
+  isArchived: 'boolean',
 };
 
-const conditionFields = [
-  { value: 'status', label: 'Status' },
-  { value: 'source', label: 'Source' },
-  { value: 'score', label: 'Score' },
-  { value: 'budget', label: 'Budget' },
-  { value: 'productInterest', label: 'Product Interest' },
-  { value: 'location', label: 'Location' },
-  { value: 'company', label: 'Company' },
-  { value: 'email', label: 'Email' },
+// All standard fields matching the Manage Columns list + extra lead fields
+const standardConditionFields: { value: string; label: string; category: 'standard'; fieldType: string }[] = [
+  // Core identification
+  { value: 'firstName', label: 'First Name', category: 'standard', fieldType: 'TEXT' },
+  { value: 'lastName', label: 'Last Name', category: 'standard', fieldType: 'TEXT' },
+  { value: 'email', label: 'Email', category: 'standard', fieldType: 'TEXT' },
+  { value: 'phone', label: 'Phone', category: 'standard', fieldType: 'TEXT' },
+  { value: 'company', label: 'Company', category: 'standard', fieldType: 'TEXT' },
+  { value: 'jobTitle', label: 'Job Title', category: 'standard', fieldType: 'TEXT' },
+  // Status & classification
+  { value: 'status', label: 'Status', category: 'standard', fieldType: 'SELECT' },
+  { value: 'source', label: 'Source', category: 'standard', fieldType: 'SELECT' },
+  { value: 'score', label: 'Score', category: 'standard', fieldType: 'NUMBER' },
+  { value: 'budget', label: 'Budget', category: 'standard', fieldType: 'NUMBER' },
+  { value: 'conversionProb', label: 'Conversion %', category: 'standard', fieldType: 'NUMBER' },
+  // Details
+  { value: 'location', label: 'Location', category: 'standard', fieldType: 'TEXT' },
+  { value: 'productInterest', label: 'Product Interest', category: 'standard', fieldType: 'TEXT' },
+  { value: 'campaign', label: 'Campaign', category: 'standard', fieldType: 'TEXT' },
+  { value: 'website', label: 'Website', category: 'standard', fieldType: 'TEXT' },
+  // Relationships
+  { value: 'assignedTo', label: 'Assigned To', category: 'standard', fieldType: 'USER' },
+  { value: 'tags', label: 'Tags', category: 'standard', fieldType: 'TEXT' },
+  // Timestamps
+  { value: 'createdAt', label: 'Created', category: 'standard', fieldType: 'DATE' },
+  { value: 'updatedAt', label: 'Updated', category: 'standard', fieldType: 'DATE' },
+  // Time
+  { value: 'time', label: 'Time', category: 'standard', fieldType: 'TIME' },
+  // State
+  { value: 'isArchived', label: 'In Recycle Bin', category: 'standard', fieldType: 'BOOLEAN' },
 ];
+
+// Returns which operators make sense for a field type
+const getOperatorsForFieldType = (fieldType: string): { value: string; label: string }[] => {
+  switch (fieldType) {
+    case 'SELECT':
+    case 'MULTI_SELECT':
+    case 'USER':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'not_equals', label: 'does not equal' },
+        { value: 'in', label: 'is one of' },
+      ];
+    case 'NUMBER':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'not_equals', label: 'does not equal' },
+        { value: 'gt', label: 'is greater than' },
+        { value: 'lt', label: 'is less than' },
+      ];
+    case 'BOOLEAN':
+      return [
+        { value: 'equals', label: 'equals' },
+      ];
+    case 'DATE':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'gt', label: 'is after' },
+        { value: 'lt', label: 'is before' },
+      ];
+    case 'TIME':
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'gt', label: 'is after' },
+        { value: 'lt', label: 'is before' },
+      ];
+    default: // TEXT, EMAIL, PHONE, URL
+      return [
+        { value: 'equals', label: 'equals' },
+        { value: 'not_equals', label: 'does not equal' },
+        { value: 'contains', label: 'contains' },
+      ];
+  }
+};
+
+// Field type to icon label for the dropdown badges
+const fieldTypeBadge: Record<string, { label: string; color: string }> = {
+  SELECT: { label: 'Select', color: 'bg-violet-100 text-violet-700' },
+  MULTI_SELECT: { label: 'Multi', color: 'bg-purple-100 text-purple-700' },
+  USER: { label: 'User', color: 'bg-indigo-100 text-indigo-700' },
+  TEXT: { label: 'Text', color: 'bg-sky-100 text-sky-700' },
+  NUMBER: { label: 'Number', color: 'bg-amber-100 text-amber-700' },
+  DATE: { label: 'Date', color: 'bg-emerald-100 text-emerald-700' },
+  TIME: { label: 'Time', color: 'bg-teal-100 text-teal-700' },
+  BOOLEAN: { label: 'Yes/No', color: 'bg-pink-100 text-pink-700' },
+  URL: { label: 'URL', color: 'bg-sky-100 text-sky-700' },
+  EMAIL: { label: 'Email', color: 'bg-sky-100 text-sky-700' },
+  PHONE: { label: 'Phone', color: 'bg-sky-100 text-sky-700' },
+};
 
 const templateCategories = [
   { id: 'all', label: 'All Templates' },
+  { id: 'sla', label: 'SLA Response Time' },
   { id: 'assignment', label: 'Assignment' },
   { id: 'communication', label: 'Communication' },
   { id: 'notification', label: 'Notification' },
   { id: 'task', label: 'Tasks' },
   { id: 'organization', label: 'Organization' },
   { id: 'integration', label: 'Integration' },
+  { id: 'time-based', label: 'Time-Based' },
+  { id: 'workflow', label: 'Multi-Action Workflows' },
+  { id: 'custom', label: 'My Templates' },
 ];
 
 type ViewMode = 'list' | 'detail' | 'templates';
@@ -128,6 +235,7 @@ type ViewMode = 'list' | 'detail' | 'templates';
 // ─── Main Page ───────────────────────────────────────────────────
 
 export default function AutomationsPage() {
+  const addToast = useNotificationStore((s) => s.addToast);
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<ViewMode>('list');
@@ -138,6 +246,24 @@ export default function AutomationsPage() {
   const [filterTrigger, setFilterTrigger] = useState('all');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [stats, setStats] = useState<any>(null);
+  const [statusLabelMap, setStatusLabelMap] = useState<Record<string, string>>({});
+
+  // Fetch custom status labels
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setStatusLabelMap(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+
+  // Dynamic status options with custom labels
+  const dynamicStatusOptions = statusOptions.map(s => ({
+    ...s,
+    label: statusLabelMap[s.value] || s.label,
+  }));
 
   const fetchRules = useCallback(async () => {
     try {
@@ -168,13 +294,21 @@ export default function AutomationsPage() {
     try {
       await api.toggleAutomation(id);
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Updated', message: 'Automation toggled successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to toggle automation');
+      addToast({ type: 'error', title: 'Toggle Failed', message: err.message || 'Failed to toggle automation' });
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this automation? This cannot be undone.')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this automation?',
+      message: 'This action cannot be undone.',
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteAutomation(id);
       if (selectedRuleId === id) {
@@ -182,8 +316,9 @@ export default function AutomationsPage() {
         setView('list');
       }
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Deleted', message: 'Automation deleted successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to delete automation');
+      addToast({ type: 'error', title: 'Delete Failed', message: err.message || 'Failed to delete automation' });
     }
   };
 
@@ -191,8 +326,9 @@ export default function AutomationsPage() {
     try {
       await api.duplicateAutomation(id);
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Duplicated', message: 'Automation duplicated successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to duplicate automation');
+      addToast({ type: 'error', title: 'Duplicate Failed', message: err.message || 'Failed to duplicate automation' });
     }
   };
 
@@ -206,8 +342,9 @@ export default function AutomationsPage() {
       setShowForm(false);
       setEditingRule(null);
       await Promise.all([fetchRules(), fetchStats()]);
+      addToast({ type: 'success', title: 'Automation Saved', message: editingRule ? 'Automation updated successfully.' : 'Automation created successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to save automation');
+      addToast({ type: 'error', title: 'Save Failed', message: err.message || 'Failed to save automation' });
     }
   };
 
@@ -254,6 +391,7 @@ export default function AutomationsPage() {
         onEdit={(rule) => { handleEdit(rule); setView('list'); }}
         onToggle={handleToggle}
         onDelete={handleDelete}
+        addToast={addToast}
       />
     );
   }
@@ -553,12 +691,13 @@ function AutomationCard({ rule, onToggle, onEdit, onDelete, onDuplicate, onViewD
 
 // ─── Automation Detail View ──────────────────────────────────────
 
-function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
+function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete, addToast }: {
   ruleId: string;
   onBack: () => void;
   onEdit: (rule: AutomationRule) => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
+  addToast: (toast: { type: 'success' | 'error' | 'warning' | 'info'; title: string; message: string }) => void;
 }) {
   const [rule, setRule] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
@@ -644,6 +783,19 @@ function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
             {rule.isActive ? <><Pause className="h-3.5 w-3.5" /> Pause</> : <><Play className="h-3.5 w-3.5" /> Activate</>}
           </button>
           <button onClick={() => onEdit(rule)} className="btn-secondary text-sm"><Edit3 className="h-3.5 w-3.5" /> Edit</button>
+          <button
+            onClick={async () => {
+              try {
+                await api.saveAutomationAsTemplate(rule.id);
+                addToast({ type: 'success', title: 'Template Saved', message: 'Automation saved as a reusable template!' });
+              } catch (err: any) {
+                addToast({ type: 'error', title: 'Template Save Failed', message: err.message || 'Failed to save as template' });
+              }
+            }}
+            className="btn-secondary text-sm"
+          >
+            <LayoutTemplate className="h-3.5 w-3.5" /> Save as Template
+          </button>
           <button onClick={() => onDelete(rule.id)} className="btn-secondary text-sm text-red-600 hover:text-red-700"><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
       </div>
@@ -683,12 +835,14 @@ function AutomationDetail({ ruleId, onBack, onEdit, onToggle, onDelete }: {
                 <span className="text-2xs font-semibold text-text-tertiary mt-1.5 uppercase tracking-wider">Conditions</span>
                 <div className="mt-1 space-y-1">
                   {rule.conditions.map((c: any, i: number) => {
-                    const fieldLabel = conditionFields.find(f => f.value === c.field)?.label || c.field;
-                    const opts = conditionFieldValueOptions[c.field];
+                    const isCustom = c.field?.startsWith('custom.');
+                    const fieldLabel = standardConditionFields.find(f => f.value === c.field)?.label
+                      || (isCustom ? c.field.slice(7).replace(/([A-Z])/g, ' $1').replace(/^./, (s: string) => s.toUpperCase()) : c.field);
+                    const opts = standardConditionFieldValueOptions[c.field];
                     const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value)) : String(c.value);
                     return (
                       <span key={i} className="block text-xs text-text-secondary">
-                        {fieldLabel} {operatorLabels[c.operator] || c.operator} <strong>{valueLabel}</strong>
+                        {fieldLabel}{isCustom && <span className="text-violet-500"> *</span>} {operatorLabels[c.operator] || c.operator} <strong>{valueLabel}</strong>
                       </span>
                     );
                   })}
@@ -819,6 +973,8 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
   const [templates, setTemplates] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [triggerFilter, setTriggerFilter] = useState('all');
 
   useEffect(() => {
     (async () => {
@@ -826,7 +982,6 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
         const data = await api.getAutomationTemplates();
         setTemplates(data);
       } catch {
-        // Fallback templates if API not available
         setTemplates([]);
       } finally {
         setLoading(false);
@@ -834,7 +989,18 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
     })();
   }, []);
 
-  const filtered = categoryFilter === 'all' ? templates : templates.filter(t => t.category === categoryFilter);
+  const filtered = templates.filter(t => {
+    if (categoryFilter !== 'all' && t.category !== categoryFilter) return false;
+    if (triggerFilter !== 'all' && t.trigger !== triggerFilter) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchesName = t.name.toLowerCase().includes(q);
+      const matchesDesc = t.description?.toLowerCase().includes(q);
+      const matchesTags = t.tags?.some((tag: string) => tag.toLowerCase().includes(q));
+      if (!matchesName && !matchesDesc && !matchesTags) return false;
+    }
+    return true;
+  });
 
   const categoryIcons: Record<string, any> = {
     assignment: UserPlus,
@@ -843,7 +1009,15 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
     task: ListTodo,
     organization: Tag,
     integration: Globe,
+    workflow: GitBranch,
+    custom: Sparkles,
   };
+
+  // Count templates per category
+  const categoryCounts = templateCategories.reduce((acc, cat) => {
+    acc[cat.id] = cat.id === 'all' ? templates.length : templates.filter(t => t.category === cat.id).length;
+    return acc;
+  }, {} as Record<string, number>);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -852,9 +1026,32 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
           <button onClick={onBack} className="btn-icon h-8 w-8"><ArrowLeft className="h-4 w-4" /></button>
           <div>
             <h1 className="text-2xl font-bold text-text-primary tracking-tight">Automation Templates</h1>
-            <p className="text-text-secondary text-sm mt-0.5">Pre-built workflows to get started quickly</p>
+            <p className="text-text-secondary text-sm mt-0.5">{templates.length} pre-built workflows to get started quickly</p>
           </div>
         </div>
+      </div>
+
+      {/* Search and Filters */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+          <input
+            className="input pl-9 text-sm"
+            placeholder="Search templates by name, description, or tags..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <select
+          className="input w-auto text-sm"
+          value={triggerFilter}
+          onChange={(e) => setTriggerFilter(e.target.value)}
+        >
+          <option value="all">All Triggers</option>
+          {Object.entries(triggerLabels).map(([val, { label }]) => (
+            <option key={val} value={val}>{label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Category Tabs */}
@@ -870,6 +1067,11 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
             }`}
           >
             {cat.label}
+            {categoryCounts[cat.id] > 0 && (
+              <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-2xs ${
+                categoryFilter === cat.id ? 'bg-white/20' : 'bg-surface-tertiary'
+              }`}>{categoryCounts[cat.id]}</span>
+            )}
           </button>
         ))}
       </div>
@@ -879,7 +1081,22 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
           {[1, 2, 3, 4].map(i => <div key={i} className="card p-5"><div className="skeleton h-24 w-full" /></div>)}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card"><div className="empty-state"><LayoutTemplate className="h-5 w-5 text-text-tertiary" /><p className="text-sm text-text-secondary mt-2">No templates available</p></div></div>
+        <div className="card">
+          <div className="empty-state">
+            <LayoutTemplate className="h-5 w-5 text-text-tertiary" />
+            <p className="text-sm text-text-secondary mt-2">
+              {searchQuery || triggerFilter !== 'all' ? 'No templates match your search' : 'No templates available'}
+            </p>
+            {(searchQuery || triggerFilter !== 'all') && (
+              <button
+                onClick={() => { setSearchQuery(''); setTriggerFilter('all'); setCategoryFilter('all'); }}
+                className="btn-secondary text-xs mt-2"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {filtered.map((template: any) => {
@@ -894,11 +1111,28 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
                     <CatIcon className="h-5 w-5" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-semibold text-text-primary">{template.name}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-text-primary">{template.name}</h3>
+                      {template.isCustom && (
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 font-medium">Custom</span>
+                      )}
+                      {template.actions?.length > 1 && (
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">{template.actions.length} actions</span>
+                      )}
+                    </div>
                     <p className="text-xs text-text-tertiary mt-0.5">{template.description}</p>
 
+                    {/* Tags */}
+                    {template.tags && template.tags.length > 0 && (
+                      <div className="mt-1.5 flex gap-1 flex-wrap">
+                        {template.tags.slice(0, 4).map((tag: string) => (
+                          <span key={tag} className="text-2xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-tertiary">{tag}</span>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Mini workflow */}
-                    <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+                    <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium ${trigger?.color || 'bg-surface-tertiary text-text-secondary'}`}>
                         <TriggerIcon className="h-3 w-3" />
                         {trigger?.label || template.trigger}
@@ -938,20 +1172,307 @@ function TemplatesGallery({ onBack, onUseTemplate }: { onBack: () => void; onUse
 
 // ─── Create / Edit Form Modal ────────────────────────────────────
 
+// Searchable field picker for conditions — renders dropdown via portal to avoid overflow clipping
+function ConditionFieldPicker({ value, onChange, allFields }: {
+  value: string;
+  onChange: (fieldValue: string) => void;
+  allFields: { value: string; label: string; category: string; fieldType: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 320 });
+
+  // Position the dropdown relative to the button
+  useEffect(() => {
+    if (open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const dropdownHeight = 340; // approximate max height
+      // Open upward if not enough space below
+      if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
+        setPos({ top: rect.top - dropdownHeight, left: rect.left, width: Math.max(rect.width, 320) });
+      } else {
+        setPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 320) });
+      }
+    }
+  }, [open]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+        buttonRef.current && !buttonRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+        setSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setSearch(''); } };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [open]);
+
+  const selected = allFields.find(f => f.value === value);
+  const filtered = allFields.filter(f =>
+    f.label.toLowerCase().includes(search.toLowerCase()) ||
+    f.value.toLowerCase().includes(search.toLowerCase())
+  );
+  const standardFields = filtered.filter(f => f.category === 'standard');
+  const customFields = filtered.filter(f => f.category === 'custom');
+
+  return (
+    <div className="relative flex-1">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="input text-sm w-full text-left flex items-center justify-between gap-2 pr-2"
+      >
+        <span className="flex items-center gap-2 truncate min-w-0">
+          <span className="truncate">{selected?.label || value}</span>
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed bg-white rounded-xl shadow-2xl border border-border-subtle overflow-hidden animate-fade-in"
+          style={{ top: pos.top, left: pos.left, width: pos.width, zIndex: 9999 }}
+        >
+          {/* Search input */}
+          <div className="p-2 border-b border-border-subtle">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary" />
+              <input
+                autoFocus
+                className="input text-sm pl-8 w-full"
+                placeholder="Search fields..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="max-h-60 overflow-y-auto overscroll-contain">
+            {/* Standard Fields */}
+            {standardFields.length > 0 && (
+              <div>
+                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0 z-10">
+                  Standard Fields
+                </div>
+                {standardFields.map(f => (
+                  <button
+                    key={f.value}
+                    type="button"
+                    onClick={() => { onChange(f.value); setOpen(false); setSearch(''); }}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 hover:bg-surface-secondary transition-colors ${f.value === value ? 'bg-brand-50 text-brand-700 font-medium' : 'text-text-primary'}`}
+                  >
+                    <span className="truncate">{f.label}</span>
+                    <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${fieldTypeBadge[f.fieldType]?.color || 'bg-gray-100 text-gray-600'}`}>
+                      {fieldTypeBadge[f.fieldType]?.label || f.fieldType}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Custom Fields */}
+            {customFields.length > 0 && (
+              <div>
+                <div className="px-3 py-1.5 text-2xs font-semibold text-text-tertiary uppercase tracking-wider bg-surface-secondary sticky top-0 z-10 flex items-center gap-1.5">
+                  <Sparkles className="h-3 w-3" />
+                  Custom Fields
+                </div>
+                {customFields.map(f => (
+                  <button
+                    key={f.value}
+                    type="button"
+                    onClick={() => { onChange(f.value); setOpen(false); setSearch(''); }}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 hover:bg-surface-secondary transition-colors ${f.value === value ? 'bg-brand-50 text-brand-700 font-medium' : 'text-text-primary'}`}
+                  >
+                    <span className="flex items-center gap-1.5 truncate">
+                      <Sparkles className="h-3 w-3 text-violet-400 flex-shrink-0" />
+                      <span className="truncate">{f.label}</span>
+                    </span>
+                    <span className={`text-2xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${fieldTypeBadge[f.fieldType]?.color || 'bg-gray-100 text-gray-600'}`}>
+                      {fieldTypeBadge[f.fieldType]?.label || f.fieldType}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {filtered.length === 0 && (
+              <div className="p-4 text-center text-sm text-text-tertiary">
+                No fields match &ldquo;{search}&rdquo;
+              </div>
+            )}
+          </div>
+
+          {/* Footer with count */}
+          <div className="border-t border-border-subtle px-3 py-1.5 text-2xs text-text-tertiary bg-surface-secondary">
+            {allFields.length} fields available ({allFields.filter(f => f.category === 'custom').length} custom)
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
 function AutomationFormModal({ rule, onClose, onSubmit }: {
   rule: AutomationRule | null;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }) {
   const isEditing = rule && rule.id;
+
+  // Extract delay from existing conditions for time-based triggers
+  const existingDelay = rule?.conditions?.find((c: any) => c.field === '__delay__');
+  const existingDelayMinutes = existingDelay ? Number(existingDelay.value) : 0;
+  const existingNonDelayConditions = rule?.conditions?.filter((c: any) => c.field !== '__delay__') || [];
+
   const [form, setForm] = useState({
     name: rule?.name || '',
     description: rule?.description || '',
     trigger: rule?.trigger || 'LEAD_CREATED',
-    conditions: rule?.conditions || [] as any[],
+    conditions: existingNonDelayConditions as any[],
     actions: rule?.actions?.length ? rule.actions : [{ type: 'notify_user', config: { message: '' } }],
   });
+  // Time delay state for time-based triggers
+  const [delayAmount, setDelayAmount] = useState(() => {
+    if (existingDelayMinutes >= 1440) return String(existingDelayMinutes / 1440);
+    if (existingDelayMinutes >= 60) return String(existingDelayMinutes / 60);
+    return String(existingDelayMinutes || 1);
+  });
+  const [delayUnit, setDelayUnit] = useState<'minutes' | 'hours' | 'days'>(() => {
+    if (existingDelayMinutes >= 1440 && existingDelayMinutes % 1440 === 0) return 'days';
+    if (existingDelayMinutes >= 60 && existingDelayMinutes % 60 === 0) return 'hours';
+    return 'minutes';
+  });
+  const isTimeBased = form.trigger === 'LEAD_CREATED_TIME_ELAPSED' || form.trigger === 'LEAD_UPDATED_TIME_ELAPSED';
   const [step, setStep] = useState(1); // 1=basics, 2=conditions, 3=actions, 4=review
+
+  // Custom fields + users state
+  const [customFieldsRaw, setCustomFieldsRaw] = useState<any[]>([]);
+  const [teamUsers, setTeamUsers] = useState<any[]>([]);
+  const [loadingFields, setLoadingFields] = useState(true);
+  const [modalStatusLabelMap, setModalStatusLabelMap] = useState<Record<string, string>>({});
+
+  // Dynamic status options with custom labels (scoped to this modal)
+  const dynamicStatusOptions = statusOptions.map(s => ({
+    ...s,
+    label: modalStatusLabelMap[s.value] || s.label,
+  }));
+
+  // Fetch custom fields, team members, and status labels on mount
+  useEffect(() => {
+    // Fetch status labels
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setModalStatusLabelMap(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchData = async () => {
+      try {
+        const [fields, users] = await Promise.all([
+          api.getCustomFields().catch(() => []),
+          api.getUsers().catch(() => []),
+        ]);
+        if (!cancelled) {
+          setCustomFieldsRaw(fields || []);
+          setTeamUsers(users || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch condition data:', err);
+      } finally {
+        if (!cancelled) setLoadingFields(false);
+      }
+    };
+    fetchData();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Build merged field lists: standard + custom
+  const allConditionFields = React.useMemo(() => {
+    const customMapped = customFieldsRaw.map((cf: any) => ({
+      value: `custom.${cf.name}`,
+      label: cf.label,
+      category: 'custom' as const,
+      fieldType: cf.type,
+    }));
+    return [...standardConditionFields, ...customMapped];
+  }, [customFieldsRaw]);
+
+  // Build user options for "Assigned To"
+  const userOptions = React.useMemo(() => {
+    return teamUsers
+      .filter((u: any) => u.isActive !== false)
+      .map((u: any) => ({
+        value: u.id,
+        label: `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email,
+      }));
+  }, [teamUsers]);
+
+  // Build merged value options: standard + custom + dynamic users
+  const allConditionFieldValueOptions = React.useMemo(() => {
+    const merged: Record<string, { value: string; label: string }[] | 'number' | 'text' | 'date' | 'time' | 'boolean'> = {};
+    // Copy standard options, resolving 'user' type to actual user list
+    for (const [key, val] of Object.entries(standardConditionFieldValueOptions)) {
+      if (val === 'user') {
+        merged[key] = userOptions;
+      } else {
+        merged[key] = val as any;
+      }
+    }
+    // Add custom field options
+    for (const cf of customFieldsRaw) {
+      const key = `custom.${cf.name}`;
+      switch (cf.type) {
+        case 'SELECT':
+        case 'MULTI_SELECT': {
+          const opts = Array.isArray(cf.options) ? cf.options : [];
+          merged[key] = opts.map((o: string) => ({ value: o, label: o }));
+          break;
+        }
+        case 'NUMBER':
+          merged[key] = 'number';
+          break;
+        case 'DATE':
+          merged[key] = 'date';
+          break;
+        case 'BOOLEAN':
+          merged[key] = 'boolean';
+          break;
+        default:
+          merged[key] = 'text';
+      }
+    }
+    return merged;
+  }, [customFieldsRaw, userOptions]);
+
+  // Helper: get field type for a given field value
+  const getFieldType = (fieldValue: string): string => {
+    return allConditionFields.find(f => f.value === fieldValue)?.fieldType || 'TEXT';
+  };
 
   const totalSteps = 4;
 
@@ -990,10 +1511,44 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
     setForm({ ...form, actions: updated });
   };
 
-  const handleSubmit = () => {
-    if (!form.name.trim()) return alert('Name is required');
-    if (form.actions.length === 0) return alert('At least one action is required');
-    onSubmit(form);
+  const handleSubmit = async () => {
+    if (!form.name.trim()) {
+      await premiumAlert({
+        title: 'Validation required',
+        message: 'Name is required.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
+    if (form.actions.length === 0) {
+      await premiumAlert({
+        title: 'Validation required',
+        message: 'At least one action is required.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
+    if (isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) {
+      await premiumAlert({
+        title: 'Validation required',
+        message: 'Please set a valid time delay.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
+
+    // Build final conditions: inject __delay__ for time-based triggers
+    const finalConditions = [...form.conditions];
+    if (isTimeBased) {
+      const multiplier = delayUnit === 'days' ? 1440 : delayUnit === 'hours' ? 60 : 1;
+      const totalMinutes = Math.round(Number(delayAmount) * multiplier);
+      finalConditions.unshift({ field: '__delay__', operator: 'equals', value: totalMinutes });
+    }
+
+    onSubmit({ ...form, conditions: finalConditions });
   };
 
   const trigger = triggerLabels[form.trigger];
@@ -1066,6 +1621,44 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                   ))}
                 </div>
               </div>
+
+              {/* Time delay config for time-based triggers */}
+              {isTimeBased && (
+                <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-teal-600" />
+                    <h4 className="text-sm font-semibold text-teal-800">Time Delay</h4>
+                  </div>
+                  <p className="text-xs text-teal-700">
+                    {form.trigger === 'LEAD_CREATED_TIME_ELAPSED'
+                      ? 'Trigger this automation after the specified time has passed since the lead was created.'
+                      : 'Trigger this automation after the specified time has passed since the lead was last updated.'}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-teal-800 whitespace-nowrap">Wait for</span>
+                    <input
+                      type="number"
+                      min="1"
+                      className="input text-sm w-24"
+                      value={delayAmount}
+                      onChange={(e) => setDelayAmount(e.target.value)}
+                      placeholder="1"
+                    />
+                    <select
+                      className="input text-sm w-28"
+                      value={delayUnit}
+                      onChange={(e) => setDelayUnit(e.target.value as 'minutes' | 'hours' | 'days')}
+                    >
+                      <option value="minutes">Minutes</option>
+                      <option value="hours">Hours</option>
+                      <option value="days">Days</option>
+                    </select>
+                    <span className="text-xs text-teal-700">
+                      after {form.trigger === 'LEAD_CREATED_TIME_ELAPSED' ? 'creation' : 'last update'}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1082,6 +1675,16 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 </button>
               </div>
 
+              {/* Field availability info */}
+              {!loadingFields && customFieldsRaw.length > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-50 border border-violet-200">
+                  <Sparkles className="h-3.5 w-3.5 text-violet-500 flex-shrink-0" />
+                  <p className="text-xs text-violet-700">
+                    <span className="font-medium">{customFieldsRaw.length} custom field{customFieldsRaw.length !== 1 ? 's' : ''}</span> available from your division settings
+                  </p>
+                </div>
+              )}
+
               {form.conditions.length === 0 ? (
                 <div className="rounded-lg border-2 border-dashed border-border-subtle p-8 text-center">
                   <Filter className="h-8 w-8 text-text-tertiary mx-auto mb-2" />
@@ -1093,40 +1696,88 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {form.conditions.map((cond: any, i: number) => (
-                    <div key={i} className="flex items-center gap-2 p-3 rounded-lg bg-surface-secondary">
-                      {i > 0 && <span className="text-2xs font-semibold text-text-tertiary uppercase">AND</span>}
-                      <select className="input text-sm flex-1" value={cond.field} onChange={(e) => {
-                        const newField = e.target.value;
-                        const opts = conditionFieldValueOptions[newField];
-                        const defaultValue = Array.isArray(opts) ? opts[0]?.value || '' : opts === 'number' ? '0' : '';
-                        updateCondition(i, { field: newField, value: defaultValue });
-                      }}>
-                        {conditionFields.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                      </select>
-                      <select className="input text-sm w-36" value={cond.operator} onChange={(e) => updateCondition(i, { operator: e.target.value })}>
-                        {Object.entries(operatorLabels).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-                      </select>
-                      {(() => {
-                        const opts = conditionFieldValueOptions[cond.field];
-                        if (Array.isArray(opts)) {
-                          return (
-                            <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
-                              <option value="">Select...</option>
-                              {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                          );
-                        }
-                        if (opts === 'number') {
-                          return <input type="number" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />;
-                        }
-                        return <input className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" />;
-                      })()}
-                      <button type="button" onClick={() => removeCondition(i)} className="btn-icon h-8 w-8 text-red-500 hover:text-red-700">
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                  {form.conditions.map((cond: any, i: number) => {
+                    const fieldType = getFieldType(cond.field);
+                    const availableOperators = getOperatorsForFieldType(fieldType);
+                    const opts = allConditionFieldValueOptions[cond.field];
+                    const isCustom = cond.field?.startsWith('custom.');
+
+                    return (
+                      <div key={i} className={`p-3 rounded-lg border ${isCustom ? 'bg-violet-50/50 border-violet-200' : 'bg-surface-secondary border-transparent'}`}>
+                        {i > 0 && (
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="h-px flex-1 bg-border-subtle" />
+                            <span className="text-2xs font-semibold text-text-tertiary uppercase px-2">AND</span>
+                            <div className="h-px flex-1 bg-border-subtle" />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          {/* Field Picker */}
+                          <ConditionFieldPicker
+                            value={cond.field}
+                            allFields={allConditionFields}
+                            onChange={(newField) => {
+                              const newOpts = allConditionFieldValueOptions[newField];
+                              const newFieldType = getFieldType(newField);
+                              const newOperators = getOperatorsForFieldType(newFieldType);
+                              let defaultValue = '';
+                              if (Array.isArray(newOpts)) defaultValue = newOpts[0]?.value || '';
+                              else if (newOpts === 'number') defaultValue = '0';
+                              else if (newOpts === 'boolean') defaultValue = 'true';
+                              else if (newOpts === 'date') defaultValue = '';
+                              const defaultOp = newOperators[0]?.value || 'equals';
+                              updateCondition(i, { field: newField, value: defaultValue, operator: defaultOp });
+                            }}
+                          />
+
+                          {/* Smart Operator Select */}
+                          <select
+                            className="input text-sm w-40"
+                            value={cond.operator}
+                            onChange={(e) => updateCondition(i, { operator: e.target.value })}
+                          >
+                            {availableOperators.map(op => (
+                              <option key={op.value} value={op.value}>{op.label}</option>
+                            ))}
+                          </select>
+
+                          {/* Type-Aware Value Input */}
+                          {(() => {
+                            if (Array.isArray(opts)) {
+                              return (
+                                <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
+                                  <option value="">Select...</option>
+                                  {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                </select>
+                              );
+                            }
+                            if (opts === 'number') {
+                              return <input type="number" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Enter number..." />;
+                            }
+                            if (opts === 'date') {
+                              return <input type="date" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} />;
+                            }
+                            if (opts === 'time') {
+                              return <input type="time" className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} />;
+                            }
+                            if (opts === 'boolean') {
+                              return (
+                                <select className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })}>
+                                  <option value="true">Yes</option>
+                                  <option value="false">No</option>
+                                </select>
+                              );
+                            }
+                            return <input className="input text-sm flex-1" value={String(cond.value)} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Enter value..." />;
+                          })()}
+
+                          <button type="button" onClick={() => removeCondition(i)} className="btn-icon h-8 w-8 text-red-500 hover:text-red-700 flex-shrink-0">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1211,7 +1862,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             <label className="label">New Status</label>
                             <select className="input text-sm" value={action.config.status || ''} onChange={(e) => updateActionConfig(i, 'status', e.target.value)}>
                               <option value="">Select status...</option>
-                              {statusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                              {dynamicStatusOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                             </select>
                           </div>
                         )}
@@ -1287,6 +1938,36 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                             </select>
                           </div>
                         )}
+                        {action.type === 'reassign_lead_round_robin' && (
+                          <div className="bg-rose-50 border border-rose-200 rounded-lg p-3">
+                            <p className="text-xs text-rose-700">This action automatically reassigns the lead to the next available team member using round-robin. The previous assignee and new assignee will both be notified.</p>
+                          </div>
+                        )}
+                        {action.type === 'update_sla_status' && (
+                          <>
+                            <div>
+                              <label className="label">SLA Status</label>
+                              <select className="input text-sm" value={action.config.slaStatus || ''} onChange={(e) => updateActionConfig(i, 'slaStatus', e.target.value)}>
+                                <option value="">Select status...</option>
+                                <option value="ON_TIME">On Time</option>
+                                <option value="AT_RISK">At Risk</option>
+                                <option value="BREACHED">Breached</option>
+                                <option value="ESCALATED">Escalated</option>
+                                <option value="RESPONDED">Responded</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label">Escalation Level</label>
+                              <select className="input text-sm" value={String(action.config.escalationLevel ?? '')} onChange={(e) => updateActionConfig(i, 'escalationLevel', e.target.value || '')}>
+                                <option value="">No change</option>
+                                <option value="0">Level 0 — Normal</option>
+                                <option value="1">Level 1 — Reminded</option>
+                                <option value="2">Level 2 — Escalated</option>
+                                <option value="3">Level 3 — Reassigned</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
@@ -1316,6 +1997,16 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                     {trigger && <trigger.icon className="h-3.5 w-3.5" />}
                     {trigger?.label || form.trigger}
                   </span>
+
+                  {isTimeBased && (
+                    <>
+                      <ArrowRight className="h-4 w-4 text-text-tertiary" />
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-teal-50 text-teal-700">
+                        <Clock className="h-3.5 w-3.5" />
+                        Wait {delayAmount} {delayUnit}
+                      </span>
+                    </>
+                  )}
 
                   {form.conditions.length > 0 && (
                     <>
@@ -1347,14 +2038,19 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                 <div className="card p-4">
                   <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider block mb-2">Conditions</span>
                   {form.conditions.map((c, i) => {
-                    const fieldLabel = conditionFields.find(f => f.value === c.field)?.label || c.field;
-                    const opts = conditionFieldValueOptions[c.field];
-                    const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value)) : String(c.value);
+                    const fieldDef = allConditionFields.find(f => f.value === c.field);
+                    const fieldLabel = fieldDef?.label || c.field.replace('custom.', '');
+                    const isCustom = c.field?.startsWith('custom.');
+                    const opts = allConditionFieldValueOptions[c.field];
+                    const valueLabel = Array.isArray(opts) ? (opts.find(o => o.value === c.value)?.label || String(c.value))
+                      : opts === 'boolean' ? (c.value === 'true' ? 'Yes' : 'No')
+                      : String(c.value);
                     return (
                       <p key={i} className="text-xs text-text-secondary">
                         {i > 0 && <span className="text-text-tertiary font-medium">AND </span>}
-                        <span className="font-medium text-text-primary">{fieldLabel}</span>{' '}
-                        {operatorLabels[c.operator] || c.operator}{' '}
+                        <span className="font-medium text-text-primary">{fieldLabel}</span>
+                        {isCustom && <span className="text-2xs text-violet-500 ml-1">(custom)</span>}
+                        {' '}{operatorLabels[c.operator] || c.operator}{' '}
                         <span className="font-medium text-text-primary">{valueLabel}</span>
                       </p>
                     );
@@ -1374,7 +2070,7 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
                         <p className="text-xs font-medium text-text-primary">{act?.label || a.type}</p>
                         {Object.entries(a.config).filter(([, v]) => v).map(([k, v]) => {
                           const configLabels: Record<string, string> = { status: 'Status', taskType: 'Task Type', priority: 'Priority', stage: 'Stage', template: 'Template', subject: 'Subject', message: 'Message', tagName: 'Tag', title: 'Title', dueInHours: 'Due In (hours)', url: 'URL', method: 'Method' };
-                          const valueMappers: Record<string, { value: string; label: string }[]> = { status: statusOptions, taskType: taskTypeOptions, priority: priorityOptions };
+                          const valueMappers: Record<string, { value: string; label: string }[]> = { status: dynamicStatusOptions, taskType: taskTypeOptions, priority: priorityOptions };
                           const displayVal = valueMappers[k]?.find(o => o.value === String(v))?.label || String(v);
                           return <p key={k} className="text-2xs text-text-tertiary">{configLabels[k] || k}: {displayVal}</p>;
                         })}
@@ -1401,8 +2097,25 @@ function AutomationFormModal({ rule, onClose, onSubmit }: {
             {step < totalSteps ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (step === 1 && !form.name.trim()) return alert('Name is required');
+                onClick={async () => {
+                  if (step === 1 && !form.name.trim()) {
+                    await premiumAlert({
+                      title: 'Validation required',
+                      message: 'Name is required.',
+                      confirmText: 'OK',
+                      variant: 'danger',
+                    });
+                    return;
+                  }
+                  if (step === 1 && isTimeBased && (!delayAmount || Number(delayAmount) <= 0)) {
+                    await premiumAlert({
+                      title: 'Validation required',
+                      message: 'Please set a valid time delay.',
+                      confirmText: 'OK',
+                      variant: 'danger',
+                    });
+                    return;
+                  }
                   setStep(step + 1);
                 }}
                 className="btn-primary text-sm"

@@ -1,4 +1,24 @@
 // ─── Organization ────────────────────────────────────────────────
+
+// ─── Division Memberships ──────────────────────────────────────
+export interface DivisionMembership {
+  id: string;
+  userId: string;
+  divisionId: string;
+  role: string;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+  division?: {
+    id: string;
+    name: string;
+    tradeName?: string;
+    logo?: string;
+    primaryColor: string;
+    type: string;
+  };
+}
+
 export interface Organization {
   id: string;
   name: string;
@@ -86,6 +106,7 @@ export interface Lead {
   company?: string;
   jobTitle?: string;
   source: LeadSource;
+  sourceDetail?: string;
   status: LeadStatus;
   score: number;
   budget?: number;
@@ -95,6 +116,10 @@ export interface Lead {
   website?: string;
   customData?: Record<string, unknown>;
   lostReason?: string;
+  doNotCall?: boolean;
+  doNotCallAt?: string;
+  doNotCallById?: string;
+  doNotCallByUser?: { id: string; firstName: string; lastName?: string };
   aiSummary?: string;
   conversionProb?: number;
   stageId?: string;
@@ -108,11 +133,14 @@ export interface Lead {
   tasks?: Task[];
   communications?: Communication[];
   attachments?: Attachment[];
-  _count?: { activities: number; tasks: number; communications: number };
+  _count?: { activities: number; tasks: number; communications: number; callLogs: number };
   channelCounts?: Record<string, number>;
   firstMessage?: { channel: string; body: string; createdAt: string } | null;
+  unreadChannelCounts?: Record<string, number>;
+  unreadCommunications?: number;
   lastInboundMessage?: { channel: string; body: string; createdAt: string } | null;
   organizationId?: string;
+  organization?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -163,8 +191,10 @@ export interface Task {
   priority: Priority;
   status: TaskStatus;
   dueAt: string;
+  reminder?: string | null;
   completedAt?: string;
   isRecurring: boolean;
+  recurRule?: string | null;
   leadId?: string;
   lead?: Pick<Lead, 'id' | 'firstName' | 'lastName'>;
   assigneeId?: string;
@@ -188,8 +218,9 @@ export interface Communication {
 
 // ─── Call Log ────────────────────────────────────────────────────
 export type CallDisposition =
-  | 'CALLBACK' | 'MEETING_ARRANGED' | 'APPOINTMENT_BOOKED' | 'INTERESTED'
-  | 'NOT_INTERESTED' | 'NO_ANSWER' | 'VOICEMAIL_LEFT' | 'WRONG_NUMBER'
+  | 'CALLBACK' | 'CALL_LATER' | 'CALL_AGAIN' | 'WILL_CALL_US_AGAIN'
+  | 'MEETING_ARRANGED' | 'APPOINTMENT_BOOKED' | 'INTERESTED'
+  | 'NOT_INTERESTED' | 'ALREADY_COMPLETED_SERVICES' | 'NO_ANSWER' | 'VOICEMAIL_LEFT' | 'WRONG_NUMBER'
   | 'BUSY' | 'GATEKEEPER' | 'FOLLOW_UP_EMAIL' | 'QUALIFIED'
   | 'PROPOSAL_REQUESTED' | 'DO_NOT_CALL' | 'OTHER';
 
@@ -241,7 +272,7 @@ export interface Attachment {
 }
 
 // ─── Custom Field ───────────────────────────────────────────────
-export type FieldType = 'TEXT' | 'NUMBER' | 'DATE' | 'SELECT' | 'MULTI_SELECT' | 'BOOLEAN' | 'URL' | 'EMAIL' | 'PHONE';
+export type FieldType = 'TEXT' | 'NUMBER' | 'DATE' | 'SELECT' | 'MULTI_SELECT' | 'BOOLEAN' | 'URL' | 'EMAIL' | 'PHONE' | 'TEXTAREA' | 'CURRENCY';
 
 export interface CustomField {
   id: string;
@@ -251,6 +282,32 @@ export interface CustomField {
   options?: string[];
   isRequired: boolean;
   order: number;
+  showInList: boolean;
+  showInDetail: boolean;
+  description?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  divisionId?: string | null;
+}
+
+export interface BuiltInField {
+  key: string;
+  label: string;
+  customLabel?: string;
+  type: string;
+  locked?: boolean;
+  category: string;
+  showInList: boolean;
+  showInDetail: boolean;
+  isRequired: boolean;
+  canToggleRequired?: boolean;
+  order: number;
+  isBuiltIn: true;
+}
+
+export interface FieldConfigResponse {
+  builtInFields: BuiltInField[];
+  customFields: CustomField[];
 }
 
 // ─── Campaign (UPDATED - replaces existing Campaign interface) ────────────────
@@ -365,6 +422,8 @@ export interface Contact {
   tasks?: Task[];
   deals?: Deal[];
   _count?: { activities: number; tasks: number; notes: number; deals: number };
+  organizationId?: string;
+  organization?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -545,6 +604,7 @@ export type NotificationType =
   | 'TASK_DUE_SOON'
   | 'TASK_OVERDUE'
   | 'TASK_COMPLETED'
+  | 'TASK_REMINDER'
   | 'PIPELINE_STAGE_CHANGED'
   | 'CAMPAIGN_STARTED'
   | 'CAMPAIGN_COMPLETED'
@@ -561,6 +621,9 @@ export type NotificationType =
   | 'IMPORT_FAILED'
   | 'AUTOMATION_TRIGGERED'
   | 'AUTOMATION_ERROR'
+  | 'CALLBACK_REMINDER'
+  | 'CALLBACK_REMINDER_HANDOFF'
+  | 'NOTIFICATION_ESCALATED'
   | 'SYSTEM_ANNOUNCEMENT';
 
 export interface AppNotification {
@@ -604,6 +667,55 @@ export interface NotificationPreferences {
   integrations: boolean;
   team: boolean;
   system: boolean;
+  emailNewLead?: boolean;
+  emailLeadAssigned?: boolean;
+  emailTaskDue?: boolean;
+  emailWeeklyDigest?: boolean;
+  inAppNewLead?: boolean;
+  inAppLeadAssigned?: boolean;
+  inAppTaskDue?: boolean;
+  inAppStatusChange?: boolean;
+  escalationEnabled?: boolean;
+  digestEnabled?: boolean;
+  defaultTaskSnoozeMinutes?: number;
+  defaultCallbackSnoozeMinutes?: number;
+}
+
+export type RecycleScope = 'none' | 'own' | 'team' | 'division' | 'all';
+export type RecycleEntityType = 'LEAD' | 'CONTACT' | 'TASK' | 'CAMPAIGN';
+
+export interface RecycleBinAccessRule {
+  view: RecycleScope;
+  restore: RecycleScope;
+  purge: boolean;
+}
+
+export interface RecycleBinAccessSettings {
+  roleScopes: Record<string, RecycleBinAccessRule>;
+  userOverrides: Record<string, RecycleBinAccessRule>;
+}
+
+export interface RecycleBinItem {
+  id: string;
+  entityType: RecycleEntityType;
+  entityId: string;
+  entityLabel?: string | null;
+  organizationId: string;
+  deletedById?: string | null;
+  recordOwnerId?: string | null;
+  recordAssigneeId?: string | null;
+  recordCreatorId?: string | null;
+  deletedAt: string;
+  purgeAt: string;
+  metadata?: Record<string, any>;
+  snapshot?: Record<string, any> | null;
+  createdAt: string;
+  updatedAt: string;
+  daysUntilPurge?: number;
+  capabilities?: {
+    canRestore: boolean;
+    canPurge: boolean;
+  };
 }
 
 export interface Toast {
@@ -633,6 +745,9 @@ export interface AllocationRules {
   maxLeadsPerUser: number;
   sourceRules: SourceAllocationRule[];
   eligibleUserIds: string[];
+  divisionId?: string;                  // Which division these rules apply to (undefined = global)
+  inherited?: boolean;                  // true if division inherits from global
+  scope?: 'global' | 'division';       // Indicates rule scope
 }
 
 export interface WorkloadUser {

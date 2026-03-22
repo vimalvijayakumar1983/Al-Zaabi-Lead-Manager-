@@ -27,8 +27,10 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/campaigns': { title: 'Campaigns', description: 'Marketing campaign management' },
   '/team': { title: 'Team', description: 'Team members and access control' },
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
+  '/recycle-bin': { title: 'Recycle Bin', description: 'Restore or permanently remove deleted records' },
   '/import': { title: 'Import Center', description: 'Import data from files' },
   '/divisions': { title: 'Divisions', description: 'Manage organization divisions' },
+  '/roles': { title: 'Roles & Permissions', description: 'Manage roles and access control' },
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -42,8 +44,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Notification Center state
   const [notifOpen, setNotifOpen] = useState(false);
   const bellRef = useRef<HTMLButtonElement>(null);
-  const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket } =
+  const { unreadCount, fetchUnreadCount, connectWebSocket, disconnectWebSocket, fetchPreferences } =
     useNotificationStore();
+
+  // IMPORTANT: usePermissionsStore must be called here at the top level,
+  // BEFORE any conditional returns. React requires hooks to always be
+  // called in the same order on every render. Moving this after a
+  // conditional return (like `if (!isAuthenticated) return null`) causes
+  // "Rendered fewer hooks than expected" crashes during sign-out.
+  const hasNotificationAccess = !user || !permissionsLoaded ||
+    hasPermission(user.id, user.role, 'notifications');
 
   // Organization branding state
   const [orgBranding, setOrgBranding] = useState<{
@@ -129,12 +139,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   // Connect WebSocket and fetch unread count when authenticated
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && hasNotificationAccess) {
       try {
         const token = localStorage.getItem('token');
         if (token) {
           connectWebSocket(token);
           fetchUnreadCount();
+          fetchPreferences();
         }
       } catch (err) {
         console.error('WebSocket/notification init error:', err);
@@ -147,7 +158,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         // Ignore cleanup errors
       }
     };
-  }, [isAuthenticated, connectWebSocket, disconnectWebSocket, fetchUnreadCount]);
+  }, [isAuthenticated, hasNotificationAccess, connectWebSocket, disconnectWebSocket, fetchUnreadCount, fetchPreferences]);
 
   // When a user's profile is updated (e.g. role change by super admin),
   // re-fetch the profile. If the role actually changed, reload the page
@@ -215,22 +226,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const routePermissions: Record<string, string> = {
     '/dashboard': 'dashboard',
     '/leads': 'leads',
+    '/contacts': 'contacts',
+    '/inbox': 'inbox',
     '/pipeline': 'pipeline',
     '/tasks': 'tasks',
     '/communication': 'leads',
     '/analytics': 'analytics',
     '/automations': 'automations',
     '/campaigns': 'campaigns',
+    '/integrations': 'integrations',
     '/team': 'team',
+    '/roles': 'roles',
     '/settings': 'settings',
-    '/contacts': 'leads',
-    '/inbox': 'leads',
-    '/import': 'leads',
+    '/recycle-bin': 'recycleBin',
+    '/import': 'import',
     '/divisions': 'divisions',
   };
 
   const requiredPermission = routePermissions[basePath];
-  // hasPermission and permissionsLoaded come from the hook called at the top
   const hasAccess = !requiredPermission || !user || !permissionsLoaded ||
     hasPermission(user.id, user.role, requiredPermission);
 
@@ -276,6 +289,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         onMobileClose={() => setMobileMenuOpen(false)}
       />
       <CommandPalette />
+      {hasNotificationAccess && (
+        <NotificationCenter
+          isOpen={notifOpen}
+          onClose={() => setNotifOpen(false)}
+          anchorRef={bellRef}
+        />
+      )}
 
       {/* Main content area */}
       <main className="transition-all duration-300 ease-smooth lg:pl-[var(--sidebar-width)]">
@@ -317,24 +337,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="hidden sm:block">
               <GlobalSearch />
             </div>
-            <button
-              ref={bellRef}
-              className="btn-icon relative"
-              title="Notifications"
-              onClick={() => setNotifOpen(!notifOpen)}
-            >
-              <Bell className="h-4.5 w-4.5" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 h-4.5 min-w-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ring-2 ring-white px-1">
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
-              )}
-            </button>
-            <NotificationCenter
-              isOpen={notifOpen}
-              onClose={() => setNotifOpen(false)}
-              anchorRef={bellRef}
-            />
+            {hasNotificationAccess && (
+              <button
+                ref={bellRef}
+                className="btn-icon relative"
+                title="Notifications"
+                onClick={() => setNotifOpen(!notifOpen)}
+              >
+                <Bell className="h-4.5 w-4.5" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 h-4.5 min-w-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ring-2 ring-white px-1">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+            )}
             <button className="btn-icon hidden sm:inline-flex" title="Help">
               <HelpCircle className="h-4.5 w-4.5" />
             </button>

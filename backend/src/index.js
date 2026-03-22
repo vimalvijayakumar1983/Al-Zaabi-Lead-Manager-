@@ -12,11 +12,25 @@ const { logger } = require('./config/logger');
 const { prisma } = require('./config/database');
 const { setupWebSocket } = require('./websocket/server');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const { startSLAMonitor, stopSLAMonitor } = require('./services/slaMonitor');
+const { startTimeBasedScheduler, stopTimeBasedScheduler } = require('./services/timeBasedAutomationScheduler');
+const { startCallbackReminderScheduler, stopCallbackReminderScheduler } = require('./services/callbackReminderScheduler');
+const { startTaskReminderScheduler, stopTaskReminderScheduler } = require('./services/taskReminderScheduler');
+const { startWillCallAgainSafetyNetScheduler, stopWillCallAgainSafetyNetScheduler } = require('./services/willCallAgainSafetyNetScheduler');
+const {
+  startNotificationEscalationScheduler,
+  stopNotificationEscalationScheduler,
+} = require('./services/notificationEscalationScheduler');
+const {
+  startRecycleBinPurgeScheduler,
+  stopRecycleBinPurgeScheduler,
+} = require('./services/recycleBinPurgeScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
 const divisionRoutes = require('./routes/divisions');
 const allocationRoutes = require('./routes/allocation');
+const emailSettingsRoutes = require('./routes/email-settings');
 const leadRoutes = require('./routes/leads');
 const pipelineRoutes = require('./routes/pipeline');
 const taskRoutes = require('./routes/tasks');
@@ -36,6 +50,9 @@ const inboxRoutes = require('./routes/inbox');
 const channelWebhookRoutes = require('./routes/channel-webhooks');
 const contactRoutes = require('./routes/contacts');
 const callLogRoutes = require('./routes/call-logs');
+const roleRoutes = require('./routes/roles');
+const savedViewRoutes = require('./routes/saved-views');
+const recycleBinRoutes = require('./routes/recycle-bin');
 
 const app = express();
 const server = createServer(app);
@@ -127,6 +144,9 @@ const routeMounts = [
   ['/channels', channelWebhookRoutes],
   ['/contacts', contactRoutes],
   ['/call-logs', callLogRoutes],
+  ['/roles', roleRoutes],
+  ['/saved-views', savedViewRoutes],
+  ['/recycle-bin', recycleBinRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {
@@ -143,17 +163,64 @@ setupWebSocket(server);
 
 // ─── Start Server ────────────────────────────────────────────────
 const PORT = config.port || 4000;
+const ENABLE_BACKGROUND_JOBS = process.env.ENABLE_BACKGROUND_JOBS !== 'false';
 
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
-  const waOk = config.whatsapp?.token && config.whatsapp?.phoneNumberId;
-  logger.info(`WhatsApp: ${waOk ? 'configured' : 'not configured (missing token or phoneNumberId)'}`);
+
+  if (!ENABLE_BACKGROUND_JOBS) {
+    logger.warn('Background schedulers are disabled (ENABLE_BACKGROUND_JOBS=false)');
+    return;
+  }
+
+  const schedulerStarts = [
+    { name: 'SLA', fn: () => startSLAMonitor(undefined, { runOnStart: true, initialDelayMs: 5000 }) },
+    { name: 'TimeBased', fn: () => startTimeBasedScheduler(undefined, { runOnStart: true, initialDelayMs: 20000 }) },
+    { name: 'CallbackReminder', fn: () => startCallbackReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 35000 }) },
+    { name: 'TaskReminder', fn: () => startTaskReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 50000 }) },
+    { name: 'WillCallAgainSafetyNet', fn: () => startWillCallAgainSafetyNetScheduler(undefined, { runOnStart: true, initialDelayMs: 65000 }) },
+  ];
+  for (const scheduler of schedulerStarts) {
+    try {
+      scheduler.fn();
+      logger.info(`[Startup] ${scheduler.name} scheduler initialized`);
+    } catch (err) {
+      logger.error(`[Startup] Failed to initialize ${scheduler.name} scheduler:`, err.message);
+    }
+  }
+
+  // Start unread reminder escalation monitor after core schedulers
+  setTimeout(() => {
+    try {
+      startNotificationEscalationScheduler();
+      logger.info('[Startup] NotificationEscalation scheduler initialized');
+    } catch (err) {
+      logger.error('[Startup] Failed to initialize NotificationEscalation scheduler:', err.message);
+    }
+  }, 80000);
+
+  // Purge recycle bin records after startup load settles
+  setTimeout(() => {
+    try {
+      startRecycleBinPurgeScheduler();
+      logger.info('[Startup] RecycleBinPurge scheduler initialized');
+    } catch (err) {
+      logger.error('[Startup] Failed to initialize RecycleBinPurge scheduler:', err.message);
+    }
+  }, 95000);
 });
 
 // Graceful shutdown
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+  stopSLAMonitor();
+  stopTimeBasedScheduler();
+  stopCallbackReminderScheduler();
+  stopTaskReminderScheduler();
+  stopWillCallAgainSafetyNetScheduler();
+  stopNotificationEscalationScheduler();
+  stopRecycleBinPurgeScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

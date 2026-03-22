@@ -3,7 +3,8 @@ import type {
   Campaign, CampaignDashboardStats,
   Integration, IntegrationLog, IntegrationPlatformInfo,
   ApiKey, WidgetConfig, Contact, ContactStats, Deal,
-  AppNotification, NotificationPreferences
+  AppNotification, NotificationPreferences,
+  BuiltInField, CustomField
 } from '@/types';
 
 // Always use same-origin /api path — Next.js API route proxies to backend server-side
@@ -121,8 +122,43 @@ class ApiClient {
     return this.request<any>(`/leads/search/global?q=${encodeURIComponent(q)}`);
   }
 
-  async getLeadTags() {
-    return this.request<any[]>('/leads/tags');
+  // ─── Tags ──────────────────────────────────────────────────────
+  async getTags(organizationId?: string) {
+    const params = organizationId ? `?organizationId=${organizationId}` : '';
+    return this.request<any[]>(`/leads/tags${params}`);
+  }
+
+  async createTag(data: { name: string; color?: string; organizationId: string }) {
+    return this.request<any>('/leads/tags', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTag(tagId: string, data: { name?: string; color?: string }) {
+    return this.request<any>(`/leads/tags/${tagId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTag(tagId: string) {
+    return this.request<any>(`/leads/tags/${tagId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async addLeadTags(leadId: string, data: { tagIds?: string[]; tagNames?: string[] }) {
+    return this.request<any>(`/leads/${leadId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async removeLeadTag(leadId: string, tagId: string) {
+    return this.request<any>(`/leads/${leadId}/tags/${tagId}`, {
+      method: 'DELETE',
+    });
   }
 
   async getFilterValues() {
@@ -131,6 +167,41 @@ class ApiClient {
 
   async getLead(id: string) {
     return this.request<any>(`/leads/${id}`);
+  }
+
+  async generateLeadAISummary(id: string, force = false) {
+    return this.request<{
+      success: boolean;
+      data: {
+        summary: string;
+        highlights: string[];
+        risks: string[];
+        opportunities: string[];
+        recommendedActions: Array<{
+          title: string;
+          reason: string;
+          priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+        }>;
+        confidence: number;
+        generatedAt: string;
+        signals: {
+          score: number;
+          conversionProb: number;
+          status: string;
+          openTasks: number;
+          overdueTasks: number;
+          staleDays: number | null;
+          communications: number;
+          calls: number;
+          notes: number;
+          hasWillCallAgain: boolean;
+          hasNotInterested: boolean;
+        };
+      };
+    }>(`/leads/${id}/ai-summary`, {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+    });
   }
 
   async createLead(data: any) {
@@ -143,6 +214,14 @@ class ApiClient {
 
   async deleteLead(id: string) {
     return this.request<any>(`/leads/${id}`, { method: 'DELETE' });
+  }
+
+  async blockLead(id: string) {
+    return this.request<any>(`/leads/${id}/block`, { method: 'POST' });
+  }
+
+  async unblockLead(id: string) {
+    return this.request<any>(`/leads/${id}/unblock`, { method: 'POST' });
   }
 
   async bulkUpdateLeads(leadIds: string[], data: any) {
@@ -172,6 +251,34 @@ class ApiClient {
     });
   }
 
+  async createPipelineStage(data: { name: string; color?: string; divisionId?: string; isWonStage?: boolean; isLostStage?: boolean }) {
+    return this.request<any>('/pipeline/stages', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePipelineStage(stageId: string, data: { name?: string; color?: string; order?: number }) {
+    return this.request<any>(`/pipeline/stages/${stageId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deletePipelineStage(stageId: string, reassignStageId?: string) {
+    const query = reassignStageId ? `?reassignStageId=${reassignStageId}` : '';
+    return this.request<any>(`/pipeline/stages/${stageId}${query}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async reorderPipelineStages(stageIds: string[]) {
+    return this.request<any>('/pipeline/stages/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ stageIds }),
+    });
+  }
+
   // Tasks
   async getTasks(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
@@ -186,10 +293,31 @@ class ApiClient {
     return this.request<any>(`/tasks/${id}/complete`, { method: 'POST' });
   }
 
+  async updateTask(id: string, data: any) {
+    return this.request<any>(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteTask(id: string) {
+    return this.request<any>(`/tasks/${id}`, { method: 'DELETE' });
+  }
+
+  async bulkUpdateTasks(taskIds: string[], data: any) {
+    return this.request<any>('/tasks/bulk', { method: 'PATCH', body: JSON.stringify({ taskIds, ...data }) });
+  }
+
+  async getTaskStats() {
+    return this.request<any>('/tasks/stats');
+  }
+
   // Analytics
   async getDashboard(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any>(`/analytics/dashboard${q}`);
+  }
+
+  async getDashboardFull(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/dashboard-full?${q}`);
   }
 
   async getAnalyticsOverview(period = '30d', divisionId?: string) {
@@ -232,13 +360,34 @@ class ApiClient {
     return this.request<any>(`/analytics/score-distribution${q}`);
   }
 
+  async getTaskSLAReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/task-sla-report?${q}`);
+  }
+
+  async getCallDispositionReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/call-disposition-report?${q}`);
+  }
+
+  async getPipelineForecastReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/pipeline-forecast-report?${q}`);
+  }
+
+  async getPhase1Report(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/phase1-report?${q}`);
+  }
+
   async getDivisionComparison() {
     return this.request<any>('/analytics/division-comparison');
   }
 
   // Users
-  async getUsers() {
-    return this.request<any[]>('/users');
+  async getUsers(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/users${q}`);
   }
 
   async inviteUser(data: any) {
@@ -259,6 +408,13 @@ class ApiClient {
 
   async reactivateUser(id: string) {
     return this.request<any>(`/users/${id}/reactivate`, { method: 'POST' });
+  }
+
+  async deleteUserPermanently(id: string, reassignTo?: string) {
+    return this.request<any>(`/users/${id}/permanent`, {
+      method: 'DELETE',
+      body: JSON.stringify(reassignTo ? { reassignTo } : {}),
+    });
   }
 
   async getPermissions() {
@@ -298,7 +454,7 @@ class ApiClient {
     fieldMapping: Record<string, string>;
     duplicateAction: string;
     duplicateField?: string;
-    assignToId?: string;
+    assignToIds?: string[];
     defaultStatus?: string;
     defaultSource?: string;
   }) {
@@ -308,7 +464,7 @@ class ApiClient {
     formData.append('fieldMapping', JSON.stringify(options.fieldMapping));
     formData.append('duplicateAction', options.duplicateAction);
     if (options.duplicateField) formData.append('duplicateField', options.duplicateField);
-    if (options.assignToId) formData.append('assignToId', options.assignToId);
+    if (options.assignToIds && options.assignToIds.length > 0) formData.append('assignToIds', JSON.stringify(options.assignToIds));
     if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
     if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
     const token = this.getToken();
@@ -543,8 +699,17 @@ class ApiClient {
     return this.request<any>(`/automations/${id}/logs?page=${page}&limit=${limit}`);
   }
 
-  async getAutomationTemplates() {
-    return this.request<any[]>('/automations/templates');
+  async getAutomationTemplates(params?: { search?: string; category?: string; trigger?: string }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.category) query.set('category', params.category);
+    if (params?.trigger) query.set('trigger', params.trigger);
+    const qs = query.toString();
+    return this.request<any[]>(`/automations/templates${qs ? `?${qs}` : ''}`);
+  }
+
+  async saveAutomationAsTemplate(id: string, data?: { name?: string; description?: string }) {
+    return this.request<any>(`/automations/${id}/save-as-template`, { method: 'POST', body: JSON.stringify(data || {}) });
   }
 
   async getAutomationStats() {
@@ -674,8 +839,35 @@ class ApiClient {
     return this.request<any[]>(`/call-logs/lead/${leadId}`);
   }
 
-  async getDispositions() {
-    return this.request<any[]>('/call-logs/dispositions');
+  async getDispositions(params?: { leadId?: string; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.leadId) q.set('leadId', params.leadId);
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<any[]>(`/call-logs/dispositions${query ? `?${query}` : ''}`);
+  }
+
+  async getDispositionSettings() {
+    return this.request<{ disposition: string; label: string; requireNotes: boolean }[]>('/call-logs/dispositions/settings');
+  }
+
+  async updateDispositionSettings(settings: { disposition: string; requireNotes: boolean }[]) {
+    return this.request<{ disposition: string; label: string; requireNotes: boolean }[]>(
+      '/call-logs/dispositions/settings',
+      { method: 'PUT', body: JSON.stringify({ settings }) }
+    );
+  }
+
+  async getDispositionStudio(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ divisionId: string; dispositions: any[] }>(`/call-logs/dispositions/studio${q}`);
+  }
+
+  async updateDispositionStudio(dispositions: any[], divisionId?: string) {
+    return this.request<{ divisionId: string; dispositions: any[] }>('/call-logs/dispositions/studio', {
+      method: 'PUT',
+      body: JSON.stringify({ dispositions, ...(divisionId ? { divisionId } : {}) }),
+    });
   }
 
   // Settings
@@ -703,7 +895,7 @@ class ApiClient {
     return this.request<any>('/settings/notifications');
   }
 
-  async updateNotificationPreferences(data: Record<string, boolean>) {
+  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
     return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
   }
 
@@ -715,18 +907,53 @@ class ApiClient {
     return this.request<any>('/settings/account', { method: 'DELETE', body: JSON.stringify({ password }) });
   }
 
+  // SLA Configuration
+  async getSLAConfig() {
+    return this.request<any>('/settings/sla');
+  }
+
+  async updateSLAConfig(data: any) {
+    return this.request<any>('/settings/sla', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getSLADashboard() {
+    return this.request<any>('/settings/sla/dashboard');
+  }
+
   // Custom Fields
   async getCustomFields(divisionId?: string) {
     const q = divisionId ? `?divisionId=${divisionId}` : '';
     return this.request<any[]>(`/settings/custom-fields${q}`);
   }
 
-  async createCustomField(data: { label: string; type: string; options?: string[]; isRequired?: boolean }) {
-    return this.request<any>('/settings/custom-fields', { method: 'POST', body: JSON.stringify(data) });
+  async createCustomField(data: {
+    label: string;
+    type: string;
+    options?: string[];
+    isRequired?: boolean;
+    showInList?: boolean;
+    showInDetail?: boolean;
+    description?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    divisionId?: string | null;
+  }) {
+    return this.request<CustomField>('/settings/custom-fields', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateCustomField(id: string, data: { label?: string; type?: string; options?: string[] | null; isRequired?: boolean }) {
-    return this.request<any>(`/settings/custom-fields/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  async updateCustomField(id: string, data: {
+    label?: string;
+    type?: string;
+    options?: string[] | null;
+    isRequired?: boolean;
+    showInList?: boolean;
+    showInDetail?: boolean;
+    description?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    divisionId?: string | null;
+  }) {
+    return this.request<CustomField>(`/settings/custom-fields/${id}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async reorderCustomFields(fieldIds: string[]) {
@@ -737,33 +964,91 @@ class ApiClient {
     return this.request<any>(`/settings/custom-fields/${id}`, { method: 'DELETE' });
   }
 
+  // Field Configuration (built-in field visibility + custom fields)
+  async getFieldConfig(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[]; statusLabels?: Record<string, string> }>(`/settings/field-config${q}`);
+  }
+
+  async saveStatusLabels(divisionId: string | null, labels: Record<string, string>) {
+    return this.request<{ success: boolean }>('/settings/status-labels', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, labels }),
+    });
+  }
+
+  async saveFieldConfig(divisionId: string | null, fields: Record<string, { showInList: boolean; showInDetail: boolean; order: number }>) {
+    return this.request<{ success: boolean }>('/settings/field-config', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, fields }),
+    });
+  }
+
   // ─── Email Settings ──────────────────────────────────────────────
-  async getEmailConfig() {
-    return this.request<any>('/settings/email');
+  async getEmailConfig(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email${qs}`);
   }
 
-  async saveEmailConfig(data: any) {
-    return this.request<any>('/settings/email', { method: 'PUT', body: JSON.stringify(data) });
+  async saveEmailConfig(data: any, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  async testEmailConnection(data: { smtpHost: string; smtpPort: number; smtpUser: string; smtpPass?: string }) {
-    return this.request<{ success: boolean; message: string }>('/settings/email/test-connection', { method: 'POST', body: JSON.stringify(data) });
+  async testEmailConnection(data: { smtpHost: string; smtpPort: number; smtpUser: string; smtpPass?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string }>(`/settings/email/test-connection${qs}`, { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async sendTestEmail(toEmail: string) {
-    return this.request<{ success: boolean; message: string }>('/settings/email/send-test', { method: 'POST', body: JSON.stringify({ toEmail }) });
+  async sendTestEmail(toEmail: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string }>(`/settings/email/send-test${qs}`, { method: 'POST', body: JSON.stringify({ toEmail }) });
   }
 
-  async getEmailTemplates() {
-    return this.request<any[]>('/settings/email/templates');
+  async getEmailTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/settings/email/templates${qs}`);
   }
 
-  async saveEmailTemplate(name: string, data: { label: string; subject: string; htmlBody: string; description?: string }) {
-    return this.request<any>(`/settings/email/templates/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+  async saveEmailTemplate(name: string, data: { label: string; subject: string; body?: string; htmlBody?: string; description?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/templates/${name}${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
-  async deleteEmailTemplate(name: string) {
-    return this.request<any>(`/settings/email/templates/${name}`, { method: 'DELETE' });
+  async deleteEmailTemplate(name: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/templates/${name}${qs}`, { method: 'DELETE' });
+  }
+
+  async previewEmailTemplate(data: { subject?: string; body?: string; htmlBody?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ subject: string; html: string }>(`/settings/email/templates/preview${qs}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // ─── Incoming Email (IMAP / POP3) Settings ──────────────────────
+  async getIncomingEmailConfig(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/incoming${qs}`);
+  }
+
+  async saveIncomingEmailConfig(data: any, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/settings/email/incoming${qs}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async testImapConnection(data: { imapHost: string; imapPort: number; imapUser: string; imapPass?: string; imapSecurity?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string; mailboxes?: string[] }>(`/settings/email/incoming/test-imap${qs}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async testPop3Connection(data: { popHost: string; popPort: number; popUser: string; popPass?: string; popSecurity?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; message: string }>(`/settings/email/incoming/test-pop3${qs}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async fetchIncomingEmails(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ success: boolean; emails?: any[]; count?: number; error?: string }>(`/settings/email/incoming/fetch${qs}`, { method: 'POST' });
   }
 
   // ─── Division Management ─────────────────────────────────────────
@@ -827,6 +1112,71 @@ class ApiClient {
 
 
 
+
+  // ─── Division Memberships ──────────────────────────────────────
+  async getUserDivisions(userId: string): Promise<any[]> {
+    const res = await this.request<{ memberships: any[] }>(`/users/${userId}/divisions`);
+    return (res as any).memberships || res || [];
+  }
+
+  async addUserToDivision(userId: string, data: { divisionId: string; role?: string }): Promise<any> {
+    return this.request<any>(`/users/${userId}/divisions`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateUserDivisionRole(userId: string, divisionId: string, data: { role?: string; isPrimary?: boolean }): Promise<any> {
+    return this.request<any>(`/users/${userId}/divisions/${divisionId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async removeUserFromDivision(userId: string, divisionId: string): Promise<any> {
+    return this.request<any>(`/users/${userId}/divisions/${divisionId}`, { method: 'DELETE' });
+  }
+
+  // ─── Recycle Bin ────────────────────────────────────────────────
+  async getRecycleBinItems(params?: Record<string, string | number>) {
+    const q = new URLSearchParams();
+    if (params) {
+      for (const [key, value] of Object.entries(params)) {
+        if (value === undefined || value === null || value === '') continue;
+        q.set(key, String(value));
+      }
+    }
+    const query = q.toString();
+    return this.request<any>(`/recycle-bin${query ? `?${query}` : ''}`);
+  }
+
+  async restoreRecycleBinItem(id: string) {
+    return this.request<any>(`/recycle-bin/${id}/restore`, { method: 'POST' });
+  }
+
+  async permanentlyDeleteRecycleBinItem(id: string) {
+    return this.request<any>(`/recycle-bin/${id}/permanent`, { method: 'DELETE' });
+  }
+
+  async bulkRestoreRecycleBinItems(ids: string[]) {
+    return this.request<any>('/recycle-bin/bulk/restore', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  async bulkPermanentlyDeleteRecycleBinItems(ids: string[], confirmText = 'DELETE') {
+    return this.request<any>('/recycle-bin/bulk/permanent-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids, confirmText }),
+    });
+  }
+
+  async getRecycleBinAccessSettings() {
+    return this.request<any>('/recycle-bin/access-settings');
+  }
+
+  async updateRecycleBinAccessSettings(data: { roleScopes?: Record<string, any>; userOverrides?: Record<string, any> }) {
+    return this.request<any>('/recycle-bin/access-settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
   // ─── Notifications ───────────────────────────────────────────────
 
   async getNotifications(params?: Record<string, string | number>) {
@@ -835,12 +1185,22 @@ class ApiClient {
       : '';
     return this.request<{
       data: AppNotification[];
-      pagination: { page: number; limit: number; total: number; totalPages: number };
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+      };
     }>(`/notifications${query}`);
   }
 
-  async getUnreadCount() {
-    return this.request<{ count: number }>('/notifications/unread-count');
+  async getUnreadCount(params?: { divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<{ count: number }>(`/notifications/unread-count${query ? `?${query}` : ''}`);
   }
 
   async markNotificationRead(id: string) {
@@ -855,6 +1215,12 @@ class ApiClient {
     });
   }
 
+  async clearAllNotifications() {
+    return this.request<{ success: boolean; changed?: number; unreadCount?: number }>('/notifications/clear-all', {
+      method: 'POST',
+    });
+  }
+
   async archiveNotification(id: string) {
     return this.request<{ success: boolean }>(`/notifications/${id}/archive`, {
       method: 'POST',
@@ -865,6 +1231,53 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/notifications/${id}`, {
       method: 'DELETE',
     });
+  }
+
+  async notificationAction(
+    id: string,
+    action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
+    minutes?: number
+  ) {
+    return this.request<any>(`/notifications/${id}/action`, {
+      method: 'POST',
+      body: JSON.stringify(
+        typeof minutes === 'number' ? { action, minutes } : { action }
+      ),
+    });
+  }
+
+  async snoozeNotification(id: string, minutes = 15) {
+    return this.request<any>(`/notifications/${id}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ minutes }),
+    });
+  }
+
+  async escalateNotification(id: string) {
+    return this.request<any>(`/notifications/${id}/escalate`, {
+      method: 'POST',
+    });
+  }
+
+  async getNotificationDigest(params?: { range?: string; from?: string; to?: string; limit?: number; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.range) q.set('range', params.range);
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (typeof params?.limit === 'number') q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<any>(`/notifications/digest${query ? `?${query}` : ''}`);
+  }
+
+  async getNotificationAnalytics(params?: { range?: string; from?: string; to?: string; divisionId?: string }) {
+    const q = new URLSearchParams();
+    if (params?.range) q.set('range', params.range);
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    const query = q.toString();
+    return this.request<any>(`/notifications/analytics${query ? `?${query}` : ''}`);
   }
 
   async getNotificationPrefs() {
@@ -886,31 +1299,41 @@ class ApiClient {
     });
   }
 
-  async getAllocationStats() {
-    return this.request<any>('/leads/allocation/stats');
+  async getAllocationStats(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/leads/allocation/stats${q}`);
   }
 
-  async autoAllocateLeads() {
+  async autoAllocateLeads(divisionId?: string) {
     return this.request<any>('/leads/allocation/auto-allocate', {
       method: 'POST',
+      body: JSON.stringify(divisionId ? { divisionId } : {}),
     });
   }
 
-  async getAllocationRules() {
-    return this.request<any>('/leads/allocation/rules');
+  async getAllocationRules(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any>(`/leads/allocation/rules${q}`);
   }
 
-  async updateAllocationRules(rules: any) {
+  async updateAllocationRules(rules: any, divisionId?: string) {
+    const payload = divisionId ? { ...rules, divisionId } : rules;
     return this.request<any>('/leads/allocation/rules', {
       method: 'PUT',
-      body: JSON.stringify(rules),
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async resetDivisionAllocationRules(divisionId: string) {
+    return this.request<any>('/leads/allocation/rules', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, resetToGlobal: true }),
     });
   }
 
   async getAssignmentHistory(leadId: string) {
     return this.request<any[]>(`/leads/${leadId}/assignment-history`);
   }
-
   // ─── Inbox / Omnichannel ──────────────────────────────────────────
 
   async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {
@@ -1009,6 +1432,31 @@ class ApiClient {
 
   async getLeadAttachments(leadId: string) {
     return this.request<any[]>(`/inbox/conversations/${leadId}/attachments`);
+  }
+
+  // ─── Saved Views ─────────────────────────────────────────────────
+  async getSavedViews(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<any[]>(`/saved-views${q}`);
+  }
+
+  async createSavedView(data: any) {
+    return this.request<any>('/saved-views', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateSavedView(id: string, data: any) {
+    return this.request<any>(`/saved-views/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteSavedView(id: string) {
+    return this.request<any>(`/saved-views/${id}`, { method: 'DELETE' });
+  }
+
+  async migrateSavedViews(views: any[], divisionId?: string) {
+    return this.request<any>('/saved-views/migrate', {
+      method: 'POST',
+      body: JSON.stringify({ views, divisionId }),
+    });
   }
 }
 

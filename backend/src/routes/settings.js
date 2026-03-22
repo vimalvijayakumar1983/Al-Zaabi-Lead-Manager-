@@ -4,9 +4,39 @@ const bcrypt = require('bcryptjs');
 const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const {
+  getUserNotificationPreferences,
+  updateUserNotificationPreferences,
+  SNOOZE_MIN_MINUTES,
+  SNOOZE_MAX_MINUTES,
+} = require('../services/notificationPreferences');
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+const notificationPreferencesSchema = z.object({
+  soundEnabled: z.boolean().optional(),
+  desktopEnabled: z.boolean().optional(),
+  emailEnabled: z.boolean().optional(),
+  leads: z.boolean().optional(),
+  tasks: z.boolean().optional(),
+  campaigns: z.boolean().optional(),
+  integrations: z.boolean().optional(),
+  team: z.boolean().optional(),
+  system: z.boolean().optional(),
+  emailNewLead: z.boolean().optional(),
+  emailLeadAssigned: z.boolean().optional(),
+  emailTaskDue: z.boolean().optional(),
+  emailWeeklyDigest: z.boolean().optional(),
+  inAppNewLead: z.boolean().optional(),
+  inAppLeadAssigned: z.boolean().optional(),
+  inAppTaskDue: z.boolean().optional(),
+  inAppStatusChange: z.boolean().optional(),
+  escalationEnabled: z.boolean().optional(),
+  digestEnabled: z.boolean().optional(),
+  defaultTaskSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
+  defaultCallbackSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
+});
 
 // ─── Get Profile ────────────────────────────────────────────────
 router.get('/profile', async (req, res, next) => {
@@ -150,57 +180,21 @@ router.put('/organization', authorize('ADMIN'), validate(z.object({
 // ─── Get Notification Preferences ───────────────────────────────
 router.get('/notifications', async (req, res, next) => {
   try {
-    const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
-      select: { settings: true },
-    });
-
-    const settings = typeof org.settings === 'object' ? org.settings : {};
-    const userNotifs = settings[`notifs_${req.user.id}`] || {
-      emailNewLead: true,
-      emailLeadAssigned: true,
-      emailTaskDue: true,
-      emailWeeklyDigest: true,
-      inAppNewLead: true,
-      inAppLeadAssigned: true,
-      inAppTaskDue: true,
-      inAppStatusChange: true,
-    };
-
-    res.json(userNotifs);
+    const preferences = await getUserNotificationPreferences(req.user.id, req.orgId);
+    res.json(preferences);
   } catch (err) {
     next(err);
   }
 });
 
 // ─── Update Notification Preferences ────────────────────────────
-router.put('/notifications', validate(z.object({
-  emailNewLead: z.boolean().optional(),
-  emailLeadAssigned: z.boolean().optional(),
-  emailTaskDue: z.boolean().optional(),
-  emailWeeklyDigest: z.boolean().optional(),
-  inAppNewLead: z.boolean().optional(),
-  inAppLeadAssigned: z.boolean().optional(),
-  inAppTaskDue: z.boolean().optional(),
-  inAppStatusChange: z.boolean().optional(),
-})), async (req, res, next) => {
+router.put('/notifications', validate(notificationPreferencesSchema), async (req, res, next) => {
   try {
-    const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
-      select: { settings: true },
-    });
-
-    const settings = typeof org.settings === 'object' ? org.settings : {};
-    const currentNotifs = settings[`notifs_${req.user.id}`] || {};
-    const updated = { ...currentNotifs, ...req.validated };
-
-    await prisma.organization.update({
-      where: { id: req.orgId },
-      data: {
-        settings: { ...settings, [`notifs_${req.user.id}`]: updated },
-      },
-    });
-
+    const updated = await updateUserNotificationPreferences(
+      req.user.id,
+      req.orgId,
+      req.validated
+    );
     res.json(updated);
   } catch (err) {
     next(err);
@@ -262,6 +256,136 @@ router.delete('/account', validate(z.object({
   }
 });
 
+// ─── Field Configuration (Built-in + Custom fields visibility) ──────
+
+const BUILT_IN_FIELDS = [
+  { key: 'name',            label: 'Name',             type: 'TEXT',         locked: true,  isRequired: true,  canToggleRequired: false, category: 'contact' },
+  { key: 'email',           label: 'Email',            type: 'EMAIL',        locked: false, isRequired: false, canToggleRequired: true,  category: 'contact' },
+  { key: 'phone',           label: 'Phone',            type: 'PHONE',        locked: false, isRequired: false, canToggleRequired: true,  category: 'contact' },
+  { key: 'company',         label: 'Company',          type: 'TEXT',         locked: false, isRequired: false, canToggleRequired: true,  category: 'contact' },
+  { key: 'jobTitle',        label: 'Job Title',        type: 'TEXT',         locked: false, isRequired: false, canToggleRequired: true,  category: 'contact' },
+  { key: 'location',        label: 'Location',         type: 'TEXT',         locked: false, isRequired: false, canToggleRequired: true,  category: 'contact' },
+  { key: 'website',         label: 'Website',          type: 'URL',          locked: false, isRequired: false, canToggleRequired: true,  category: 'contact' },
+  { key: 'source',          label: 'Source',            type: 'SELECT',       locked: false, isRequired: false, canToggleRequired: true,  category: 'lead' },
+  { key: 'status',          label: 'Status',            type: 'SELECT',       locked: true,  isRequired: false, canToggleRequired: false, category: 'lead' },
+  { key: 'score',           label: 'Score',             type: 'NUMBER',       locked: false, isRequired: false, canToggleRequired: false, category: 'lead' },
+  { key: 'budget',          label: 'Budget',            type: 'CURRENCY',     locked: false, isRequired: false, canToggleRequired: true,  category: 'business' },
+  { key: 'productInterest', label: 'Product Interest',  type: 'TEXT',         locked: false, isRequired: false, canToggleRequired: true,  category: 'business' },
+  { key: 'campaign',        label: 'Campaign',          type: 'TEXT',         locked: false, isRequired: false, canToggleRequired: true,  category: 'business' },
+  { key: 'conversionProb',  label: 'Conversion %',      type: 'NUMBER',       locked: false, isRequired: false, canToggleRequired: false, category: 'lead' },
+  { key: 'stage',           label: 'Pipeline Stage',    type: 'SELECT',       locked: false, isRequired: false, canToggleRequired: false, category: 'lead' },
+  { key: 'assignedTo',      label: 'Assigned To',       type: 'TEXT',         locked: true,  isRequired: false, canToggleRequired: false, category: 'lead' },
+  { key: 'tags',            label: 'Tags',              type: 'MULTI_SELECT', locked: false, isRequired: false, canToggleRequired: false, category: 'lead' },
+  { key: 'createdAt',       label: 'Created Date',      type: 'DATE',         locked: false, isRequired: false, canToggleRequired: false, category: 'system' },
+  { key: 'updatedAt',       label: 'Updated Date',      type: 'DATE',         locked: false, isRequired: false, canToggleRequired: false, category: 'system' },
+];
+
+// GET /field-config — Get field configuration for a division
+router.get('/field-config', async (req, res, next) => {
+  try {
+    const { divisionId } = req.query;
+    const orgId = req.orgId;
+
+    // Get org settings for field config
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+
+    const settings = (org?.settings || {});
+    const divKey = divisionId ? `division_${divisionId}` : 'default';
+    // Cascade: division-specific → group-level defaults → empty
+    const fieldConfig = settings.fieldConfig?.[divKey] || settings.fieldConfig?.['default'] || {};
+
+    // Get status labels for this division
+    const statusLabels = settings.statusLabels?.[divKey] || settings.statusLabels?.['default'] || {};
+
+    // Merge built-in fields with saved config
+    const builtInFields = BUILT_IN_FIELDS.map((f, idx) => ({
+      ...f,
+      customLabel: fieldConfig[f.key]?.customLabel || null,
+      showInList: fieldConfig[f.key]?.showInList ?? true,
+      showInDetail: fieldConfig[f.key]?.showInDetail ?? true,
+      isRequired: f.canToggleRequired === false ? (f.isRequired ?? false) : (fieldConfig[f.key]?.isRequired ?? f.isRequired ?? false),
+      canToggleRequired: f.canToggleRequired ?? false,
+      order: fieldConfig[f.key]?.order ?? idx,
+      isBuiltIn: true,
+    }));
+
+    // Get custom fields for this org (optionally filtered by division)
+    if (divisionId) {
+      const customFields = await prisma.customField.findMany({
+        where: {
+          organizationId: orgId,
+          OR: [
+            { divisionId: null },
+            { divisionId },
+          ],
+        },
+        orderBy: { order: 'asc' },
+      });
+      return res.json({ builtInFields, customFields, statusLabels });
+    }
+
+    const customFields = await prisma.customField.findMany({
+      where: { organizationId: orgId },
+      orderBy: { order: 'asc' },
+    });
+
+    res.json({ builtInFields, customFields, statusLabels });
+  } catch (err) { next(err); }
+});
+
+// PUT /field-config — Save built-in field visibility per division
+router.put('/field-config', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const { divisionId, fields } = req.body;
+    const orgId = req.orgId;
+    const divKey = divisionId ? `division_${divisionId}` : 'default';
+
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+
+    const settings = (org?.settings || {});
+    if (!settings.fieldConfig) settings.fieldConfig = {};
+    settings.fieldConfig[divKey] = fields;
+
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: { settings },
+    });
+
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+// PUT /status-labels — Save custom status labels per division
+router.put('/status-labels', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const { divisionId, labels } = req.body;
+    const orgId = req.orgId;
+    const divKey = divisionId ? `division_${divisionId}` : 'default';
+
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+
+    const settings = (org?.settings || {});
+    if (!settings.statusLabels) settings.statusLabels = {};
+    settings.statusLabels[divKey] = labels || {};
+
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: { settings },
+    });
+
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
 // ─── Custom Fields ─────────────────────────────────────────────
 
 // List custom fields
@@ -298,13 +422,18 @@ router.get('/custom-fields', async (req, res, next) => {
 // Create custom field
 router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
   label: z.string().min(1).max(100),
-  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']),
+  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE', 'TEXTAREA', 'CURRENCY']),
   options: z.array(z.string()).optional(),
   isRequired: z.boolean().optional(),
   divisionId: z.string().uuid().optional().nullable(),
+  showInList: z.boolean().optional(),
+  showInDetail: z.boolean().optional(),
+  description: z.string().max(500).optional().nullable(),
+  placeholder: z.string().max(200).optional().nullable(),
+  defaultValue: z.string().max(500).optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const { label, type, options, isRequired, divisionId } = req.validated;
+    const { label, type, options, isRequired, divisionId, showInList, showInDetail, description, placeholder, defaultValue } = req.validated;
     const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
 
     // Generate name from label (e.g. "Company Size" -> "companySize")
@@ -328,6 +457,12 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
         options: (type === 'SELECT' || type === 'MULTI_SELECT') ? (options || []) : null,
         isRequired: isRequired || false,
         order: (maxOrder._max.order ?? -1) + 1,
+        showInList: showInList ?? true,
+        showInDetail: showInDetail ?? true,
+        description: description || null,
+        placeholder: placeholder || null,
+        defaultValue: defaultValue || null,
+        divisionId: divisionId || null,
         organizationId: targetOrgId,
       },
     });
@@ -344,9 +479,15 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
 // Update custom field
 router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
   label: z.string().min(1).max(100).optional(),
-  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE']).optional(),
+  type: z.enum(['TEXT', 'NUMBER', 'DATE', 'SELECT', 'MULTI_SELECT', 'BOOLEAN', 'URL', 'EMAIL', 'PHONE', 'TEXTAREA', 'CURRENCY']).optional(),
   options: z.array(z.string()).optional().nullable(),
   isRequired: z.boolean().optional(),
+  showInList: z.boolean().optional(),
+  showInDetail: z.boolean().optional(),
+  description: z.string().max(500).optional().nullable(),
+  placeholder: z.string().max(200).optional().nullable(),
+  defaultValue: z.string().max(500).optional().nullable(),
+  divisionId: z.string().uuid().optional().nullable(),
 })), async (req, res, next) => {
   try {
     const existing = await prisma.customField.findFirst({
@@ -438,15 +579,182 @@ router.delete('/custom-fields/:id', authorize('ADMIN'), async (req, res, next) =
   }
 });
 
+// ─── SLA Configuration ──────────────────────────────────────
+
+const { getSLAConfig, DEFAULT_SLA_CONFIG, getLeadSLAInfo } = require('../services/slaMonitor');
+
+// Get SLA settings
+router.get('/sla', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const slaConfig = getSLAConfig(settings);
+    res.json(slaConfig);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update SLA settings
+router.put('/sla', authorize('ADMIN'), validate(z.object({
+  enabled: z.boolean(),
+  thresholds: z.object({
+    warningMinutes: z.coerce.number().int().min(1).max(10080),
+    breachMinutes: z.coerce.number().int().min(1).max(10080),
+    escalationMinutes: z.coerce.number().int().min(1).max(10080),
+    reassignMinutes: z.coerce.number().int().min(1).max(10080),
+  }).optional(),
+  actions: z.object({
+    onWarning: z.enum(['notify', 'none']).optional(),
+    onBreach: z.enum(['remind', 'notify', 'none']).optional(),
+    onEscalation: z.enum(['notify_manager', 'reassign', 'notify', 'none']).optional(),
+    onReassign: z.enum(['reassign', 'notify', 'none']).optional(),
+  }).optional(),
+  escalationContactId: z.string().uuid().optional().nullable(),
+  workingHoursOnly: z.boolean().optional(),
+  excludeStatuses: z.array(z.string()).optional(),
+})), async (req, res, next) => {
+  try {
+    const data = req.validated;
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const currentSla = settings.sla || {};
+
+    const updatedSla = {
+      ...DEFAULT_SLA_CONFIG,
+      ...currentSla,
+      ...data,
+      thresholds: { ...DEFAULT_SLA_CONFIG.thresholds, ...(currentSla.thresholds || {}), ...(data.thresholds || {}) },
+      actions: { ...DEFAULT_SLA_CONFIG.actions, ...(currentSla.actions || {}), ...(data.actions || {}) },
+    };
+
+    await prisma.organization.update({
+      where: { id: req.orgId },
+      data: { settings: { ...settings, sla: updatedSla } },
+    });
+
+    res.json(updatedSla);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get SLA dashboard stats
+router.get('/sla/dashboard', async (req, res, next) => {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: req.orgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const config = getSLAConfig(settings);
+
+    if (!config.enabled) {
+      return res.json({ enabled: false });
+    }
+
+    // Get SLA status counts
+    const [onTime, atRisk, breached, escalated, responded] = await Promise.all([
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'ON_TIME', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'AT_RISK', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'BREACHED', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'ESCALATED', status: { notIn: config.excludeStatuses } } }),
+      prisma.lead.count({ where: { organizationId: { in: req.orgIds }, isArchived: false, slaStatus: 'RESPONDED', status: { notIn: config.excludeStatuses } } }),
+    ]);
+
+    // Get average response time for responded leads
+    const respondedLeads = await prisma.lead.findMany({
+      where: {
+        organizationId: { in: req.orgIds },
+        isArchived: false,
+        firstRespondedAt: { not: null },
+      },
+      select: { createdAt: true, firstRespondedAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    let avgResponseMinutes = 0;
+    if (respondedLeads.length > 0) {
+      const totalMinutes = respondedLeads.reduce((sum, l) => {
+        const diff = new Date(l.firstRespondedAt).getTime() - new Date(l.createdAt).getTime();
+        return sum + diff / 60000;
+      }, 0);
+      avgResponseMinutes = Math.round(totalMinutes / respondedLeads.length);
+    }
+
+    // Get breached leads needing attention
+    const breachedLeads = await prisma.lead.findMany({
+      where: {
+        organizationId: { in: req.orgIds },
+        isArchived: false,
+        slaStatus: { in: ['BREACHED', 'ESCALATED', 'AT_RISK'] },
+        status: { notIn: config.excludeStatuses },
+      },
+      include: {
+        assignedTo: { select: { id: true, firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+
+    const enrichedBreachedLeads = breachedLeads.map(lead => ({
+      ...lead,
+      slaInfo: getLeadSLAInfo(lead, settings),
+    }));
+
+    res.json({
+      enabled: true,
+      thresholds: config.thresholds,
+      counts: { onTime, atRisk, breached, escalated, responded },
+      avgResponseMinutes,
+      breachedLeads: enrichedBreachedLeads,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Email Configuration ─────────────────────────────────────
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
 
+// Helper: resolve the target division ID for email settings
+// SUPER_ADMIN must specify ?divisionId=<id>; ADMIN uses their own org
+async function resolveEmailOrgId(req, res) {
+  const { divisionId } = req.query;
+
+  if (req.isSuperAdmin) {
+    if (!divisionId) {
+      res.status(400).json({ error: 'Please select a division to configure email settings' });
+      return null;
+    }
+    // Verify divisionId is a valid child division
+    if (!req.orgIds.includes(divisionId)) {
+      res.status(403).json({ error: 'Division not found or access denied' });
+      return null;
+    }
+    return divisionId;
+  }
+
+  // ADMIN uses their own orgId (which is already a division)
+  return req.orgId;
+}
+
 // Get email config
 router.get('/email', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -476,9 +784,12 @@ router.put('/email', authorize('ADMIN'), validate(z.object({
   replyTo: z.string().email().optional().nullable(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -500,7 +811,7 @@ router.put('/email', authorize('ADMIN'), validate(z.object({
     };
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, emailConfig } },
     });
 
@@ -519,12 +830,15 @@ router.post('/email/test-connection', authorize('ADMIN'), validate(z.object({
   smtpPass: z.string().optional(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const data = req.validated;
 
     // If password is masked, use the stored one
     if (!data.smtpPass || data.smtpPass === '••••••••') {
       const org = await prisma.organization.findUnique({
-        where: { id: req.orgId },
+        where: { id: targetOrgId },
         select: { settings: true },
       });
       const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -543,9 +857,12 @@ router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
   toEmail: z.string().email(),
 })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const { toEmail } = req.validated;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -562,6 +879,196 @@ router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
   }
 });
 
+// ─── Incoming Email Configuration (IMAP / POP3) ─────────────
+
+const { testImapConnection, testPop3Connection, fetchEmails } = require('../services/emailReceiveService');
+
+// Get incoming email config
+router.get('/email/incoming', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const config = settings.incomingEmailConfig || {};
+
+    // Never return passwords in plain text
+    const sanitized = { ...config };
+    if (sanitized.imapPass) {
+      sanitized.imapPass = '••••••••';
+      sanitized.hasImapPassword = true;
+    }
+    if (sanitized.popPass) {
+      sanitized.popPass = '••••••••';
+      sanitized.hasPopPassword = true;
+    }
+
+    res.json(sanitized);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Save incoming email config
+router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
+  protocol: z.enum(['imap', 'pop3']),
+  // IMAP fields
+  imapHost: z.string().optional(),
+  imapPort: z.coerce.number().int().min(1).max(65535).optional(),
+  imapUser: z.string().optional(),
+  imapPass: z.string().optional(),
+  imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+  imapFolder: z.string().optional(),
+  // POP3 fields
+  popHost: z.string().optional(),
+  popPort: z.coerce.number().int().min(1).max(65535).optional(),
+  popUser: z.string().optional(),
+  popPass: z.string().optional(),
+  popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+  popDeleteAfterFetch: z.boolean().optional(),
+  // Common
+  fetchInterval: z.coerce.number().int().min(1).max(1440).optional(),
+  autoFetch: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const data = req.validated;
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = typeof org.settings === 'object' ? org.settings : {};
+    const existingConfig = settings.incomingEmailConfig || {};
+
+    // If passwords are masked or empty, keep the existing ones
+    if (!data.imapPass || data.imapPass === '••••••••') {
+      data.imapPass = existingConfig.imapPass || '';
+    }
+    if (!data.popPass || data.popPass === '••••••••') {
+      data.popPass = existingConfig.popPass || '';
+    }
+
+    const incomingEmailConfig = {
+      protocol: data.protocol,
+      // IMAP
+      imapHost: data.imapHost || existingConfig.imapHost || '',
+      imapPort: data.imapPort || existingConfig.imapPort || 993,
+      imapUser: data.imapUser || existingConfig.imapUser || '',
+      imapPass: data.imapPass,
+      imapSecurity: data.imapSecurity || existingConfig.imapSecurity || 'ssl',
+      imapFolder: data.imapFolder || existingConfig.imapFolder || 'INBOX',
+      // POP3
+      popHost: data.popHost || existingConfig.popHost || '',
+      popPort: data.popPort || existingConfig.popPort || 995,
+      popUser: data.popUser || existingConfig.popUser || '',
+      popPass: data.popPass,
+      popSecurity: data.popSecurity || existingConfig.popSecurity || 'ssl',
+      popDeleteAfterFetch: data.popDeleteAfterFetch ?? existingConfig.popDeleteAfterFetch ?? false,
+      // Common
+      fetchInterval: data.fetchInterval || existingConfig.fetchInterval || 5,
+      autoFetch: data.autoFetch ?? existingConfig.autoFetch ?? false,
+    };
+
+    await prisma.organization.update({
+      where: { id: targetOrgId },
+      data: { settings: { ...settings, incomingEmailConfig } },
+    });
+
+    // Return sanitized config
+    const sanitized = { ...incomingEmailConfig };
+    if (sanitized.imapPass) { sanitized.imapPass = '••••••••'; sanitized.hasImapPassword = true; }
+    if (sanitized.popPass) { sanitized.popPass = '••••••••'; sanitized.hasPopPassword = true; }
+
+    res.json(sanitized);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test IMAP connection
+router.post('/email/incoming/test-imap', authorize('ADMIN'), validate(z.object({
+  imapHost: z.string().min(1),
+  imapPort: z.coerce.number().int().min(1).max(65535),
+  imapUser: z.string().min(1),
+  imapPass: z.string().optional(),
+  imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+})), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const data = req.validated;
+
+    // If password is masked, use the stored one
+    if (!data.imapPass || data.imapPass === '••••••••') {
+      const org = await prisma.organization.findUnique({
+        where: { id: targetOrgId },
+        select: { settings: true },
+      });
+      const settings = typeof org.settings === 'object' ? org.settings : {};
+      data.imapPass = settings.incomingEmailConfig?.imapPass || '';
+    }
+
+    const result = await testImapConnection(data);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test POP3 connection
+router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
+  popHost: z.string().min(1),
+  popPort: z.coerce.number().int().min(1).max(65535),
+  popUser: z.string().min(1),
+  popPass: z.string().optional(),
+  popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
+})), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const data = req.validated;
+
+    // If password is masked, use the stored one
+    if (!data.popPass || data.popPass === '••••••••') {
+      const org = await prisma.organization.findUnique({
+        where: { id: targetOrgId },
+        select: { settings: true },
+      });
+      const settings = typeof org.settings === 'object' ? org.settings : {};
+      data.popPass = settings.incomingEmailConfig?.popPass || '';
+    }
+
+    const result = await testPop3Connection(data);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Fetch emails from configured incoming server
+router.post('/email/incoming/fetch', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const result = await fetchEmails(targetOrgId, {
+      limit: 20,
+      markAsRead: false,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Email Templates ────────────────────────────────────────
 
 const DEFAULT_TEMPLATES = [
@@ -569,12 +1076,14 @@ const DEFAULT_TEMPLATES = [
     name: 'welcome',
     label: 'Welcome',
     subject: 'Welcome to {{companyName}}!',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Welcome, {{firstName}}!</h2>
-  <p style="color: #374151; line-height: 1.6;">Thank you for your interest in {{companyName}}. We're excited to connect with you.</p>
-  <p style="color: #374151; line-height: 1.6;">A member of our team will be in touch shortly to discuss how we can help.</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Welcome, {{firstName}}!
+
+Thank you for your interest in {{companyName}}. We're excited to connect with you.
+
+A member of our team will be in touch shortly to discuss how we can help.
+
+Best regards,
+{{senderName}}`,
     description: 'Sent to new leads when they first enter the system',
     isDefault: true,
   },
@@ -582,12 +1091,14 @@ const DEFAULT_TEMPLATES = [
     name: 'follow-up',
     label: 'Follow Up',
     subject: 'Following up — {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
-  <p style="color: #374151; line-height: 1.6;">I wanted to follow up on our recent conversation. Do you have any questions or would you like to schedule a call?</p>
-  <p style="color: #374151; line-height: 1.6;">I'm happy to help with anything you need.</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Hi {{firstName}},
+
+I wanted to follow up on our recent conversation. Do you have any questions or would you like to schedule a call?
+
+I'm happy to help with anything you need.
+
+Best regards,
+{{senderName}}`,
     description: 'Follow-up email for leads that have been contacted',
     isDefault: true,
   },
@@ -595,12 +1106,14 @@ const DEFAULT_TEMPLATES = [
     name: 'proposal',
     label: 'Proposal',
     subject: 'Proposal from {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
-  <p style="color: #374151; line-height: 1.6;">Please find our proposal details below. We've tailored this based on our discussion about your needs.</p>
-  <p style="color: #374151; line-height: 1.6;">Feel free to reach out if you have any questions or would like to discuss further.</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Hi {{firstName}},
+
+Please find our proposal details below. We've tailored this based on our discussion about your needs.
+
+Feel free to reach out if you have any questions or would like to discuss further.
+
+Best regards,
+{{senderName}}`,
     description: 'Sent when sharing a proposal with a lead',
     isDefault: true,
   },
@@ -608,12 +1121,14 @@ const DEFAULT_TEMPLATES = [
     name: 'meeting-reminder',
     label: 'Meeting Reminder',
     subject: 'Reminder: Upcoming meeting — {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Hi {{firstName}},</h2>
-  <p style="color: #374151; line-height: 1.6;">This is a friendly reminder about our upcoming meeting.</p>
-  <p style="color: #374151; line-height: 1.6;">Looking forward to speaking with you!</p>
-  <p style="color: #374151; line-height: 1.6;">Best regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Hi {{firstName}},
+
+This is a friendly reminder about our upcoming meeting.
+
+Looking forward to speaking with you!
+
+Best regards,
+{{senderName}}`,
     description: 'Reminder email before a scheduled meeting',
     isDefault: true,
   },
@@ -621,13 +1136,118 @@ const DEFAULT_TEMPLATES = [
     name: 'thank-you',
     label: 'Thank You',
     subject: 'Thank you — {{companyName}}',
-    htmlBody: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-  <h2 style="color: #6366f1;">Thank you, {{firstName}}!</h2>
-  <p style="color: #374151; line-height: 1.6;">We truly appreciate your business and trust in {{companyName}}.</p>
-  <p style="color: #374151; line-height: 1.6;">If there's anything else we can help with, please don't hesitate to reach out.</p>
-  <p style="color: #374151; line-height: 1.6;">Warm regards,<br/>{{senderName}}</p>
-</div>`,
+    body: `Thank you, {{firstName}}!
+
+We truly appreciate your business and trust in {{companyName}}.
+
+If there's anything else we can help with, please don't hesitate to reach out.
+
+Warm regards,
+{{senderName}}`,
     description: 'Thank you email after closing a deal',
+    isDefault: true,
+  },
+  {
+    name: 'status-update',
+    label: 'Status Update',
+    subject: 'Lead Status Update: {{firstName}} {{lastName}}',
+    body: `Hi,
+
+This is to inform you that the status of lead {{firstName}} {{lastName}} has been updated.
+
+New Status: {{status}}
+Company: {{company}}
+Email: {{email}}
+Phone: {{phone}}
+
+Please take the necessary action.
+
+Best regards,
+{{companyName}} CRM`,
+    description: 'Notification when lead status changes — can be sent to users or external emails',
+    isDefault: true,
+  },
+  {
+    name: 'sla-breach-alert',
+    label: 'SLA Breach Alert',
+    subject: '⚠️ SLA Breach: {{firstName}} {{lastName}} needs immediate attention',
+    body: `Hi {{senderName}},
+
+URGENT: Lead {{firstName}} {{lastName}} has breached the SLA response time and requires immediate attention.
+
+Lead Details:
+• Name: {{firstName}} {{lastName}}
+• Email: {{email}}
+• Phone: {{phone}}
+• Company: {{company}}
+• Status: {{status}}
+
+This lead has not been contacted within the expected response window. Please take action immediately or escalate to your manager.
+
+— {{companyName}} CRM`,
+    description: 'Sent to the assigned rep or manager when a lead breaches the SLA response time',
+    isDefault: true,
+  },
+  {
+    name: 'post-meeting-thank-you',
+    label: 'Post-Meeting Thank You',
+    subject: 'Great meeting with you — {{companyName}}',
+    body: `Hi {{firstName}},
+
+Thank you for taking the time to meet with us today. It was a pleasure learning more about your needs.
+
+As discussed, here are the next steps we'll be taking:
+• We will prepare a tailored proposal based on your requirements
+• Our team will follow up within the next 2 business days
+
+If you have any questions in the meantime, please don't hesitate to reach out.
+
+Looking forward to working together!
+
+Best regards,
+{{senderName}}
+{{companyName}}`,
+    description: 'Sent after a meeting to thank the lead and outline next steps',
+    isDefault: true,
+  },
+  {
+    name: 're-engagement',
+    label: 'Re-Engagement',
+    subject: 'We miss you, {{firstName}}! — {{companyName}}',
+    body: `Hi {{firstName}},
+
+It's been a while since we last connected, and I wanted to reach out to see how things are going.
+
+At {{companyName}}, we've been working on some exciting new offerings that might be of interest to you.
+
+Would you be open to a quick call to catch up? I'd love to explore how we can help.
+
+Looking forward to hearing from you!
+
+Best regards,
+{{senderName}}
+{{companyName}}`,
+    description: 'Sent to leads that have been inactive for 30+ days to re-engage them',
+    isDefault: true,
+  },
+  {
+    name: 'referral-request',
+    label: 'Referral Request',
+    subject: 'A small favour — {{companyName}}',
+    body: `Hi {{firstName}},
+
+I hope you've been enjoying your experience with {{companyName}}! We truly value our partnership.
+
+If you know anyone who could benefit from our services, we'd be grateful for a referral. A warm introduction goes a long way, and we promise to take excellent care of anyone you send our way.
+
+As a token of appreciation, we offer special benefits for both you and anyone you refer.
+
+Thank you for your trust and support!
+
+Warm regards,
+{{senderName}}
+{{companyName}}`,
+    description: 'Sent to won customers 14 days after closing to request referrals',
     isDefault: true,
   },
 ];
@@ -635,8 +1255,11 @@ const DEFAULT_TEMPLATES = [
 // Get email templates
 router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -649,18 +1272,23 @@ router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
 });
 
 // Save a single email template (create or update by name)
+// Accepts plain text `body` (admin-friendly) or legacy `htmlBody`
 router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
   label: z.string().min(1).max(100),
   subject: z.string().min(1).max(500),
-  htmlBody: z.string().min(1),
+  body: z.string().min(1).optional(),
+  htmlBody: z.string().optional(),
   description: z.string().max(500).optional(),
-})), async (req, res, next) => {
+}).refine((d) => d.body || d.htmlBody, { message: 'Either body or htmlBody is required' })), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const { name } = req.params;
     const data = req.validated;
 
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -671,23 +1299,85 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
       name,
       label: data.label,
       subject: data.subject,
-      htmlBody: data.htmlBody,
       description: data.description || '',
       isDefault: false,
     };
 
+    // Store plain text body (preferred) or legacy htmlBody
+    if (data.body) {
+      templateData.body = data.body;
+      // Remove legacy htmlBody if switching to plain text
+      templateData.htmlBody = undefined;
+    } else if (data.htmlBody) {
+      templateData.htmlBody = data.htmlBody;
+    }
+
     if (existingIdx >= 0) {
       templates[existingIdx] = { ...templates[existingIdx], ...templateData };
+      // Clean up: if switching to body, remove old htmlBody
+      if (data.body) {
+        delete templates[existingIdx].htmlBody;
+      }
     } else {
       templates.push(templateData);
     }
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, emailTemplates: templates } },
     });
 
-    res.json(templateData);
+    res.json(templates[existingIdx >= 0 ? existingIdx : templates.length - 1]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Preview an email template — renders with sample variables
+router.post('/email/templates/preview', authorize('ADMIN'), validate(z.object({
+  subject: z.string().optional(),
+  body: z.string().optional(),
+  htmlBody: z.string().optional(),
+})), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
+    const { renderTemplate, wrapInHtmlLayout, textToHtml } = require('../services/emailService');
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { name: true, tradeName: true, primaryColor: true },
+    });
+
+    const sampleVariables = {
+      firstName: 'Ahmed',
+      lastName: 'Al-Zaabi',
+      email: 'ahmed@example.com',
+      phone: '+971 50 123 4567',
+      company: 'Sample Corp',
+      companyName: org?.tradeName || org?.name || 'Your Company',
+      senderName: 'Sales Team',
+      status: 'QUALIFIED',
+      source: 'WEBSITE',
+      jobTitle: 'Manager',
+      location: 'Dubai, UAE',
+      assignedTo: 'Sarah Johnson',
+    };
+
+    const layoutOptions = {
+      orgName: org?.tradeName || org?.name || 'Your Company',
+      brandColor: org?.primaryColor || '#6366f1',
+    };
+
+    const template = {
+      subject: req.validated.subject || 'Preview Subject',
+      body: req.validated.body,
+      htmlBody: req.validated.htmlBody,
+    };
+
+    const result = renderTemplate(template, sampleVariables, layoutOptions);
+    res.json({ subject: result.subject, html: result.html });
   } catch (err) {
     next(err);
   }
@@ -696,9 +1386,12 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
 // Delete an email template
 router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, next) => {
   try {
+    const targetOrgId = await resolveEmailOrgId(req, res);
+    if (!targetOrgId) return;
+
     const { name } = req.params;
     const org = await prisma.organization.findUnique({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       select: { settings: true },
     });
     const settings = typeof org.settings === 'object' ? org.settings : {};
@@ -707,7 +1400,7 @@ router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, nex
     templates = templates.filter((t) => t.name !== name);
 
     await prisma.organization.update({
-      where: { id: req.orgId },
+      where: { id: targetOrgId },
       data: { settings: { ...settings, emailTemplates: templates } },
     });
 

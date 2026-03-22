@@ -7,6 +7,20 @@ const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner,
 const { getTemplate, getAllTemplates, labelToFieldName } = require('../config/industryTemplates');
 
 const bcrypt = require('bcryptjs');
+const { sendInviteEmail } = require('../email');
+
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
 
 const router = Router();
 
@@ -55,7 +69,7 @@ router.get('/', async (req, res, next) => {
         },
         include: {
           _count: {
-            select: { users: true, leads: true },
+            select: { users: true, leads: { where: { isArchived: false } } },
           },
         },
         orderBy: { name: 'asc' },
@@ -69,7 +83,7 @@ router.get('/', async (req, res, next) => {
       where: { id: req.user.organizationId },
       include: {
         _count: {
-          select: { users: true, leads: true },
+          select: { users: true, leads: { where: { isArchived: false } } },
         },
       },
     });
@@ -163,7 +177,7 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
       where: { id: result.id },
       include: {
         _count: {
-          select: { users: true, leads: true },
+          select: { users: true, leads: { where: { isArchived: false } } },
         },
       },
     });
@@ -174,7 +188,7 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
     notifyOrgAdmins(req.user.organizationId, {
       type: NOTIFICATION_TYPES.DIVISION_CREATED,
       title: 'New Division Created',
-      message: `${req.user.firstName} ${req.user.lastName} created division: ${name}${template ? ` (${template.name} template)` : ''}`,
+      message: `${getDisplayName(req.user)} created division: ${name}${template ? ` (${template.name} template)` : ''}`,
       entityType: 'division',
       entityId: division.id,
     }, req.user.id).catch(() => {});
@@ -200,7 +214,7 @@ router.get('/:id', async (req, res, next) => {
         },
         include: {
           _count: {
-            select: { users: true, leads: true, pipelineStages: true },
+            select: { users: true, leads: { where: { isArchived: false } }, pipelineStages: true },
           },
         },
       });
@@ -221,7 +235,7 @@ router.get('/:id', async (req, res, next) => {
       where: { id },
       include: {
         _count: {
-          select: { users: true, leads: true, pipelineStages: true },
+          select: { users: true, leads: { where: { isArchived: false } }, pipelineStages: true },
         },
       },
     });
@@ -277,7 +291,7 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
       data: updateData,
       include: {
         _count: {
-          select: { users: true, leads: true },
+          select: { users: true, leads: { where: { isArchived: false } } },
         },
       },
     });
@@ -603,10 +617,11 @@ router.get('/:id/stats', async (req, res, next) => {
     const [totalUsers, activeUsers, totalLeads, newLeadsThisMonth, pipelineCount, taskCount] = await Promise.all([
       prisma.user.count({ where: { organizationId: divisionId } }),
       prisma.user.count({ where: { organizationId: divisionId, isActive: true } }),
-      prisma.lead.count({ where: { organizationId: divisionId } }),
+      prisma.lead.count({ where: { organizationId: divisionId, isArchived: false } }),
       prisma.lead.count({
         where: {
           organizationId: divisionId,
+          isArchived: false,
           createdAt: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
         },
       }),
@@ -643,6 +658,7 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
     // Verify division exists and requester has access
     const division = await prisma.organization.findFirst({
       where: { id: divisionId, ...(req.isSuperAdmin ? {} : { id: { in: req.orgIds } }) },
+      select: { id: true, name: true, parentId: true },
     });
     if (!division) return res.status(404).json({ error: 'Division not found' });
 
@@ -664,11 +680,18 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
 
     res.status(201).json(user);
 
+    // ── Fire-and-forget: Send invitation email with credentials ──
+    const parentOrgId = division.parentId || divisionId;
+    const inviterFullName = getDisplayName(req.user);
+    sendInviteEmail(email, password, getDisplayName({ firstName, lastName }), division.name, role, inviterFullName, parentOrgId).catch((err) => {
+      console.error('Failed to send invite email:', err.message);
+    });
+
     // Fire-and-forget notification
     notifyOrgAdmins(divisionId, {
       type: NOTIFICATION_TYPES.TEAM_MEMBER_INVITED || 'TEAM_MEMBER_INVITED',
       title: 'New Team Member',
-      message: `${req.user.firstName} ${req.user.lastName} invited ${email} to ${division.name}`,
+      message: `${getDisplayName(req.user)} invited ${email} to ${division.name}`,
       entityType: 'user',
       entityId: user.id,
     }, req.user.id).catch(() => {});

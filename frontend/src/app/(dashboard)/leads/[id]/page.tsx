@@ -6,7 +6,10 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
+import { LogCallModalDynamic } from '../components/log-call-modal';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 
 const statusColors: Record<string, string> = {
   NEW: 'bg-indigo-100 text-indigo-800 border-indigo-200',
@@ -16,6 +19,7 @@ const statusColors: Record<string, string> = {
   NEGOTIATION: 'bg-orange-100 text-orange-800 border-orange-200',
   WON: 'bg-green-100 text-green-800 border-green-200',
   LOST: 'bg-red-100 text-red-800 border-red-200',
+  DO_NOT_CALL: 'bg-red-900 text-white border-red-900',
 };
 
 const activityIcons: Record<string, { icon: string; color: string }> = {
@@ -30,6 +34,10 @@ const activityIcons: Record<string, { icon: string; color: string }> = {
   MEETING_SCHEDULED: { icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', color: 'text-emerald-500 bg-emerald-100' },
   ASSIGNMENT_CHANGED: { icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z', color: 'text-orange-500 bg-orange-100' },
   LEAD_CREATED: { icon: 'M12 6v6m0 0v6m0-6h6m-6 0H6', color: 'text-green-500 bg-green-100' },
+  SLA_REMINDER_SENT: { icon: 'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9', color: 'text-amber-600 bg-amber-100' },
+  SLA_ESCALATED: { icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', color: 'text-red-600 bg-red-100' },
+  SLA_REASSIGNED: { icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15', color: 'text-red-700 bg-red-100' },
+  SLA_BREACHED: { icon: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-red-600 bg-red-100' },
 };
 
 const priorityColors: Record<string, string> = {
@@ -39,11 +47,32 @@ const priorityColors: Record<string, string> = {
   URGENT: 'bg-red-100 text-red-700',
 };
 
+// ─── Smart Name Display (handles duplicate firstName/lastName) ────
+const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
+  const fn = (obj.firstName || '').trim();
+  const ln = (obj.lastName || '').trim();
+  if (!ln || fn.toLowerCase() === ln.toLowerCase()) return fn || 'Unknown';
+  if (fn.toLowerCase().endsWith(ln.toLowerCase())) return fn;
+  return `${fn} ${ln}`.trim() || 'Unknown';
+};
+const getLeadInitials = (obj: { firstName?: string; lastName?: string }) => {
+  const name = getLeadDisplayName(obj);
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+};
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const dispatchDataChange = useNotificationStore((s) => s.dispatchDataChange);
+  const addToast = useNotificationStore((s) => s.addToast);
   const [lead, setLead] = useState<Lead | null>(null);
   const [loading, setLoading] = useState(true);
+  const [aiSummaryData, setAiSummaryData] = useState<any | null>(null);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+  const [aiSummaryCopied, setAiSummaryCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
   const [noteContent, setNoteContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -79,13 +108,94 @@ export default function LeadDetailPage() {
   const [editingBody, setEditingBody] = useState('');
   const editInputRef = useRef<HTMLTextAreaElement>(null);
 
+  const [unreadCommsCount, setUnreadCommsCount] = useState(0);
   const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
+
+  const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
+
+  // ─── Lead Navigation System ────────────────────────────────────────
+  type LeadPreview = { id: string; name: string; status: string; company: string; callCount: number };
+  type NavData = { leadIds: string[]; leadPreviews: LeadPreview[]; viewName: string; totalInView: number; currentPage: number; pageSize: number; timestamp: number };
+  const [navData, setNavData] = useState<NavData | null>(null);
+  const [visitedIds, setVisitedIds] = useState<Set<string>>(new Set());
+
+  // Read navigation data from sessionStorage (set by leads list page)
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('lead-navigation');
+      if (raw) {
+        const data = JSON.parse(raw) as NavData;
+        // Only use if less than 30 minutes old
+        if (Date.now() - data.timestamp < 30 * 60 * 1000) {
+          setNavData(data);
+        }
+      }
+      // Track visited leads
+      const visitedRaw = sessionStorage.getItem('lead-nav-visited');
+      const visited = visitedRaw ? new Set<string>(JSON.parse(visitedRaw)) : new Set<string>();
+      visited.add(id);
+      setVisitedIds(visited);
+      sessionStorage.setItem('lead-nav-visited', JSON.stringify(Array.from(visited)));
+    } catch (_) { /* sessionStorage unavailable */ }
+  }, [id]);
+
+  const currentNavIndex = navData ? navData.leadIds.indexOf(id) : -1;
+  const hasPrev = navData !== null && currentNavIndex > 0;
+  const hasNext = navData !== null && currentNavIndex >= 0 && currentNavIndex < navData.leadIds.length - 1;
+  const globalPosition = navData ? (navData.currentPage - 1) * navData.pageSize + currentNavIndex + 1 : 0;
+  const visitedCount = navData ? navData.leadIds.filter(lid => visitedIds.has(lid)).length : 0;
+
+  const goToPrevious = useCallback(() => {
+    if (hasPrev && navData) router.push(`/leads/${navData.leadIds[currentNavIndex - 1]}`);
+  }, [hasPrev, navData, currentNavIndex, router]);
+
+  const goToNext = useCallback(() => {
+    if (hasNext && navData) router.push(`/leads/${navData.leadIds[currentNavIndex + 1]}`);
+  }, [hasNext, navData, currentNavIndex, router]);
+
+  const nextLeadPreviews = navData && currentNavIndex >= 0
+    ? navData.leadPreviews.slice(currentNavIndex + 1, currentNavIndex + 4)
+    : [];
+
+  // Keyboard shortcuts ref (actual handler defined after handleSaveAndNext)
+  const saveAndNextRef = useRef<(() => void) | null>(null);
+
+  const getFieldLabel = (key: string, defaultLabel: string): string => {
+    if (!fieldConfig) return defaultLabel;
+    const f = fieldConfig.builtInFields?.find((b: any) => b.key === key);
+    return f?.customLabel || defaultLabel;
+  };
+
+  // Phone formatting - auto-add UAE country code if missing
+  const formatPhone = (phone: string | null | undefined): string => {
+    if (!phone) return '';
+    const cleaned = phone.trim();
+    if (!cleaned) return '';
+    if (cleaned.startsWith('+')) return cleaned;
+    if (cleaned.startsWith('00')) return '+' + cleaned.slice(2);
+    return '+971' + cleaned;
+  };
 
   useEffect(() => {
     // Scope custom fields to the lead's division when available
     const divisionId = lead?.organizationId;
     api.getCustomFields(divisionId || undefined).then(setCustomFields).catch(() => {});
   }, [lead?.organizationId]);
+
+  useEffect(() => {
+    const divisionId = lead?.organizationId;
+    if (!divisionId) return;
+    api.getFieldConfig(divisionId)
+      .then((data: any) => {
+        if (data && data.builtInFields) {
+          setFieldConfig(data);
+        }
+      })
+      .catch(() => {
+        setFieldConfig(null);
+      });
+  }, [lead?.organizationId]);
+
 
   // Pipeline stages are now fetched alongside the lead in the initial load
   // effect below to avoid a visible delay (waterfall). This effect only
@@ -141,6 +251,24 @@ export default function LeadDetailPage() {
   const refreshLead = useCallback(async () => {
     const data = await api.getLead(id);
     setLead(data);
+    setUnreadCommsCount(data.unreadCommunications || 0);
+  }, [id]);
+
+  const loadLeadAISummary = useCallback(async (force = false) => {
+    setAiSummaryLoading(true);
+    setAiSummaryError(null);
+    try {
+      const response = await api.generateLeadAISummary(id, force);
+      const payload = response?.data || null;
+      setAiSummaryData(payload);
+      if (payload?.summary) {
+        setLead((prev) => (prev ? { ...prev, aiSummary: payload.summary } : prev));
+      }
+    } catch (err: any) {
+      setAiSummaryError(err?.message || 'Failed to generate AI summary');
+    } finally {
+      setAiSummaryLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
@@ -152,6 +280,7 @@ export default function LeadDetailPage() {
     Promise.all([loadLead, loadStages])
       .then(([leadData, stagesData]: [any, any]) => {
         setLead(leadData);
+        setUnreadCommsCount(leadData?.unreadCommunications || 0);
 
         const allStages = stagesData?.stages || stagesData || [];
         // Pick stages matching the lead's division
@@ -174,14 +303,19 @@ export default function LeadDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  useEffect(() => {
+    loadLeadAISummary(false).catch(() => {});
+  }, [loadLeadAISummary]);
+
   const handleStageClick = async (stage: { id: string; name: string; color: string; isWonStage?: boolean; isLostStage?: boolean }) => {
     if (!lead) return;
     if (stage.id === lead.stageId) return;
     try {
       await api.moveLead(lead.id, stage.id, 0);
       await refreshLead();
+      addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${stage.name}` });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Stage Update Failed', message: err.message });
     }
   };
 
@@ -189,11 +323,19 @@ export default function LeadDetailPage() {
     if (!lead || !noteContent.trim()) return;
     await api.addLeadNote(lead.id, noteContent);
     setNoteContent('');
-    await refreshLead();
+    await Promise.all([refreshLead(), loadLeadAISummary(true)]);
   };
 
   const handleDelete = async () => {
-    if (!lead || !confirm('Archive this lead?')) return;
+    if (!lead) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this lead?',
+      message: 'This lead will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     await api.deleteLead(lead.id);
     router.push('/leads');
   };
@@ -201,8 +343,7 @@ export default function LeadDetailPage() {
   const startEditing = () => {
     if (!lead) return;
     setEditForm({
-      firstName: lead.firstName,
-      lastName: lead.lastName,
+      name: getLeadDisplayName(lead),
       email: lead.email || '',
       phone: lead.phone || '',
       company: lead.company || '',
@@ -224,8 +365,8 @@ export default function LeadDetailPage() {
     setIsEditing(true);
   };
 
-  const handleSaveEdit = async () => {
-    if (!lead) return;
+  const handleSaveEdit = async (): Promise<boolean> => {
+    if (!lead) return false;
     setSaving(true);
     try {
       const data: any = { ...editForm };
@@ -251,23 +392,74 @@ export default function LeadDetailPage() {
         }
       }
       data.customData = newCustomData;
+
+      // Smart-split unified Name field into firstName/lastName
+      if (data.name && typeof data.name === 'string') {
+        const nameParts = data.name.trim().split(/\s+/);
+        if (nameParts.length <= 1) {
+          data.firstName = nameParts[0] || lead.firstName;
+          data.lastName = '';
+        } else {
+          data.lastName = nameParts.pop() || '';
+          data.firstName = nameParts.join(' ');
+        }
+        delete data.name;
+      }
+
       await api.updateLead(lead.id, data);
       setIsEditing(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Lead Saved', message: 'Lead details updated successfully' });
+      return true;
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Save Failed', message: err.message });
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
+  // Save & Next: save edits then jump to next lead in the queue
+  const handleSaveAndNext = async () => {
+    const success = await handleSaveEdit();
+    if (success && hasNext && navData) {
+      router.push(`/leads/${navData.leadIds[currentNavIndex + 1]}`);
+    }
+  };
+
+  // Keep ref in sync for keyboard handler
+  saveAndNextRef.current = handleSaveAndNext;
+
+  // ─── Keyboard Shortcuts (Alt+← Alt+→ Alt+S) ──────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't trigger in input/textarea/contenteditable
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
+
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goToPrevious();
+      } else if (e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault();
+        goToNext();
+      } else if (e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        if (isEditing && saveAndNextRef.current) saveAndNextRef.current();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [goToPrevious, goToNext, isEditing]);
+
   const handleCreateTask = async (taskData: any) => {
     try {
       await api.createTask({ ...taskData, leadId: lead!.id });
       setShowTaskModal(false);
-      await refreshLead();
+      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      addToast({ type: 'success', title: 'Task Created', message: 'New task has been created' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Task Creation Failed', message: err.message });
     }
   };
 
@@ -275,9 +467,10 @@ export default function LeadDetailPage() {
     try {
       await api.logCommunication({ ...commData, leadId: lead!.id });
       setShowCommModal(false);
-      await refreshLead();
+      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      addToast({ type: 'success', title: 'Communication Logged', message: 'Communication has been recorded' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Log Communication Failed', message: err.message });
     }
   };
 
@@ -298,9 +491,10 @@ export default function LeadDetailPage() {
     try {
       await api.logCall({ ...callData, leadId: lead!.id });
       setShowCallLogModal(false);
-      await Promise.all([refreshLead(), loadCallLogs()]);
+      await Promise.all([refreshLead(), loadCallLogs(), loadLeadAISummary(true)]);
+      addToast({ type: 'success', title: 'Call Logged', message: 'Call log has been recorded' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Log Call Failed', message: err.message });
     }
   };
 
@@ -308,9 +502,10 @@ export default function LeadDetailPage() {
     try {
       await api.sendEmail({ leadId: lead!.id, ...emailData });
       setShowEmailComposer(false);
-      await refreshLead();
+      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      addToast({ type: 'success', title: 'Email Sent', message: 'Email has been sent successfully' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Send Email Failed', message: err.message });
     }
   };
 
@@ -320,8 +515,9 @@ export default function LeadDetailPage() {
       await api.updateLead(lead.id, { status: 'WON' });
       setShowConvertModal(false);
       await refreshLead();
+      addToast({ type: 'success', title: 'Lead Converted', message: 'Lead has been marked as Won' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Conversion Failed', message: err.message });
     }
   };
 
@@ -334,33 +530,29 @@ export default function LeadDetailPage() {
         lifecycle: 'CUSTOMER',
         type: 'CUSTOMER',
         createDeal,
-        dealName: lead.company ? `${lead.company} - Deal` : `${lead.firstName} ${lead.lastName} - Deal`,
+        dealName: lead.company ? `${lead.company} - Deal` : `${getLeadDisplayName(lead)} - Deal`,
         dealAmount: lead.budget ? Number(lead.budget) : undefined,
       });
       setShowConvertToContact(false);
+      addToast({ type: 'success', title: 'Converted to Contact', message: 'Lead has been converted to a contact' });
       router.push(`/contacts/${contact.id}`);
     } catch (err: any) {
-      alert(err.message || 'Failed to convert lead to contact');
+      addToast({ type: 'error', title: 'Conversion Failed', message: err.message || 'Failed to convert lead to contact' });
     } finally {
       setConvertingToContact(false);
     }
   };
 
-  // Sort messages chronologically (oldest first) for display
-  const sortMessagesByDate = useCallback((list: any[]) => {
-    return [...list].sort((a, b) =>
-      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    );
-  }, []);
-
-  // Load chat messages when Communications tab is active (background = no full loading, feels real-time)
-  const loadChatMessages = useCallback(async (background = false) => {
+  // Load chat messages when Communications tab is active
+  // The backend auto-marks unread messages as read when fetched
+  const loadChatMessages = useCallback(async () => {
     if (!id) return;
     if (!background) setChatLoading(true);
     try {
       const data = await api.getInboxMessages(id, { limit: 100 });
-      const list = data.messages || [];
-      setChatMessages(sortMessagesByDate(list));
+      setChatMessages(data.messages || []);
+      // Backend marks messages as read on fetch; reset local unread count
+      setUnreadCommsCount(0);
     } catch {
       // Fallback to lead's communications if inbox API fails
       if (lead?.communications) {
@@ -374,11 +566,18 @@ export default function LeadDetailPage() {
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
-      loadChatMessages(false); // initial load: show loading
+      loadChatMessages();
+      // Also explicitly mark as read and notify other components
+      api.markConversationRead(lead.id).then(() => {
+        setUnreadCommsCount(0);
+        // Notify any mounted list pages to refresh (e.g. lead list channel counts)
+        dispatchDataChange({ entity: 'communication', action: 'updated', entityId: lead.id });
+      }).catch((err) => console.error('Failed to mark conversation read:', err));
     }
     if (activeTab === 'call_logs' && lead?.id) {
       loadCallLogs();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
 
   // Poll for new messages when Communications tab is active (background refresh, no loading overlay)
@@ -393,18 +592,21 @@ export default function LeadDetailPage() {
     // For lead events, only refresh if it's this lead (or no entityId specified)
     if (event.entity === 'lead' && event.entityId && event.entityId !== id) return;
     refreshLead();
-  }, [id, refreshLead]));
+    loadLeadAISummary(true).catch(() => {});
+  }, [id, refreshLead, loadLeadAISummary]));
 
   // Real-time sync: refresh chat messages when communications change (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
     if (event.entityId && event.entityId !== id) return;
-    loadChatMessages(true);
-  }, [id, loadChatMessages]));
+    loadChatMessages();
+    loadLeadAISummary(true).catch(() => {});
+  }, [id, loadChatMessages, loadLeadAISummary]));
 
   // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
   useRealtimeSync(['task'], useCallback(() => {
     refreshLead();
-  }, [refreshLead]));
+    loadLeadAISummary(true).catch(() => {});
+  }, [refreshLead, loadLeadAISummary]));
 
   // Auto-scroll chat container to bottom (without moving the page)
   useEffect(() => {
@@ -458,7 +660,7 @@ export default function LeadDetailPage() {
     } catch (err: any) {
       // Remove optimistic message on failure
       setChatMessages(prev => prev.filter(m => m.id !== tempId));
-      alert(err.message);
+      addToast({ type: 'error', title: 'Message Failed', message: err.message });
     } finally {
       setSendingChat(false);
     }
@@ -471,21 +673,98 @@ export default function LeadDetailPage() {
       setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
       setEditingMsgId(null);
       setEditingBody('');
+      addToast({ type: 'success', title: 'Message Edited', message: 'Message has been updated' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Edit Failed', message: err.message });
     }
   };
 
   const handleDeleteMessage = async (messageId: string) => {
-    if (!confirm('Delete this message? It will be shown as "message was deleted".')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this message?',
+      message: 'This message will remain in timeline as "message was deleted".',
+      confirmText: 'Delete message',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteInboxMessage(messageId);
       setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
       setMenuOpenMsgId(null);
+      addToast({ type: 'success', title: 'Message Deleted', message: 'Message has been deleted' });
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Delete Failed', message: err.message });
     }
   };
+
+  // Built-in fields that are rendered in dedicated sections elsewhere on the page.
+  const FIELDS_SHOWN_ELSEWHERE = new Set([
+    'firstName', 'lastName',
+    'status',
+    'assignedTo',
+    'email', 'phone', 'location', 'website',
+    'score', 'conversionProb',
+    'createdAt', 'updatedAt',
+  ]);
+
+  const BUILT_IN_FIELD_RENDERER: Record<string, (lead: any) => string> = {
+    name: (l) => getLeadDisplayName(l) || '-',
+    email: (l) => l.email || '-',
+    phone: (l) => formatPhone(l.phone) || '-',
+    company: (l) => l.company || '-',
+    jobTitle: (l) => l.jobTitle || '-',
+    source: (l) => l.source ? `${l.source.replace(/_/g, ' ')}${l.sourceDetail ? ` (${l.sourceDetail})` : ''}` : '-',
+    status: (l) => l.status ? l.status.replace(/_/g, ' ') : '-',
+    score: (l) => l.score !== undefined && l.score !== null ? String(l.score) : '-',
+    budget: (l) => l.budget ? `AED ${Number(l.budget).toLocaleString()}` : '-',
+    productInterest: (l) => l.productInterest || '-',
+    campaign: (l) => l.campaign || '-',
+    location: (l) => l.location || '-',
+    website: (l) => l.website || '-',
+    conversionProb: (l) => l.conversionProb != null ? `${Math.round(l.conversionProb * 100)}%` : '-',
+    stage: (l) => l.stage?.name || '-',
+    stageId: (l) => l.stage?.name || '-',
+    tags: (l) => Array.isArray(l.tags) && l.tags.length > 0 ? l.tags.map((t: any) => t.tag?.name || t.name || String(t)).join(', ') : '-',
+    assignedTo: (l) => l.assignedTo ? getLeadDisplayName(l.assignedTo) : '-',
+    createdAt: (l) => l.createdAt ? new Date(l.createdAt).toLocaleString() : '-',
+    updatedAt: (l) => l.updatedAt ? new Date(l.updatedAt).toLocaleString() : '-',
+  };
+
+  function renderCustomFieldValue(cf: any, lead: any): string {
+    const cd = (lead.customData || {}) as Record<string, unknown>;
+    const val = cd[cf.name];
+    if (val === undefined || val === null || val === '') return '-';
+    switch (cf.type) {
+      case 'BOOLEAN': return val ? 'Yes' : 'No';
+      case 'MULTI_SELECT': return Array.isArray(val) ? val.join(', ') : String(val);
+      case 'DATE': return new Date(String(val)).toLocaleDateString();
+      case 'CURRENCY': return `AED ${Number(val).toLocaleString()}`;
+      case 'URL': return String(val);
+      default: return String(val);
+    }
+  }
+
+  const DETAIL_CATEGORIES = [
+    { key: 'contact',  label: 'Contact' },
+    { key: 'lead',     label: 'Lead Info' },
+    { key: 'business', label: 'Business' },
+    { key: 'system',   label: 'System' },
+  ];
+
+  const handleCopyAISummary = useCallback(async () => {
+    const text = aiSummaryData?.summary || lead?.aiSummary;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setAiSummaryCopied(true);
+      setTimeout(() => setAiSummaryCopied(false), 1500);
+      addToast({ type: 'success', title: 'Copied', message: 'AI summary copied to clipboard' });
+    } catch {
+      addToast({ type: 'error', title: 'Copy Failed', message: 'Unable to copy summary' });
+    }
+  }, [aiSummaryData?.summary, lead?.aiSummary, addToast]);
+
 
   if (loading) {
     return (
@@ -511,41 +790,136 @@ export default function LeadDetailPage() {
   const lostStage = pipelineStages.find((s: any) => s.isLostStage);
   const currentStageIndex = mainStages.findIndex((s: any) => s.id === lead.stageId);
   const isOnLostStage = lostStage && lead.stageId === lostStage.id;
+  const aiSignals = aiSummaryData?.signals || null;
+  const displayScore = Number(aiSignals?.score ?? lead.score ?? 0);
+  const displayConversionProb = typeof aiSignals?.conversionProb === 'number'
+    ? aiSignals.conversionProb
+    : lead.conversionProb;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-4">
-          <button onClick={() => router.back()} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-          </button>
-          <div className="h-14 w-14 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-md">
-            {lead.firstName[0]}{lead.lastName[0]}
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{lead.firstName} {lead.lastName}</h1>
-            <p className="text-gray-500">{lead.company || 'No company'} {lead.jobTitle ? `· ${lead.jobTitle}` : ''}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`badge text-sm px-3 py-1.5 border ${statusColors[lead.status]}`}>{lead.status.replace(/_/g, ' ')}</span>
-          {!isEditing && (
-            <button onClick={startEditing} className="btn-secondary text-xs gap-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-              Edit
+    <div className="flex flex-col -m-3 sm:-m-4 md:-m-6 overflow-hidden" style={{ height: 'calc(100dvh - 3.5rem)' }}>
+      {/* ═══ FROZEN TOP BAR — Compact one-line nav + identification ═══ */}
+      <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 py-2 border-b border-gray-200 bg-white" style={{ boxShadow: '0 1px 2px 0 rgba(0,0,0,0.03)' }}>
+        <div className="flex items-center justify-between gap-2">
+          {/* Left: Back + Lead identity */}
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <button onClick={() => router.back()} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
             </button>
+            <div className="flex-shrink-0 h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[10px] font-semibold text-white">
+              {getLeadInitials(lead)}
+            </div>
+            <h1 className="text-sm font-bold text-gray-900 truncate">{getLeadDisplayName(lead)}</h1>
+            <span className="hidden sm:inline text-xs text-gray-400 truncate">{lead.company || ''}</span>
+            <span className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${lead.doNotCall ? statusColors.DO_NOT_CALL : statusColors[lead.status]}`}>
+              {lead.doNotCall ? '🚫 DNC' : lead.status.replace(/_/g, ' ')}
+            </span>
+          </div>
+
+          {/* Center: Navigation arrows + position (if navigating from list) */}
+          {navData && navData.leadIds.length > 1 && currentNavIndex >= 0 && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={goToPrevious}
+                disabled={!hasPrev}
+                className={`p-1 rounded transition-colors ${hasPrev ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-200 cursor-not-allowed'}`}
+                title="Previous lead (Alt+←)"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              </button>
+              <span className="text-xs text-gray-500 whitespace-nowrap">
+                <span className="font-bold text-brand-600">{currentNavIndex + 1}</span>
+                <span className="text-gray-400">/{navData.leadIds.length}</span>
+                {navData.viewName && <span className="hidden md:inline text-gray-400"> · {navData.viewName}</span>}
+              </span>
+              <button
+                onClick={goToNext}
+                disabled={!hasNext}
+                className={`p-1 rounded transition-colors ${hasNext ? 'hover:bg-gray-100 text-gray-600' : 'text-gray-200 cursor-not-allowed'}`}
+                title="Next lead (Alt+→)"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </button>
+              {/* Progress dots */}
+              <div className="hidden lg:flex items-center gap-1 ml-1">
+                <div className="w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${visitedCount >= navData.leadIds.length ? 'bg-green-500' : 'bg-brand-500'}`}
+                    style={{ width: `${Math.min(100, (visitedCount / navData.leadIds.length) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] text-gray-400">{visitedCount}/{navData.leadIds.length}</span>
+              </div>
+            </div>
           )}
-          <button onClick={handleDelete} className="btn-secondary text-xs text-red-600 hover:text-red-700 gap-1.5">
-            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-            Archive
-          </button>
+
+          {/* Right: Quick actions */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {!isEditing && (
+              <button onClick={startEditing} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-brand-600 transition-colors" title="Edit lead">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+              </button>
+            )}
+            <button onClick={handleDelete} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Delete lead">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </button>
+            {hasNext && !isEditing && navData && navData.leadIds.length > 1 && (
+              <button
+                onClick={goToNext}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-white bg-brand-600 hover:bg-brand-700 active:scale-95 transition-all"
+              >
+                Next
+                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </button>
+            )}
+          </div>
         </div>
       </div>
+      {/* ← end frozen top bar */}
 
-      {/* Stage Progress Bar — driven by division's custom pipeline stages */}
+      {/* ═══ SCROLLABLE CONTENT ZONE — everything else scrolls ═══ */}
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-6 py-4 space-y-4">
+
+      {/* DNC compact stripe */}
+      {lead.doNotCall && (
+        <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-red-50 border border-red-200">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-red-700">🚫 DO NOT CALL</span>
+            <span className="text-[11px] text-red-500">
+              {lead.doNotCallAt ? `Blocked ${new Date(lead.doNotCallAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : 'Blocked'}
+              {(lead as any).doNotCallByUser ? ` by ${(lead as any).doNotCallByUser.firstName}` : ''}
+            </span>
+          </div>
+          {fullUsers.find(u => u.id === currentUserId && ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(u.role)) && (
+            <button
+              onClick={async () => {
+                const confirmed = await premiumConfirm({
+                  title: 'Unblock this lead?',
+                  message: 'The lead will appear again in active lead views.',
+                  confirmText: 'Unblock',
+                  cancelText: 'Cancel',
+                  variant: 'default',
+                });
+                if (!confirmed) return;
+                try {
+                  await api.unblockLead(lead.id);
+                  addToast({ type: 'success', title: 'Lead Unblocked', message: 'Lead has been unblocked' });
+                  window.location.reload();
+                } catch (err: any) {
+                  addToast({ type: 'error', title: 'Unblock Failed', message: err.message || 'Failed to unblock lead' });
+                }
+              }}
+              className="text-[11px] font-semibold text-red-600 hover:text-red-800 px-2 py-0.5 rounded hover:bg-red-100 transition-colors"
+            >
+              Unblock
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Stage Progress Bar */}
       {mainStages.length > 0 ? (
-        <div className="card p-4">
+        <div className="px-1 py-1">
           <div className="flex items-center justify-between">
             {mainStages.map((stage: any, i: number) => {
               const isActive = i <= currentStageIndex && !isOnLostStage;
@@ -557,7 +931,7 @@ export default function LeadDetailPage() {
                     className={`relative flex flex-col items-center group ${i < mainStages.length - 1 ? 'flex-1' : ''}`}
                   >
                     <div
-                      className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                      className={`h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all ${
                         isCurrent ? 'text-white ring-4 ring-opacity-30 scale-110' :
                         isActive ? 'text-white' :
                         'bg-gray-200 text-gray-500 group-hover:bg-gray-300'
@@ -611,67 +985,63 @@ export default function LeadDetailPage() {
               <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-gray-500">First Name</label>
-                    <input className="input text-sm" value={editForm.firstName} onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })} />
+                    <label className="text-xs text-gray-500">Name</label>
+                    <input className="input text-sm" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Ahmed Al-Zaabi" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Last Name</label>
-                    <input className="input text-sm" value={editForm.lastName} onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })} />
+
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Email</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('email', 'Email')}</label>
                   <input type="email" className="input text-sm" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Phone</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('phone', 'Phone')}</label>
                   <input className="input text-sm" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Location</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('location', 'Location')}</label>
                   <input className="input text-sm" value={editForm.location} onChange={(e) => setEditForm({ ...editForm, location: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Website</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('website', 'Website')}</label>
                   <input className="input text-sm" value={editForm.website} onChange={(e) => setEditForm({ ...editForm, website: e.target.value })} />
                 </div>
               </div>
             ) : (
               <>
-                <ContactRow icon="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" label="Email" value={lead.email} isLink={lead.email ? `mailto:${lead.email}` : undefined} />
-                <ContactRow icon="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" label="Phone" value={lead.phone} isLink={lead.phone ? `tel:${lead.phone}` : undefined} />
-                <ContactRow icon="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" label="Location" value={lead.location} />
-                <ContactRow icon="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" label="Website" value={lead.website} isLink={lead.website || undefined} />
+                <ContactRow icon="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" label={getFieldLabel('email', 'Email')} value={lead.email} isLink={lead.email ? `mailto:${lead.email}` : undefined} />
+                <ContactRow icon="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" label={getFieldLabel('phone', 'Phone')} value={formatPhone(lead.phone)} isLink={lead.phone ? `tel:${formatPhone(lead.phone)}` : undefined} />
+                <ContactRow icon="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" label={getFieldLabel('location', 'Location')} value={lead.location} />
+                <ContactRow icon="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" label={getFieldLabel('website', 'Website')} value={lead.website} isLink={lead.website || undefined} />
               </>
             )}
-          </div>
-
-          {/* Lead Details */}
-          <div className="card p-4 space-y-3">
-            <h3 className="font-semibold text-gray-900 flex items-center gap-1.5">
+            <hr className="my-3 border-gray-100" />
+            <h3 className="font-semibold text-gray-900 flex items-center gap-1.5 -mt-1">
               <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               Lead Details
             </h3>
             {isEditing ? (
               <div className="space-y-2">
                 <div>
-                  <label className="text-xs text-gray-500">Company</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('company', 'Company')}</label>
                   <input className="input text-sm" value={editForm.company} onChange={(e) => setEditForm({ ...editForm, company: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Job Title</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('jobTitle', 'Job Title')}</label>
                   <input className="input text-sm" value={editForm.jobTitle} onChange={(e) => setEditForm({ ...editForm, jobTitle: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Product Interest</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('productInterest', 'Product Interest')}</label>
                   <input className="input text-sm" value={editForm.productInterest} onChange={(e) => setEditForm({ ...editForm, productInterest: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Budget</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('budget', 'Budget')}</label>
                   <input type="number" className="input text-sm" value={editForm.budget} onChange={(e) => setEditForm({ ...editForm, budget: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500">Campaign</label>
+                  <label className="text-xs text-gray-500">{getFieldLabel('campaign', 'Campaign')}</label>
                   <input className="input text-sm" value={editForm.campaign} onChange={(e) => setEditForm({ ...editForm, campaign: e.target.value })} />
                 </div>
                 <div>
@@ -693,6 +1063,10 @@ export default function LeadDetailPage() {
                       <input type="number" className="input text-sm" required={cf.isRequired}
                         value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
                     )}
+                    {cf.type === 'CURRENCY' && (
+                      <input type="number" className="input text-sm" required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
+                    )}
                     {cf.type === 'DATE' && (
                       <input type="date" className="input text-sm" required={cf.isRequired}
                         value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
@@ -701,7 +1075,7 @@ export default function LeadDetailPage() {
                       <select className="input text-sm" required={cf.isRequired}
                         value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })}>
                         <option value="">Select...</option>
-                        {(cf.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                        {(cf.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
                       </select>
                     )}
                     {cf.type === 'BOOLEAN' && (
@@ -719,8 +1093,12 @@ export default function LeadDetailPage() {
                         }
                       }}>
                         <option value="">Add option...</option>
-                        {(cf.options || []).filter(o => !((customEditValues[cf.name] as string[]) || []).includes(o)).map(o => <option key={o} value={o}>{o}</option>)}
+                        {(cf.options || []).filter((o: string) => !((customEditValues[cf.name] as string[]) || []).includes(o)).map((o: string) => <option key={o} value={o}>{o}</option>)}
                       </select>
+                    )}
+                    {cf.type === 'TEXTAREA' && (
+                      <textarea className="input text-sm" rows={3} required={cf.isRequired}
+                        value={String(customEditValues[cf.name] || '')} onChange={(e) => setCustomEditValues({ ...customEditValues, [cf.name]: e.target.value })} />
                     )}
                   </div>
                 ))}
@@ -728,104 +1106,257 @@ export default function LeadDetailPage() {
                   <button onClick={handleSaveEdit} disabled={saving} className="btn-primary text-xs flex-1">
                     {saving ? 'Saving...' : 'Save Changes'}
                   </button>
+                  {hasNext && (
+                    <button
+                      onClick={handleSaveAndNext}
+                      disabled={saving}
+                      className="flex items-center justify-center gap-1.5 text-xs font-semibold flex-1 px-3 py-2 rounded-lg text-white bg-green-600 hover:bg-green-700 active:scale-[0.98] transition-all shadow-sm disabled:opacity-50"
+                    >
+                      {saving ? (
+                        <><svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Saving...</>
+                      ) : (
+                        <>Save & Next <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg></>
+                      )}
+                    </button>
+                  )}
                   <button onClick={() => setIsEditing(false)} className="btn-secondary text-xs">Cancel</button>
                 </div>
               </div>
             ) : (
-              <>
-                <InfoRow label="Source" value={lead.source ? lead.source.replace(/_/g, ' ') : '-'} />
-                <InfoRow label="Campaign" value={lead.campaign || '-'} />
-                <InfoRow label="Product Interest" value={lead.productInterest || '-'} />
-                <InfoRow label="Budget" value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
-                <InfoRow label="Stage" value={lead.stage?.name || '-'} />
-                {/* Custom fields */}
-                {customFields.map(cf => {
-                  const cd = (lead.customData || {}) as Record<string, unknown>;
-                  const val = cd[cf.name];
-                  let display = '-';
-                  if (val !== undefined && val !== null && val !== '') {
-                    if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
-                    else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
-                    else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
-                    else display = String(val);
-                  }
-                  return <InfoRow key={cf.id} label={cf.label} value={display} />;
-                })}
-              </>
+              fieldConfig ? (
+                <>
+                  {DETAIL_CATEGORIES.map(cat => {
+                    const fields = fieldConfig.builtInFields
+                      .filter((f: any) => f.category === cat.key && f.showInDetail && !FIELDS_SHOWN_ELSEWHERE.has(f.key))
+                      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+                    if (fields.length === 0) return null;
+                    return (
+                      <div key={cat.key}>
+                        <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mt-2 mb-0.5">{cat.label}</p>
+                        {fields.map((field: any) => (
+                          <InfoRow
+                            key={field.key}
+                            label={field.customLabel || field.label}
+                            value={(BUILT_IN_FIELD_RENDERER[field.key] || (() => '-'))(lead)}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {/* Dynamic custom fields */}
+                  {(() => {
+                    const visibleCF = fieldConfig.customFields
+                      .filter((cf: any) => cf.showInDetail !== false)
+                      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+                    if (visibleCF.length === 0) return null;
+                    return (
+                      <div>
+                        <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mt-2 mb-0.5">Custom Fields</p>
+                        {visibleCF.map((cf: any) => (
+                          <InfoRow
+                            key={cf.id || cf.name}
+                            label={cf.label}
+                            value={renderCustomFieldValue(cf, lead)}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                /* Fallback: original hardcoded fields when field config API is unavailable */
+                <>
+                  <InfoRow label={getFieldLabel('source', 'Source')} value={lead.source ? `${lead.source.replace(/_/g, ' ')}${lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}` : '-'} />
+                  <InfoRow label={getFieldLabel('campaign', 'Campaign')} value={lead.campaign || '-'} />
+                  <InfoRow label={getFieldLabel('productInterest', 'Product Interest')} value={lead.productInterest || '-'} />
+                  <InfoRow label={getFieldLabel('budget', 'Budget')} value={lead.budget ? `AED ${Number(lead.budget).toLocaleString()}` : '-'} />
+                  <InfoRow label="Stage" value={lead.stage?.name || '-'} />
+                  {/* Custom fields (fallback) */}
+                  {customFields.map(cf => {
+                    const cd = (lead.customData || {}) as Record<string, unknown>;
+                    const val = cd[cf.name];
+                    let display = '-';
+                    if (val !== undefined && val !== null && val !== '') {
+                      if (cf.type === 'BOOLEAN') display = val ? 'Yes' : 'No';
+                      else if (cf.type === 'MULTI_SELECT' && Array.isArray(val)) display = val.join(', ');
+                      else if (cf.type === 'DATE') display = new Date(String(val)).toLocaleDateString();
+                      else display = String(val);
+                    }
+                    return <InfoRow key={cf.id} label={cf.label} value={display} />;
+                  })}
+                </>
+              )
             )}
           </div>
 
-          {/* AI Score */}
+          {/* AI Lead Summary */}
           <div className="card p-4">
-            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
-              Lead Intelligence
-            </h3>
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-1.5">
+                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                AI Lead Summary
+              </h3>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => loadLeadAISummary(true)}
+                  disabled={aiSummaryLoading}
+                  className="px-2 py-1 rounded-md border border-gray-200 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {aiSummaryLoading ? 'Refreshing...' : 'Regenerate'}
+                </button>
+                <button
+                  onClick={handleCopyAISummary}
+                  disabled={!aiSummaryData?.summary && !lead.aiSummary}
+                  className="px-2 py-1 rounded-md border border-gray-200 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {aiSummaryCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-gray-600">Lead Score</span>
-              <span className="text-2xl font-bold tabular-nums" style={{ color: (lead.score || 0) >= 70 ? '#16a34a' : (lead.score || 0) >= 40 ? '#d97706' : '#dc2626' }}>
-                {lead.score || 0}<span className="text-sm font-normal text-gray-400">/100</span>
+              <span className="text-2xl font-bold tabular-nums" style={{ color: displayScore >= 70 ? '#16a34a' : displayScore >= 40 ? '#d97706' : '#dc2626' }}>
+                {displayScore}<span className="text-sm font-normal text-gray-400">/100</span>
               </span>
             </div>
             <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden mb-3">
               <div className="h-full rounded-full transition-all duration-500" style={{
-                width: `${lead.score || 0}%`,
-                background: (lead.score || 0) >= 70 ? 'linear-gradient(90deg, #22c55e, #16a34a)' : (lead.score || 0) >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)',
+                width: `${displayScore}%`,
+                background: displayScore >= 70 ? 'linear-gradient(90deg, #22c55e, #16a34a)' : displayScore >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)',
               }} />
             </div>
-            {lead.conversionProb != null && (
-              <div className="flex items-center justify-between text-sm mb-2">
+
+            {displayConversionProb != null && (
+              <div className="flex items-center justify-between text-sm mb-3">
                 <span className="text-gray-600">Conversion Probability</span>
-                <span className="font-bold" style={{ color: lead.conversionProb >= 0.6 ? '#16a34a' : lead.conversionProb >= 0.3 ? '#d97706' : '#dc2626' }}>
-                  {Math.round(lead.conversionProb * 100)}%
+                <span className="font-bold" style={{ color: displayConversionProb >= 0.6 ? '#16a34a' : displayConversionProb >= 0.3 ? '#d97706' : '#dc2626' }}>
+                  {Math.round(displayConversionProb * 100)}%
                 </span>
               </div>
             )}
-            {lead.aiSummary && (
-              <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-                <p className="text-sm text-gray-600 italic">{lead.aiSummary}</p>
+
+            {aiSummaryLoading && !aiSummaryData ? (
+              <div className="space-y-2">
+                <div className="h-3 w-full rounded bg-gray-100 animate-pulse" />
+                <div className="h-3 w-5/6 rounded bg-gray-100 animate-pulse" />
+                <div className="h-3 w-4/6 rounded bg-gray-100 animate-pulse" />
+              </div>
+            ) : (
+              <>
+                <div className="p-3 rounded-lg bg-brand-50 border border-brand-100">
+                  <p className="text-sm text-gray-700 leading-relaxed">
+                    {aiSummaryData?.summary || lead.aiSummary || 'Generate AI summary to get lead insights and recommended actions.'}
+                  </p>
+                </div>
+
+                {aiSummaryData?.highlights?.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {aiSummaryData.highlights.slice(0, 6).map((item: string, idx: number) => (
+                      <span key={`ai-highlight-${idx}`} className="inline-flex items-center rounded-full bg-gray-100 text-gray-700 px-2 py-0.5 text-[11px] font-medium">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {(aiSummaryData?.risks?.length > 0 || aiSummaryData?.opportunities?.length > 0) && (
+                  <div className="mt-3 grid grid-cols-1 gap-2">
+                    {aiSummaryData?.risks?.length > 0 && (
+                      <div className="rounded-lg border border-red-100 bg-red-50/40 p-2.5">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700 mb-1">Risks</p>
+                        <ul className="space-y-1">
+                          {aiSummaryData.risks.slice(0, 2).map((risk: string, idx: number) => (
+                            <li key={`ai-risk-${idx}`} className="text-xs text-red-800">{risk}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiSummaryData?.opportunities?.length > 0 && (
+                      <div className="rounded-lg border border-green-100 bg-green-50/40 p-2.5">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-green-700 mb-1">Opportunities</p>
+                        <ul className="space-y-1">
+                          {aiSummaryData.opportunities.slice(0, 2).map((opp: string, idx: number) => (
+                            <li key={`ai-opp-${idx}`} className="text-xs text-green-800">{opp}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {aiSummaryData?.recommendedActions?.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-gray-200 p-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">Next Best Actions</p>
+                    <div className="space-y-1.5">
+                      {aiSummaryData.recommendedActions.slice(0, 2).map((action: any, idx: number) => (
+                        <div key={`ai-action-${idx}`} className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-gray-800">{action.title}</p>
+                            <p className="text-[11px] text-gray-500">{action.reason}</p>
+                          </div>
+                          <span className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full ${priorityColors[action.priority] || 'bg-gray-100 text-gray-700'}`}>
+                            {action.priority || 'MEDIUM'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(aiSummaryData?.confidence || aiSummaryData?.generatedAt || aiSummaryError) && (
+              <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
+                <span className={`${aiSummaryError ? 'text-red-600' : 'text-gray-500'}`}>
+                  {aiSummaryError
+                    ? aiSummaryError
+                    : `Confidence ${Math.round(aiSummaryData?.confidence || 0)}%`}
+                </span>
+                {aiSummaryData?.generatedAt && (
+                  <span className="text-gray-400">
+                    Updated {new Date(aiSummaryData.generatedAt).toLocaleString()}
+                  </span>
+                )}
               </div>
             )}
           </div>
 
-          {/* Quick Actions */}
-          <div className="card p-4">
-            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-              Quick Actions
-            </h3>
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => { setActiveTab('tasks'); setShowTaskModal(true); }} className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors">
-                <svg className="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-                Add Task
+          {/* Quick Actions compact toolbar */}
+          <div className="card px-3 py-2">
+            <div className="flex items-center gap-1 flex-wrap">
+              <button onClick={() => { setActiveTab('tasks'); setShowTaskModal(true); }} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors" title="Add Task">
+                <svg className="h-3.5 w-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                Task
               </button>
-              <button onClick={() => { setShowCallLogModal(true); }} className="flex items-center gap-2 p-2.5 rounded-lg border border-cyan-200 text-sm text-cyan-700 bg-cyan-50 hover:bg-cyan-100 hover:border-cyan-300 transition-colors">
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-                Log Call
+              <button onClick={() => { setShowCallLogModal(true); }} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-cyan-700 bg-cyan-50 hover:bg-cyan-100 transition-colors" title="Log Call">
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                Call
               </button>
-              <button onClick={() => { setActiveTab('communications'); setShowCommModal(true); }} className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors">
-                <svg className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                Log Comm
+              <button onClick={() => { setActiveTab('communications'); setShowCommModal(true); }} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors" title="Log Comm">
+                <svg className="h-3.5 w-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                Comm
               </button>
-              <button onClick={() => { setActiveTab('notes'); }} className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors">
-                <svg className="h-4 w-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                Add Note
+              <button onClick={() => { setActiveTab('notes'); }} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors" title="Add Note">
+                <svg className="h-3.5 w-3.5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                Note
               </button>
               {lead.email && (
-                <button onClick={() => setShowEmailComposer(true)} className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors">
-                  <svg className="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                  Send Email
+                <button onClick={() => setShowEmailComposer(true)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors" title="Send Email">
+                  <svg className="h-3.5 w-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                  Email
                 </button>
               )}
+              <div className="flex-1" />
               {lead.status !== 'WON' && lead.status !== 'LOST' && (
-                <button onClick={() => setShowConvertModal(true)} className="flex items-center gap-2 p-2.5 rounded-lg border border-green-200 text-sm text-green-700 bg-green-50 hover:bg-green-100 hover:border-green-300 transition-colors col-span-2">
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
-                  Convert to Won Deal
+                <button onClick={() => setShowConvertModal(true)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 transition-colors" title="Convert to Won">
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                  Won
                 </button>
               )}
-              <button onClick={() => setShowConvertToContact(true)} className="flex items-center gap-2 p-2.5 rounded-lg border border-brand-200 text-sm text-brand-700 bg-brand-50 hover:bg-brand-100 hover:border-brand-300 transition-colors col-span-2">
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                Convert to Contact
+              <button onClick={() => setShowConvertToContact(true)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-brand-700 bg-brand-50 hover:bg-brand-100 transition-colors" title="Convert to Contact">
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                Contact
               </button>
             </div>
           </div>
@@ -865,10 +1396,23 @@ export default function LeadDetailPage() {
               <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               Timestamps
             </h3>
-            <InfoRow label="Created" value={lead.createdAt ? new Date(lead.createdAt).toLocaleString() : '-'} />
-            <InfoRow label="Updated" value={lead.updatedAt ? new Date(lead.updatedAt).toLocaleString() : '-'} />
-
+            <InfoRow label="Created" value={lead.createdAt ? `${new Date(lead.createdAt).toLocaleString()} (${formatTimeAgo(lead.createdAt)})` : '-'} />
+            <InfoRow label="Updated" value={lead.updatedAt ? `${new Date(lead.updatedAt).toLocaleString()} (${formatTimeAgo(lead.updatedAt)})` : '-'} />
+            {(lead as any).firstRespondedAt && (
+              <InfoRow label="First Response" value={`${new Date((lead as any).firstRespondedAt).toLocaleString()} (${formatTimeAgo((lead as any).firstRespondedAt)})`} />
+            )}
           </div>
+
+          {/* SLA Status */}
+          {(lead as any).slaInfo?.enabled && (
+            <div className="card p-4">
+              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                SLA Status
+              </h3>
+              <SLADetailCard slaInfo={(lead as any).slaInfo} />
+            </div>
+          )}
         </div>
 
         {/* Right: Activity Feed */}
@@ -880,7 +1424,7 @@ export default function LeadDetailPage() {
               { key: 'notes', label: 'Notes', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z', count: lead.notes?.length },
               { key: 'tasks', label: 'Tasks', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2', count: lead.tasks?.length },
               { key: 'call_logs', label: 'Call Logs', icon: 'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z', count: callLogs.length || undefined },
-              { key: 'communications', label: 'Communications', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', count: lead.communications?.length },
+              { key: 'communications', label: 'Communications', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', count: unreadCommsCount || undefined },
             ] as const).map((tab) => (
               <button
                 key={tab.key}
@@ -1047,10 +1591,14 @@ export default function LeadDetailPage() {
                     {callLogs.map((log) => {
                       const dispositionStyles: Record<string, { bg: string; text: string; border: string }> = {
                         CALLBACK: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+                        CALL_LATER: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+                        CALL_AGAIN: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+                        WILL_CALL_US_AGAIN: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
                         MEETING_ARRANGED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
                         APPOINTMENT_BOOKED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
                         INTERESTED: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
                         NOT_INTERESTED: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+                        ALREADY_COMPLETED_SERVICES: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
                         NO_ANSWER: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
                         VOICEMAIL_LEFT: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
                         WRONG_NUMBER: { bg: 'bg-red-50', text: 'text-red-600', border: 'border-red-200' },
@@ -1064,9 +1612,11 @@ export default function LeadDetailPage() {
                       };
                       const style = dispositionStyles[log.disposition] || dispositionStyles.OTHER;
                       const dispositionLabel: Record<string, string> = {
-                        CALLBACK: 'Call Back Requested', MEETING_ARRANGED: 'Meeting Arranged',
+                        CALLBACK: 'Call Back Requested', CALL_LATER: 'Call Later (Scheduled)',
+                        CALL_AGAIN: 'Call Again (Anytime)', WILL_CALL_US_AGAIN: 'Will Call Us Again',
+                        MEETING_ARRANGED: 'Meeting Arranged',
                         APPOINTMENT_BOOKED: 'Appointment Booked', INTERESTED: 'Interested',
-                        NOT_INTERESTED: 'Not Interested', NO_ANSWER: 'No Answer',
+                        NOT_INTERESTED: 'Not Interested', ALREADY_COMPLETED_SERVICES: 'Already Completed Services', NO_ANSWER: 'No Answer',
                         VOICEMAIL_LEFT: 'Voicemail Left', WRONG_NUMBER: 'Wrong Number',
                         BUSY: 'Line Busy', GATEKEEPER: 'Reached Gatekeeper',
                         FOLLOW_UP_EMAIL: 'Follow-up Email', QUALIFIED: 'Lead Qualified',
@@ -1078,7 +1628,9 @@ export default function LeadDetailPage() {
                           <div className="flex items-start justify-between">
                             <div className="flex items-center gap-2">
                               <svg className={`h-5 w-5 ${style.text}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-                              <span className={`text-sm font-semibold ${style.text}`}>{dispositionLabel[log.disposition] || log.disposition}</span>
+                              <span className={`text-sm font-semibold ${style.text}`}>
+                                {String((log.metadata as any)?.dispositionLabel || dispositionLabel[log.disposition] || log.disposition)}
+                              </span>
                             </div>
                             <span className="text-xs text-gray-500">{new Date(log.createdAt).toLocaleString()}</span>
                           </div>
@@ -1087,6 +1639,18 @@ export default function LeadDetailPage() {
                             {log.user && <span>By {log.user.firstName} {log.user.lastName}</span>}
                             {log.duration && <span>Duration: {Math.floor(log.duration / 60)}m {log.duration % 60}s</span>}
                             {log.callbackDate && <span>Callback: {new Date(log.callbackDate).toLocaleString()}</span>}
+                            {log.metadata?.expectedCallbackWindowLabel && (
+                              <span>Expected callback: {String(log.metadata.expectedCallbackWindowLabel)}</span>
+                            )}
+                            {log.metadata?.notInterestedReasonLabel && (
+                              <span>Reason: {String(log.metadata.notInterestedReasonLabel)}</span>
+                            )}
+                            {log.metadata?.notInterestedOtherText && (
+                              <span>Detail: {String(log.metadata.notInterestedOtherText)}</span>
+                            )}
+                            {log.metadata?.completedServiceLocationLabel && (
+                              <span>Completed: {String(log.metadata.completedServiceLocationLabel)}</span>
+                            )}
                             {log.meetingDate && <span>Meeting: {new Date(log.meetingDate).toLocaleString()}</span>}
                             {log.appointmentDate && <span>Appointment: {new Date(log.appointmentDate).toLocaleString()}</span>}
                             {log.followUpTaskId && (
@@ -1210,7 +1774,7 @@ export default function LeadDetailPage() {
                               {/* Sender name for inbound */}
                               {!isOutbound && (
                                 <p className="text-xs font-semibold text-teal-700 mb-0.5">
-                                  {lead.firstName} {lead.lastName}
+                                  {getLeadDisplayName(lead)}
                                 </p>
                               )}
                               {isOutbound && msg.user && (
@@ -1367,12 +1931,50 @@ export default function LeadDetailPage() {
           </div>
         </div>
       </div>
+      </div>
+      {/* ← end scrollable content zone */}
 
-      {/* Create Task Modal */}
-      {showTaskModal && <CreateTaskModal onClose={() => setShowTaskModal(false)} onSubmit={handleCreateTask} />}
+      {/* ═══ FROZEN BOTTOM — Compact single-line preview strip ═══ */}
+      {navData && nextLeadPreviews.length > 0 && currentNavIndex >= 0 && (
+        <div className="flex-shrink-0 z-10 px-3 sm:px-4 md:px-6 py-1.5 border-t border-gray-200 bg-gray-50/80">
+          <div className="flex items-center gap-2 text-xs overflow-x-auto">
+            <span className="text-gray-400 font-medium flex-shrink-0">Next →</span>
+            {nextLeadPreviews.map((preview, i) => (
+              <button
+                key={preview.id}
+                onClick={() => router.push(`/leads/${preview.id}`)}
+                className="flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-white hover:shadow-sm border border-transparent hover:border-gray-200 transition-all group"
+              >
+                <div className="h-5 w-5 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0">
+                  {preview.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() || '?'}
+                </div>
+                <span className="font-medium text-gray-700 group-hover:text-brand-600 truncate max-w-[120px]">{preview.name}</span>
+                <span className={`text-[10px] font-medium px-1 py-0.5 rounded ${
+                  preview.status === 'NEW' ? 'bg-indigo-50 text-indigo-600' :
+                  preview.status === 'CONTACTED' ? 'bg-blue-50 text-blue-600' :
+                  preview.status === 'QUALIFIED' ? 'bg-cyan-50 text-cyan-600' :
+                  preview.status === 'WON' ? 'bg-green-50 text-green-600' :
+                  preview.status === 'LOST' ? 'bg-red-50 text-red-600' :
+                  'bg-gray-100 text-gray-500'
+                }`}>{preview.status.replace(/_/g, ' ')}</span>
+                <span className={`text-[10px] ${preview.callCount === 0 ? 'text-gray-400' : preview.callCount <= 2 ? 'text-blue-500' : preview.callCount <= 5 ? 'text-amber-500' : 'text-red-500'}`}>📞{preview.callCount}</span>
+                {i < nextLeadPreviews.length - 1 && <span className="text-gray-300 ml-1">│</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showTaskModal && (
+        <CreateTaskModal
+          onClose={() => setShowTaskModal(false)}
+          onSubmit={handleCreateTask}
+          divisionId={lead.organizationId}
+        />
+      )}
 
       {/* Log Call Modal */}
-      {showCallLogModal && <LogCallModal onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={`${lead.firstName} ${lead.lastName}`} />}
+      {showCallLogModal && <LogCallModalDynamic onClose={() => setShowCallLogModal(false)} onSubmit={handleLogCall} leadName={getLeadDisplayName(lead)} leadId={lead.id} />}
 
       {/* Log Communication Modal */}
       {showCommModal && <LogCommModal onClose={() => setShowCommModal(false)} onSubmit={handleLogComm} leadEmail={lead.email} />}
@@ -1383,7 +1985,7 @@ export default function LeadDetailPage() {
           onClose={() => setShowEmailComposer(false)}
           onSend={handleSendEmail}
           toEmail={lead.email}
-          leadName={`${lead.firstName} ${lead.lastName}`}
+          leadName={getLeadDisplayName(lead)}
         />
       )}
 
@@ -1396,7 +1998,7 @@ export default function LeadDetailPage() {
                 <svg className="h-6 w-6 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
               </div>
               <h2 className="text-lg font-semibold text-gray-900">Convert to Contact</h2>
-              <p className="text-sm text-gray-500 mt-1">Convert <strong>{lead.firstName} {lead.lastName}</strong> into a contact record.</p>
+              <p className="text-sm text-gray-500 mt-1">Convert <strong>{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</strong> into a contact record.</p>
             </div>
             <div className="space-y-3 mb-5">
               <p className="text-xs text-gray-500">This will create a new contact with all existing lead information. You can optionally create a deal at the same time.</p>
@@ -1437,7 +2039,7 @@ export default function LeadDetailPage() {
                 <svg className="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
               </div>
               <h2 className="text-lg font-semibold text-gray-900">Convert to Won Deal</h2>
-              <p className="text-sm text-gray-500 mt-1">Mark <strong>{lead.firstName} {lead.lastName}</strong> as a won deal? This will update the status to WON.</p>
+              <p className="text-sm text-gray-500 mt-1">Mark <strong>{lead.firstName}{lead.lastName ? ` ${lead.lastName}` : ""}</strong> as a won deal? This will update the status to WON.</p>
             </div>
             <div className="flex gap-2">
               <button onClick={() => setShowConvertModal(false)} className="btn-secondary flex-1">Cancel</button>
@@ -1457,6 +2059,112 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between py-1">
       <span className="text-sm text-gray-500">{label}</span>
       <span className="text-sm font-medium text-gray-900 text-right max-w-[60%] truncate">{value}</span>
+    </div>
+  );
+}
+
+function SLADetailCard({ slaInfo }: { slaInfo: any }) {
+  if (!slaInfo || !slaInfo.enabled) return null;
+
+  const formatDuration = (minutes: number) => {
+    if (minutes < 60) return `${Math.round(minutes)} min`;
+    const h = Math.floor(minutes / 60);
+    const m = Math.round(minutes % 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  };
+
+  const statusConfig: Record<string, { label: string; color: string; bg: string; desc: string }> = {
+    ON_TIME: { label: 'On Time', color: 'text-green-700', bg: 'bg-green-50 ring-green-200', desc: 'Lead is within SLA response window' },
+    AT_RISK: { label: 'At Risk', color: 'text-amber-700', bg: 'bg-amber-50 ring-amber-200', desc: 'Approaching SLA breach threshold' },
+    BREACHED: { label: 'SLA Breached', color: 'text-red-700', bg: 'bg-red-50 ring-red-300', desc: 'Response time has exceeded SLA threshold' },
+    ESCALATED: { label: 'Escalated', color: 'text-red-800', bg: 'bg-red-100 ring-red-400', desc: 'Lead has been escalated due to SLA breach' },
+    RESPONDED: { label: 'Responded', color: 'text-green-700', bg: 'bg-green-50 ring-green-200', desc: 'Lead has been attended to' },
+  };
+
+  const cfg = statusConfig[slaInfo.status] || statusConfig.ON_TIME;
+
+  return (
+    <div className="space-y-3">
+      {/* Status Badge */}
+      <div className="flex items-center justify-between">
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ring-1 ${cfg.bg} ${cfg.color}`}>
+          {(slaInfo.status === 'BREACHED' || slaInfo.status === 'ESCALATED' || slaInfo.status === 'AT_RISK') && (
+            <span className="relative flex h-2 w-2">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${slaInfo.status === 'AT_RISK' ? 'bg-amber-500' : 'bg-red-500'}`} />
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${slaInfo.status === 'AT_RISK' ? 'bg-amber-500' : 'bg-red-600'}`} />
+            </span>
+          )}
+          {slaInfo.status === 'ON_TIME' && <span className="h-2 w-2 rounded-full bg-green-500" />}
+          {slaInfo.status === 'RESPONDED' && <span className="h-2 w-2 rounded-full bg-green-500" />}
+          {cfg.label}
+        </span>
+        {slaInfo.escalationLevel > 0 && (
+          <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full ring-1 ring-red-200">
+            Level {slaInfo.escalationLevel}
+          </span>
+        )}
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-gray-500">{cfg.desc}</p>
+
+      {/* Progress Bar (for non-responded) */}
+      {slaInfo.status !== 'RESPONDED' && slaInfo.percentUsed !== undefined && (
+        <div>
+          <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+            <span>{formatDuration(slaInfo.elapsedMinutes || 0)} elapsed</span>
+            <span>{slaInfo.timeRemainingMinutes > 0 ? `${formatDuration(slaInfo.timeRemainingMinutes)} remaining` : 'Overdue'}</span>
+          </div>
+          <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500" style={{
+              width: `${Math.min(slaInfo.percentUsed, 100)}%`,
+              backgroundColor: slaInfo.percentUsed >= 100 ? '#dc2626' : slaInfo.percentUsed >= 75 ? '#f59e0b' : '#22c55e',
+            }} />
+          </div>
+        </div>
+      )}
+
+      {/* Response Time (for responded leads) */}
+      {slaInfo.status === 'RESPONDED' && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Response time:</span>
+          <span className={`text-sm font-semibold ${slaInfo.withinSLA ? 'text-green-700' : 'text-amber-700'}`}>
+            {formatDuration(slaInfo.respondedInMinutes || 0)}
+          </span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${slaInfo.withinSLA ? 'bg-green-50 text-green-700 ring-1 ring-green-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'}`}>
+            {slaInfo.withinSLA ? 'Within SLA' : 'SLA Exceeded'}
+          </span>
+        </div>
+      )}
+
+      {/* Thresholds */}
+      {slaInfo.thresholds && (
+        <div className="border-t border-gray-100 pt-2 mt-2">
+          <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1.5">SLA Thresholds</p>
+          <div className="grid grid-cols-2 gap-1 text-xs">
+            <span className="text-gray-500">Warning:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.warningMinutes)}</span>
+            <span className="text-gray-500">Breach:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.breachMinutes)}</span>
+            <span className="text-gray-500">Escalation:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.escalationMinutes)}</span>
+            <span className="text-gray-500">Reassign:</span>
+            <span className="text-gray-700 font-medium">{formatDuration(slaInfo.thresholds.reassignMinutes)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Breach/Escalation timestamps */}
+      {slaInfo.slaBreachedAt && (
+        <div className="text-xs text-red-600">
+          Breached at: {new Date(slaInfo.slaBreachedAt).toLocaleString()}
+        </div>
+      )}
+      {slaInfo.lastEscalatedAt && (
+        <div className="text-xs text-red-600">
+          Last escalated: {new Date(slaInfo.lastEscalatedAt).toLocaleString()}
+        </div>
+      )}
     </div>
   );
 }
@@ -1541,59 +2249,139 @@ function formatTimeAgo(dateStr: string) {
 
 // ─── Create Task Modal ───────────────────────────────────────────
 
-function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
-  const tomorrow = new Date(Date.now() + 86400000);
-  const defaultDate = tomorrow.toISOString().split('T')[0];
-  const defaultTime = '09:00';
+function CreateTaskModal({
+  onClose,
+  onSubmit,
+  divisionId,
+}: {
+  onClose: () => void;
+  onSubmit: (data: any) => void;
+  divisionId?: string;
+}) {
+  const addToast = useNotificationStore((s) => s.addToast);
+  const TYPE_LABELS: Record<string, string> = {
+    FOLLOW_UP_CALL: 'Follow-up Call',
+    MEETING: 'Meeting',
+    EMAIL: 'Email',
+    WHATSAPP: 'WhatsApp',
+    DEMO: 'Demo',
+    PROPOSAL: 'Proposal',
+    OTHER: 'Other',
+  };
+
+  const toLocalInputValue = (date: Date) => {
+    const tzOffsetMs = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  };
+
+  const combineDateAndTimeToISO = (date?: string, time?: string) => {
+    if (!date || !time) return null;
+    const dt = new Date(`${date}T${time}`);
+    if (Number.isNaN(dt.getTime())) return null;
+    return dt.toISOString();
+  };
+
+  const formatDateTime = (dateStr: string) =>
+    new Date(dateStr).toLocaleString('en-AE', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
 
   const [form, setForm] = useState({
     title: '',
     description: '',
     type: 'FOLLOW_UP_CALL',
     priority: 'MEDIUM',
-    dueAt: (() => {
-      const d = new Date(Date.now() + 86400000);
-      d.setSeconds(0, 0);
-      const tzOffsetMs = d.getTimezoneOffset() * 60000;
-      return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
-    })(),
+    dueAt: toLocalInputValue(new Date(Date.now() + 24 * 60 * 60 * 1000)),
     assigneeId: '',
     reminderDate: '',
     reminderTime: '',
+    isRecurring: false,
+    recurRule: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
-  const [fullUsers, setFullUsers] = useState<User[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
   const [meId, setMeId] = useState('');
 
   useEffect(() => {
-    Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]) => {
+    Promise.all([api.getUsers(divisionId), api.getMe()]).then(([userList, me]) => {
       setUsers(Array.isArray(userList) ? userList : []);
-      setFullUsers(Array.isArray(userList) ? userList : []);
-      setCurrentUserId(me?.id || '');
       if (me?.id) {
         setMeId(me.id);
         setForm((f) => ({ ...f, assigneeId: f.assigneeId || me.id }));
       }
     }).catch(() => {});
-  }, []);
+  }, [divisionId]);
+
+  const dueAtDate = form.dueAt ? new Date(form.dueAt) : null;
+  const dueAtValid = !!dueAtDate && !Number.isNaN(dueAtDate.getTime());
+  const reminderIso = combineDateAndTimeToISO(form.reminderDate, form.reminderTime);
+  const selectedAssignee = users.find((u) => u.id === form.assigneeId);
+
+  const setDuePreset = (minutesFromNow: number) => {
+    const d = new Date(Date.now() + minutesFromNow * 60_000);
+    setForm((prev) => ({ ...prev, dueAt: toLocalInputValue(d) }));
+  };
+
+  const setReminderBeforeDue = (minutesBeforeDue: number) => {
+    if (!dueAtValid || !dueAtDate) {
+      addToast({ type: 'info', title: 'Set due date first', message: 'Choose due date/time before applying reminder presets.' });
+      return;
+    }
+    const r = new Date(dueAtDate.getTime() - minutesBeforeDue * 60_000);
+    const local = toLocalInputValue(r);
+    setForm((prev) => ({ ...prev, reminderDate: local.split('T')[0] || '', reminderTime: local.split('T')[1] || '' }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     try {
+      if (!form.title.trim() || form.title.trim().length < 3) {
+        addToast({ type: 'error', title: 'Invalid title', message: 'Please enter at least 3 characters.' });
+        return;
+      }
+      if (!form.assigneeId) {
+        addToast({ type: 'error', title: 'Assignee required', message: 'Select a division member to assign this task.' });
+        return;
+      }
+      if (!dueAtValid || !dueAtDate) {
+        addToast({ type: 'error', title: 'Invalid due date', message: 'Please set a valid due date and time.' });
+        return;
+      }
+      if (dueAtDate < new Date()) {
+        addToast({ type: 'error', title: 'Invalid due date', message: 'Due date cannot be in the past.' });
+        return;
+      }
+      if ((form.reminderDate || form.reminderTime) && !reminderIso) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Please provide both reminder date and time.' });
+        return;
+      }
+      if (reminderIso && new Date(reminderIso) > dueAtDate) {
+        addToast({ type: 'error', title: 'Invalid reminder', message: 'Reminder cannot be after due date.' });
+        return;
+      }
+      if (form.isRecurring && !form.recurRule) {
+        addToast({ type: 'error', title: 'Recurrence missing', message: 'Choose recurrence pattern or disable recurring.' });
+        return;
+      }
+
       const payload: any = {
-        title: form.title,
-        description: form.description,
+        title: form.title.trim(),
+        description: form.description.trim(),
         type: form.type,
         priority: form.priority,
         assigneeId: form.assigneeId,
-        dueAt: new Date(`${form.dueDate}T${form.dueTime}:00`).toISOString(),
+        dueAt: dueAtDate.toISOString(),
+        divisionId,
+        isRecurring: form.isRecurring,
+        recurRule: form.isRecurring ? form.recurRule : null,
       };
-      if (form.reminderDate && form.reminderTime) {
-        payload.reminder = new Date(`${form.reminderDate}T${form.reminderTime}:00`).toISOString();
+      if (reminderIso) {
+        payload.reminder = reminderIso;
       }
       await onSubmit(payload);
     } finally {
@@ -1603,15 +2391,38 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="card w-full max-w-lg">
+      <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b">
-          <h2 className="text-lg font-semibold text-gray-900">Create Task</h2>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Create Smart Task</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Feature-rich task composer for this lead.</p>
+          </div>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400"><svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-5">
+          {divisionId && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              Division-scoped assignment is enabled. Only users from this lead&apos;s division are shown.
+            </div>
+          )}
+
+          <div>
+            <label className="label">Quick Start</label>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, type: 'FOLLOW_UP_CALL', priority: 'MEDIUM', title: p.title || 'Follow-up call' }))}>Follow-up</button>
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, type: 'MEETING', priority: 'HIGH', title: p.title || 'Client meeting' }))}>Meeting</button>
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, type: 'PROPOSAL', priority: 'HIGH', title: p.title || 'Send proposal' }))}>Proposal</button>
+              <button type="button" className="px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50" onClick={() => setForm((p) => ({ ...p, priority: 'URGENT', title: p.title || 'Urgent follow-up' }))}>Urgent</button>
+            </div>
+          </div>
+
           <div>
             <label className="label">Title *</label>
             <input className="input" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Follow up on proposal" />
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-[11px] text-gray-500">Action-oriented titles improve clarity and execution.</p>
+              <p className="text-[11px] text-gray-500">{form.title.length}/120</p>
+            </div>
           </div>
           <div>
             <label className="label">Description</label>
@@ -1622,7 +2433,7 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
               <label className="label">Type</label>
               <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'].map((t) => (
-                  <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+                  <option key={t} value={t}>{TYPE_LABELS[t] || t.replace(/_/g, ' ')}</option>
                 ))}
               </select>
             </div>
@@ -1647,6 +2458,9 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
                 <span className="text-xs text-green-600 font-medium">Assigned to you</span>
               )}
             </div>
+            {divisionId && (
+              <p className="text-[11px] text-gray-500 mb-1.5">Only members in this lead&apos;s division are shown.</p>
+            )}
             <select className="input" required value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
               <option value="">Select assignee...</option>
               {users.map((u) => (
@@ -1657,7 +2471,55 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
           <div>
             <label className="label">Due Date & Time *</label>
             <input type="datetime-local" className="input" required value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} />
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(60)}>In 1 hour</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(180)}>In 3 hours</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(24 * 60)}>Tomorrow</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setDuePreset(2 * 24 * 60)}>In 2 days</button>
+            </div>
           </div>
+          <div>
+            <label className="label">Reminder</label>
+            <div className="grid grid-cols-2 gap-2">
+              <input type="date" className="input" value={form.reminderDate} onChange={(e) => setForm({ ...form, reminderDate: e.target.value })} placeholder="Date" />
+              <input type="time" className="input" value={form.reminderTime} onChange={(e) => setForm({ ...form, reminderTime: e.target.value })} placeholder="Time" />
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setReminderBeforeDue(15)}>15 min before</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setReminderBeforeDue(60)}>1 hour before</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setReminderBeforeDue(24 * 60)}>1 day before</button>
+              <button type="button" className="px-2 py-1 rounded-md border text-xs hover:bg-gray-50" onClick={() => setForm((p) => ({ ...p, reminderDate: '', reminderTime: '' }))}>Clear</button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded"
+                checked={form.isRecurring}
+                onChange={(e) => setForm((p) => ({ ...p, isRecurring: e.target.checked, recurRule: e.target.checked ? p.recurRule || 'weekly' : '' }))}
+              />
+              Recurring task
+            </label>
+            {form.isRecurring && (
+              <select className="input" value={form.recurRule} onChange={(e) => setForm((p) => ({ ...p, recurRule: e.target.value }))}>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600 space-y-1">
+            <p className="font-medium text-gray-800">Live summary</p>
+            <p>Type: {TYPE_LABELS[form.type] || form.type.replace(/_/g, ' ')} • Priority: {form.priority}</p>
+            <p>Due: {dueAtValid && dueAtDate ? formatDateTime(dueAtDate.toISOString()) : 'Not set'}</p>
+            <p>Reminder: {reminderIso ? formatDateTime(reminderIso) : 'No reminder'}</p>
+            <p>Assignee: {selectedAssignee ? `${selectedAssignee.firstName} ${selectedAssignee.lastName}` : 'Not selected'}</p>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={submitting} className="btn-primary">
@@ -1672,8 +2534,10 @@ function CreateTaskModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
 
 // ─── Log Call Modal ──────────────────────────────────────────────
 
-const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: string }[] = [
-  { value: 'CALLBACK', label: 'Call Back Requested', group: 'Follow-up', icon: '🔄' },
+const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: string; description?: string }[] = [
+  { value: 'CALL_LATER', label: 'Call Later (Scheduled)', group: 'Follow-up', icon: '🕐', description: 'Client requested a specific date & time' },
+  { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', group: 'Follow-up', icon: '🔄', description: 'Follow up anytime — no specific schedule' },
+  { value: 'WILL_CALL_US_AGAIN', label: 'Will Call Us Again', group: 'Follow-up', icon: '🤝', description: 'Client said they will call us back; keep soft engagement' },
   { value: 'MEETING_ARRANGED', label: 'Meeting Arranged', group: 'Positive', icon: '📅' },
   { value: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', group: 'Positive', icon: '✅' },
   { value: 'INTERESTED', label: 'Interested - Send Info', group: 'Positive', icon: '👍' },
@@ -1685,41 +2549,113 @@ const DISPOSITION_OPTIONS: { value: string; label: string; group: string; icon: 
   { value: 'BUSY', label: 'Line Busy', group: 'Retry', icon: '📞' },
   { value: 'GATEKEEPER', label: 'Reached Gatekeeper', group: 'Retry', icon: '🚧' },
   { value: 'NOT_INTERESTED', label: 'Not Interested', group: 'Closed', icon: '👎' },
+  { value: 'ALREADY_COMPLETED_SERVICES', label: 'Already Completed Services', group: 'Closed', icon: '🏁', description: 'Service already completed; track where it was done' },
   { value: 'WRONG_NUMBER', label: 'Wrong Number', group: 'Closed', icon: '❌' },
   { value: 'DO_NOT_CALL', label: 'Do Not Call', group: 'Closed', icon: '🚫' },
   { value: 'OTHER', label: 'Other', group: 'Other', icon: '📝' },
 ];
 
-function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string }) {
+const FALLBACK_DISPOSITION_FIELDS: Record<string, any[]> = {
+  CALL_LATER: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: true, validation: { futureOnly: true } }],
+  CALL_AGAIN: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  CALLBACK: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  NO_ANSWER: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  VOICEMAIL_LEFT: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  BUSY: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  GATEKEEPER: [{ key: 'callbackDate', label: 'Callback Date & Time', type: 'datetime', required: false }],
+  MEETING_ARRANGED: [{ key: 'meetingDate', label: 'Meeting Date & Time', type: 'datetime', required: true }],
+  APPOINTMENT_BOOKED: [{ key: 'appointmentDate', label: 'Appointment Date & Time', type: 'datetime', required: true }],
+};
+
+function fallbackDispositions() {
+  return DISPOSITION_OPTIONS.map((opt, idx) => ({
+    value: opt.value,
+    label: opt.label,
+    group: opt.group,
+    icon: opt.icon,
+    description: opt.description || '',
+    requireNotes: opt.value === 'OTHER',
+    fields: FALLBACK_DISPOSITION_FIELDS[opt.value] || [],
+    sortOrder: (idx + 1) * 10,
+  }));
+}
+
+function isFieldVisible(field: any, values: Record<string, any>) {
+  if (!field?.showWhen?.fieldKey) return true;
+  return values[field.showWhen.fieldKey] === field.showWhen.equals;
+}
+
+function isMissing(value: any) {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+function LogCallModal({ onClose, onSubmit, leadName, leadId }: { onClose: () => void; onSubmit: (data: any) => Promise<void>; leadName: string; leadId: string }) {
   const [form, setForm] = useState({
     disposition: '',
     notes: '',
     duration: '',
-    callbackDate: '',
-    meetingDate: '',
-    appointmentDate: '',
+    dynamicFieldValues: {} as Record<string, any>,
     createFollowUp: true,
   });
+  const [catalog, setCatalog] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    api.getDispositions({ leadId })
+      .then((rows) => {
+        const normalized = Array.isArray(rows) ? rows.map((row: any) => ({
+          value: row.value,
+          label: row.label,
+          group: row.group || 'Other',
+          icon: row.icon || '📝',
+          description: row.description || '',
+          requireNotes: row.requireNotes === true,
+          fields: Array.isArray(row.fields) ? row.fields : [],
+          sortOrder: Number(row.sortOrder || 0),
+        })) : [];
+        setCatalog(normalized.length > 0 ? normalized : fallbackDispositions());
+      })
+      .catch(() => setCatalog(fallbackDispositions()));
+  }, [leadId]);
+
   const selectedDisposition = form.disposition;
-  const showCallback = selectedDisposition === 'CALLBACK' || selectedDisposition === 'BUSY' || selectedDisposition === 'NO_ANSWER' || selectedDisposition === 'VOICEMAIL_LEFT' || selectedDisposition === 'GATEKEEPER';
-  const showMeeting = selectedDisposition === 'MEETING_ARRANGED';
-  const showAppointment = selectedDisposition === 'APPOINTMENT_BOOKED';
+  const selectedDefinition = catalog.find((item) => item.value === selectedDisposition);
+  const notesRequired = selectedDefinition ? selectedDefinition.requireNotes : selectedDisposition === 'OTHER';
+  const notesEmpty = !form.notes || !form.notes.trim();
+  const visibleFields = (selectedDefinition?.fields || []).filter((field: any) => isFieldVisible(field, form.dynamicFieldValues));
+  const requiredFieldErrors = visibleFields
+    .filter((field: any) => field.required)
+    .filter((field: any) => isMissing(form.dynamicFieldValues[field.key]));
+  const datetimeFutureError = visibleFields.find((field: any) => {
+    if (field.type !== 'datetime' || field?.validation?.futureOnly !== true) return false;
+    const raw = form.dynamicFieldValues[field.key];
+    if (!raw) return false;
+    const parsed = new Date(String(raw));
+    return Number.isNaN(parsed.getTime()) || parsed <= new Date();
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.disposition) return;
+    if (notesRequired && notesEmpty) return;
+    if (requiredFieldErrors.length > 0 || datetimeFutureError) return;
     setSubmitting(true);
     try {
       const durationSeconds = form.duration ? parseInt(form.duration) * 60 : null;
+      const values = form.dynamicFieldValues || {};
+      const toIsoOrNull = (raw: any) => (raw ? new Date(String(raw)).toISOString() : null);
       await onSubmit({
         disposition: form.disposition,
         notes: form.notes || null,
         duration: durationSeconds,
-        callbackDate: form.callbackDate ? new Date(form.callbackDate).toISOString() : null,
-        meetingDate: form.meetingDate ? new Date(form.meetingDate).toISOString() : null,
-        appointmentDate: form.appointmentDate ? new Date(form.appointmentDate).toISOString() : null,
+        callbackDate: toIsoOrNull(values.callbackDate),
+        meetingDate: toIsoOrNull(values.meetingDate),
+        appointmentDate: toIsoOrNull(values.appointmentDate),
+        expectedCallbackWindow: values.expectedCallbackWindow || null,
+        notInterestedReason: values.notInterestedReason || null,
+        notInterestedOtherText: values.notInterestedOtherText?.trim?.() || null,
+        completedServiceLocation: values.completedServiceLocation || null,
+        dynamicFieldValues: values,
         createFollowUp: form.createFollowUp,
       });
     } finally {
@@ -1739,16 +2675,16 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
+
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Disposition Selection */}
           <div>
             <label className="label">Call Outcome *</label>
             <div className="grid grid-cols-2 gap-2 mt-1">
-              {DISPOSITION_OPTIONS.map((opt) => (
+              {catalog.map((opt: any) => (
                 <button
                   key={opt.value}
                   type="button"
-                  onClick={() => setForm({ ...form, disposition: opt.value })}
+                  onClick={() => setForm((prev) => ({ ...prev, disposition: opt.value, dynamicFieldValues: {} }))}
                   className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-all ${
                     form.disposition === opt.value
                       ? 'border-brand-500 bg-brand-50 text-brand-700 ring-1 ring-brand-500'
@@ -1756,53 +2692,61 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
                   }`}
                 >
                   <span className="text-base">{opt.icon}</span>
-                  <span className="font-medium leading-tight">{opt.label}</span>
+                  <div>
+                    <span className="font-medium leading-tight">{opt.label}</span>
+                    {opt.description && <p className="text-[10px] text-gray-400 leading-tight mt-0.5">{opt.description}</p>}
+                  </div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Conditional date fields */}
-          {showCallback && (
-            <div>
-              <label className="label">Callback Date & Time</label>
-              <input
-                type="datetime-local"
-                className="input"
-                value={form.callbackDate}
-                onChange={(e) => setForm({ ...form, callbackDate: e.target.value })}
-              />
-              <p className="text-xs text-gray-400 mt-1">When should we call back?</p>
+          {selectedDefinition && visibleFields.length > 0 && (
+            <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3">
+              <p className="text-xs font-medium text-brand-700">Disposition Fields</p>
+              {visibleFields.map((field: any) => {
+                const value = form.dynamicFieldValues[field.key] ?? '';
+                const missing = field.required && isMissing(value);
+                return (
+                  <div key={field.key} className="space-y-1">
+                    <label className="label mb-0">{field.label}{field.required ? ' *' : ''}</label>
+                    {field.type === 'select' ? (
+                      <select
+                        className={`input ${missing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                        value={String(value || '')}
+                        onChange={(e) => setForm((prev) => ({
+                          ...prev,
+                          dynamicFieldValues: { ...prev.dynamicFieldValues, [field.key]: e.target.value },
+                        }))}
+                      >
+                        <option value="">Select...</option>
+                        {(field.options || []).map((option: any) => (
+                          <option key={option.value} value={option.value}>{option.label || option.value}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'}
+                        className={`input ${missing ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
+                        value={String(value || '')}
+                        placeholder={field.placeholder || ''}
+                        min={field.type === 'datetime' && field?.validation?.futureOnly ? new Date().toISOString().slice(0, 16) : undefined}
+                        onChange={(e) => setForm((prev) => ({
+                          ...prev,
+                          dynamicFieldValues: { ...prev.dynamicFieldValues, [field.key]: e.target.value },
+                        }))}
+                      />
+                    )}
+                    {missing && <p className="text-xs text-red-500">{field.label} is required.</p>}
+                  </div>
+                );
+              })}
+              {datetimeFutureError && (
+                <p className="text-xs text-red-500">{datetimeFutureError.label} must be in the future.</p>
+              )}
             </div>
           )}
 
-          {showMeeting && (
-            <div>
-              <label className="label">Meeting Date & Time *</label>
-              <input
-                type="datetime-local"
-                className="input"
-                required
-                value={form.meetingDate}
-                onChange={(e) => setForm({ ...form, meetingDate: e.target.value })}
-              />
-            </div>
-          )}
-
-          {showAppointment && (
-            <div>
-              <label className="label">Appointment Date & Time *</label>
-              <input
-                type="datetime-local"
-                className="input"
-                required
-                value={form.appointmentDate}
-                onChange={(e) => setForm({ ...form, appointmentDate: e.target.value })}
-              />
-            </div>
-          )}
-
-          {/* Call Duration */}
           <div>
             <label className="label">Call Duration (minutes)</label>
             <input
@@ -1815,19 +2759,23 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
             />
           </div>
 
-          {/* Notes */}
           <div>
-            <label className="label">Call Notes</label>
+            <label className="label">
+              Call Notes {notesRequired && <span className="text-red-500 font-semibold">*</span>}
+            </label>
             <textarea
-              className="input"
+              className={`input ${notesRequired && notesEmpty ? 'border-red-400 ring-1 ring-red-400 focus:border-red-500 focus:ring-red-500' : ''}`}
               rows={3}
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="Key points from the conversation..."
+              placeholder={notesRequired ? 'Required — describe the call outcome in detail...' : 'Key points from the conversation...'}
+              required={notesRequired}
             />
+            {notesRequired && notesEmpty && (
+              <p className="text-xs text-red-500 mt-1">Notes are mandatory for this call outcome.</p>
+            )}
           </div>
 
-          {/* Auto Follow-up */}
           <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-3">
             <input
               type="checkbox"
@@ -1843,7 +2791,11 @@ function LogCallModal({ onClose, onSubmit, leadName }: { onClose: () => void; on
 
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" disabled={submitting || !form.disposition} className="btn-primary gap-1.5">
+            <button
+              type="submit"
+              disabled={submitting || !form.disposition || (notesRequired && notesEmpty) || requiredFieldErrors.length > 0 || !!datetimeFutureError}
+              className="btn-primary gap-1.5"
+            >
               {submitting ? (
                 <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Saving...</>
               ) : (

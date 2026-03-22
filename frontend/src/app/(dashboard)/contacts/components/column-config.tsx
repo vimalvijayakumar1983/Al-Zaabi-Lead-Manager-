@@ -20,6 +20,7 @@ export const DEFAULT_CONTACT_COLUMNS: ContactColumnDef[] = [
   { id: 'jobTitle', label: 'Job Title', visible: false, sortable: false },
   { id: 'lifecycle', label: 'Lifecycle', visible: true, sortable: false },
   { id: 'type', label: 'Type', visible: true, sortable: false },
+  { id: 'division', label: 'Division', visible: false, sortable: false },
   { id: 'owner', label: 'Owner', visible: true, sortable: false },
   { id: 'score', label: 'Score', visible: true, sortable: true, sortField: 'score' },
   { id: 'tags', label: 'Tags', visible: true, sortable: false },

@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useNotificationStore } from '@/store/notificationStore';
+import { premiumConfirm } from '@/lib/premiumDialogs';
 import {
   MessageCircle, Send, Search, Phone, Mail, ArrowLeft,
   User, Building2, Star, Clock, ChevronDown, Smile, X, ExternalLink,
@@ -160,6 +161,34 @@ interface CannedResponse {
   category: string;
 }
 
+// ─── Phone formatting - auto-add UAE country code if missing ────
+function formatPhone(phone: string | null | undefined): string {
+  if (!phone) return '';
+  const cleaned = phone.trim();
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('00')) return '+' + cleaned.slice(2);
+  return '+971' + cleaned;
+}
+
+// ─── Name Display Helpers ────────────────────────────────────────────
+
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Main Component ─────────────────────────────────────────────────
 
 export default function InboxPage() {
@@ -199,6 +228,20 @@ function InboxContent() {
 
   // Right panel tabs: info | notes | canned | attachments
   const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+
+  // Fetch custom status labels
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
+    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
+    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
+      .catch(() => {});
+  }, []);
+
+  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -473,7 +516,14 @@ function InboxContent() {
 
   // ─── Delete message ────────────────────────────────────────────
   const handleDeleteMessage = async (messageId: string) => {
-    if (!confirm('Delete this message? It will be shown as "message was deleted".')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this message?',
+      message: 'It will remain visible as "message was deleted".',
+      confirmText: 'Delete message',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteInboxMessage(messageId);
       setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
@@ -755,7 +805,7 @@ function InboxContent() {
                     : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary'
                 }`}
               >
-                {s ? s.replace(/_/g, ' ') : 'All Status'}
+                {s ? getStatusLabel(s) : 'All Status'}
               </button>
             ))}
           </div>
@@ -897,7 +947,7 @@ function InboxContent() {
                           {/* Status pill */}
                           <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
                             <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
-                            {(convo.leadStatus || 'NEW').replace(/_/g, ' ')}
+                            {getStatusLabel(convo.leadStatus || 'NEW')}
                           </span>
 
                           {/* Unread count badge or message count */}
@@ -1005,14 +1055,14 @@ function InboxContent() {
                 className="h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm"
                 style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
               >
-                {leadInfo?.firstName?.charAt(0) || '?'}
+                {getDisplayInitials(leadInfo?.firstName, leadInfo?.lastName)}
               </div>
 
               {/* Contact info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-semibold text-text-primary truncate">
-                    {leadInfo ? `${leadInfo.firstName} ${leadInfo.lastName}`.trim() : 'Loading...'}
+                    {leadInfo ? getDisplayName(leadInfo.firstName, leadInfo.lastName) : 'Loading...'}
                   </h3>
                   {/* Status badge with dropdown */}
                   {leadInfo && (
@@ -1024,7 +1074,7 @@ function InboxContent() {
                         } ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}
                       >
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {(leadInfo.status || 'NEW').replace(/_/g, ' ')}
+                        {getStatusLabel(leadInfo.status || 'NEW')}
                         <ChevronDown className="h-2.5 w-2.5" />
                       </button>
 
@@ -1039,7 +1089,7 @@ function InboxContent() {
                               }`}
                             >
                               <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-                              {status.replace(/_/g, ' ')}
+                              {getStatusLabel(status)}
                             </button>
                           ))}
                         </div>
@@ -1160,12 +1210,12 @@ function InboxContent() {
                                 {/* Sender name */}
                                 {isOutbound && msg.user && (
                                   <p className="text-xs font-semibold text-indigo-700 mb-0.5">
-                                    {msg.user.firstName} {msg.user.lastName}
+                                    {getDisplayName(msg.user.firstName, msg.user.lastName)}
                                   </p>
                                 )}
                                 {!isOutbound && (
                                   <p className="text-xs font-semibold text-teal-700 mb-0.5">
-                                    {leadInfo?.firstName} {leadInfo?.lastName}
+                                    {getDisplayName(leadInfo?.firstName, leadInfo?.lastName)}
                                   </p>
                                 )}
 
@@ -1481,10 +1531,10 @@ function InboxContent() {
                     className="h-16 w-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-3 shadow-md"
                     style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
                   >
-                    {leadInfo.firstName.charAt(0)}
+                    {getDisplayInitials(leadInfo.firstName, leadInfo.lastName)}
                   </div>
                   <p className="text-sm font-bold text-text-primary">
-                    {leadInfo.firstName} {leadInfo.lastName}
+                    {getDisplayName(leadInfo.firstName, leadInfo.lastName)}
                   </p>
                   {leadInfo.jobTitle && (
                     <p className="text-xs text-text-tertiary mt-0.5">{leadInfo.jobTitle}</p>
@@ -1516,7 +1566,7 @@ function InboxContent() {
                   <p className="text-2xs font-bold text-text-tertiary uppercase tracking-wider mb-2">Contact Details</p>
                   {[
                     { icon: Mail, label: 'Email', value: leadInfo.email },
-                    { icon: Phone, label: 'Phone', value: leadInfo.phone },
+                    { icon: Phone, label: 'Phone', value: formatPhone(leadInfo.phone) },
                     { icon: Building2, label: 'Company', value: leadInfo.company },
                     { icon: Briefcase, label: 'Job Title', value: leadInfo.jobTitle },
                   ].filter(d => d.value).map(d => (
@@ -1578,7 +1628,7 @@ function InboxContent() {
                       <p className="text-2xs text-text-tertiary mb-0.5">Status</p>
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium ${STATUS_COLORS[leadInfo.status]?.bg || 'bg-gray-50'} ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}>
                         <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {(leadInfo.status || 'NEW').replace(/_/g, ' ')}
+                        {getStatusLabel(leadInfo.status || 'NEW')}
                       </span>
                     </div>
                     <div className="p-2 rounded-lg bg-surface-secondary/50">
@@ -1602,12 +1652,12 @@ function InboxContent() {
                   {leadInfo.assignedTo && (
                     <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-brand-50/50">
                       <div className="h-6 w-6 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-2xs font-bold">
-                        {leadInfo.assignedTo.firstName.charAt(0)}
+                        {getDisplayInitials(leadInfo.assignedTo.firstName, leadInfo.assignedTo.lastName)}
                       </div>
                       <div>
                         <p className="text-2xs text-text-tertiary">Assigned to</p>
                         <p className="text-xs font-medium text-text-primary">
-                          {leadInfo.assignedTo.firstName} {leadInfo.assignedTo.lastName}
+                          {getDisplayName(leadInfo.assignedTo.firstName, leadInfo.assignedTo.lastName)}
                         </p>
                       </div>
                     </div>
@@ -1669,7 +1719,7 @@ function InboxContent() {
                         <p className="text-xs text-text-primary whitespace-pre-wrap">{note.content}</p>
                         <div className="flex items-center gap-2 mt-2 text-2xs text-amber-700">
                           <span className="font-medium">
-                            {note.user?.firstName} {note.user?.lastName}
+                            {getDisplayName(note.user?.firstName, note.user?.lastName)}
                           </span>
                           <span>&middot;</span>
                           <span>{new Date(note.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>

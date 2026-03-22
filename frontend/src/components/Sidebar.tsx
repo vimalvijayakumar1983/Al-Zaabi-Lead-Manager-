@@ -29,21 +29,25 @@ import {
   X,
   Inbox,
   UserCircle,
+  Shield,
+  Archive,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: '1', permission: 'dashboard' },
   { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null, permission: 'leads' },
-  { href: '/contacts', label: 'Contacts', icon: UserCircle, shortcut: 'C', permission: 'leads' },
-  { href: '/inbox', label: 'Inbox', icon: Inbox, shortcut: 'I', permission: 'leads' },
+  { href: '/contacts', label: 'Contacts', icon: UserCircle, shortcut: 'C', permission: 'contacts' },
+  { href: '/inbox', label: 'Inbox', icon: Inbox, shortcut: 'I', permission: 'inbox' },
   { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
   { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
   { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
-  { href: '/integrations', label: 'Integrations', icon: Plug2, permission: 'settings' },
+  { href: '/integrations', label: 'Integrations', icon: Plug2, permission: 'integrations' },
   { href: '/team', label: 'Team', icon: UserCog, shortcut: '8', permission: 'team' },
-  { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'leads' },
+  { href: '/roles', label: 'Roles', icon: Shield, permission: 'roles' },
+  { href: '/recycle-bin', label: 'Recycle Bin', icon: Archive, permission: 'recycleBin' },
+  { href: '/import', label: 'Import', icon: Upload, shortcut: '9', permission: 'import' },
   { href: '/divisions', label: 'Divisions', icon: Building2, shortcut: '0', permission: 'divisions', divisionOnly: true },
 ];
 

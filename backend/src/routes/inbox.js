@@ -7,7 +7,20 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
-const { sendText: sendWhatsAppText } = require('../services/whatsappService');
+const { regenerateLeadSummaryById } = require('../services/aiService');
+
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
 
 // ─── Multer config for attachments (memory storage for serverless) ──
 
@@ -36,6 +49,11 @@ const upload = multer({
 });
 
 const router = Router();
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 // ─── Serve Attachment File from DB (public — UUID acts as access token) ──
 
@@ -184,7 +202,7 @@ router.get('/conversations', async (req, res, next) => {
       const platform = lastMsg ? resolvePlatform(lastMsg) : 'UNKNOWN';
       return {
         leadId: lead.id,
-        contactName: `${lead.firstName} ${lead.lastName}`.trim(),
+        contactName: getDisplayName(lead),
         contactEmail: lead.email,
         contactPhone: lead.phone,
         company: lead.company,
@@ -232,7 +250,7 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       select: {
         id: true, firstName: true, lastName: true, email: true, phone: true,
         company: true, status: true, score: true, source: true, jobTitle: true,
-        createdAt: true, budget: true,
+        createdAt: true, budget: true, organizationId: true,
         assignedTo: { select: { id: true, firstName: true, lastName: true } },
         stage: { select: { id: true, name: true, color: true } },
       },
@@ -300,6 +318,16 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       messages: enriched,
       pagination: { total, page: parseInt(page), limit: take, totalPages: Math.ceil(total / take) },
     });
+
+    // Auto-mark unread inbound messages as read when viewed
+    prisma.communication.updateMany({
+      where: { leadId, isRead: false, direction: 'INBOUND' },
+      data: { isRead: true, readAt: new Date() },
+    }).then((result) => {
+      if (result.count > 0) {
+        broadcastDataChange(lead.organizationId, 'communication', 'updated', null, { entityId: leadId }).catch(() => {});
+      }
+    }).catch(() => {});
   } catch (err) { next(err); }
 });
 
@@ -328,7 +356,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
     const msgMetadata = { ...metadata };
     if (platform) msgMetadata.platform = platform.toLowerCase();
 
-    // Create communication record
+    // Create communication record (outbound messages are always read)
     const communication = await prisma.communication.create({
       data: {
         leadId,
@@ -338,6 +366,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
         subject,
         metadata: msgMetadata,
         userId: req.user.id,
+        isRead: true,
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -391,6 +420,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
     };
 
     res.status(201).json(enriched);
+    refreshLeadAISummaryAsync(leadId);
 
     broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -452,7 +482,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       }));
     }
 
-    // Create communication record
+    // Create communication record (outbound messages are always read)
     const communication = await prisma.communication.create({
       data: {
         leadId,
@@ -462,6 +492,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
         subject: subject || null,
         metadata: msgMetadata,
         userId: req.user.id,
+        isRead: true,
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
@@ -535,6 +566,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     };
 
     res.status(201).json(enriched);
+    refreshLeadAISummaryAsync(leadId);
 
     broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -564,6 +596,31 @@ router.get('/conversations/:leadId/attachments', async (req, res, next) => {
     }));
 
     res.json(mapped);
+  } catch (err) { next(err); }
+});
+
+// ─── Mark Conversation as Read ──────────────────────────────────────
+
+router.post('/conversations/:leadId/read', async (req, res, next) => {
+  try {
+    const { leadId } = req.params;
+
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // Mark all unread inbound messages for this lead as read
+    const result = await prisma.communication.updateMany({
+      where: { leadId, isRead: false, direction: 'INBOUND' },
+      data: { isRead: true, readAt: new Date() },
+    });
+
+    res.json({ success: true, markedCount: result.count });
+
+    // Pass null as actorId so the current user also receives the update
+    // (their lead list needs to refresh channel unread counts)
+    broadcastDataChange(lead.organizationId, 'communication', 'updated', null, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
 });
 
@@ -657,6 +714,7 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
     });
 
     res.json(updated);
+    refreshLeadAISummaryAsync(leadId);
   } catch (err) { next(err); }
 });
 
@@ -691,6 +749,7 @@ router.post('/conversations/:leadId/notes', async (req, res, next) => {
     });
 
     res.status(201).json(note);
+    refreshLeadAISummaryAsync(leadId);
 
     broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -749,6 +808,7 @@ router.patch('/messages/:messageId', validate(z.object({
     });
 
     res.json(updated);
+    refreshLeadAISummaryAsync(message.leadId);
 
     broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
   } catch (err) { next(err); }
@@ -778,6 +838,7 @@ router.delete('/messages/:messageId', async (req, res, next) => {
     });
 
     res.json({ message: 'Message deleted' });
+    refreshLeadAISummaryAsync(message.leadId);
 
     broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
   } catch (err) { next(err); }

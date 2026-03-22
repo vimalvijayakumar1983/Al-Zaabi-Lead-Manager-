@@ -6,9 +6,30 @@ const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const { checkTaskReminders } = require('../services/taskReminderScheduler');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
+const { regenerateLeadSummaryById } = require('../services/aiService');
+
+// ─── Display name helper (deduplication) ─────────────────────────
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return 'Unknown';
+  if (!ln) return fn;
+  if (!fn) return ln;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 const taskSchema = z.object({
   title: z.string().min(1),
@@ -17,24 +38,85 @@ const taskSchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
   dueAt: z.string().datetime(),
   leadId: z.string().uuid().optional().nullable(),
+  divisionId: z.string().uuid().optional().nullable(),
   assigneeId: z.string().uuid(),
   isRecurring: z.boolean().optional(),
   recurRule: z.string().optional().nullable(),
   reminder: z.string().datetime().optional().nullable(),
 });
 
+// ─── Task Stats ─────────────────────────────────────────────────
+router.get('/stats', async (req, res, next) => {
+  try {
+    const where = {};
+    if (req.isRestrictedRole) {
+      where.assigneeId = req.user.id;
+    } else {
+      where.assignee = { organizationId: { in: req.orgIds } };
+    }
+
+    const now = new Date();
+    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
+    const weekEnd = new Date(todayStart);
+    weekEnd.setDate(weekEnd.getDate() + (6 - weekEnd.getDay()));
+    weekEnd.setHours(23, 59, 59, 999);
+
+    const [total, pending, inProgress, completed, cancelled, overdue, completedToday, dueThisWeek, byPriority, byType] = await Promise.all([
+      prisma.task.count({ where }),
+      prisma.task.count({ where: { ...where, status: 'PENDING' } }),
+      prisma.task.count({ where: { ...where, status: 'IN_PROGRESS' } }),
+      prisma.task.count({ where: { ...where, status: 'COMPLETED' } }),
+      prisma.task.count({ where: { ...where, status: 'CANCELLED' } }),
+      prisma.task.count({ where: { ...where, dueAt: { lt: now }, status: { in: ['PENDING', 'IN_PROGRESS'] } } }),
+      prisma.task.count({ where: { ...where, status: 'COMPLETED', completedAt: { gte: todayStart, lte: todayEnd } } }),
+      prisma.task.count({ where: { ...where, status: { not: 'COMPLETED' }, dueAt: { gte: todayStart, lte: weekEnd } } }),
+      prisma.task.groupBy({ by: ['priority'], where, _count: true }),
+      prisma.task.groupBy({ by: ['type'], where, _count: true }),
+    ]);
+
+    res.json({
+      total, pending, inProgress, completed, cancelled, overdue, completedToday, dueThisWeek,
+      byPriority: byPriority.reduce((acc, r) => ({ ...acc, [r.priority]: r._count }), {}),
+      byType: byType.reduce((acc, r) => ({ ...acc, [r.type]: r._count }), {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── List Tasks ──────────────────────────────────────────────────
 router.get('/', validateQuery(paginationSchema.extend({
+  search: z.string().optional(),
   status: z.string().optional(),
+  statuses: z.string().optional(),
   priority: z.string().optional(),
+  priorities: z.string().optional(),
+  divisionId: z.string().optional(),
+  type: z.string().optional(),
   assigneeId: z.string().optional(),
   leadId: z.string().optional(),
   overdue: z.coerce.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, status, priority, assigneeId, leadId, overdue } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, type, divisionId, assigneeId, leadId, overdue } = req.validatedQuery;
 
     const where = {};
+    const allowedStatuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
+    const allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+    const allowedTypes = ['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'];
+    const scopedOrgIds = (req.isSuperAdmin && divisionId && req.orgIds.includes(divisionId))
+      ? [divisionId]
+      : req.orgIds;
+
+    const parsedStatuses = (statuses || '')
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter((s) => allowedStatuses.includes(s));
+    const parsedPriorities = (priorities || '')
+      .split(',')
+      .map((p) => p.trim().toUpperCase())
+      .filter((p) => allowedPriorities.includes(p));
 
     // Scope to org via assignee's organization
     if (leadId) {
@@ -43,17 +125,59 @@ router.get('/', validateQuery(paginationSchema.extend({
     if (req.isRestrictedRole) {
       // SALES_REP / VIEWER only sees their own tasks
       where.assigneeId = req.user.id;
-    } else if (assigneeId) {
-      where.assigneeId = assigneeId;
     } else {
-      // Default: show tasks for users in the accessible orgs
-      where.assignee = { organizationId: { in: req.orgIds } };
+      // Always scope tasks to accessible orgs; optionally narrow by assignee.
+      where.assignee = { organizationId: { in: scopedOrgIds } };
+      if (assigneeId) where.assigneeId = assigneeId;
     }
-    if (status) where.status = status;
-    if (priority) where.priority = priority;
+
+    if (parsedStatuses.length > 1) {
+      where.status = { in: parsedStatuses };
+    } else if (parsedStatuses.length === 1) {
+      where.status = parsedStatuses[0];
+    } else if (status && allowedStatuses.includes(String(status).toUpperCase())) {
+      where.status = String(status).toUpperCase();
+    }
+
+    if (parsedPriorities.length > 1) {
+      where.priority = { in: parsedPriorities };
+    } else if (parsedPriorities.length === 1) {
+      where.priority = parsedPriorities[0];
+    } else if (priority && allowedPriorities.includes(String(priority).toUpperCase())) {
+      where.priority = String(priority).toUpperCase();
+    }
+
+    if (type && allowedTypes.includes(String(type).toUpperCase())) {
+      where.type = String(type).toUpperCase();
+    }
+
+    if (search?.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+        {
+          lead: {
+            OR: [
+              { firstName: { contains: q, mode: 'insensitive' } },
+              { lastName: { contains: q, mode: 'insensitive' } },
+            ],
+          },
+        },
+      ];
+    }
+
     if (overdue) {
       where.dueAt = { lt: new Date() };
-      where.status = { in: ['PENDING', 'IN_PROGRESS'] };
+      const dueStatuses = ['PENDING', 'IN_PROGRESS'];
+      if (typeof where.status === 'string') {
+        where.status = dueStatuses.includes(where.status) ? where.status : { in: [] };
+      } else if (where.status?.in && Array.isArray(where.status.in)) {
+        const intersected = where.status.in.filter((s) => dueStatuses.includes(s));
+        where.status = { in: intersected };
+      } else {
+        where.status = { in: dueStatuses };
+      }
     }
 
     const [tasks, total] = await Promise.all([
@@ -80,12 +204,45 @@ router.get('/', validateQuery(paginationSchema.extend({
 router.post('/', validate(taskSchema), async (req, res, next) => {
   try {
     const data = req.validated;
+    const { divisionId, ...taskData } = data;
+
+    let targetDivisionId = null;
+    if (taskData.leadId) {
+      const lead = await prisma.lead.findFirst({
+        where: { id: taskData.leadId, organizationId: { in: req.orgIds } },
+        select: { id: true, organizationId: true },
+      });
+      if (!lead) return res.status(404).json({ error: 'Lead not found' });
+      targetDivisionId = lead.organizationId;
+      if (divisionId && divisionId !== targetDivisionId) {
+        return res.status(400).json({ error: 'Task division must match lead division' });
+      }
+    } else if (divisionId) {
+      if (!req.orgIds.includes(divisionId)) {
+        return res.status(403).json({ error: 'Invalid division scope' });
+      }
+      targetDivisionId = divisionId;
+    } else if (!req.isSuperAdmin) {
+      targetDivisionId = req.user.organizationId;
+    }
+
+    const assignee = await prisma.user.findUnique({
+      where: { id: taskData.assigneeId },
+      select: { id: true, organizationId: true, isActive: true },
+    });
+    if (!assignee || !assignee.isActive || !req.orgIds.includes(assignee.organizationId)) {
+      return res.status(400).json({ error: 'Invalid assignee for your accessible divisions' });
+    }
+    if (targetDivisionId && assignee.organizationId !== targetDivisionId) {
+      return res.status(400).json({ error: 'Assignee must belong to the selected division' });
+    }
+    targetDivisionId = targetDivisionId || assignee.organizationId;
 
     const task = await prisma.task.create({
       data: {
-        ...data,
-        dueAt: new Date(data.dueAt),
-        reminder: data.reminder ? new Date(data.reminder) : null,
+        ...taskData,
+        dueAt: new Date(taskData.dueAt),
+        reminder: taskData.reminder ? new Date(taskData.reminder) : null,
         createdById: req.user.id,
       },
       include: {
@@ -94,41 +251,48 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
       },
     });
 
-    if (data.leadId) {
+    if (taskData.leadId) {
       await prisma.leadActivity.create({
         data: {
-          leadId: data.leadId,
+          leadId: taskData.leadId,
           userId: req.user.id,
           type: 'TASK_CREATED',
-          description: `Task created: ${data.title}`,
+          description: `Task created: ${taskData.title}`,
         },
       });
     }
 
-    if (data.assigneeId !== req.user.id) {
-      notifyUser(data.assigneeId, {
-        type: 'task_assigned',
-        task: { id: task.id, title: task.title },
-      });
-    }
+    notifyUser(taskData.assigneeId, {
+      type: taskData.assigneeId === req.user.id ? 'task_created' : 'task_assigned',
+      task: { id: task.id, title: task.title },
+    });
 
     res.status(201).json(task);
 
     // ── Fire-and-forget notification ──
-    if (data.assigneeId && data.assigneeId !== req.user.id) {
+    if (taskData.assigneeId) {
+      const isSelfAssigned = taskData.assigneeId === req.user.id;
       createNotification({
         type: NOTIFICATION_TYPES.TASK_ASSIGNED,
-        title: 'New Task Assigned',
-        message: `${req.user.firstName} ${req.user.lastName} assigned you task: ${task.title}`,
-        userId: data.assigneeId,
+        title: isSelfAssigned ? 'Task Created' : 'New Task Assigned',
+        message: isSelfAssigned
+          ? `You created a new task: ${task.title}`
+          : `${getDisplayName(req.user)} assigned you task: ${task.title}`,
+        userId: taskData.assigneeId,
         actorId: req.user.id,
         entityType: 'task',
         entityId: task.id,
-        organizationId: req.user.organizationId,
+        organizationId: targetDivisionId,
       }).catch(() => {});
     }
 
-    broadcastDataChange(req.user.organizationId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
+    broadcastDataChange(targetDivisionId, 'task', 'created', req.user.id, { entityId: task.id }).catch(() => {});
+    refreshLeadAISummaryAsync(task.leadId);
+
+    // Trigger immediate reminder check so notifications fire without waiting for next poll cycle
+    if (taskData.reminder || taskData.dueAt) {
+      checkTaskReminders().catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
@@ -140,16 +304,51 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
     // Verify task belongs to accessible orgs via assignee
     const existing = await prisma.task.findFirst({
       where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+      include: {
+        lead: { select: { organizationId: true } },
+        assignee: { select: { organizationId: true } },
+      },
     });
     if (!existing) return res.status(404).json({ error: 'Task not found' });
 
     const data = req.validated;
-    if (data.dueAt) data.dueAt = new Date(data.dueAt);
-    if (data.reminder) data.reminder = new Date(data.reminder);
+    const { divisionId, ...updateData } = data;
+    let targetDivisionId = existing.lead?.organizationId || existing.assignee?.organizationId || null;
+
+    if (updateData.leadId) {
+      const lead = await prisma.lead.findFirst({
+        where: { id: updateData.leadId, organizationId: { in: req.orgIds } },
+        select: { id: true, organizationId: true },
+      });
+      if (!lead) return res.status(404).json({ error: 'Lead not found' });
+      targetDivisionId = lead.organizationId;
+    }
+    if (divisionId) {
+      if (!req.orgIds.includes(divisionId)) return res.status(403).json({ error: 'Invalid division scope' });
+      targetDivisionId = divisionId;
+    }
+
+    if (updateData.assigneeId) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: updateData.assigneeId },
+        select: { id: true, organizationId: true, isActive: true },
+      });
+      if (!assignee || !assignee.isActive || !req.orgIds.includes(assignee.organizationId)) {
+        return res.status(400).json({ error: 'Invalid assignee for your accessible divisions' });
+      }
+      if (targetDivisionId && assignee.organizationId !== targetDivisionId) {
+        return res.status(400).json({ error: 'Assignee must belong to the same division as the task' });
+      }
+    } else if (targetDivisionId && existing.assignee?.organizationId && existing.assignee.organizationId !== targetDivisionId) {
+      return res.status(400).json({ error: 'Current assignee is outside the selected division. Reassign first.' });
+    }
+
+    if (updateData.dueAt) updateData.dueAt = new Date(updateData.dueAt);
+    if (updateData.reminder) updateData.reminder = new Date(updateData.reminder);
 
     const task = await prisma.task.update({
       where: { id: req.params.id },
-      data,
+      data: updateData,
       include: {
         lead: { select: { id: true, firstName: true, lastName: true } },
         assignee: { select: { id: true, firstName: true, lastName: true } },
@@ -157,7 +356,13 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
     });
     res.json(task);
 
-    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+    broadcastDataChange(targetDivisionId || req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+    refreshLeadAISummaryAsync(task.leadId || existing.leadId);
+
+    // Trigger immediate reminder check when due date or reminder is changed
+    if (updateData.reminder || updateData.dueAt) {
+      checkTaskReminders().catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
@@ -195,7 +400,7 @@ router.post('/:id/complete', async (req, res, next) => {
       createNotification({
         type: NOTIFICATION_TYPES.TASK_COMPLETED,
         title: 'Task Completed',
-        message: `${req.user.firstName} ${req.user.lastName} completed task: ${task.title}`,
+        message: `${getDisplayName(req.user)} completed task: ${task.title}`,
         userId: task.createdById,
         actorId: req.user.id,
         entityType: 'task',
@@ -205,6 +410,103 @@ router.post('/:id/complete', async (req, res, next) => {
     }
 
     broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
+    refreshLeadAISummaryAsync(task.leadId);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Bulk Update Tasks ──────────────────────────────────────────
+router.patch('/bulk', validate(z.object({
+  taskIds: z.array(z.string().uuid()).min(1),
+  status: z.enum(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']).optional(),
+  priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+  assigneeId: z.string().uuid().optional(),
+  delete: z.boolean().optional(),
+})), async (req, res, next) => {
+  try {
+    const { taskIds, delete: shouldDelete, ...updateData } = req.validated;
+
+    // Verify tasks belong to accessible orgs
+    const accessibleTasks = await prisma.task.findMany({
+      where: { id: { in: taskIds }, assignee: { organizationId: { in: req.orgIds } } },
+      include: {
+        assignee: { select: { organizationId: true } },
+        lead: { select: { organizationId: true } },
+      },
+    });
+    const accessibleIds = accessibleTasks.map(t => t.id);
+
+    if (accessibleIds.length === 0) return res.status(404).json({ error: 'No accessible tasks found' });
+
+    if (updateData.assigneeId) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: updateData.assigneeId },
+        select: { id: true, organizationId: true, isActive: true },
+      });
+      if (!assignee || !assignee.isActive || !req.orgIds.includes(assignee.organizationId)) {
+        return res.status(400).json({ error: 'Invalid assignee for your accessible divisions' });
+      }
+
+      const mismatched = accessibleTasks.filter((task) => {
+        const taskDivisionId = task.lead?.organizationId || task.assignee?.organizationId;
+        return taskDivisionId && taskDivisionId !== assignee.organizationId;
+      });
+      if (mismatched.length > 0) {
+        return res.status(400).json({
+          error: 'Assignee must belong to the same division as selected task(s)',
+          mismatchedTaskCount: mismatched.length,
+        });
+      }
+    }
+
+    if (shouldDelete) {
+      await Promise.all(
+        accessibleTasks.map((task) => {
+          const taskOrgId = task.lead?.organizationId || task.assignee?.organizationId || req.user.organizationId;
+          return upsertRecycleBinItem({
+            entityType: 'TASK',
+            entityId: task.id,
+            entityLabel: task.title,
+            organizationId: taskOrgId,
+            deletedById: req.user.id,
+            recordAssigneeId: task.assigneeId,
+            recordCreatorId: task.createdById,
+            snapshot: {
+              title: task.title,
+              description: task.description,
+              type: task.type,
+              priority: task.priority,
+              status: task.status,
+              dueAt: task.dueAt,
+              completedAt: task.completedAt,
+              isRecurring: task.isRecurring,
+              recurRule: task.recurRule,
+              reminder: task.reminder,
+              leadId: task.leadId,
+              contactId: task.contactId,
+              assigneeId: task.assigneeId,
+              createdById: task.createdById,
+            },
+          });
+        })
+      );
+      await prisma.task.deleteMany({ where: { id: { in: accessibleIds } } });
+      res.json({ message: `${accessibleIds.length} tasks moved to recycle bin`, count: accessibleIds.length });
+    } else {
+      const data = {};
+      if (updateData.status) data.status = updateData.status;
+      if (updateData.priority) data.priority = updateData.priority;
+      if (updateData.assigneeId) data.assigneeId = updateData.assigneeId;
+      if (updateData.status === 'COMPLETED') data.completedAt = new Date();
+
+      await prisma.task.updateMany({ where: { id: { in: accessibleIds } }, data });
+      res.json({ message: `${accessibleIds.length} tasks updated`, count: accessibleIds.length });
+    }
+
+    broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, {}).catch(() => {});
+    const affectedLeadIds = [...new Set(accessibleTasks.map((task) => task.leadId).filter(Boolean))];
+    affectedLeadIds.forEach((leadId) => refreshLeadAISummaryAsync(leadId));
   } catch (err) {
     next(err);
   }
@@ -216,13 +518,45 @@ router.delete('/:id', async (req, res, next) => {
     // Verify task belongs to accessible orgs
     const existing = await prisma.task.findFirst({
       where: { id: req.params.id, assignee: { organizationId: { in: req.orgIds } } },
+      include: {
+        assignee: { select: { organizationId: true } },
+        lead: { select: { organizationId: true } },
+      },
     });
     if (!existing) return res.status(404).json({ error: 'Task not found' });
 
+    const taskOrgId = existing.lead?.organizationId || existing.assignee?.organizationId || req.user.organizationId;
+    await upsertRecycleBinItem({
+      entityType: 'TASK',
+      entityId: existing.id,
+      entityLabel: existing.title,
+      organizationId: taskOrgId,
+      deletedById: req.user.id,
+      recordAssigneeId: existing.assigneeId,
+      recordCreatorId: existing.createdById,
+      snapshot: {
+        title: existing.title,
+        description: existing.description,
+        type: existing.type,
+        priority: existing.priority,
+        status: existing.status,
+        dueAt: existing.dueAt,
+        completedAt: existing.completedAt,
+        isRecurring: existing.isRecurring,
+        recurRule: existing.recurRule,
+        reminder: existing.reminder,
+        leadId: existing.leadId,
+        contactId: existing.contactId,
+        assigneeId: existing.assigneeId,
+        createdById: existing.createdById,
+      },
+    });
+
     await prisma.task.delete({ where: { id: req.params.id } });
-    res.json({ message: 'Task deleted' });
+    res.json({ message: 'Task moved to recycle bin' });
 
     broadcastDataChange(req.user.organizationId, 'task', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
+    refreshLeadAISummaryAsync(existing.leadId);
   } catch (err) {
     next(err);
   }

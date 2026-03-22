@@ -60,6 +60,7 @@ import {
   GitBranch,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Constants ──────────────────────────────────────────────────────
 const ROLES = ['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'] as const;
@@ -111,8 +112,20 @@ function formatAED(value: number): string {
   return `AED ${value.toLocaleString()}`;
 }
 
-function getInitials(firstName: string, lastName: string): string {
-  return `${firstName?.charAt(0) || ''}${lastName?.charAt(0) || ''}`.toUpperCase();
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
 }
 
 // ─── Modal Wrapper ──────────────────────────────────────────────────
@@ -391,11 +404,26 @@ function UserActionMenu({
   onTransfer: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+
+  const handleOpen = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      const menuHeight = 200; // approximate menu height
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const top = spaceBelow < menuHeight ? rect.top - menuHeight : rect.bottom + 4;
+      const left = Math.max(8, rect.right - 208); // 208 = w-52 (13rem)
+      setMenuPos({ top, left });
+    }
+    setOpen(!open);
+  };
 
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        ref={btnRef}
+        onClick={handleOpen}
         className="btn-icon h-8 w-8"
         title="Actions"
       >
@@ -403,8 +431,11 @@ function UserActionMenu({
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-52 bg-white rounded-xl shadow-lg border border-border-subtle py-1">
+          <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[9999] w-52 bg-white rounded-xl shadow-lg border border-border-subtle py-1"
+            style={{ top: menuPos.top, left: menuPos.left }}
+          >
             <button
               onClick={() => { setOpen(false); onEditRole(); }}
               className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-primary hover:bg-surface-secondary transition-colors"
@@ -457,6 +488,7 @@ function UserActionMenu({
 export default function DivisionsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // Auth
   const [authorized, setAuthorized] = useState<boolean | null>(null);
@@ -548,9 +580,6 @@ export default function DivisionsPage() {
   const [transferring, setTransferring] = useState(false);
   const [transferError, setTransferError] = useState('');
 
-  // Success toast
-  const [toast, setToast] = useState('');
-
   // ── Auth Check ────────────────────────────────────────────────────
   useEffect(() => {
     if (user) {
@@ -560,8 +589,7 @@ export default function DivisionsPage() {
 
   // ── Show Toast Helper ─────────────────────────────────────────────
   const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(''), 3000);
+    addToast({ type: 'success', title: 'Success', message: msg });
   };
 
   // ── Fetch Divisions ───────────────────────────────────────────────
@@ -972,7 +1000,7 @@ export default function DivisionsPage() {
     if (localSearch) {
       filtered = filtered.filter(
         (u) =>
-          `${u.firstName} ${u.lastName}`.toLowerCase().includes(localSearch) ||
+          getDisplayName(u.firstName, u.lastName).toLowerCase().includes(localSearch) ||
           u.email.toLowerCase().includes(localSearch)
       );
     }
@@ -995,7 +1023,7 @@ export default function DivisionsPage() {
       let cmp = 0;
       switch (sortKeyVal) {
         case 'name':
-          cmp = `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
+          cmp = getDisplayName(a.firstName, a.lastName).localeCompare(getDisplayName(b.firstName, b.lastName));
           break;
         case 'email':
           cmp = a.email.localeCompare(b.email);
@@ -1104,13 +1132,7 @@ export default function DivisionsPage() {
   // ═══════════════════════════════════════════════════════════════════
   return (
     <div className="space-y-6">
-      {/* ── Toast ───────────────────────────────────────────────────── */}
-      {toast && (
-        <div className="fixed top-4 right-4 z-[100] flex items-center gap-2 bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-lg text-sm font-medium animate-fade-in-up">
-          <CheckCircle2 className="h-4 w-4" />
-          {toast}
-        </div>
-      )}
+      {/* Toasts are now handled globally by the notification store */}
 
       {/* ── Page Header ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
@@ -1403,10 +1425,10 @@ export default function DivisionsPage() {
             return (
               <div
                 key={division.id}
-                className="bg-white rounded-2xl border border-border-subtle overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                className="bg-white rounded-2xl border border-border-subtle shadow-sm hover:shadow-md transition-shadow"
               >
                 {/* ── Division Color Bar ──────────────────────────────── */}
-                <div className="h-1.5" style={{ backgroundColor: division.primaryColor || '#6366f1' }} />
+                <div className="h-1.5 rounded-t-2xl" style={{ backgroundColor: division.primaryColor || '#6366f1' }} />
 
                 {/* ── Division Header ────────────────────────────────── */}
                 <div className="px-6 py-5">
@@ -1721,12 +1743,12 @@ export default function DivisionsPage() {
                                       <img src={u.avatar} alt="" className="h-8 w-8 rounded-full object-cover border border-border-subtle" />
                                     ) : (
                                       <div className="h-8 w-8 rounded-full bg-brand-100 text-brand-700 flex items-center justify-center text-xs font-bold">
-                                        {getInitials(u.firstName, u.lastName)}
+                                        {getDisplayInitials(u.firstName, u.lastName)}
                                       </div>
                                     )}
                                     <div className="min-w-0">
                                       <p className="text-sm font-medium text-text-primary truncate">
-                                        {u.firstName} {u.lastName}
+                                        {getDisplayName(u.firstName, u.lastName)}
                                       </p>
                                     </div>
                                   </div>
@@ -2433,7 +2455,7 @@ export default function DivisionsPage() {
             <p className="text-sm text-text-secondary">
               Change role for{' '}
               <strong className="text-text-primary">
-                {editRoleUser.user.firstName} {editRoleUser.user.lastName}
+                {getDisplayName(editRoleUser.user.firstName, editRoleUser.user.lastName)}
               </strong>
             </p>
           )}
@@ -2486,7 +2508,7 @@ export default function DivisionsPage() {
             <p className="text-sm text-text-secondary">
               Reset password for{' '}
               <strong className="text-text-primary">
-                {resetPwUser.user.firstName} {resetPwUser.user.lastName}
+                {getDisplayName(resetPwUser.user.firstName, resetPwUser.user.lastName)}
               </strong>
               <br />
               <span className="text-xs text-text-tertiary">{resetPwUser.user.email}</span>
@@ -2550,7 +2572,7 @@ export default function DivisionsPage() {
               <p className="text-sm text-text-secondary mb-1">
                 Transfer{' '}
                 <strong className="text-text-primary">
-                  {transferUser.user.firstName} {transferUser.user.lastName}
+                  {getDisplayName(transferUser.user.firstName, transferUser.user.lastName)}
                 </strong>{' '}
                 to another division:
               </p>

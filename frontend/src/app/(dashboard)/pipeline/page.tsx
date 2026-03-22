@@ -14,6 +14,7 @@ import {
   Calendar, BarChart3, Hash, Target,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
 
 // ─── Source config ─────────────────────────────────────────────────
 const sourceOptions = [
@@ -61,9 +62,26 @@ const priorityConfig = {
   cold: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-200', icon: Snowflake, label: 'Cold' },
 };
 
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
 // ─── Main Component ────────────────────────────────────────────────
 export default function PipelinePage() {
   const { user: currentUser } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
 
   // Core state
   const [stages, setStages] = useState<PipelineStage[]>([]);
@@ -97,8 +115,26 @@ export default function PipelinePage() {
   // ─── Fetch ─────────────────────────────────────────────────
   const fetchStages = useCallback(async () => {
     try {
-      const data = await api.getPipelineStages();
-      setStages(data);
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const data = await api.getPipelineStages(activeDivisionId || undefined);
+
+      // When "All Divisions" is selected, merge stages with the same name
+      // (e.g., 4× "New Lead" from different orgs → 1 combined "New Lead" column)
+      if (!activeDivisionId && data.length > 0) {
+        const mergedMap = new Map<string, any>();
+        for (const stage of data) {
+          const key = stage.name.trim().toLowerCase();
+          if (mergedMap.has(key)) {
+            const existing = mergedMap.get(key);
+            existing.leads = [...existing.leads, ...stage.leads];
+          } else {
+            mergedMap.set(key, { ...stage, leads: [...stage.leads] });
+          }
+        }
+        setStages(Array.from(mergedMap.values()));
+      } else {
+        setStages(data);
+      }
     } finally {
       setLoading(false);
     }
@@ -154,11 +190,13 @@ export default function PipelinePage() {
     setDragOverStage(null);
     if (!draggedLead) return;
 
+    const targetStage = stages.find(s => s.id === stageId);
     try {
       await api.moveLead(draggedLead, stageId, 0);
+      addToast({ type: 'success', title: 'Lead Moved', message: `Lead moved to ${targetStage?.name || 'stage'}` });
       fetchStages();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' });
     }
     setDraggedLead(null);
   };
@@ -299,9 +337,22 @@ export default function PipelinePage() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="flex flex-col gap-4 h-[calc(100dvh-7rem)] animate-fade-in overflow-hidden">
+      {/* Thin scrollbar styles */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        .pipeline-board::-webkit-scrollbar { width: 6px; height: 6px; }
+        .pipeline-board::-webkit-scrollbar-track { background: transparent; border-radius: 3px; }
+        .pipeline-board::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 3px; }
+        .pipeline-board::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.22); }
+        .pipeline-col::-webkit-scrollbar { width: 5px; }
+        .pipeline-col::-webkit-scrollbar-track { background: transparent; }
+        .pipeline-col::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+        .pipeline-col::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.2); }
+        .pipeline-board { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.12) transparent; }
+        .pipeline-col { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.1) transparent; }
+      `}} />
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Pipeline</h1>
           <p className="text-text-secondary text-sm mt-0.5">
@@ -331,7 +382,7 @@ export default function PipelinePage() {
       </div>
 
       {/* Pipeline Summary Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 flex-shrink-0">
         <div className="card p-3.5">
           <div className="flex items-center gap-2 mb-1">
             <div className="h-7 w-7 rounded-lg bg-brand-50 flex items-center justify-center">
@@ -371,7 +422,7 @@ export default function PipelinePage() {
       </div>
 
       {/* Search & Filter Bar */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-3 flex-wrap flex-shrink-0">
         {/* Search */}
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
@@ -483,7 +534,7 @@ export default function PipelinePage() {
                 <option value="me">Me</option>
                 <option value="unassigned">Unassigned</option>
                 {teamMembers.map(u => (
-                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                  <option key={u.id} value={u.id}>{getDisplayName(u.firstName, u.lastName)}</option>
                 ))}
               </select>
 
@@ -601,7 +652,7 @@ export default function PipelinePage() {
 
       {/* Active Filter Badges */}
       {activeFilterCount > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
           <span className="text-sm font-medium text-text-secondary">
             Showing {totalLeadsFiltered} of {totalLeadsAll} leads
           </span>
@@ -667,7 +718,7 @@ export default function PipelinePage() {
 
       {/* ─── KANBAN VIEW ─────────────────────────────────────── */}
       {viewMode === 'kanban' && (
-        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin" style={{ minHeight: 'calc(100vh - 380px)' }}>
+        <div className="flex-1 min-h-0 flex gap-3 overflow-x-auto overflow-y-hidden pb-2 pipeline-board">
           {sortedStages.map((stage) => {
             const stageValue = stage.leads.reduce((sum: number, l: any) => sum + (Number(l.budget) || 0), 0);
             const leadCount = stage.leads.length;
@@ -676,7 +727,7 @@ export default function PipelinePage() {
             return (
               <div
                 key={stage.id}
-                className="flex-shrink-0 w-72 flex flex-col"
+                className="flex-shrink-0 w-72 flex flex-col h-full min-h-0"
                 onDragOver={(e) => handleDragOver(e, stage.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, stage.id)}
@@ -711,7 +762,7 @@ export default function PipelinePage() {
                 </div>
 
                 {/* Cards Container */}
-                <div className={`flex-1 space-y-2 rounded-xl p-2 transition-all duration-200 ${
+                <div className={`flex-1 min-h-0 space-y-2 rounded-xl p-2 transition-all duration-200 overflow-y-auto pipeline-col ${
                   isDragOver
                     ? 'bg-brand-50 ring-2 ring-brand-500/30 ring-offset-1'
                     : 'bg-surface-tertiary/50'
@@ -734,11 +785,11 @@ export default function PipelinePage() {
                         <Link href={`/leads/${lead.id}`}>
                           <div className="flex items-center gap-2.5 mb-2">
                             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white shadow-xs flex-shrink-0">
-                              {(lead.firstName || '?')[0]}{(lead.lastName || '')[0]}
+                              {getDisplayInitials(lead.firstName, lead.lastName)}
                             </div>
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-text-primary truncate group-hover:text-brand-700 transition-colors">
-                                {lead.firstName} {lead.lastName}
+                                {getDisplayName(lead.firstName, lead.lastName)}
                               </p>
                               <p className="text-xs text-text-tertiary truncate">
                                 {lead.company || lead.email || '-'}
@@ -756,7 +807,7 @@ export default function PipelinePage() {
                             )}
                             {lead.source && (
                               <span className="text-2xs px-1.5 py-0.5 rounded-md bg-surface-secondary text-text-secondary font-medium">
-                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source}
+                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}
                               </span>
                             )}
                           </div>
@@ -784,9 +835,9 @@ export default function PipelinePage() {
                           {lead.assignedTo && (
                             <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-border-subtle">
                               <div className="h-5 w-5 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center text-[9px] font-semibold text-white">
-                                {(lead.assignedTo.firstName || '?')[0]}{(lead.assignedTo.lastName || '')[0]}
+                                {getDisplayInitials(lead.assignedTo.firstName, lead.assignedTo.lastName)}
                               </div>
-                              <span className="text-2xs text-text-tertiary">{lead.assignedTo.firstName} {lead.assignedTo.lastName}</span>
+                              <span className="text-2xs text-text-tertiary">{getDisplayName(lead.assignedTo.firstName, lead.assignedTo.lastName)}</span>
                             </div>
                           )}
                         </Link>
@@ -813,7 +864,7 @@ export default function PipelinePage() {
 
       {/* ─── LIST VIEW ───────────────────────────────────────── */}
       {viewMode === 'list' && (
-        <div className="space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pipeline-board">
           {sortedStages.map((stage) => {
             const stageValue = stage.leads.reduce((sum: number, l: any) => sum + (Number(l.budget) || 0), 0);
 
@@ -828,7 +879,8 @@ export default function PipelinePage() {
                 </div>
 
                 {stage.leads.length > 0 ? (
-                  <table className="w-full">
+                  <div className="overflow-x-auto">
+                  <table className="w-full min-w-[600px]">
                     <thead>
                       <tr className="table-header">
                         <th className="table-cell text-left">Name</th>
@@ -849,10 +901,10 @@ export default function PipelinePage() {
                             <td className="table-cell">
                               <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
                                 <div className="h-8 w-8 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-semibold text-white flex-shrink-0">
-                                  {(lead.firstName || '?')[0]}{(lead.lastName || '')[0]}
+                                  {getDisplayInitials(lead.firstName, lead.lastName)}
                                 </div>
                                 <div>
-                                  <p className="text-sm font-medium text-text-primary group-hover:text-brand-700">{lead.firstName} {lead.lastName}</p>
+                                  <p className="text-sm font-medium text-text-primary group-hover:text-brand-700">{getDisplayName(lead.firstName, lead.lastName)}</p>
                                   <p className="text-2xs text-text-tertiary">{lead.email}</p>
                                 </div>
                               </Link>
@@ -860,7 +912,7 @@ export default function PipelinePage() {
                             <td className="table-cell hidden md:table-cell text-sm text-text-secondary">{lead.company || '—'}</td>
                             <td className="table-cell hidden md:table-cell">
                               <span className="text-2xs px-1.5 py-0.5 rounded-md bg-surface-secondary text-text-secondary font-medium">
-                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source || '—'}
+                                {sourceOptions.find(s => s.value === lead.source)?.label || lead.source || '—'}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}
                               </span>
                             </td>
                             <td className="table-cell text-right hidden md:table-cell text-sm font-medium text-text-primary">
@@ -872,7 +924,7 @@ export default function PipelinePage() {
                               </span>
                             </td>
                             <td className="table-cell hidden lg:table-cell text-sm text-text-secondary">
-                              {lead.assignedTo ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}` : '—'}
+                              {lead.assignedTo ? getDisplayName(lead.assignedTo.firstName, lead.assignedTo.lastName) : '—'}
                             </td>
                             <td className="table-cell hidden lg:table-cell text-2xs text-text-tertiary">
                               {lead.createdAt ? (
@@ -888,6 +940,7 @@ export default function PipelinePage() {
                       })}
                     </tbody>
                   </table>
+                  </div>
                 ) : (
                   <div className="px-4 py-6 text-center text-sm text-text-tertiary">
                     {activeFilterCount > 0 ? 'No matching leads in this stage' : 'No leads in this stage'}

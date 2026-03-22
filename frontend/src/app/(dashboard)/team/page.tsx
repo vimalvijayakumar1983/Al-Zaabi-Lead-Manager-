@@ -5,17 +5,36 @@ import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore, FEATURES } from '@/lib/permissions';
-import type { User, Organization } from '@/types';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
+import type { User, Organization, DivisionMembership } from '@/types';
 import {
   UserPlus, X, Shield, Users as UsersIcon, Crown, Eye,
   MoreHorizontal, Pencil, Key, UserX, UserCheck, Search,
-  Mail, Phone, Calendar, BarChart3, CheckCircle2, XCircle,
+  Mail, Phone, Calendar, BarChart3, Check, CheckCircle2, XCircle,
   AlertTriangle, ChevronDown, ChevronUp, Filter, RotateCcw, Save,
   Building2, Sparkles, ArrowUpDown, ArrowUp, ArrowDown,
   Clock, TrendingUp, ListChecks, Hash, SlidersHorizontal,
-  UserCog, Zap,
+  UserCog, Zap, Star, Trash2, Plus, RefreshCw,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { useNotificationStore } from '@/store/notificationStore';
+
+// ─── Name display helpers ───────────────────────────────────────────
+function getDisplayName(first?: string | null, last?: string | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim();
+  if (f && l && f.toLowerCase() === l.toLowerCase()) return f;
+  if (f && l && f.toLowerCase().includes(l.toLowerCase())) return f;
+  if (f && l && l.toLowerCase().includes(f.toLowerCase())) return l;
+  return [f, l].filter(Boolean).join(' ') || 'Unknown';
+}
+
+function getDisplayInitials(first?: string | null, last?: string | null): string {
+  const name = getDisplayName(first, last);
+  const parts = name.split(' ').filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
 
 // ─── Config ────────────────────────────────────────────────────────
 const roleConfig: Record<string, { bg: string; text: string; ring: string; icon: React.ComponentType<{ className?: string }>; label: string; description: string }> = {
@@ -78,6 +97,7 @@ const sortOptions: { value: SortField; label: string }[] = [
 // ─── Main Component ────────────────────────────────────────────────
 export default function TeamPage() {
   const { user: currentUser } = useAuthStore();
+  const addToast = useNotificationStore((s) => s.addToast);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Core state
@@ -88,6 +108,14 @@ export default function TeamPage() {
   const [resetPasswordUser, setResetPasswordUser] = useState<User | null>(null);
   const [showRoles, setShowRoles] = useState(false);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
+
+
+  // Division Memberships
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -108,6 +136,10 @@ export default function TeamPage() {
 
   // Bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkRoleDropdown, setShowBulkRoleDropdown] = useState(false);
+  const [showBulkDivisionDropdown, setShowBulkDivisionDropdown] = useState(false);
+  const bulkRoleRef = useRef<HTMLDivElement>(null);
+  const bulkDivisionRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
   const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
@@ -154,6 +186,21 @@ export default function TeamPage() {
     return () => window.removeEventListener('click', handler);
   }, [activeMenu]);
 
+  // Close bulk dropdowns on outside click
+  useEffect(() => {
+    if (!showBulkRoleDropdown && !showBulkDivisionDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (bulkRoleRef.current && !bulkRoleRef.current.contains(e.target as Node)) {
+        setShowBulkRoleDropdown(false);
+      }
+      if (bulkDivisionRef.current && !bulkDivisionRef.current.contains(e.target as Node)) {
+        setShowBulkDivisionDropdown(false);
+      }
+    };
+    window.addEventListener('mousedown', handler);
+    return () => window.removeEventListener('mousedown', handler);
+  }, [showBulkRoleDropdown, showBulkDivisionDropdown]);
+
   // ─── Computed counts ───────────────────────────────────────
   const activeCount = users.filter(u => u.isActive).length;
   const inactiveCount = users.filter(u => !u.isActive).length;
@@ -192,7 +239,7 @@ export default function TeamPage() {
     let result = users.filter((u) => {
       // Search (name, email, phone)
       const matchesSearch = searchQuery === '' ||
-        `${u.firstName} ${u.lastName} ${u.email} ${u.phone || ''}`.toLowerCase().includes(searchQuery.toLowerCase());
+        `${getDisplayName(u.firstName, u.lastName)} ${u.email} ${u.phone || ''}`.toLowerCase().includes(searchQuery.toLowerCase());
 
       // Role (multi-select)
       const matchesRole = roleFilters.length === 0 || roleFilters.includes(u.role);
@@ -245,7 +292,7 @@ export default function TeamPage() {
       let cmp = 0;
       switch (sortField) {
         case 'name':
-          cmp = `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`);
+          cmp = getDisplayName(a.firstName, a.lastName).localeCompare(getDisplayName(b.firstName, b.lastName));
           break;
         case 'leads':
           cmp = (b._count?.assignedLeads || 0) - (a._count?.assignedLeads || 0);
@@ -269,6 +316,27 @@ export default function TeamPage() {
     return result;
   }, [users, searchQuery, roleFilters, statusFilter, divisionFilter, dateJoinedPreset, customDateFrom, customDateTo, performanceFilter, tasksFilter, sortField, sortDirection]);
 
+
+  // Division Memberships
+  const [userMemberships, setUserMemberships] = useState<Record<string, DivisionMembership[]>>({});
+  const [showMembershipModal, setShowMembershipModal] = useState<User | null>(null);
+  const [membershipLoading, setMembershipLoading] = useState<string | null>(null);
+  const [addDivisionRole, setAddDivisionRole] = useState<string>('SALES_REP');
+  const [addDivisionId, setAddDivisionId] = useState<string>('');
+
+  // Pagination calculations
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedUsers.length / pageSize));
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredAndSortedUsers.slice(start, start + pageSize);
+  }, [filteredAndSortedUsers, currentPage, pageSize]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, roleFilters, statusFilter, divisionFilter, sortField, sortDirection]);
+
+
   // ─── Active filter count ───────────────────────────────────
   const activeFilterCount = useMemo(() => {
     let count = 0;
@@ -281,6 +349,82 @@ export default function TeamPage() {
     if (tasksFilter !== 'all') count++;
     return count;
   }, [searchQuery, roleFilters, statusFilter, divisionFilter, dateJoinedPreset, performanceFilter, tasksFilter]);
+
+
+  // Load division memberships for all users
+  const loadAllMemberships = useCallback(async (userList: User[]) => {
+    try {
+      const results: Record<string, DivisionMembership[]> = {};
+      await Promise.all(
+        userList.map(async (u) => {
+          try {
+            const memberships = await api.getUserDivisions(u.id);
+            results[u.id] = memberships;
+          } catch { results[u.id] = []; }
+        })
+      );
+      setUserMemberships(results);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (users.length > 0) loadAllMemberships(users);
+  }, [users, loadAllMemberships]);
+
+  const handleAddToDivision = async (userId: string) => {
+    if (!addDivisionId) return;
+    setMembershipLoading(userId);
+    try {
+      await api.addUserToDivision(userId, { divisionId: addDivisionId, role: addDivisionRole });
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      setAddDivisionId('');
+      setAddDivisionRole('SALES_REP');
+      addToast({ type: 'success', title: 'Division Added', message: 'User added to division successfully.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to add division' });
+    }
+    setMembershipLoading(null);
+  };
+
+  const handleRemoveFromDivision = async (userId: string, divisionId: string) => {
+    setMembershipLoading(userId);
+    try {
+      await api.removeUserFromDivision(userId, divisionId);
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      addToast({ type: 'success', title: 'Division Removed', message: 'User removed from division successfully.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to remove from division' });
+    }
+    setMembershipLoading(null);
+  };
+
+  const handleUpdateMembershipRole = async (userId: string, divisionId: string, role: string) => {
+    setMembershipLoading(userId);
+    try {
+      await api.updateUserDivisionRole(userId, divisionId, { role });
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      addToast({ type: 'success', title: 'Role Updated', message: 'Division role updated successfully.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to update role' });
+    }
+    setMembershipLoading(null);
+  };
+
+  const handleSetPrimaryDivision = async (userId: string, divisionId: string) => {
+    setMembershipLoading(userId);
+    try {
+      await api.updateUserDivisionRole(userId, divisionId, { isPrimary: true });
+      const memberships = await api.getUserDivisions(userId);
+      setUserMemberships(prev => ({ ...prev, [userId]: memberships }));
+      addToast({ type: 'success', title: 'Primary Division Set', message: 'Primary division updated successfully.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to set primary division' });
+    }
+    setMembershipLoading(null);
+  };
 
   const clearAllFilters = () => {
     setSearchQuery('');
@@ -298,10 +442,10 @@ export default function TeamPage() {
 
   // ─── Bulk actions ──────────────────────────────────────────
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredAndSortedUsers.length) {
+    if (selectedIds.size === paginatedUsers.length && paginatedUsers.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filteredAndSortedUsers.map(u => u.id)));
+      setSelectedIds(new Set(paginatedUsers.map(u => u.id)));
     }
   };
 
@@ -321,58 +465,96 @@ export default function TeamPage() {
 
   // ─── Handlers ──────────────────────────────────────────────
   const handleDeactivate = async (user: User) => {
-    if (!confirm(`Deactivate ${user.firstName} ${user.lastName}? They will lose access immediately.`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Deactivate ${getDisplayName(user.firstName, user.lastName)}?`,
+      message: 'They will lose access immediately.',
+      confirmText: 'Deactivate',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api.deactivateUser(user.id);
+      addToast({ type: 'success', title: 'User Deactivated', message: `${getDisplayName(user.firstName, user.lastName)} has been deactivated.` });
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to deactivate user' });
     }
   };
 
   const handleReactivate = async (user: User) => {
     try {
       await api.reactivateUser(user.id);
+      addToast({ type: 'success', title: 'User Reactivated', message: `${getDisplayName(user.firstName, user.lastName)} has been reactivated.` });
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to reactivate user' });
+    }
+  };
+
+  // ─── Delete User State & Handler ──────────────────────────────
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null);
+  const [deleteReassignTo, setDeleteReassignTo] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const handleDeleteUser = async () => {
+    if (!deleteConfirmUser) return;
+    setDeleteLoading(true);
+    try {
+      await api.deleteUserPermanently(deleteConfirmUser.id, deleteReassignTo || undefined);
+      addToast({ type: 'success', title: 'User Deleted', message: `${getDisplayName(deleteConfirmUser.firstName, deleteConfirmUser.lastName)} permanently deleted.` });
+      setDeleteConfirmUser(null);
+      setDeleteReassignTo('');
+      fetchUsers();
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Error', message: err?.message || 'Failed to delete user' });
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
   const handleBulkDeactivate = async () => {
-    if (!confirm(`Deactivate ${selectedIds.size} selected users?`)) return;
+    const confirmed = await premiumConfirm({
+      title: `Deactivate ${selectedIds.size} selected user(s)?`,
+      message: 'Selected users will lose access immediately.',
+      confirmText: 'Deactivate Users',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.deactivateUser(id)));
+      addToast({ type: 'success', title: 'Bulk Deactivate', message: `${selectedIds.size} users have been deactivated.` });
       setSelectedIds(new Set());
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to deactivate users' });
     }
   };
 
-  const handleBulkChangeRole = async () => {
-    const role = prompt('Enter new role (ADMIN, MANAGER, SALES_REP, VIEWER):');
+  const handleBulkChangeRole = async (role: string) => {
     if (!role || !['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER'].includes(role)) return;
     try {
       await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { role })));
+      addToast({ type: 'success', title: 'Role Updated', message: `${selectedIds.size} users updated to ${roleConfig[role]?.label || role}.` });
       setSelectedIds(new Set());
+      setShowBulkRoleDropdown(false);
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to change roles' });
     }
   };
 
-  const handleBulkTransferDivision = async () => {
-    if (!isSuperAdmin || divisions.length === 0) return;
-    const divName = prompt(`Enter division name to transfer to:\n${divisions.map(d => d.name).join(', ')}`);
-    const div = divisions.find(d => d.name.toLowerCase() === divName?.toLowerCase());
-    if (!div) { alert('Division not found'); return; }
+  const handleBulkTransferDivision = async (divisionId: string) => {
+    if (!isSuperAdmin || !divisionId) return;
     try {
-      await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { divisionId: div.id } as any)));
+      await Promise.all(Array.from(selectedIds).map(id => api.updateUser(id, { divisionId } as any)));
+      addToast({ type: 'success', title: 'Division Transferred', message: `${selectedIds.size} users transferred to new division.` });
       setSelectedIds(new Set());
+      setShowBulkDivisionDropdown(false);
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to transfer division' });
     }
   };
 
@@ -398,7 +580,7 @@ export default function TeamPage() {
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton onRefresh={fetchUsers} />
-          <button onClick={() => setShowRoles(true)} className="btn-secondary">
+          <button onClick={() => window.location.href = '/roles'} className="btn-secondary">
             <Shield className="h-4 w-4" />
             Roles &amp; Access
           </button>
@@ -410,6 +592,57 @@ export default function TeamPage() {
           )}
         </div>
       </div>
+
+
+      {/* ─── Division Scope Bar ─── */}
+      {isSuperAdmin && divisions.length > 0 && (
+        <div className="bg-gradient-to-r from-brand-50 to-purple-50 border border-brand-200/60 rounded-xl p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-lg bg-white shadow-sm flex items-center justify-center">
+                <Building2 className="h-4.5 w-4.5 text-brand-600" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-brand-700/70 uppercase tracking-wider">View by Division</p>
+                <p className="text-xs text-text-tertiary mt-0.5">
+                  {divisionFilter === 'all' 
+                    ? `Showing all ${divisions.length} divisions`
+                    : `Filtered to ${divisions.find(d => d.id === divisionFilter)?.name || 'selected division'}`
+                  }
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {divisions.map((div) => (
+                <button
+                  key={div.id}
+                  onClick={() => setDivisionFilter(divisionFilter === div.id ? 'all' : div.id)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all duration-150 ${
+                    divisionFilter === div.id
+                      ? 'bg-white text-brand-700 border-brand-300 shadow-sm ring-1 ring-brand-200'
+                      : 'bg-white/60 text-text-secondary border-transparent hover:bg-white hover:border-border hover:shadow-sm'
+                  }`}
+                >
+                  <span
+                    className="inline-block h-2 w-2 rounded-full mr-1.5"
+                    style={{ backgroundColor: (div as any).primaryColor || '#6366f1' }}
+                  />
+                  {div.name}
+                </button>
+              ))}
+              {divisionFilter !== 'all' && (
+                <button
+                  onClick={() => setDivisionFilter('all')}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg text-brand-600 hover:bg-white/80 transition-colors flex items-center gap-1"
+                >
+                  <X className="h-3 w-3" />
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Enhanced Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -424,10 +657,10 @@ export default function TeamPage() {
             <div className="h-8 w-8 rounded-lg bg-brand-50 flex items-center justify-center">
               <UsersIcon className="h-4 w-4 text-brand-600" />
             </div>
-            <span className="text-xl font-bold text-text-primary">{users.length}</span>
+            <span className="text-xl font-bold text-text-primary">{filteredAndSortedUsers.length}</span>
           </div>
           <p className="text-sm font-medium text-text-primary">Total Users</p>
-          <p className="text-2xs text-text-tertiary mt-0.5">All team members</p>
+          <p className="text-2xs text-text-tertiary mt-0.5">{divisionFilter !== 'all' ? 'In selected division' : 'All team members'}</p>
         </button>
 
         {/* Active Now (last 24h) */}
@@ -799,16 +1032,80 @@ export default function TeamPage() {
             Deselect All
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={handleBulkChangeRole} className="btn-secondary text-sm">
-              <UserCog className="h-3.5 w-3.5" />
-              Change Role
-            </button>
-            {isSuperAdmin && divisions.length > 0 && (
-              <button onClick={handleBulkTransferDivision} className="btn-secondary text-sm">
-                <Building2 className="h-3.5 w-3.5" />
-                Transfer Division
+            {/* Change Role Dropdown */}
+            <div className="relative" ref={bulkRoleRef}>
+              <button
+                onClick={() => { setShowBulkRoleDropdown(!showBulkRoleDropdown); setShowBulkDivisionDropdown(false); }}
+                className="btn-secondary text-sm"
+              >
+                <UserCog className="h-3.5 w-3.5" />
+                Change Role
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showBulkRoleDropdown ? 'rotate-180' : ''}`} />
               </button>
+              {showBulkRoleDropdown && (
+                <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-xl ring-1 ring-gray-200 py-1 z-[60] animate-fade-in">
+                  <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Select Role</div>
+                  {[
+                    { value: 'ADMIN', label: 'Admin', icon: '👑', desc: 'Full division access' },
+                    { value: 'MANAGER', label: 'Manager', icon: '📋', desc: 'Manage team & leads' },
+                    { value: 'SALES_REP', label: 'Sales Rep', icon: '💼', desc: 'Work assigned leads' },
+                    { value: 'VIEWER', label: 'Viewer', icon: '👁️', desc: 'Read-only access' },
+                  ].map(role => (
+                    <button
+                      key={role.value}
+                      onClick={() => handleBulkChangeRole(role.value)}
+                      className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-center gap-3 transition-colors"
+                    >
+                      <span className="text-lg">{role.icon}</span>
+                      <div>
+                        <div className="text-sm font-medium text-gray-800">{role.label}</div>
+                        <div className="text-xs text-gray-500">{role.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Transfer Division Dropdown */}
+            {isSuperAdmin && divisions.length > 0 && (
+              <div className="relative" ref={bulkDivisionRef}>
+                <button
+                  onClick={() => { setShowBulkDivisionDropdown(!showBulkDivisionDropdown); setShowBulkRoleDropdown(false); }}
+                  className="btn-secondary text-sm"
+                >
+                  <Building2 className="h-3.5 w-3.5" />
+                  Transfer Division
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showBulkDivisionDropdown ? 'rotate-180' : ''}`} />
+                </button>
+                {showBulkDivisionDropdown && (
+                  <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl ring-1 ring-gray-200 py-1 z-[60] animate-fade-in max-h-72 overflow-y-auto">
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Select Division</div>
+                    {divisions.map(div => (
+                      <button
+                        key={div.id}
+                        onClick={() => handleBulkTransferDivision(div.id)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-brand-50 flex items-center gap-3 transition-colors"
+                      >
+                        <div
+                          className="h-8 w-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0"
+                          style={{ backgroundColor: (div as any).settings?.brandColors?.primary || '#6366f1' }}
+                        >
+                          {div.name?.charAt(0) || 'D'}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-gray-800 truncate">{div.name}</div>
+                          {(div as any).tradeName && (
+                            <div className="text-xs text-gray-500 truncate">{(div as any).tradeName}</div>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+
             <button onClick={handleBulkDeactivate} className="btn-secondary text-sm text-red-600 hover:bg-red-50">
               <UserX className="h-3.5 w-3.5" />
               Deactivate
@@ -818,7 +1115,7 @@ export default function TeamPage() {
       )}
 
       {/* Team Table */}
-      <div className="card overflow-hidden">
+      <div className="card">
         <table className="w-full">
           <thead>
             <tr className="table-header">
@@ -826,7 +1123,7 @@ export default function TeamPage() {
                 <th className="table-cell w-10">
                   <input
                     type="checkbox"
-                    checked={filteredAndSortedUsers.length > 0 && selectedIds.size === filteredAndSortedUsers.length}
+                    checked={filteredAndSortedUsers.length > 0 && selectedIds.size === paginatedUsers.length && paginatedUsers.length > 0}
                     onChange={toggleSelectAll}
                     className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
                   />
@@ -834,7 +1131,7 @@ export default function TeamPage() {
               )}
               <th className="table-cell text-left">Member</th>
               <th className="table-cell text-left">Role</th>
-              {isSuperAdmin && <th className="table-cell text-left hidden md:table-cell">Division</th>}
+              {isSuperAdmin && <th className="table-cell text-left hidden md:table-cell">Divisions</th>}
               <th className="table-cell text-left hidden md:table-cell">Contact</th>
               <th className="table-cell text-center hidden lg:table-cell">Leads</th>
               <th className="table-cell text-center hidden lg:table-cell">Tasks</th>
@@ -870,7 +1167,7 @@ export default function TeamPage() {
                 </td>
               </tr>
             ) : (
-              filteredAndSortedUsers.map((user) => {
+              paginatedUsers.map((user, _idx) => {
                 const role = roleConfig[user.role] || roleConfig.VIEWER;
                 const RoleIcon = role.icon;
                 const isCurrentUser = currentUser?.id === user.id;
@@ -899,7 +1196,7 @@ export default function TeamPage() {
                       <div className="flex items-center gap-3">
                         <div className="relative flex-shrink-0">
                           <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-semibold text-white shadow-soft">
-                            {user.firstName[0]}{user.lastName[0]}
+                            {getDisplayInitials(user.firstName, user.lastName)}
                           </div>
                           <div className={`absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-white ${
                             user.isActive ? 'bg-emerald-500' : 'bg-gray-300'
@@ -907,7 +1204,7 @@ export default function TeamPage() {
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-text-primary truncate">
-                            {user.firstName} {user.lastName}
+                            {getDisplayName(user.firstName, user.lastName)}
                             {isCurrentUser && <span className="text-2xs text-text-tertiary ml-1 font-normal">(you)</span>}
                           </p>
                           <p className="text-2xs text-text-tertiary truncate">{user.email}</p>
@@ -926,10 +1223,36 @@ export default function TeamPage() {
                     {/* Division (SUPER_ADMIN only) */}
                     {isSuperAdmin && (
                       <td className="table-cell hidden md:table-cell">
-                        <span className={`badge ${divColor.bg} ${divColor.text} ring-1 ${divColor.ring}`}>
-                          <Building2 className="h-3 w-3" />
-                          {divName}
-                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setShowMembershipModal(user); }}
+                          className="flex flex-wrap gap-1 max-w-[260px] group/div cursor-pointer"
+                          title="Click to manage divisions"
+                        >
+                          {(userMemberships[user.id] || []).length > 0 ? (
+                            <>
+                              {(userMemberships[user.id] || []).slice(0, 3).map((m: any) => (
+                                <span key={m.id} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-2xs font-medium border" style={{
+                                  backgroundColor: (m.division?.primaryColor || '#6366f1') + '15',
+                                  borderColor: (m.division?.primaryColor || '#6366f1') + '30',
+                                  color: m.division?.primaryColor || '#6366f1'
+                                }}>
+                                  <span className="h-1.5 w-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: m.division?.primaryColor || '#6366f1' }} />
+                                  {(m.division?.name || '?').replace('Al-Zaabi ', '')}
+                                  {m.isPrimary && <span className="ml-0.5">★</span>}
+                                </span>
+                              ))}
+                              {(userMemberships[user.id] || []).length > 3 && (
+                                <span className="text-2xs text-text-tertiary">+{(userMemberships[user.id] || []).length - 3}</span>
+                              )}
+                            </>
+                          ) : (
+                            <span className={`badge ${divColor.bg} ${divColor.text} ring-1 ${divColor.ring}`}>
+                              <Building2 className="h-3 w-3" />
+                              {divName}
+                            </span>
+                          )}
+                          <span className="text-2xs text-brand-500 opacity-0 group-hover/div:opacity-100 ml-0.5">✎</span>
+                        </button>
                       </td>
                     )}
 
@@ -991,20 +1314,46 @@ export default function TeamPage() {
                         {!isSelf && (
                           <div className="relative">
                             <button
-                              onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === user.id ? null : user.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveMenu(activeMenu === user.id ? null : user.id);
+                              }}
                               className="btn-icon h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
                             >
                               <MoreHorizontal className="h-4 w-4" />
                             </button>
 
                             {activeMenu === user.id && (
-                              <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-50">
+                              <div
+                                ref={(el) => {
+                                  if (el && el.parentElement) {
+                                    const btnRect = el.parentElement.querySelector('button')?.getBoundingClientRect();
+                                    if (!btnRect) return;
+                                    const menuHeight = el.offsetHeight;
+                                    const spaceBelow = window.innerHeight - btnRect.bottom;
+                                    if (spaceBelow < menuHeight + 8) {
+                                      el.style.top = `${btnRect.top - menuHeight - 4}px`;
+                                    } else {
+                                      el.style.top = `${btnRect.bottom + 4}px`;
+                                    }
+                                    el.style.left = `${Math.max(8, btnRect.right - el.offsetWidth)}px`;
+                                  }
+                                }}
+                                className="fixed w-52 bg-white rounded-xl shadow-float border border-border p-1.5 animate-scale-in z-[9999]"
+                              >
                                 <button
                                   onClick={() => { setEditingUser(user); setActiveMenu(null); }}
                                   className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-tertiary transition-colors"
                                 >
                                   <Pencil className="h-3.5 w-3.5 text-text-tertiary" />
                                   Edit Member
+                                </button>
+                                <button
+                                  onClick={() => { setShowMembershipModal(user); setActiveMenu(null); }}
+                                  className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-tertiary transition-colors"
+                                >
+                                  <Building2 className="h-3.5 w-3.5 text-text-tertiary" />
+                                  Manage Divisions
                                 </button>
                                 {isAdmin && (
                                   <button
@@ -1033,6 +1382,18 @@ export default function TeamPage() {
                                     Reactivate
                                   </button>
                                 )}
+                                {isAdmin && (
+                                  <>
+                                    <div className="my-1 h-px bg-border-subtle" />
+                                    <button
+                                      onClick={() => { setDeleteConfirmUser(user); setActiveMenu(null); }}
+                                      className="flex items-center gap-2.5 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      Delete Permanently
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1047,6 +1408,88 @@ export default function TeamPage() {
         </table>
       </div>
 
+
+      {/* Pagination */}
+      {filteredAndSortedUsers.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-border bg-surface-secondary/30 rounded-b-xl">
+          <div className="flex items-center gap-3 text-sm text-text-secondary">
+            <span>
+              Showing {Math.min((currentPage - 1) * pageSize + 1, filteredAndSortedUsers.length)}–{Math.min(currentPage * pageSize, filteredAndSortedUsers.length)} of {filteredAndSortedUsers.length} member{filteredAndSortedUsers.length !== 1 ? 's' : ''}
+            </span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              className="px-2 py-1 text-xs rounded-lg border border-border bg-white text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+            >
+              <option value={5}>5 per page</option>
+              <option value={10}>10 per page</option>
+              <option value={20}>20 per page</option>
+              <option value={50}>50 per page</option>
+              <option value={100}>100 per page</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="px-2 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="First page"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+            </button>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+            {(() => {
+              const pages: number[] = [];
+              const maxVisible = 5;
+              let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+              let end = Math.min(totalPages, start + maxVisible - 1);
+              if (end - start + 1 < maxVisible) start = Math.max(1, end - maxVisible + 1);
+              if (start > 1) { pages.push(1); if (start > 2) pages.push(-1); }
+              for (let i = start; i <= end; i++) pages.push(i);
+              if (end < totalPages) { if (end < totalPages - 1) pages.push(-2); pages.push(totalPages); }
+              return pages.map((p, i) =>
+                p < 0 ? (
+                  <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-text-tertiary">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => setCurrentPage(p)}
+                    className={`min-w-[32px] px-2 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      currentPage === p
+                        ? 'bg-brand-primary text-white border-brand-primary shadow-sm'
+                        : 'bg-white text-text-secondary border-border hover:bg-surface-secondary'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                )
+              );
+            })()}
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1.5 text-xs font-medium rounded-lg border border-border bg-white text-text-secondary hover:bg-surface-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Last page"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Modals */}
       {showInvite && (
         <InviteModal
@@ -1059,6 +1502,149 @@ export default function TeamPage() {
       {editingUser && <EditMemberModal user={editingUser} onClose={() => setEditingUser(null)} onSaved={fetchUsers} />}
       {resetPasswordUser && <ResetPasswordModal user={resetPasswordUser} onClose={() => setResetPasswordUser(null)} />}
       {showRoles && <RolesAccessModal onClose={() => setShowRoles(false)} />}
+      {showMembershipModal && (
+        <ManageDivisionsModal
+          user={showMembershipModal}
+          divisions={divisions}
+          onClose={() => setShowMembershipModal(null)}
+          onSaved={fetchUsers}
+        />
+      )}
+
+      {/* ─── Delete User Confirmation Modal ──────────────────────── */}
+      {deleteConfirmUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { setDeleteConfirmUser(null); setDeleteReassignTo(''); }} />
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            {/* Header */}
+            <div className="bg-red-50 border-b border-red-100 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <Trash2 className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-red-900">Delete User Permanently</h2>
+                  <p className="text-sm text-red-700">This action cannot be undone</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-6 py-4 space-y-4">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm font-medium text-gray-900">
+                  {getDisplayName(deleteConfirmUser.firstName, deleteConfirmUser.lastName)}
+                </p>
+                <p className="text-xs text-gray-500">{deleteConfirmUser.email}</p>
+                <p className="text-xs text-gray-500 mt-1">Role: {deleteConfirmUser.role}</p>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-sm text-amber-800">
+                  <strong>Warning:</strong> This will permanently remove this user, their notifications, activity history, and division memberships.
+                </p>
+              </div>
+
+              {/* Reassign leads dropdown — scoped to same division(s) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Reassign leads & tasks to:
+                </label>
+                <select
+                  value={deleteReassignTo}
+                  onChange={(e) => setDeleteReassignTo(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">No reassignment (delete if no leads)</option>
+                  {(() => {
+                    // Get the divisions the deleted user belongs to
+                    const deletedUserDivs = (userMemberships[deleteConfirmUser.id] || []).map((m: any) => m.divisionId || m.organizationId);
+                    // If user has no division memberships, fall back to showing all active users
+                    if (deletedUserDivs.length === 0) {
+                      return users
+                        .filter((u) => u.id !== deleteConfirmUser.id && u.isActive)
+                        .map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {getDisplayName(u.firstName, u.lastName)} ({roleConfig[u.role]?.label || u.role})
+                          </option>
+                        ));
+                    }
+                    // Group eligible users by division
+                    const divisionGroups: { division: Organization; users: User[] }[] = [];
+                    for (const divId of deletedUserDivs) {
+                      const div = divisions.find((d) => d.id === divId);
+                      if (!div) continue;
+                      const divUsers = users.filter((u) => {
+                        if (u.id === deleteConfirmUser.id || !u.isActive) return false;
+                        const uDivs = (userMemberships[u.id] || []).map((m: any) => m.divisionId || m.organizationId);
+                        return uDivs.includes(divId);
+                      });
+                      if (divUsers.length > 0) {
+                        divisionGroups.push({ division: div, users: divUsers });
+                      }
+                    }
+                    // Render optgroups by division
+                    if (divisionGroups.length === 1) {
+                      // Single division — no need for optgroup header
+                      return divisionGroups[0].users.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {getDisplayName(u.firstName, u.lastName)} ({roleConfig[u.role]?.label || u.role})
+                        </option>
+                      ));
+                    }
+                    return divisionGroups.map((g) => (
+                      <optgroup key={g.division.id} label={g.division.name}>
+                        {g.users.map((u) => (
+                          <option key={`${g.division.id}-${u.id}`} value={u.id}>
+                            {getDisplayName(u.firstName, u.lastName)} ({roleConfig[u.role]?.label || u.role})
+                          </option>
+                        ))}
+                      </optgroup>
+                    ));
+                  })()}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  {(() => {
+                    const deletedUserDivs = (userMemberships[deleteConfirmUser.id] || []).map((m: any) => m.divisionId || m.organizationId);
+                    const divNames = deletedUserDivs.map((id: string) => divisions.find((d) => d.id === id)?.name).filter(Boolean);
+                    if (divNames.length > 0) {
+                      return `Showing users from: ${divNames.join(', ')}`;
+                    }
+                    return 'If the user has assigned leads, you must select someone to reassign them to.';
+                  })()}
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50">
+              <button
+                onClick={() => { setDeleteConfirmUser(null); setDeleteReassignTo(''); }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteUser}
+                disabled={deleteLoading}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+              >
+                {deleteLoading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Delete Permanently
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1301,7 +1887,7 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
   return (
     <div className="modal">
       <div className="overlay" onClick={onClose} />
-      <div className="modal-panel w-full max-w-lg relative z-50">
+      <div className={`modal-panel w-full relative z-50 ${tab === 'permissions' ? 'max-w-3xl' : 'max-w-lg'}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Edit Team Member</h2>
@@ -1335,10 +1921,10 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
             <div className="flex items-center gap-4 p-4 rounded-lg bg-surface-secondary">
               <div className="h-12 w-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-lg font-semibold text-white shadow-soft">
-                {form.firstName[0]}{form.lastName[0]}
+                {getDisplayInitials(form.firstName, form.lastName)}
               </div>
               <div>
-                <p className="font-semibold text-text-primary">{form.firstName} {form.lastName}</p>
+                <p className="font-semibold text-text-primary">{getDisplayName(form.firstName, form.lastName)}</p>
                 <p className="text-sm text-text-secondary">{user.email}</p>
               </div>
             </div>
@@ -1413,14 +1999,14 @@ function EditMemberModal({ user, onClose, onSaved }: { user: User; onClose: () =
               </div>
             </div>
 
-            <div className="card overflow-hidden">
-              <table className="w-full">
+            <div className="card overflow-x-auto">
+              <table className="w-full min-w-[640px]">
                 <thead>
                   <tr className="table-header">
-                    <th className="table-cell text-left">Feature</th>
-                    <th className="table-cell text-center">Role Default</th>
-                    <th className="table-cell text-center">Override</th>
-                    <th className="table-cell text-center">Effective</th>
+                    <th className="table-cell text-left whitespace-nowrap">Feature</th>
+                    <th className="table-cell text-center whitespace-nowrap">Role Default</th>
+                    <th className="table-cell text-center whitespace-nowrap">Override</th>
+                    <th className="table-cell text-center whitespace-nowrap">Effective</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
@@ -1522,7 +2108,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Reset Password</h2>
-            <p className="text-2xs text-text-tertiary mt-0.5">{user.firstName} {user.lastName} ({user.email})</p>
+            <p className="text-2xs text-text-tertiary mt-0.5">{getDisplayName(user.firstName, user.lastName)} ({user.email})</p>
           </div>
           <button onClick={onClose} className="btn-icon"><X className="h-4 w-4" /></button>
         </div>
@@ -1541,7 +2127,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
             <div className="p-3 rounded-lg bg-amber-50 ring-1 ring-amber-200">
               <div className="flex gap-2">
                 <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-amber-800">This will immediately change the password for <strong>{user.firstName} {user.lastName}</strong>. They will need to use the new password on their next login.</p>
+                <p className="text-sm text-amber-800">This will immediately change the password for <strong>{getDisplayName(user.firstName, user.lastName)}</strong>. They will need to use the new password on their next login.</p>
               </div>
             </div>
 
@@ -1597,6 +2183,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
 function RolesAccessModal({ onClose }: { onClose: () => void }) {
   const { user: currentUser } = useAuthStore();
   const { rolePermissions, loadPermissions } = usePermissionsStore();
+  const addToast = useNotificationStore((s) => s.addToast);
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
   const isAdmin = currentUser?.role === 'ADMIN' || isSuperAdmin;
 
@@ -1629,8 +2216,9 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
       await api.updateRolePermissions(editPerms);
       await loadPermissions();
       setDirty(false);
+      addToast({ type: 'success', title: 'Permissions Saved', message: 'Role permissions updated successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Failed to save');
+      addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to save' });
     } finally {
       setSaving(false);
     }
@@ -1743,6 +2331,459 @@ function RolesAccessModal({ onClose }: { onClose: () => void }) {
           ) : (
             <button onClick={onClose} className="btn-secondary">Close</button>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Manage Divisions Modal ──────────────────────────────────── */
+function ManageDivisionsModal({ user, divisions, onClose, onSaved }: { 
+  user: User; 
+  divisions: any[]; 
+  onClose: () => void; 
+  onSaved: () => void;
+}) {
+  const [memberships, setMemberships] = useState<any[]>([]);
+  const [originalMemberships, setOriginalMemberships] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [addingDivision, setAddingDivision] = useState(false);
+  const [selectedNewDivision, setSelectedNewDivision] = useState('');
+  const [selectedNewRole, setSelectedNewRole] = useState('SALES_REP');
+  const [pendingAdds, setPendingAdds] = useState<any[]>([]);
+  const [pendingRemoves, setPendingRemoves] = useState<string[]>([]);
+  const [pendingRoleChanges, setPendingRoleChanges] = useState<Record<string, string>>({});
+  const [pendingPrimary, setPendingPrimary] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadMemberships();
+  }, []);
+
+  const loadMemberships = async () => {
+    try {
+      setLoading(true);
+      const data = await api.getUserDivisions(user.id);
+      const list = Array.isArray(data) ? data : [];
+      setMemberships(list);
+      setOriginalMemberships(JSON.parse(JSON.stringify(list)));
+    } catch (err) {
+      console.error('Failed to load memberships:', err);
+      if (user.organizationId) {
+        const fallback = [{
+          id: 'current',
+          divisionId: user.organizationId,
+          role: user.role,
+          isPrimary: true,
+          division: divisions.find(d => d.id === user.organizationId) || { name: 'Current Division' }
+        }];
+        setMemberships(fallback);
+        setOriginalMemberships(JSON.parse(JSON.stringify(fallback)));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Local state changes (no API calls until Save)
+  const handleRoleChange = (divisionId: string, newRole: string) => {
+    setPendingRoleChanges(prev => ({ ...prev, [divisionId]: newRole }));
+    setMemberships(prev => prev.map(m => 
+      m.divisionId === divisionId ? { ...m, role: newRole } : m
+    ));
+  };
+
+  const handleSetPrimary = (divisionId: string) => {
+    setPendingPrimary(divisionId);
+    setMemberships(prev => prev.map(m => ({
+      ...m,
+      isPrimary: m.divisionId === divisionId
+    })));
+  };
+
+  const handleRemove = async (membership: any) => {
+    const activeMemberships = memberships.filter(m => !pendingRemoves.includes(m.divisionId));
+    if (activeMemberships.length <= 1) {
+      await premiumAlert({
+        title: 'Division required',
+        message: 'User must belong to at least one division.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return;
+    }
+    setPendingRemoves(prev => [...prev, membership.divisionId]);
+  };
+
+  const undoRemove = (divisionId: string) => {
+    setPendingRemoves(prev => prev.filter(id => id !== divisionId));
+  };
+
+  const handleAddToPending = () => {
+    if (!selectedNewDivision) return;
+    const div = divisions.find(d => d.id === selectedNewDivision);
+    setPendingAdds(prev => [...prev, {
+      divisionId: selectedNewDivision,
+      role: selectedNewRole,
+      division: div || { name: 'Division' }
+    }]);
+    setSelectedNewDivision('');
+    setSelectedNewRole('SALES_REP');
+    setAddingDivision(false);
+  };
+
+  const removePendingAdd = (divisionId: string) => {
+    setPendingAdds(prev => prev.filter(a => a.divisionId !== divisionId));
+  };
+
+  const hasChanges = pendingAdds.length > 0 || pendingRemoves.length > 0 || 
+    Object.keys(pendingRoleChanges).length > 0 || pendingPrimary !== null;
+
+  const handleSaveAll = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      // Process removes
+      for (const divId of pendingRemoves) {
+        await api.removeUserFromDivision(user.id, divId);
+      }
+      // Process role changes
+      for (const [divId, role] of Object.entries(pendingRoleChanges)) {
+        if (!pendingRemoves.includes(divId)) {
+          await api.updateUserDivisionRole(user.id, divId, { role });
+        }
+      }
+      // Process primary change
+      if (pendingPrimary && !pendingRemoves.includes(pendingPrimary)) {
+        await api.updateUserDivisionRole(user.id, pendingPrimary, { isPrimary: true });
+      }
+      // Process adds
+      for (const add of pendingAdds) {
+        await api.addUserToDivision(user.id, { divisionId: add.divisionId, role: add.role });
+      }
+      
+      // Success!
+      setSaveSuccess(true);
+      setPendingAdds([]);
+      setPendingRemoves([]);
+      setPendingRoleChanges({});
+      setPendingPrimary(null);
+      onSaved();
+      
+      // Reload fresh data
+      await loadMemberships();
+      
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err: any) {
+      console.error('Failed to save:', err);
+      setError(err?.message || 'Failed to save changes. Please check your connection and try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const availableDivisions = divisions.filter(
+    d => !memberships.some(m => m.divisionId === d.id) && 
+         !pendingAdds.some(a => a.divisionId === d.id) &&
+         !pendingRemoves.includes(d.id) === false // show removed ones as available
+  ).filter(d => !pendingAdds.some(a => a.divisionId === d.id));
+
+  const roleOptions = [
+    { value: 'SUPER_ADMIN', label: 'Super Admin', color: 'text-purple-600' },
+    { value: 'ADMIN', label: 'Division Admin', color: 'text-blue-600' },
+    { value: 'MANAGER', label: 'Manager / Team Lead', color: 'text-emerald-600' },
+    { value: 'SALES_REP', label: 'Sales Rep', color: 'text-orange-600' },
+    { value: 'VIEWER', label: 'Viewer', color: 'text-gray-600' },
+  ];
+
+  const changeCount = pendingAdds.length + pendingRemoves.length + 
+    Object.keys(pendingRoleChanges).length + (pendingPrimary ? 1 : 0);
+
+  return (
+    <div className="modal">
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={onClose} />
+      <div className="modal-panel w-full max-w-2xl relative z-50 flex flex-col max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-border-primary flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+              {(user.firstName?.[0] || user.email?.[0] || '?').toUpperCase()}
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-text-primary">Manage Division Access</h2>
+              <p className="text-sm text-text-secondary">{getDisplayName(user.firstName, user.lastName)} · {user.email}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-surface-tertiary rounded-lg transition-colors">
+            <X className="h-5 w-5 text-text-tertiary" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 space-y-4 flex-1 overflow-y-auto min-h-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <RefreshCw className="h-6 w-6 animate-spin text-brand-primary" />
+              <span className="ml-2 text-text-secondary">Loading divisions...</span>
+            </div>
+          ) : (
+            <>
+              {/* Current Memberships */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-text-primary uppercase tracking-wider">
+                    Current Divisions ({memberships.filter(m => !pendingRemoves.includes(m.divisionId)).length})
+                  </h3>
+                </div>
+                
+                {memberships.length === 0 && pendingAdds.length === 0 ? (
+                  <div className="text-center py-8 text-text-secondary">
+                    <Building2 className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                    <p>No division memberships found</p>
+                  </div>
+                ) : (
+                  memberships.map((membership) => {
+                    const isRemoved = pendingRemoves.includes(membership.divisionId);
+                    const isRoleChanged = pendingRoleChanges[membership.divisionId];
+                    const isPrimaryChanged = pendingPrimary === membership.divisionId;
+                    return (
+                      <div key={membership.divisionId || membership.id} 
+                        className={`flex items-center justify-between p-4 rounded-xl border transition-all duration-200 ${
+                          isRemoved 
+                            ? 'border-red-200 bg-red-50/50 opacity-60' 
+                            : (isRoleChanged || isPrimaryChanged)
+                              ? 'border-amber-300 bg-amber-50/50'
+                              : 'border-border-primary bg-surface-secondary hover:bg-surface-tertiary'
+                        }`}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                            style={{ backgroundColor: membership.division?.primaryColor || '#6366f1' }}>
+                            {(membership.division?.name?.[0] || 'D').toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className={`font-medium ${isRemoved ? 'line-through text-red-400' : 'text-text-primary'}`}>
+                                {membership.division?.name || 'Unknown Division'}
+                              </span>
+                              {(pendingPrimary ? pendingPrimary === membership.divisionId : membership.isPrimary) && !isRemoved && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 rounded">Primary</span>
+                              )}
+                              {isRemoved && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-red-100 text-red-600 rounded">Will be removed</span>
+                              )}
+                              {isRoleChanged && !isRemoved && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 rounded">Modified</span>
+                              )}
+                            </div>
+                            <span className="text-xs text-text-tertiary">{membership.division?.tradeName || ''}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isRemoved ? (
+                            <button
+                              onClick={() => undoRemove(membership.divisionId)}
+                              className="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                            >
+                              Undo
+                            </button>
+                          ) : (
+                            <>
+                              <select
+                                value={membership.role}
+                                onChange={(e) => handleRoleChange(membership.divisionId, e.target.value)}
+                                className="text-sm border border-border-primary rounded-lg px-2 py-1.5 bg-surface-primary text-text-primary focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
+                              >
+                                {roleOptions.map(r => (
+                                  <option key={r.value} value={r.value}>{r.label}</option>
+                                ))}
+                              </select>
+                              {!(pendingPrimary ? pendingPrimary === membership.divisionId : membership.isPrimary) && (
+                                <button
+                                  onClick={() => handleSetPrimary(membership.divisionId)}
+                                  className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                                  title="Set as primary division"
+                                >
+                                  <Star className="h-4 w-4" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleRemove(membership)}
+                                disabled={memberships.filter(m => !pendingRemoves.includes(m.divisionId)).length <= 1}
+                                className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30"
+                                title="Remove from division"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Pending Adds */}
+              {pendingAdds.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-emerald-700 uppercase tracking-wider flex items-center gap-2">
+                    <Plus className="h-3.5 w-3.5" />
+                    New Divisions to Add ({pendingAdds.length})
+                  </h3>
+                  {pendingAdds.map((add) => (
+                    <div key={add.divisionId}
+                      className="flex items-center justify-between p-4 rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50/50">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                          style={{ backgroundColor: add.division?.primaryColor || '#10b981' }}>
+                          {(add.division?.name?.[0] || 'D').toUpperCase()}
+                        </div>
+                        <div>
+                          <span className="font-medium text-text-primary">{add.division?.name}</span>
+                          <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 rounded">New</span>
+                          <div className="text-xs text-text-tertiary">
+                            Role: {roleOptions.find(r => r.value === add.role)?.label || add.role}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removePendingAdd(add.divisionId)}
+                        className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Remove"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add New Division Form */}
+              {(divisions.filter(d => 
+                !memberships.some(m => m.divisionId === d.id && !pendingRemoves.includes(m.divisionId)) && 
+                !pendingAdds.some(a => a.divisionId === d.id)
+              ).length > 0) && (
+                <div className="pt-2">
+                  {!addingDivision ? (
+                    <button
+                      onClick={() => setAddingDivision(true)}
+                      className="flex items-center gap-2 w-full justify-center py-3 border-2 border-dashed border-border-primary rounded-xl text-sm font-medium text-text-secondary hover:text-brand-primary hover:border-brand-primary transition-colors"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add to Another Division
+                    </button>
+                  ) : (
+                    <div className="p-4 rounded-xl border-2 border-brand-primary bg-brand-primary/5 space-y-3">
+                      <h4 className="text-sm font-semibold text-text-primary">Select Division & Role</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1">Division</label>
+                          <select
+                            value={selectedNewDivision}
+                            onChange={(e) => setSelectedNewDivision(e.target.value)}
+                            className="w-full border border-border-primary rounded-lg px-3 py-2 text-sm bg-surface-primary text-text-primary"
+                          >
+                            <option value="">Select division...</option>
+                            {divisions.filter(d => 
+                              !memberships.some(m => m.divisionId === d.id && !pendingRemoves.includes(m.divisionId)) && 
+                              !pendingAdds.some(a => a.divisionId === d.id)
+                            ).map(d => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1">Role</label>
+                          <select
+                            value={selectedNewRole}
+                            onChange={(e) => setSelectedNewRole(e.target.value)}
+                            className="w-full border border-border-primary rounded-lg px-3 py-2 text-sm bg-surface-primary text-text-primary"
+                          >
+                            {roleOptions.map(r => (
+                              <option key={r.value} value={r.value}>{r.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => { setAddingDivision(false); setSelectedNewDivision(''); }}
+                          className="px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-tertiary rounded-lg transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleAddToPending}
+                          disabled={!selectedNewDivision}
+                          className="px-4 py-1.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          + Add Division
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="mx-6 mb-2 flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {/* Success */}
+        {saveSuccess && (
+          <div className="mx-6 mb-2 flex items-center gap-2 p-3 rounded-lg bg-emerald-50 text-sm text-emerald-700 ring-1 ring-emerald-200">
+            <Check className="h-4 w-4 flex-shrink-0" />
+            All changes saved successfully!
+          </div>
+        )}
+
+        {/* Footer with prominent Save button */}
+        <div className="flex items-center justify-between p-6 border-t border-border-primary bg-surface-secondary/50 rounded-b-2xl flex-shrink-0">
+          <div className="text-sm text-text-tertiary">
+            {hasChanges ? (
+              <span className="text-amber-600 dark:text-amber-400 font-medium">{changeCount} unsaved change{changeCount !== 1 ? 's' : ''}</span>
+            ) : (
+              <span className="text-gray-500">No unsaved changes</span>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="px-5 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-xl transition-colors"
+            >
+              {hasChanges ? 'Discard & Close' : 'Close'}
+            </button>
+            <button
+              onClick={handleSaveAll}
+              disabled={!hasChanges || saving}
+              className={`px-6 py-2.5 text-sm font-semibold rounded-xl transition-all duration-200 flex items-center gap-2 ${
+                hasChanges 
+                  ? 'text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg shadow-blue-500/25' 
+                  : 'text-gray-400 bg-gray-100 cursor-not-allowed'
+              }`}
+            >
+              {saving ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="h-4 w-4" />
+                  Save Changes
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

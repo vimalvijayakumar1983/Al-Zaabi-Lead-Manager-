@@ -124,4 +124,4 @@ const broadcastDataChange = async (orgId, entity, action, actorId, meta = {}) =>
   }
 };
 
-module.exports = { setupWebSocket, notifyUser, notifyOrganization, broadcastDataChange };
+module.exports = { setupWebSocket, notifyUser, notifyOrganization, broadcastDataChange, _clients: clients };

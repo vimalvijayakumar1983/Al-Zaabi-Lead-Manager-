@@ -4,21 +4,50 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
-const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
+const { calculateLeadScore, predictConversion, calculateFullScore, rescoreAndPersist } = require('../utils/leadScoring');
 const { detectDuplicates } = require('../utils/duplicateDetection');
 const { createAuditLog } = require('../middleware/auditLog');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { autoAssign, getNextAssignee } = require('../services/leadAssignment');
 const { executeAutomations } = require('../services/automationEngine');
+const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
+const { upsertRecycleBinItem } = require('../services/recycleBinService');
+const { generateLeadSummaryInsights, regenerateLeadSummaryById } = require('../services/aiService');
 
 const router = Router();
 router.use(authenticate, orgScope);
 
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
+
+const BUILTIN_CALL_OUTCOMES = new Set([
+  'CALLBACK', 'CALL_LATER', 'CALL_AGAIN', 'WILL_CALL_US_AGAIN',
+  'MEETING_ARRANGED', 'APPOINTMENT_BOOKED', 'INTERESTED',
+  'NOT_INTERESTED', 'ALREADY_COMPLETED_SERVICES', 'NO_ANSWER',
+  'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'BUSY', 'GATEKEEPER',
+  'FOLLOW_UP_EMAIL', 'QUALIFIED', 'PROPOSAL_REQUESTED', 'DO_NOT_CALL', 'OTHER',
+]);
+
+// Smart name display — deduplicates when firstName and lastName are identical
+function getDisplayName(obj) {
+  const fn = (obj?.firstName || '').trim();
+  const ln = (obj?.lastName || '').trim();
+  if (!fn && !ln) return '';
+  if (!ln) return fn;
+  if (fn.toLowerCase() === ln.toLowerCase()) return fn;
+  if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
+  if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
+  return `${fn} ${ln}`;
+}
+
 // ─── Schemas ─────────────────────────────────────────────────────
 const createLeadSchema = z.object({
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
+  name: z.string().optional(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional().default(''),
   email: z.string().email().optional().nullable(),
   phone: z.string().optional().nullable(),
   company: z.string().optional().nullable(),
@@ -70,17 +99,37 @@ const leadFilterSchema = paginationSchema.extend({
   conversionMax: z.coerce.number().optional(),
   customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
   divisionId: z.string().optional(),
+  callOutcome: z.string().optional(), // comma-separated CallDisposition values
+  minCallCount: z.coerce.number().int().min(0).optional(),
+  maxCallCount: z.coerce.number().int().min(0).optional(),
+  showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
+});
+
+const aiSummaryRequestSchema = z.object({
+  force: z.boolean().optional(),
 });
 
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
 
     const where = {
       organizationId: { in: req.orgIds },
       isArchived: false,
     };
+
+    // ── Do Not Call / Blocked filter ──
+    // By default, hide DNC leads from all views
+    // showBlocked=true shows ONLY DNC leads (admin Blocked tab)
+    if (showBlocked === 'true') {
+      if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'Only admins can view blocked leads' });
+      }
+      where.doNotCall = true;
+    } else {
+      where.doNotCall = false;
+    }
 
     // Role-based data scoping: SALES_REP only sees their own assigned leads
     if (req.isRestrictedRole) {
@@ -107,8 +156,10 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
     if (assignedToId && !req.isRestrictedRole) {
-      if (assignedToId === 'unassigned') {
+      if (assignedToId === 'unassigned' || assignedToId === '__unassigned__') {
         where.assignedToId = null;
+      } else if (assignedToId === '__current_user__') {
+        where.assignedToId = req.user.id;
       } else {
         where.assignedToId = assignedToId;
       }
@@ -142,11 +193,35 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       ];
     }
 
-    // Date range
-    if (dateFrom || dateTo) {
+    // Date range — resolve shortcut tokens first
+    let resolvedFrom = dateFrom;
+    let resolvedTo = dateTo;
+    if (resolvedFrom === '__this_week__') {
+      const now = new Date();
+      const day = now.getDay(); // 0=Sun
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
+      resolvedFrom = new Date(now.getFullYear(), now.getMonth(), diff).toISOString().split('T')[0];
+      resolvedTo = undefined; // up to now
+    } else if (resolvedFrom === '__today__') {
+      resolvedFrom = new Date().toISOString().split('T')[0];
+      resolvedTo = resolvedFrom;
+    } else if (resolvedFrom === '__this_month__') {
+      const now = new Date();
+      resolvedFrom = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      resolvedTo = undefined;
+    } else if (resolvedFrom === '__last_7_days__') {
+      const d = new Date(); d.setDate(d.getDate() - 7);
+      resolvedFrom = d.toISOString().split('T')[0];
+      resolvedTo = undefined;
+    } else if (resolvedFrom === '__last_30_days__') {
+      const d = new Date(); d.setDate(d.getDate() - 30);
+      resolvedFrom = d.toISOString().split('T')[0];
+      resolvedTo = undefined;
+    }
+    if (resolvedFrom || resolvedTo) {
       where.createdAt = {};
-      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
-      if (dateTo) where.createdAt.lte = new Date(dateTo + 'T23:59:59.999Z');
+      if (resolvedFrom) where.createdAt.gte = new Date(resolvedFrom);
+      if (resolvedTo) where.createdAt.lte = new Date(resolvedTo + 'T23:59:59.999Z');
     }
     // Text field filters
     if (company) where.company = { contains: company, mode: 'insensitive' };
@@ -180,6 +255,31 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
       if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
     }
+    // Call outcome filtering (filter leads by their last/any call disposition)
+    if (callOutcome) {
+      const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
+      if (outcomes.length > 0) {
+        const builtinOutcomes = outcomes.filter(o => BUILTIN_CALL_OUTCOMES.has(o));
+        const customOutcomes = outcomes.filter(o => !builtinOutcomes.includes(o));
+        const callOutcomeOr = [];
+        if (builtinOutcomes.length > 0) {
+          callOutcomeOr.push({
+            disposition: builtinOutcomes.length === 1 ? builtinOutcomes[0] : { in: builtinOutcomes },
+          });
+        }
+        if (customOutcomes.length > 0) {
+          callOutcomeOr.push({
+            OR: customOutcomes.map((key) => ({
+              disposition: 'OTHER',
+              metadata: { path: ['dispositionKey'], equals: key },
+            })),
+          });
+        }
+        if (callOutcomeOr.length > 0) {
+          where.callLogs = { some: callOutcomeOr.length === 1 ? callOutcomeOr[0] : { OR: callOutcomeOr } };
+        }
+      }
+    }
     // Custom field filtering (JSON encoded)
     if (customField) {
       try {
@@ -197,6 +297,39 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       } catch { /* ignore invalid JSON */ }
     }
 
+    // ─── Call Count Filtering ──────────────────────────────────
+    if (minCallCount !== undefined || maxCallCount !== undefined) {
+      const min = minCallCount !== undefined ? Number(minCallCount) : 0;
+      const max = maxCallCount !== undefined ? Number(maxCallCount) : Infinity;
+
+      if (min > 0) {
+        // Only leads that have been called at least `min` times
+        const having = { id: { _count: { gte: min } } };
+        if (max < Infinity) having.id._count.lte = max;
+
+        const results = await prisma.callLog.groupBy({
+          by: ['leadId'],
+          _count: { id: true },
+          having,
+        });
+        const ids = results.map(r => r.leadId);
+        // If no leads match, add impossible condition to return 0 results
+        where.AND = [...(where.AND || []), { id: { in: ids.length > 0 ? ids : ['__none__'] } }];
+      } else if (max < Infinity) {
+        // Min is 0, so include leads with 0 calls too
+        // Exclude leads with MORE than max calls
+        const tooMany = await prisma.callLog.groupBy({
+          by: ['leadId'],
+          _count: { id: true },
+          having: { id: { _count: { gt: max } } },
+        });
+        const excludeIds = tooMany.map(r => r.leadId);
+        if (excludeIds.length > 0) {
+          where.AND = [...(where.AND || []), { id: { notIn: excludeIds } }];
+        }
+      }
+    }
+
     const [leads, total] = await Promise.all([
       prisma.lead.findMany({
         where,
@@ -204,7 +337,8 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
           stage: { select: { id: true, name: true, color: true } },
           tags: { include: { tag: true } },
-          _count: { select: { activities: true, tasks: true, communications: true } },
+          organization: { select: { id: true, name: true } },
+          _count: { select: { activities: true, tasks: true, communications: true, callLogs: true } },
         },
         orderBy: { [sortBy]: sortOrder },
         ...paginate(page, limit),
@@ -212,16 +346,40 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       prisma.lead.count({ where }),
     ]);
 
-    // Fetch per-channel communication counts, first message (where lead came from), and last inbound for the current page of leads
+    // Fetch per-channel communication counts, unread counts, last message, and last call outcome for the current page of leads
     const leadIds = leads.map(l => l.id);
     let channelCountsMap = {};
+    let unreadChannelCountsMap = {};
     let lastMessageMap = {};
-    let firstMessageMap = {};
+    let lastCallOutcomeMap = {};
     if (leadIds.length > 0) {
-      const [channelCounts, lastMessages, firstMessages] = await Promise.all([
+      // Fetch last call log per lead (most recent call's disposition + date)
+      const lastCallLogs = await prisma.callLog.findMany({
+        where: { leadId: { in: leadIds } },
+        orderBy: { createdAt: 'desc' },
+        distinct: ['leadId'],
+        select: { leadId: true, disposition: true, notes: true, createdAt: true, metadata: true },
+      });
+      for (const cl of lastCallLogs) {
+        const md = (typeof cl.metadata === 'object' && cl.metadata !== null) ? cl.metadata : {};
+        lastCallOutcomeMap[cl.leadId] = {
+          disposition: cl.disposition,
+          dispositionKey: md.dispositionKey || null,
+          dispositionLabel: md.dispositionLabel || null,
+          notes: cl.notes,
+          date: cl.createdAt,
+        };
+      }
+
+      const [channelCounts, unreadChannelCounts, lastMessages] = await Promise.all([
         prisma.communication.groupBy({
           by: ['leadId', 'channel'],
           where: { leadId: { in: leadIds } },
+          _count: { id: true },
+        }),
+        prisma.communication.groupBy({
+          by: ['leadId', 'channel'],
+          where: { leadId: { in: leadIds }, isRead: false, direction: 'INBOUND' },
           _count: { id: true },
         }),
         prisma.communication.findMany({
@@ -244,7 +402,13 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         channelCountsMap[row.leadId][row.channel] = row._count.id;
       }
 
-      // Build last inbound message map: { leadId: { channel, body, createdAt } }
+      // Build unread channel counts map: { leadId: { WHATSAPP: 1, ... } }
+      for (const row of unreadChannelCounts) {
+        if (!unreadChannelCountsMap[row.leadId]) unreadChannelCountsMap[row.leadId] = {};
+        unreadChannelCountsMap[row.leadId][row.channel] = row._count.id;
+      }
+
+      // Build last message map: { leadId: { channel, body, createdAt } }
       for (const msg of lastMessages) {
         lastMessageMap[msg.leadId] = {
           channel: msg.channel,
@@ -263,15 +427,59 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
 
-    // Enrich leads with channel counts, first message, and last inbound message
+    // Get org settings for SLA info
+    let orgSettings = null;
+    try {
+      const org = await prisma.organization.findFirst({
+        where: { id: { in: req.orgIds } },
+        select: { settings: true },
+      });
+      orgSettings = org?.settings;
+    } catch { /* non-critical */ }
+
+    // Enrich leads with channel counts, unread counts, last message, last call outcome, and SLA info
     const enrichedLeads = leads.map(lead => ({
       ...lead,
+      doNotCall: lead.doNotCall || false,
+      doNotCallAt: lead.doNotCallAt || null,
       channelCounts: channelCountsMap[lead.id] || {},
-      firstMessage: firstMessageMap[lead.id] || null,
+      unreadChannelCounts: unreadChannelCountsMap[lead.id] || {},
       lastInboundMessage: lastMessageMap[lead.id] || null,
+      lastCallOutcome: lastCallOutcomeMap[lead.id] || null,
+      slaInfo: getLeadSLAInfo(lead, orgSettings),
     }));
 
-    res.json(paginatedResponse(enrichedLeads, total, page, limit));
+    // Terminal normalization for immediate UI consistency:
+    // WON => 100 / 1.00, LOST => 0 / 0.00
+    const wonNeedsCorrection = [];
+    const lostNeedsCorrection = [];
+    const normalizedLeads = enrichedLeads.map((lead) => {
+      if (lead.status === 'WON') {
+        if (lead.score !== 100 || lead.conversionProb !== 1) wonNeedsCorrection.push(lead.id);
+        return { ...lead, score: 100, conversionProb: 1 };
+      }
+      if (lead.status === 'LOST') {
+        if ((lead.score || 0) !== 0 || (lead.conversionProb || 0) !== 0) lostNeedsCorrection.push(lead.id);
+        return { ...lead, score: 0, conversionProb: 0 };
+      }
+      return lead;
+    });
+
+    res.json(paginatedResponse(normalizedLeads, total, page, limit));
+
+    // Background self-heal for legacy rows with stale terminal scores.
+    if (wonNeedsCorrection.length > 0) {
+      prisma.lead.updateMany({
+        where: { id: { in: wonNeedsCorrection }, organizationId: { in: req.orgIds }, status: 'WON' },
+        data: { score: 100, conversionProb: 1 },
+      }).catch(() => {});
+    }
+    if (lostNeedsCorrection.length > 0) {
+      prisma.lead.updateMany({
+        where: { id: { in: lostNeedsCorrection }, organizationId: { in: req.orgIds }, status: 'LOST' },
+        data: { score: 0, conversionProb: 0 },
+      }).catch(() => {});
+    }
   } catch (err) {
     next(err);
   }
@@ -388,7 +596,230 @@ router.get('/tags', async (req, res, next) => {
   }
 });
 
+// ─── Create Tag ─────────────────────────────────────────────────
+router.post('/tags', async (req, res, next) => {
+  try {
+    const { name, color, organizationId } = req.body;
+    if (!name || !organizationId) {
+      return res.status(400).json({ error: 'Name and organizationId are required' });
+    }
+    // Check org access
+    if (!req.orgIds.includes(organizationId)) {
+      return res.status(403).json({ error: 'Access denied to this division' });
+    }
+    // Check duplicate
+    const existing = await prisma.tag.findUnique({
+      where: { organizationId_name: { organizationId, name: name.trim() } },
+    });
+    if (existing) {
+      return res.status(409).json({ error: 'Tag already exists in this division' });
+    }
+    const tag = await prisma.tag.create({
+      data: { name: name.trim(), color: color || '#6366f1', organizationId },
+    });
+    res.status(201).json(tag);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Update Tag ─────────────────────────────────────────────────
+router.put('/tags/:id', async (req, res, next) => {
+  try {
+    const tag = await prisma.tag.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    
+    const { name, color } = req.body;
+    const updateData = {};
+    if (name !== undefined) {
+      // Check duplicate name in same org
+      const dup = await prisma.tag.findFirst({
+        where: { organizationId: tag.organizationId, name: name.trim(), id: { not: tag.id } },
+      });
+      if (dup) return res.status(409).json({ error: 'A tag with this name already exists' });
+      updateData.name = name.trim();
+    }
+    if (color !== undefined) updateData.color = color;
+    
+    const updated = await prisma.tag.update({
+      where: { id: tag.id },
+      data: updateData,
+    });
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Delete Tag ─────────────────────────────────────────────────
+router.delete('/tags/:id', async (req, res, next) => {
+  try {
+    const tag = await prisma.tag.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    
+    // Delete all lead-tag associations first, then the tag
+    await prisma.$transaction([
+      prisma.leadTag.deleteMany({ where: { tagId: tag.id } }),
+      prisma.contactTag.deleteMany({ where: { tagId: tag.id } }),
+      prisma.tag.delete({ where: { id: tag.id } }),
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Add Tags to Lead ───────────────────────────────────────────
+router.post('/:id/tags', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    
+    const { tagIds, tagNames } = req.body;
+    const results = [];
+    
+    // Add by tag IDs
+    if (tagIds && Array.isArray(tagIds)) {
+      for (const tagId of tagIds) {
+        try {
+          await prisma.leadTag.create({ data: { leadId: lead.id, tagId } });
+          results.push({ tagId, added: true });
+        } catch (e) {
+          // Already exists - skip
+          results.push({ tagId, added: false, reason: 'already assigned' });
+        }
+      }
+    }
+    
+    // Add by tag names (create-on-the-fly)
+    if (tagNames && Array.isArray(tagNames)) {
+      for (const name of tagNames) {
+        const tag = await prisma.tag.upsert({
+          where: { organizationId_name: { organizationId: lead.organizationId, name: name.trim() } },
+          create: { name: name.trim(), organizationId: lead.organizationId },
+          update: {},
+        });
+        try {
+          await prisma.leadTag.create({ data: { leadId: lead.id, tagId: tag.id } });
+          results.push({ tagId: tag.id, name: tag.name, added: true });
+        } catch (e) {
+          results.push({ tagId: tag.id, name: tag.name, added: false, reason: 'already assigned' });
+        }
+      }
+    }
+    
+    // Return updated lead with tags
+    const updated = await prisma.lead.findUnique({
+      where: { id: lead.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    res.json({ tags: updated.tags, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Remove Tag from Lead ───────────────────────────────────────
+router.delete('/:id/tags/:tagId', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    
+    await prisma.leadTag.delete({
+      where: { leadId_tagId: { leadId: lead.id, tagId: req.params.tagId } },
+    }).catch(() => {});
+    
+    // Return updated tags
+    const updated = await prisma.lead.findUnique({
+      where: { id: lead.id },
+      include: { tags: { include: { tag: true } } },
+    });
+    res.json({ tags: updated.tags });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Get Lead by ID ──────────────────────────────────────────────
+router.post('/:id/ai-summary', validate(aiSummaryRequestSchema), async (req, res, next) => {
+  try {
+    const summaryWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) summaryWhere.assignedToId = req.user.id;
+
+    const lead = await prisma.lead.findFirst({
+      where: summaryWhere,
+      include: {
+        stage: { select: { id: true, name: true, color: true } },
+        activities: {
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+          select: { id: true, type: true, description: true, createdAt: true },
+        },
+        notes: {
+          orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
+          take: 20,
+          select: { id: true, content: true, createdAt: true },
+        },
+        tasks: {
+          orderBy: { dueAt: 'asc' },
+          take: 30,
+          select: { id: true, title: true, status: true, priority: true, dueAt: true, createdAt: true, updatedAt: true },
+        },
+        communications: {
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+          select: { id: true, channel: true, direction: true, subject: true, body: true, createdAt: true },
+        },
+        callLogs: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          select: { id: true, disposition: true, notes: true, createdAt: true, metadata: true },
+        },
+      },
+    });
+
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const force = req.validated?.force === true;
+    const insights = generateLeadSummaryInsights(lead, {
+      activities: lead.activities,
+      communications: lead.communications,
+      tasks: lead.tasks,
+      notes: lead.notes,
+      callLogs: lead.callLogs,
+    });
+
+    const summaryText = insights.summary;
+    const shouldPersist = force || !lead.aiSummary || String(lead.aiSummary).trim() !== String(summaryText).trim();
+    if (shouldPersist) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { aiSummary: summaryText },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...insights,
+        summary: summaryText,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:id', async (req, res, next) => {
   try {
     const detailWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
@@ -423,7 +854,56 @@ router.get('/:id', async (req, res, next) => {
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
     }
-    res.json(lead);
+
+    // Count unread inbound communications and fetch org settings for SLA
+    const [unreadCount, orgForSLA] = await Promise.all([
+      prisma.communication.count({
+        where: { leadId: lead.id, isRead: false, direction: 'INBOUND' },
+      }),
+      prisma.organization.findUnique({
+        where: { id: lead.organizationId },
+        select: { settings: true },
+      }),
+    ]);
+
+    // Fetch DNC blocker info if lead is blocked
+    let doNotCallByUser = null;
+    if (lead.doNotCall && lead.doNotCallById) {
+      try {
+        doNotCallByUser = await prisma.user.findUnique({
+          where: { id: lead.doNotCallById },
+          select: { id: true, firstName: true, lastName: true },
+        });
+      } catch { /* non-critical */ }
+    }
+
+    // Calculate full score breakdown for display and return fresh values
+    let scoreBreakdown = null;
+    let freshScore = lead.score;
+    let freshConversionProb = lead.conversionProb;
+    try {
+      const scoreResult = await calculateFullScore(lead.id);
+      scoreBreakdown = scoreResult.breakdown;
+      freshScore = scoreResult.score;
+      freshConversionProb = scoreResult.conversionProb;
+      // If score has drifted, silently update it
+      if (scoreResult.score !== lead.score || scoreResult.conversionProb !== lead.conversionProb) {
+        await prisma.lead.update({
+          where: { id: lead.id },
+          data: { score: scoreResult.score, conversionProb: scoreResult.conversionProb },
+        });
+      }
+    } catch { /* non-critical — breakdown is optional */ }
+
+    res.json({
+      ...lead,
+      score: freshScore,
+      conversionProb: freshConversionProb,
+      unreadCommunications: unreadCount,
+      slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
+      doNotCallByUser,
+      scoreBreakdown,
+    });
   } catch (err) {
     next(err);
   }
@@ -433,6 +913,65 @@ router.get('/:id', async (req, res, next) => {
 router.post('/', validate(createLeadSchema), async (req, res, next) => {
   try {
     const data = req.validated;
+
+    // Smart-split unified "name" field into firstName / lastName
+    if (data.name && !data.firstName) {
+      const parts = data.name.trim().split(/\s+/);
+      if (parts.length === 1) {
+        data.firstName = parts[0];
+        data.lastName = '';
+      } else {
+        data.lastName = parts.pop();
+        data.firstName = parts.join(' ');
+      }
+    }
+    delete data.name;
+
+    // Ensure firstName is present
+    if (!data.firstName || data.firstName.trim() === '') {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    if (data.lastName === undefined || data.lastName === null) data.lastName = '';
+
+    // ─── Dynamic Required Field Validation ─────────────────────────────
+    // Check field config for the target division to enforce required fields
+    try {
+      const targetDivId = (req.isSuperAdmin && data.divisionId) ? data.divisionId : req.orgId;
+      const configOrg = await prisma.organization.findUnique({
+        where: { id: targetDivId },
+        select: { settings: true },
+      });
+      const settings = configOrg?.settings || {};
+      const divKey = `division_${targetDivId}`;
+      const fieldConfig = settings.fieldConfig?.[divKey] || settings.fieldConfig?.['default'] || {};
+
+      const missingFields = [];
+      // Map of config key to request data key
+      const fieldKeyMap = {
+        email: 'email', phone: 'phone', company: 'company', jobTitle: 'jobTitle',
+        source: 'source', budget: 'budget', productInterest: 'productInterest',
+        location: 'location', website: 'website', campaign: 'campaign',
+      };
+      for (const [configKey, dataKey] of Object.entries(fieldKeyMap)) {
+        if (fieldConfig[configKey]?.isRequired) {
+          const val = data[dataKey];
+          if (val === undefined || val === null || String(val).trim() === '') {
+            // Find the label from BUILT_IN_FIELDS or use the key
+            const builtIn = BUILT_IN_FIELDS.find(f => f.key === configKey);
+            missingFields.push(builtIn?.label || configKey);
+          }
+        }
+      }
+      if (missingFields.length > 0) {
+        return res.status(400).json({
+          error: `Required fields missing: ${missingFields.join(', ')}`,
+          missingFields,
+        });
+      }
+    } catch (configErr) {
+      // Don't block lead creation if field config check fails
+      console.warn('Field config validation warning:', configErr.message);
+    }
 
     // Determine target org: SUPER_ADMIN can target a division.
     // If SUPER_ADMIN doesn't specify a division, fall back to the first child
@@ -566,7 +1105,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
       createNotification({
         type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
         title: 'New Lead Assigned',
-        message: `${req.user.firstName} ${req.user.lastName} assigned lead ${lead.firstName} ${lead.lastName} to you`,
+        message: `${getDisplayName(req.user)} assigned lead ${getDisplayName(lead)} to you`,
         userId: lead.assignedToId,
         actorId: req.user.id,
         entityType: 'lead',
@@ -579,7 +1118,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     notifyOrgAdmins(targetOrgId, {
       type: NOTIFICATION_TYPES.LEAD_CREATED,
       title: 'New Lead Created',
-      message: `${req.user.firstName} ${req.user.lastName} created lead ${lead.firstName} ${lead.lastName}`,
+      message: `${getDisplayName(req.user)} created lead ${getDisplayName(lead)}`,
       entityType: 'lead',
       entityId: lead.id,
     }, req.user.id).catch(() => {});
@@ -589,6 +1128,7 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
 
     // Broadcast data change to all org users
     broadcastDataChange(targetOrgId, 'lead', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -609,20 +1149,100 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     const data = req.validated;
     delete data.divisionId; // not applicable for update
+
+    // Smart-split unified "name" field into firstName / lastName
+    if (data.name) {
+      const parts = data.name.trim().split(/\s+/);
+      if (parts.length === 1) {
+        data.firstName = parts[0];
+        data.lastName = '';
+      } else {
+        data.lastName = parts.pop();
+        data.firstName = parts.join(' ');
+      }
+      delete data.name;
+    }
+    if (data.lastName === undefined || data.lastName === null) data.lastName = '';
+
     const { tags: tagNames, ...updateData } = data;
 
-    // Recalculate score if relevant fields change
-    const merged = { ...existing, ...updateData };
-    const activityCount = await prisma.leadActivity.count({ where: { leadId: existing.id } });
-    updateData.score = calculateLeadScore(merged, activityCount);
-    updateData.conversionProb = predictConversion(updateData.score, updateData.status || existing.status);
+    // Score will be recalculated AFTER save via rescoreAndPersist
+    // so the new pipeline position, status, and profile data are all captured.
+    // We skip pre-save scoring to avoid stale pipeline position issues.
 
     // Handle won/lost timestamps
     if (updateData.status === 'WON' && existing.status !== 'WON') {
       updateData.wonAt = new Date();
-    }
-    if (updateData.status === 'LOST' && existing.status !== 'LOST') {
+      updateData.lostAt = null;  // Clear lost if re-won
+    } else if (updateData.status === 'LOST' && existing.status !== 'LOST') {
       updateData.lostAt = new Date();
+      updateData.wonAt = null;   // Clear won if lost
+    } else if (updateData.status && updateData.status !== 'WON' && updateData.status !== 'LOST') {
+      // Moving away from terminal status — clear both dates (deal re-opened)
+      if (existing.status === 'WON') updateData.wonAt = null;
+      if (existing.status === 'LOST') updateData.lostAt = null;
+    }
+
+    // Mark first response — any status change from NEW counts as "responded"
+    if (!existing.firstRespondedAt && updateData.status && updateData.status !== 'NEW') {
+      updateData.firstRespondedAt = new Date();
+      updateData.slaStatus = 'RESPONDED';
+    }
+
+    // ── Reverse sync: status change → find matching pipeline stage ──
+    if (updateData.status && updateData.status !== existing.status && !updateData.stageId) {
+      const statusToKeywords = {
+        NEW:       ['new', 'untouched', 'fresh', 'incoming'],
+        CONTACTED: ['contact', 'touched', 'follow', 'reach', 'called', 'engaged'],
+        QUALIFIED: ['qualif', 'interested', 'hot', 'warm', 'ready'],
+        WON:       ['won', 'converted', 'signed', 'closed won'],
+        LOST:      ['lost', 'dead', 'rejected', 'disqualif', 'closed lost'],
+      };
+
+      const keywords = statusToKeywords[updateData.status] || [];
+      if (keywords.length > 0) {
+        const orgStages = await prisma.pipelineStage.findMany({
+          where: { organizationId: existing.organizationId },
+          orderBy: { order: 'asc' },
+        });
+
+        // Find best matching stage by keyword
+        let matchedStage = null;
+        for (const stage of orgStages) {
+          const sName = stage.name.toLowerCase();
+          if (keywords.some(kw => sName.includes(kw))) {
+            matchedStage = stage;
+            break;
+          }
+        }
+
+        // Also check isWonStage / isLostStage flags
+        if (!matchedStage && updateData.status === 'WON') {
+          matchedStage = orgStages.find(s => s.isWonStage);
+        }
+        if (!matchedStage && updateData.status === 'LOST') {
+          matchedStage = orgStages.find(s => s.isLostStage);
+        }
+
+        if (matchedStage && matchedStage.id !== existing.stageId) {
+          updateData.stageId = matchedStage.id;
+        }
+      }
+    }
+
+    // Handle tag updates if provided
+    if (tagNames && Array.isArray(tagNames)) {
+      // Remove all existing tags
+      await prisma.leadTag.deleteMany({ where: { leadId: existing.id } });
+      // Add new tags
+      for (const name of tagNames) {
+        const tag = await prisma.tag.upsert({
+          where: { organizationId_name: { organizationId: existing.organizationId, name: name.trim() } },
+          create: { name: name.trim(), organizationId: existing.organizationId },
+          update: {},
+        });
+        await prisma.leadTag.create({ data: { leadId: existing.id, tagId: tag.id } });
+      }
     }
 
     const lead = await prisma.$transaction(async (tx) => {
@@ -706,9 +1326,18 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     res.json(lead);
 
+    // ── Fire-and-forget rescore with SAVED data ──
+    // This ensures pipeline position, status, and profile changes
+    // are all reflected in the score. Score updates are persisted
+    // asynchronously — the response has the lead data, next view
+    // shows the accurate score.
+    rescoreAndPersist(lead.id).catch(err =>
+      logger.error('Post-update rescore failed:', err.message)
+    );
+
     // ── Fire-and-forget notifications ──
-    const leadName = `${lead.firstName} ${lead.lastName}`;
-    const actorName = `${req.user.firstName} ${req.user.lastName}`;
+    const leadName = getDisplayName(lead);
+    const actorName = getDisplayName(req.user);
 
     // Status changed notification
     if (data.status && data.status !== existing.status) {
@@ -799,6 +1428,7 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     // Broadcast data change to all org users
     broadcastDataChange(existing.organizationId, 'lead', 'updated', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -822,6 +1452,29 @@ router.delete('/:id', async (req, res, next) => {
       data: { isArchived: true },
     });
 
+    await upsertRecycleBinItem({
+      entityType: 'LEAD',
+      entityId: lead.id,
+      entityLabel: getDisplayName(lead),
+      organizationId: lead.organizationId,
+      deletedById: req.user.id,
+      recordOwnerId: lead.assignedToId || null,
+      recordCreatorId: lead.createdById || null,
+      metadata: {
+        status: lead.status,
+        source: lead.source,
+      },
+      snapshot: {
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        email: lead.email,
+        phone: lead.phone,
+        company: lead.company,
+        assignedToId: lead.assignedToId,
+        createdById: lead.createdById,
+      },
+    });
+
     await createAuditLog({
       userId: req.user.id,
       organizationId: lead.organizationId,
@@ -831,7 +1484,7 @@ router.delete('/:id', async (req, res, next) => {
       req,
     });
 
-    res.json({ message: 'Lead archived' });
+    res.json({ message: 'Lead moved to recycle bin' });
 
     broadcastDataChange(lead.organizationId, 'lead', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});
   } catch (err) {
@@ -869,9 +1522,18 @@ router.post('/:id/notes', validate(z.object({
       },
     });
 
+    // Mark first response — adding a note counts as attending to the lead
+    if (!lead.firstRespondedAt) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { firstRespondedAt: new Date(), slaStatus: 'RESPONDED' },
+      });
+    }
+
     res.status(201).json(note);
 
     broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
   } catch (err) {
     next(err);
   }
@@ -925,8 +1587,8 @@ router.post('/:id/reassign', validate(z.object({
         },
       });
 
-      const prevName = previousAssignee ? `${previousAssignee.firstName} ${previousAssignee.lastName}` : 'Unassigned';
-      const newName = `${result.assignedTo.firstName} ${result.assignedTo.lastName}`;
+      const prevName = previousAssignee ? getDisplayName(previousAssignee) : 'Unassigned';
+      const newName = getDisplayName(result.assignedTo);
 
       await tx.leadActivity.create({
         data: {
@@ -956,7 +1618,7 @@ router.post('/:id/reassign', validate(z.object({
       createNotification({
         type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
         title: 'Lead Reassigned to You',
-        message: `${req.user.firstName} ${req.user.lastName} reassigned ${updated.firstName} ${updated.lastName} to you${reason ? '. Reason: ' + reason : ''}`,
+        message: `${getDisplayName(req.user)} reassigned ${getDisplayName(updated)} to you${reason ? '. Reason: ' + reason : ''}`,
         userId: assignedToId,
         actorId: req.user.id,
         entityType: 'lead',
@@ -970,7 +1632,7 @@ router.post('/:id/reassign', validate(z.object({
       createNotification({
         type: NOTIFICATION_TYPES.LEAD_ASSIGNED,
         title: 'Lead Reassigned',
-        message: `${req.user.firstName} ${req.user.lastName} reassigned ${updated.firstName} ${updated.lastName} to another team member${reason ? '. Reason: ' + reason : ''}`,
+        message: `${getDisplayName(req.user)} reassigned ${getDisplayName(updated)} to another team member${reason ? '. Reason: ' + reason : ''}`,
         userId: previousAssignee.id,
         actorId: req.user.id,
         entityType: 'lead',
@@ -993,6 +1655,7 @@ router.post('/:id/reassign', validate(z.object({
     res.json(updated);
 
     broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: updated.id }).catch(() => {});
+    refreshLeadAISummaryAsync(updated.id);
   } catch (err) { next(err); }
 });
 
@@ -1015,12 +1678,156 @@ router.patch('/bulk', validate(z.object({
     notifyOrgAdmins(req.user.organizationId, {
       type: NOTIFICATION_TYPES.LEAD_STATUS_CHANGED,
       title: 'Bulk Lead Update',
-      message: `${req.user.firstName} ${req.user.lastName} updated ${leadIds.length} leads`,
+      message: `${getDisplayName(req.user)} updated ${leadIds.length} leads`,
       entityType: 'lead',
       entityId: null,
     }, req.user.id).catch(() => {});
 
     broadcastDataChange(req.user.organizationId, 'lead', 'bulk_updated', req.user.id).catch(() => {});
+    leadIds.forEach((leadId) => refreshLeadAISummaryAsync(leadId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Block Lead (Do Not Call) ────────────────────────────────────
+router.post('/:id/block', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        doNotCall: true,
+        doNotCallAt: new Date(),
+        doNotCallById: req.user.id,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead manually blocked (Do Not Call) by ${getDisplayName(req.user)}`,
+        metadata: { trigger: 'manual_block' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead blocked — removed from active outreach' });
+    refreshLeadAISummaryAsync(lead.id);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Unblock Lead (Remove Do Not Call) ───────────────────────────
+router.post('/:id/unblock', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (!lead.doNotCall) return res.status(400).json({ error: 'Lead is not blocked' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        doNotCall: false,
+        doNotCallAt: null,
+        doNotCallById: null,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead unblocked by ${getDisplayName(req.user)} — restored to active outreach`,
+        metadata: { trigger: 'manual_unblock' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead unblocked — restored to active leads' });
+    refreshLeadAISummaryAsync(lead.id);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Rescore a single lead (GET score breakdown) ─────────────────
+router.get('/:id/score', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      select: { id: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const result = await calculateFullScore(lead.id);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Rescore a single lead and persist ──────────────────────────
+router.post('/:id/rescore', async (req, res, next) => {
+  try {
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+      select: { id: true, score: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const result = await rescoreAndPersist(lead.id);
+    res.json({
+      success: true,
+      data: {
+        previousScore: lead.score,
+        newScore: result.score,
+        conversionProb: result.conversionProb,
+        breakdown: result.breakdown,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Bulk rescore all leads in org ──────────────────────────────
+router.post('/bulk/rescore', async (req, res, next) => {
+  try {
+    const leads = await prisma.lead.findMany({
+      where: { organizationId: { in: req.orgIds } },
+      select: { id: true },
+    });
+
+    let scored = 0;
+    let errors = 0;
+    for (const lead of leads) {
+      try {
+        await rescoreAndPersist(lead.id);
+        scored++;
+      } catch {
+        errors++;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { total: leads.length, scored, errors },
+    });
   } catch (err) {
     next(err);
   }

@@ -50,6 +50,9 @@ model Organization {
   apiKeys           ApiKey[]
   contacts          Contact[]
   deals             Deal[]
+  divisionMemberships DivisionMembership[] @relation("DivisionMembers")
+  customRoles         CustomRole[]
+  savedViews          SavedView[]
 
   @@index([parentId])
   @@map("organizations")
@@ -67,7 +70,9 @@ enum Plan {
 model User {
   id             String   @id @default(uuid())
   email          String   @unique
-  passwordHash   String
+  passwordHash    String
+  resetToken      String?
+  resetTokenExpiry DateTime?
   firstName      String
   lastName       String
   role           Role     @default(SALES_REP)
@@ -95,11 +100,17 @@ model User {
   actedNotifications    Notification[] @relation("NotificationActor")
   notificationPreference NotificationPreference?
   createdIntegrations   Integration[]  @relation("IntegrationCreator")
+  divisionMemberships  DivisionMembership[]
   ownedContacts         Contact[]      @relation("ContactOwner")
   createdContacts       Contact[]      @relation("ContactCreatedBy")
   contactActivities     ContactActivity[]
   contactNotes          ContactNote[]
   ownedDeals            Deal[]         @relation("DealOwner")
+
+  customRoleId         String?
+  customRole           CustomRole?    @relation("UserCustomRole", fields: [customRoleId], references: [id], onDelete: SetNull)
+  createdCustomRoles   CustomRole[]   @relation("CustomRoleCreator")
+  createdViews         SavedView[]    @relation("ViewCreator")
 
   @@index([organizationId])
   @@map("users")
@@ -118,12 +129,13 @@ enum Role {
 model Lead {
   id              String     @id @default(uuid())
   firstName       String
-  lastName        String
+  lastName        String     @default("")
   email           String?
   phone           String?
   company         String?
   jobTitle        String?
   source          LeadSource @default(MANUAL)
+  sourceDetail    String?
   status          LeadStatus @default(NEW)
   score           Int        @default(0)
   budget          Decimal?   @db.Decimal(12, 2)
@@ -138,6 +150,17 @@ model Lead {
   wonAt           DateTime?
   lostAt          DateTime?
   lostReason      String?
+  doNotCall       Boolean   @default(false)
+  doNotCallAt     DateTime?
+  doNotCallById   String?
+
+  // ── SLA Tracking ──
+  firstRespondedAt  DateTime?            // When the assigned user first interacted with this lead
+  slaStatus         LeadSLAStatus @default(ON_TIME)
+  escalationLevel   Int           @default(0)  // 0=normal, 1=reminded, 2=escalated, 3=reassigned
+  lastEscalatedAt   DateTime?            // Last time an SLA escalation action was taken
+  slaBreachedAt     DateTime?            // When the SLA was first breached
+
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
@@ -170,6 +193,7 @@ model Lead {
   @@index([organizationId, stageId])
   @@index([email])
   @@index([phone])
+  @@index([organizationId, slaStatus])
   @@map("leads")
 }
 
@@ -200,12 +224,20 @@ enum LeadStatus {
   LOST
 }
 
+enum LeadSLAStatus {
+  ON_TIME        // Within SLA thresholds
+  AT_RISK        // Approaching SLA breach (e.g. 75% of threshold elapsed)
+  BREACHED       // SLA threshold exceeded, action pending
+  ESCALATED      // Escalation action taken (reminded/reassigned)
+  RESPONDED      // User responded within SLA
+}
+
 // ─── Contacts ───────────────────────────────────────────────────
 
 model Contact {
   id              String        @id @default(uuid())
   firstName       String
-  lastName        String
+  lastName        String     @default("")
   email           String?
   phone           String?
   mobile          String?
@@ -408,11 +440,15 @@ model CallLog {
 }
 
 enum CallDisposition {
-  CALLBACK          // Customer asked to call back later
+  CALLBACK          // Customer asked to call back later (legacy — use CALL_LATER / CALL_AGAIN)
+  CALL_LATER        // Client requested call at a specific date/time (mandatory schedule)
+  CALL_AGAIN        // Call again anytime — no specific schedule required
+  WILL_CALL_US_AGAIN // Client said they will call back; place in soft engagement loop
   MEETING_ARRANGED  // Meeting has been scheduled
   APPOINTMENT_BOOKED // Appointment confirmed
   INTERESTED        // Customer showed interest, send info
   NOT_INTERESTED    // Customer not interested
+  ALREADY_COMPLETED_SERVICES // Service already completed; track inside vs outside center
   NO_ANSWER         // No one picked up
   VOICEMAIL_LEFT    // Left voicemail
   WRONG_NUMBER      // Wrong contact number
@@ -460,6 +496,10 @@ enum ActivityType {
   ASSIGNMENT_CHANGED
   SCORE_UPDATED
   ATTACHMENT_ADDED
+  SLA_REMINDER_SENT
+  SLA_ESCALATED
+  SLA_REASSIGNED
+  SLA_BREACHED
   CUSTOM
 }
 
@@ -513,6 +553,7 @@ model Task {
 
   @@index([assigneeId, status])
   @@index([dueAt])
+  @@index([reminder])
   @@map("tasks")
 }
 
@@ -551,6 +592,8 @@ model Communication {
   metadata    Json              @default("{}")
   isEdited    Boolean           @default(false)
   isDeleted   Boolean           @default(false)
+  isRead      Boolean           @default(false)
+  readAt      DateTime?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
@@ -561,6 +604,7 @@ model Communication {
   user        User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([leadId, createdAt])
+  @@index([leadId, isRead, direction])
   @@map("communications")
 }
 
@@ -620,6 +664,40 @@ enum CampaignStatus {
   COMPLETED
 }
 
+enum RecycleEntityType {
+  LEAD
+  CONTACT
+  TASK
+  CAMPAIGN
+}
+
+model RecycleBinItem {
+  id               String            @id @default(uuid())
+  entityType       RecycleEntityType
+  entityId         String
+  entityLabel      String?
+  organizationId   String
+  deletedById      String?
+  recordOwnerId    String?
+  recordAssigneeId String?
+  recordCreatorId  String?
+  deletedAt        DateTime          @default(now())
+  purgeAt          DateTime
+  metadata         Json              @default("{}")
+  snapshot         Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@unique([entityType, entityId])
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, purgeAt])
+  @@index([entityType, organizationId])
+  @@index([recordOwnerId])
+  @@index([recordAssigneeId])
+  @@index([recordCreatorId])
+  @@map("recycle_bin_items")
+}
+
 // ─── Tags ────────────────────────────────────────────────────────
 
 model Tag {
@@ -675,6 +753,13 @@ model CustomField {
   options        Json?
   isRequired     Boolean   @default(false)
   order          Int       @default(0)
+  showInList     Boolean   @default(true)
+  showInDetail   Boolean   @default(true)
+  description    String?
+  placeholder    String?
+  defaultValue   String?
+
+  divisionId     String?
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -693,6 +778,8 @@ enum FieldType {
   URL
   EMAIL
   PHONE
+  TEXTAREA
+  CURRENCY
 }
 
 // ─── Automation Rules ────────────────────────────────────────────
@@ -705,6 +792,7 @@ model AutomationRule {
   conditions     Json
   actions        Json
   isActive       Boolean             @default(true)
+  isTemplate     Boolean             @default(false)
   executionCount Int                 @default(0)
   lastExecutedAt DateTime?
   createdAt      DateTime            @default(now())
@@ -715,6 +803,7 @@ model AutomationRule {
   logs           AutomationLog[]
 
   @@index([organizationId, isActive])
+  @@index([organizationId, isTemplate])
   @@map("automation_rules")
 }
 
@@ -745,8 +834,13 @@ enum AutomationTrigger {
   LEAD_ASSIGNED
   LEAD_SCORE_CHANGED
   LEAD_INACTIVE
+  LEAD_SLA_WARNING
+  LEAD_SLA_BREACHED
+  LEAD_SLA_ESCALATED
   TASK_DUE
   TASK_OVERDUE
+  LEAD_CREATED_TIME_ELAPSED
+  LEAD_UPDATED_TIME_ELAPSED
 }
 
 // ─── Webhooks ────────────────────────────────────────────────────
@@ -810,7 +904,7 @@ model AuditLog {
   id             String   @id @default(uuid())
   action         String
   entity         String
-  entityId       String
+  entityId       String?
   oldData        Json?
   newData        Json?
   ipAddress      String?
@@ -928,4 +1022,103 @@ model ApiKey {
 
   @@index([key, isActive])
   @@map("api_keys")
+}
+
+// ─── Division Memberships ────────────────────────────────────────
+// Allows users to belong to multiple divisions with different roles
+
+model DivisionMembership {
+  id         String   @id @default(uuid())
+  userId     String
+  divisionId String
+  role       Role     @default(SALES_REP)
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  division   Organization @relation("DivisionMembers", fields: [divisionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, divisionId])
+  @@index([userId])
+  @@index([divisionId])
+  @@map("division_memberships")
+}
+
+
+// ─── Custom Roles ────────────────────────────────────────────────
+
+model CustomRole {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  color          String   @default("#6366f1")
+  icon           String   @default("shield")
+  permissions    Json     @default("{}")
+  isSystem       Boolean  @default(false)
+  baseRole       Role     @default(SALES_REP)
+  level          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdById    String?
+  createdBy      User?    @relation("CustomRoleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  users          User[]   @relation("UserCustomRole")
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("custom_roles")
+}
+
+// ─── Saved Views ─────────────────────────────────────────────────
+
+model SavedView {
+  id               String   @id @default(uuid())
+  name             String
+  icon             String?
+  filters          Json     @default("{}")
+  sortBy           String?
+  sortOrder        String?  @default("desc")
+  columns          Json?
+  visibility       String   @default("everyone") // everyone, private, specific_users, specific_roles
+  visibleToUsers   String[] @default([])
+  visibleToRoles   String[] @default([])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  divisionId       String?
+
+  createdById      String
+  createdBy        User @relation("ViewCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([divisionId])
+  @@index([createdById])
+  @@map("saved_views")
+}
+
+model EmailSettings {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  smtpHost       String   @default("mail.alzaabigroup.com")
+  smtpPort       Int      @default(465)
+  smtpSecure     Boolean  @default(true)
+  smtpUsername   String   @default("")
+  smtpPassword   String   @default("")
+  fromEmail      String   @default("")
+  fromName       String   @default("Al-Zaabi Lead Manager")
+  imapHost       String?  @default("")
+  imapPort       Int?     @default(993)
+  imapSecure     Boolean? @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("email_settings")
 }

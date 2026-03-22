@@ -26,6 +26,11 @@ export interface FilterState {
   conversionMin: string;
   conversionMax: string;
   stageId: string;
+  callOutcome: string;      // comma-separated CallDisposition values
+  minCallCount: string;
+  maxCallCount: string;
+  divisionId: string;
+  showBlocked: string;    // 'true' to show only DNC/blocked leads (admin Blocked tab)
 }
 
 export const emptyFilters: FilterState = {
@@ -50,6 +55,11 @@ export const emptyFilters: FilterState = {
   conversionMin: '',
   conversionMax: '',
   stageId: '',
+  callOutcome: '',
+  minCallCount: '',
+  maxCallCount: '',
+  divisionId: '',
+  showBlocked: '',
 };
 
 const statusOptions = [
@@ -76,6 +86,28 @@ const sourceOptions = [
   { value: 'EMAIL', label: 'Email' },
   { value: 'PHONE', label: 'Phone' },
   { value: 'OTHER', label: 'Other' },
+];
+
+const callOutcomeOptions = [
+  { value: 'CALLBACK', label: 'Call Back Requested', icon: '🔄', group: 'Follow-up' },
+  { value: 'CALL_LATER', label: 'Call Later (Scheduled)', icon: '🕐', group: 'Follow-up' },
+  { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', icon: '☎️', group: 'Follow-up' },
+  { value: 'WILL_CALL_US_AGAIN', label: 'Will Call Us Again', icon: '🤝', group: 'Follow-up' },
+  { value: 'MEETING_ARRANGED', label: 'Meeting Arranged', icon: '📅', group: 'Positive' },
+  { value: 'APPOINTMENT_BOOKED', label: 'Appointment Booked', icon: '✅', group: 'Positive' },
+  { value: 'INTERESTED', label: 'Interested - Send Info', icon: '👍', group: 'Positive' },
+  { value: 'QUALIFIED', label: 'Lead Qualified', icon: '⭐', group: 'Positive' },
+  { value: 'PROPOSAL_REQUESTED', label: 'Proposal Requested', icon: '📋', group: 'Positive' },
+  { value: 'FOLLOW_UP_EMAIL', label: 'Follow-up Email Requested', icon: '📧', group: 'Follow-up' },
+  { value: 'NO_ANSWER', label: 'No Answer', icon: '📵', group: 'Retry' },
+  { value: 'VOICEMAIL_LEFT', label: 'Voicemail Left', icon: '📨', group: 'Retry' },
+  { value: 'BUSY', label: 'Line Busy', icon: '📞', group: 'Retry' },
+  { value: 'GATEKEEPER', label: 'Reached Gatekeeper', icon: '🚧', group: 'Retry' },
+  { value: 'NOT_INTERESTED', label: 'Not Interested', icon: '👎', group: 'Closed' },
+  { value: 'ALREADY_COMPLETED_SERVICES', label: 'Already Completed Services', icon: '🏁', group: 'Closed' },
+  { value: 'WRONG_NUMBER', label: 'Wrong Number', icon: '❌', group: 'Closed' },
+  { value: 'DO_NOT_CALL', label: 'Do Not Call', icon: '🚫', group: 'Closed' },
+  { value: 'OTHER', label: 'Other', icon: '📝', group: 'Other' },
 ];
 
 const boolOptions = [
@@ -186,6 +218,15 @@ function TagIcon() {
 function CalendarIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
 }
+function PhoneOutcomeIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>;
+}
+function CallCountIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 3h6m-3-3v6" /></svg>;
+}
+function ValueIcon() {
+  return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+}
 function BoltIcon() {
   return <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>;
 }
@@ -234,11 +275,22 @@ function toggleMulti(current: string, value: string): string {
 export function AdvancedFilters({ filters, onChange, users, tags: availableTags = [], stages = [], onClose }: AdvancedFiltersProps) {
   const [local, setLocal] = useState<FilterState>({ ...filters });
 
+  // Load divisions from localStorage
+  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('divisions');
+      if (raw) setDivisions(JSON.parse(raw));
+    } catch { /* ignore */ }
+  }, []);
+
   // Section open/closed state
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     statusPipeline: true,
+    callOutcome: false,
+    callActivity: false,
     assignmentContact: false,
-    scoreBudget: false,
+    scoreValue: false,
     textSearch: false,
     tags: false,
     dateRange: false,
@@ -276,9 +328,11 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
 
   // Count active filters per section
   const sectionCounts = {
-    statusPipeline: [local.status, local.stageId, local.source].filter(Boolean).length,
+    statusPipeline: [local.status, local.stageId, local.source, local.divisionId].filter(Boolean).length,
+    callOutcome: local.callOutcome ? parseMulti(local.callOutcome).length : 0,
+    callActivity: [local.minCallCount, local.maxCallCount].filter(Boolean).length,
     assignmentContact: [local.assignedToId, local.hasEmail, local.hasPhone].filter(Boolean).length,
-    scoreBudget: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
+    scoreValue: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
     textSearch: [local.company, local.jobTitle, local.location, local.campaign, local.productInterest].filter(Boolean).length,
     tags: local.tags ? 1 : 0,
     dateRange: [local.dateFrom, local.dateTo].filter(Boolean).length,
@@ -360,11 +414,12 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   // Multi-select helpers for status and source
   const selectedStatuses = parseMulti(local.status);
   const selectedSources = parseMulti(local.source);
+  const selectedCallOutcomes = parseMulti(local.callOutcome);
 
   return (
-    <div className="card p-5 border-brand-200 bg-white shadow-lg space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="card border-brand-200 bg-white shadow-lg flex flex-col max-h-[calc(100vh-12rem)] overflow-hidden">
+      {/* Header - pinned */}
+      <div className="flex items-center justify-between px-5 pt-5 pb-3 flex-shrink-0 border-b border-gray-100">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <FilterIcon />
           Advanced Filters
@@ -383,6 +438,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
           </button>
         </div>
       </div>
+
+      {/* Scrollable content area */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4 [&::-webkit-scrollbar]:w-[6px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-gray-400" style={{ scrollbarWidth: 'thin', scrollbarColor: '#d1d5db transparent' }}>
 
       {/* Save Dialog */}
       {showSaveDialog && (
@@ -492,9 +550,9 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         <button
           onClick={() => applyQuickFilter({ budgetMin: '50000' })}
           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition-colors"
-          title="Leads with budget ≥ 50,000 AED"
+          title="Leads with value ≥ 50,000 AED"
         >
-          High Value (≥50K AED)
+          💰 Value ≥50K AED
         </button>
         {/* New enhanced presets */}
         <button
@@ -520,6 +578,27 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
           title="Leads with no activity for 30+ days (created before 30 days ago with status NEW or CONTACTED)"
         >
           Stale Leads (30+ days)
+        </button>
+        <button
+          onClick={() => applyQuickFilter({ minCallCount: '0', maxCallCount: '0' })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-300 hover:bg-gray-100 transition-colors"
+          title="Leads that have never been called"
+        >
+          🔇 Never Called
+        </button>
+        <button
+          onClick={() => applyQuickFilter({ minCallCount: '5' })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors"
+          title="Leads called 5 or more times"
+        >
+          🔥 Called 5+ Times
+        </button>
+        <button
+          onClick={() => applyQuickFilter({ budgetMin: '100000' })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+          title="Leads with value ≥ 100,000 AED"
+        >
+          💰 High Value (≥100K)
         </button>
         <button
           onClick={() => applyQuickFilter({ dateFrom: daysAgo(7) })}
@@ -585,6 +664,136 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
                 </div>
               </div>
             </div>
+            {divisions.length > 0 && (
+              <div>
+                <label className="label">Division</label>
+                <select className="input" value={local.divisionId} onChange={(e) => setLocal({ ...local, divisionId: e.target.value })}>
+                  <option value="">All Divisions</option>
+                  {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Section: Call Outcome */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader title="Call Outcome" icon={<PhoneOutcomeIcon />} count={sectionCounts.callOutcome} open={openSections.callOutcome} onToggle={() => toggleSection('callOutcome')} />
+        {openSections.callOutcome && (
+          <div className="p-4">
+            <label className="label mb-1.5">Last Call Outcome <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+            <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-0.5">
+              {['Positive', 'Follow-up', 'Retry', 'Closed', 'Other'].map((group) => {
+                const groupOptions = callOutcomeOptions.filter(o => o.group === group);
+                if (groupOptions.length === 0) return null;
+                return (
+                  <div key={group}>
+                    <div className="text-2xs font-semibold text-gray-400 uppercase tracking-wide px-1 pt-1.5 pb-0.5">{group}</div>
+                    {groupOptions.map((o) => {
+                      const isSelected = selectedCallOutcomes.includes(o.value);
+                      return (
+                        <label key={o.value} className="flex items-center gap-2 cursor-pointer px-1 py-1 rounded hover:bg-gray-50">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => setLocal({ ...local, callOutcome: toggleMulti(local.callOutcome, o.value) })}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                          />
+                          <span className="text-sm">{o.icon}</span>
+                          <span className={`text-sm ${isSelected ? 'text-brand-700 font-medium' : 'text-gray-600'}`}>{o.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+            {selectedCallOutcomes.length > 0 && (
+              <button
+                onClick={() => setLocal({ ...local, callOutcome: '' })}
+                className="text-xs text-gray-500 hover:text-gray-700 mt-2"
+              >
+                Clear selection ({selectedCallOutcomes.length})
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Section: Call Activity (Call Count) */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader title="Call Activity" icon={<CallCountIcon />} count={sectionCounts.callActivity} open={openSections.callActivity} onToggle={() => toggleSection('callActivity')} />
+        {openSections.callActivity && (
+          <div className="p-4 space-y-3">
+            {/* Smart presets — color-coded to match table badges */}
+            <div>
+              <label className="label mb-1.5">Quick Presets</label>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '0', maxCallCount: '0' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '0' && local.maxCallCount === '0'
+                      ? 'bg-gray-200 text-gray-800 border-gray-400 ring-2 ring-gray-300'
+                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-gray-300 text-gray-700 text-[10px] font-bold">0</span>
+                  Never Called
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '1', maxCallCount: '2' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '1' && local.maxCallCount === '2'
+                      ? 'bg-blue-100 text-blue-800 border-blue-400 ring-2 ring-blue-300'
+                      : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-200 text-blue-700 text-[10px] font-bold">1-2</span>
+                  Low Touch
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '3', maxCallCount: '5' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '3' && local.maxCallCount === '5'
+                      ? 'bg-amber-100 text-amber-800 border-amber-400 ring-2 ring-amber-300'
+                      : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-amber-200 text-amber-700 text-[10px] font-bold">3-5</span>
+                  Moderate
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, minCallCount: '6', maxCallCount: '' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.minCallCount === '6' && local.maxCallCount === ''
+                      ? 'bg-red-100 text-red-800 border-red-400 ring-2 ring-red-300'
+                      : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-red-200 text-red-700 text-[10px] font-bold">6+</span>
+                  High Touch
+                </button>
+              </div>
+            </div>
+            {/* Custom range */}
+            <div>
+              <label className="label mb-1">Custom Range</label>
+              <div className="flex items-center gap-2">
+                <input type="number" className="input" placeholder="Min calls" min={0} value={local.minCallCount} onChange={(e) => setLocal({ ...local, minCallCount: e.target.value })} />
+                <span className="text-gray-400 text-sm">to</span>
+                <input type="number" className="input" placeholder="Max calls" min={0} value={local.maxCallCount} onChange={(e) => setLocal({ ...local, maxCallCount: e.target.value })} />
+              </div>
+            </div>
+            {/* Clear */}
+            {(local.minCallCount || local.maxCallCount) && (
+              <button
+                onClick={() => setLocal({ ...local, minCallCount: '', maxCallCount: '' })}
+                className="text-xs text-gray-500 hover:text-gray-700"
+              >
+                Clear call activity filter
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -620,33 +829,96 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         )}
       </div>
 
-      {/* Section 3: Score & Budget */}
+      {/* Section 3: Score & Value */}
       <div className="border border-gray-200 rounded-lg overflow-hidden">
-        <SectionHeader title="Score & Budget" icon={<ChartIcon />} count={sectionCounts.scoreBudget} open={openSections.scoreBudget} onToggle={() => toggleSection('scoreBudget')} />
-        {openSections.scoreBudget && (
-          <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <SectionHeader title="Score & Value" icon={<ValueIcon />} count={sectionCounts.scoreValue} open={openSections.scoreValue} onToggle={() => toggleSection('scoreValue')} />
+        {openSections.scoreValue && (
+          <div className="p-4 space-y-4">
+            {/* Lead Value / Associated Value */}
             <div>
-              <label className="label">Score Range</label>
-              <div className="flex items-center gap-2">
-                <input type="number" className="input" placeholder="Min" min={0} max={100} value={local.minScore} onChange={(e) => setLocal({ ...local, minScore: e.target.value })} />
-                <span className="text-gray-400">-</span>
-                <input type="number" className="input" placeholder="Max" min={0} max={100} value={local.maxScore} onChange={(e) => setLocal({ ...local, maxScore: e.target.value })} />
+              <label className="label mb-1.5">Lead Value (AED)</label>
+              {/* Value presets */}
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '', budgetMax: '0' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMax === '0' && !local.budgetMin
+                      ? 'bg-gray-200 text-gray-800 border-gray-400 ring-2 ring-gray-300'
+                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  No Value
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '1', budgetMax: '25000' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '1' && local.budgetMax === '25000'
+                      ? 'bg-blue-100 text-blue-800 border-blue-400 ring-2 ring-blue-300'
+                      : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  &lt; 25K
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '25000', budgetMax: '100000' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '25000' && local.budgetMax === '100000'
+                      ? 'bg-amber-100 text-amber-800 border-amber-400 ring-2 ring-amber-300'
+                      : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  25K – 100K
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '100000', budgetMax: '' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '100000' && !local.budgetMax
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-400 ring-2 ring-emerald-300'
+                      : 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  💰 100K+
+                </button>
+                <button
+                  onClick={() => setLocal({ ...local, budgetMin: '500000', budgetMax: '' })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    local.budgetMin === '500000' && !local.budgetMax
+                      ? 'bg-purple-100 text-purple-800 border-purple-400 ring-2 ring-purple-300'
+                      : 'bg-purple-50 text-purple-600 border-purple-200 hover:bg-purple-100'
+                  }`}
+                >
+                  💎 500K+
+                </button>
               </div>
-            </div>
-            <div>
-              <label className="label">Budget Range (AED)</label>
+              {/* Custom range */}
               <div className="flex items-center gap-2">
-                <input type="number" className="input" placeholder="Min" min={0} value={local.budgetMin} onChange={(e) => setLocal({ ...local, budgetMin: e.target.value })} />
-                <span className="text-gray-400">-</span>
-                <input type="number" className="input" placeholder="Max" min={0} value={local.budgetMax} onChange={(e) => setLocal({ ...local, budgetMax: e.target.value })} />
+                <input type="number" className="input" placeholder="Min AED" min={0} value={local.budgetMin} onChange={(e) => setLocal({ ...local, budgetMin: e.target.value })} />
+                <span className="text-gray-400 text-sm">to</span>
+                <input type="number" className="input" placeholder="Max AED" min={0} value={local.budgetMax} onChange={(e) => setLocal({ ...local, budgetMax: e.target.value })} />
               </div>
+              {(local.budgetMin || local.budgetMax) && (
+                <button onClick={() => setLocal({ ...local, budgetMin: '', budgetMax: '' })} className="text-xs text-gray-500 hover:text-gray-700 mt-1">
+                  Clear value filter
+                </button>
+              )}
             </div>
-            <div>
-              <label className="label">Conversion % Range</label>
-              <div className="flex items-center gap-2">
-                <input type="number" className="input" placeholder="Min %" min={0} max={100} value={local.conversionMin} onChange={(e) => setLocal({ ...local, conversionMin: e.target.value })} />
-                <span className="text-gray-400">-</span>
-                <input type="number" className="input" placeholder="Max %" min={0} max={100} value={local.conversionMax} onChange={(e) => setLocal({ ...local, conversionMax: e.target.value })} />
+            {/* Score Range */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Score Range</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" className="input" placeholder="Min" min={0} max={100} value={local.minScore} onChange={(e) => setLocal({ ...local, minScore: e.target.value })} />
+                  <span className="text-gray-400">-</span>
+                  <input type="number" className="input" placeholder="Max" min={0} max={100} value={local.maxScore} onChange={(e) => setLocal({ ...local, maxScore: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="label">Conversion % Range</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" className="input" placeholder="Min %" min={0} max={100} value={local.conversionMin} onChange={(e) => setLocal({ ...local, conversionMin: e.target.value })} />
+                  <span className="text-gray-400">-</span>
+                  <input type="number" className="input" placeholder="Max %" min={0} max={100} value={local.conversionMax} onChange={(e) => setLocal({ ...local, conversionMax: e.target.value })} />
+                </div>
               </div>
             </div>
           </div>
@@ -769,12 +1041,14 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
         </div>
       )}
 
-      {/* Footer */}
-      <div className="flex items-center justify-between pt-4 border-t">
-        <button onClick={handleClear} className="text-sm text-gray-500 hover:text-gray-700">Clear All Filters</button>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
-          <button onClick={handleApply} className="btn-primary text-sm">Apply Filters</button>
+      </div>{/* end scrollable content area */}
+
+      {/* Footer - pinned at bottom */}
+      <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50/80 flex-shrink-0 rounded-b-lg">
+        <button onClick={handleClear} className="text-sm text-gray-500 hover:text-red-600 hover:underline transition-colors">Clear All Filters</button>
+        <div className="flex gap-2.5">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-50 transition-colors">Cancel</button>
+          <button onClick={handleApply} className="px-5 py-2 rounded-lg text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 shadow-sm transition-colors">Apply Filters</button>
         </div>
       </div>
     </div>
@@ -820,13 +1094,29 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
   if (filters.location) badges.push({ key: 'location', label: `Location: ${filters.location}` });
   if (filters.campaign) badges.push({ key: 'campaign', label: `Campaign: ${filters.campaign}` });
   if (filters.productInterest) badges.push({ key: 'productInterest', label: `Product: ${filters.productInterest}` });
-  if (filters.budgetMin) badges.push({ key: 'budgetMin', label: `Budget >= ${filters.budgetMin} AED` });
-  if (filters.budgetMax) badges.push({ key: 'budgetMax', label: `Budget <= ${filters.budgetMax} AED` });
+  if (filters.budgetMin) badges.push({ key: 'budgetMin', label: `Value ≥ ${Number(filters.budgetMin).toLocaleString()} AED` });
+  if (filters.budgetMax) badges.push({ key: 'budgetMax', label: `Value ≤ ${Number(filters.budgetMax).toLocaleString()} AED` });
+  if (filters.minCallCount) badges.push({ key: 'minCallCount', label: filters.minCallCount === '0' && filters.maxCallCount === '0' ? 'Never Called' : `Calls ≥ ${filters.minCallCount}` });
+  if (filters.maxCallCount && !(filters.minCallCount === '0' && filters.maxCallCount === '0')) badges.push({ key: 'maxCallCount', label: `Calls ≤ ${filters.maxCallCount}` });
   if (filters.tags) badges.push({ key: 'tags', label: `Tags: ${filters.tags}` });
   if (filters.hasEmail) badges.push({ key: 'hasEmail', label: `Has Email: ${filters.hasEmail === 'true' ? 'Yes' : 'No'}` });
   if (filters.hasPhone) badges.push({ key: 'hasPhone', label: `Has Phone: ${filters.hasPhone === 'true' ? 'Yes' : 'No'}` });
   if (filters.conversionMin) badges.push({ key: 'conversionMin', label: `Conv >= ${filters.conversionMin}%` });
   if (filters.conversionMax) badges.push({ key: 'conversionMax', label: `Conv <= ${filters.conversionMax}%` });
+  if (filters.callOutcome) {
+    const outcomes = parseMulti(filters.callOutcome);
+    const outcomeLabels = outcomes.map(v => callOutcomeOptions.find(o => o.value === v)?.label || v);
+    badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
+  }
+  if (filters.divisionId) {
+    let divName = filters.divisionId;
+    try {
+      const divs = JSON.parse(localStorage.getItem('divisions') || '[]');
+      const found = divs.find((d: any) => d.id === filters.divisionId);
+      if (found) divName = found.name;
+    } catch { /* ignore */ }
+    badges.push({ key: 'divisionId', label: `Division: ${divName}` });
+  }
 
   if (badges.length === 0) return null;
 

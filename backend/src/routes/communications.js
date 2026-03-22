@@ -6,9 +6,15 @@ const { validate } = require('../middleware/validate');
 const { sendText, sendTemplate } = require('../services/whatsappService');
 const { sendEmail } = require('../services/emailService');
 const { logger } = require('../config/logger');
+const { regenerateLeadSummaryById } = require('../services/aiService');
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+function refreshLeadAISummaryAsync(leadId) {
+  if (!leadId) return;
+  regenerateLeadSummaryById(leadId).catch(() => {});
+}
 
 const communicationSchema = z.object({
   leadId: z.string().uuid(),
@@ -110,7 +116,16 @@ router.post('/', validate(communicationSchema), async (req, res, next) => {
       },
     });
 
+    // Mark first response — any outbound communication counts as attending to the lead
+    if (data.direction === 'OUTBOUND' && !lead.firstRespondedAt) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { firstRespondedAt: new Date(), slaStatus: 'RESPONDED' },
+      });
+    }
+
     res.status(201).json(communication);
+    refreshLeadAISummaryAsync(data.leadId);
   } catch (err) {
     next(err);
   }
@@ -166,6 +181,7 @@ router.post('/send-email', validate(z.object({
     });
 
     res.status(201).json(communication);
+    refreshLeadAISummaryAsync(leadId);
   } catch (err) {
     next(err);
   }

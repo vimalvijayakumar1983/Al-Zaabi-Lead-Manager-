@@ -11,6 +11,7 @@ import React, {
 import { useRouter } from 'next/navigation';
 import { useNotificationStore } from '@/store/notificationStore';
 import type { AppNotification, NotificationType } from '@/types';
+import { premiumAlert, premiumConfirm, premiumPrompt } from '@/lib/premiumDialogs';
 import {
   Bell,
   BellOff,
@@ -49,6 +50,19 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const NOTIFICATION_PAGE_SIZE = 20;
+const SNOOZE_MIN_MINUTES = 5;
+const SNOOZE_MAX_MINUTES = 10080;
+const SNOOZE_PRESETS = [5, 15, 30, 60] as const;
+
+function normalizeSnoozeMinutes(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(
+    SNOOZE_MIN_MINUTES,
+    Math.min(SNOOZE_MAX_MINUTES, Math.floor(value))
+  );
+}
 
 /** Filter tab definitions */
 type FilterTab = 'all' | 'unread' | 'leads' | 'tasks' | 'system';
@@ -72,7 +86,7 @@ const FILTER_TABS: TabDefinition[] = [
   {
     key: 'tasks',
     label: 'Tasks',
-    matcher: (n) => n.type.startsWith('TASK_'),
+    matcher: (n) => n.type.startsWith('TASK_') || n.type.startsWith('CALLBACK_') || n.type === 'NOTIFICATION_ESCALATED',
   },
   {
     key: 'system',
@@ -84,7 +98,8 @@ const FILTER_TABS: TabDefinition[] = [
       n.type.startsWith('DIVISION_') ||
       n.type.startsWith('TEAM_') ||
       n.type.startsWith('CAMPAIGN_') ||
-      n.type.startsWith('AUTOMATION_'),
+          n.type.startsWith('AUTOMATION_') ||
+          n.type.startsWith('NOTIFICATION_'),
   },
 ];
 
@@ -207,6 +222,11 @@ const notificationIcons: Record<string, NotificationIconDef> = {
     color: 'text-red-600',
     bg: 'bg-red-50',
   },
+  NOTIFICATION_ESCALATED: {
+    icon: AlertTriangle,
+    color: 'text-red-600',
+    bg: 'bg-red-50',
+  },
   SYSTEM_ANNOUNCEMENT: {
     icon: Info,
     color: 'text-gray-600',
@@ -321,14 +341,14 @@ function getActorInitials(actor?: AppNotification['actor']): string {
 /** Skeleton placeholder for loading state. */
 function NotificationSkeleton() {
   return (
-    <div className="flex items-start gap-3 px-4 py-3 animate-pulse">
-      <div className="h-9 w-9 rounded-xl bg-gray-200 shrink-0" />
+    <div className="flex items-start gap-3 px-5 py-3.5 animate-pulse">
+      <div className="h-9 w-9 rounded-xl bg-gray-100 shrink-0" />
       <div className="flex-1 space-y-2">
         <div className="flex items-center gap-2">
-          <div className="h-3.5 w-32 rounded bg-gray-200" />
-          <div className="h-3 w-12 rounded bg-gray-100 ml-auto" />
+          <div className="h-3.5 w-32 rounded-md bg-gray-100" />
+          <div className="h-3 w-12 rounded-md bg-gray-50 ml-auto" />
         </div>
-        <div className="h-3 w-48 rounded bg-gray-100" />
+        <div className="h-3 w-48 rounded-md bg-gray-50" />
       </div>
     </div>
   );
@@ -340,7 +360,15 @@ interface NotificationItemProps {
   onRead: (id: string) => void;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onAction: (
+    id: string,
+    action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
+    minutes?: number
+  ) => void;
+  actionBusy: boolean;
   onClick: (n: AppNotification) => void;
+  taskSnoozeMinutes: number;
+  callbackSnoozeMinutes: number;
 }
 
 function NotificationItem({
@@ -348,13 +376,40 @@ function NotificationItem({
   onRead,
   onArchive,
   onDelete,
+  onAction,
+  actionBusy,
   onClick,
+  taskSnoozeMinutes,
+  callbackSnoozeMinutes,
 }: NotificationItemProps) {
   const [showActions, setShowActions] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const iconDef = getNotificationIcon(notification.type);
   const IconComponent = iconDef.icon;
   const hasActor = !!notification.actor;
+  const isTaskEntity = notification.entityType === 'task' && !!notification.entityId;
+  const isTaskNotification =
+    isTaskEntity &&
+    (notification.type.startsWith('TASK_') ||
+      notification.type === 'NOTIFICATION_ESCALATED');
+  const isReminderNotification =
+    notification.type === 'TASK_REMINDER' ||
+    notification.type === 'TASK_DUE_SOON' ||
+    notification.type === 'TASK_OVERDUE' ||
+    notification.type === 'CALLBACK_REMINDER' ||
+    notification.type === 'CALLBACK_REMINDER_HANDOFF' ||
+    (notification.type === 'NOTIFICATION_ESCALATED' && isTaskEntity);
+  const canEscalate = isReminderNotification;
+  const defaultSnoozeMinutes = notification.type.startsWith('CALLBACK_')
+    ? callbackSnoozeMinutes
+    : taskSnoozeMinutes;
+  const [snoozeChoice, setSnoozeChoice] = useState<string>(
+    String(defaultSnoozeMinutes)
+  );
+
+  useEffect(() => {
+    setSnoozeChoice(String(defaultSnoozeMinutes));
+  }, [notification.id, defaultSnoozeMinutes]);
 
   const handleArchive = useCallback(
     (e: React.MouseEvent) => {
@@ -382,6 +437,43 @@ function NotificationItem({
     [notification.id, onRead]
   );
 
+  const handleAction = useCallback(
+    (e: React.MouseEvent, action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE', minutes?: number) => {
+      e.stopPropagation();
+      onAction(notification.id, action, minutes);
+    },
+    [notification.id, onAction]
+  );
+
+  const resolveSnoozeMinutes = useCallback(async () => {
+    if (snoozeChoice !== 'custom') {
+      return normalizeSnoozeMinutes(Number(snoozeChoice), defaultSnoozeMinutes);
+    }
+    const raw = await premiumPrompt({
+      title: 'Custom Snooze Duration',
+      message: `Enter snooze time in minutes (${SNOOZE_MIN_MINUTES}-${SNOOZE_MAX_MINUTES}).`,
+      placeholder: String(defaultSnoozeMinutes),
+      initialValue: String(defaultSnoozeMinutes),
+      confirmText: 'Apply',
+      cancelText: 'Cancel',
+      variant: 'info',
+    });
+    if (raw === null) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      await premiumAlert({
+        title: 'Invalid duration',
+        message: 'Please enter a valid number of minutes.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
+      return null;
+    }
+    const minutes = normalizeSnoozeMinutes(parsed, defaultSnoozeMinutes);
+    setSnoozeChoice(String(minutes));
+    return minutes;
+  }, [snoozeChoice, defaultSnoozeMinutes]);
+
   return (
     <div
       role="button"
@@ -396,21 +488,21 @@ function NotificationItem({
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
       className={`
-        group relative flex items-start gap-3 px-4 py-3 cursor-pointer
-        transition-all duration-200 ease-out
-        ${isRemoving ? 'opacity-0 translate-x-4 max-h-0 py-0 overflow-hidden' : 'opacity-100 translate-x-0 max-h-40'}
-        ${notification.isRead ? 'bg-transparent hover:bg-surface-secondary/60' : 'bg-brand-500/[0.04] hover:bg-brand-500/[0.08]'}
+        group relative flex items-start gap-3 px-5 py-3 cursor-pointer
+        transition-all duration-200 ease-out border-b border-gray-50 last:border-b-0
+        ${isRemoving ? 'opacity-0 -translate-x-2 max-h-0 py-0 overflow-hidden' : 'opacity-100 translate-x-0 max-h-40'}
+        ${notification.isRead
+          ? 'bg-white hover:bg-gray-50/80'
+          : 'bg-brand-500/[0.03] hover:bg-brand-500/[0.07]'}
       `}
     >
-      {/* Unread indicator */}
+      {/* Unread indicator — left accent line */}
       {!notification.isRead && (
-        <div className="absolute left-1.5 top-1/2 -translate-y-1/2">
-          <span className="block h-1.5 w-1.5 rounded-full bg-brand-500 ring-2 ring-brand-500/20" />
-        </div>
+        <div className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full bg-brand-500" />
       )}
 
       {/* Icon / Avatar */}
-      <div className="shrink-0 pt-0.5">
+      <div className="shrink-0 mt-0.5">
         {hasActor && notification.actor?.avatar ? (
           <img
             src={notification.actor.avatar}
@@ -419,7 +511,7 @@ function NotificationItem({
           />
         ) : hasActor ? (
           <div
-            className={`h-9 w-9 rounded-xl ${iconDef.bg} flex items-center justify-center ring-1 ring-black/5`}
+            className={`h-9 w-9 rounded-xl ${iconDef.bg} flex items-center justify-center ring-1 ring-black/[0.06]`}
           >
             <span className={`text-xs font-semibold ${iconDef.color}`}>
               {getActorInitials(notification.actor)}
@@ -427,7 +519,7 @@ function NotificationItem({
           </div>
         ) : (
           <div
-            className={`h-9 w-9 rounded-xl ${iconDef.bg} flex items-center justify-center ring-1 ring-black/5`}
+            className={`h-9 w-9 rounded-xl ${iconDef.bg} flex items-center justify-center ring-1 ring-black/[0.06]`}
           >
             <IconComponent className={`h-4 w-4 ${iconDef.color}`} />
           </div>
@@ -446,43 +538,96 @@ function NotificationItem({
           >
             {notification.title}
           </p>
-          <span className="text-[11px] text-text-tertiary whitespace-nowrap shrink-0 pt-px">
+          <span className="text-[11px] text-text-tertiary whitespace-nowrap shrink-0 pt-0.5 tabular-nums">
             {formatRelativeTime(notification.createdAt)}
           </span>
         </div>
-        <p className="text-[12px] text-text-tertiary leading-relaxed line-clamp-2 mt-0.5">
+        <p className="text-[12px] text-text-tertiary leading-relaxed line-clamp-2 mt-0.5 pr-6">
           {notification.message}
         </p>
+        {(isTaskNotification || isReminderNotification || canEscalate) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {isTaskNotification && (
+              <button
+                onClick={(e) => handleAction(e, 'MARK_DONE')}
+                disabled={actionBusy}
+                className="h-6 px-2 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+              >
+                Done
+              </button>
+            )}
+            {isReminderNotification && (
+              <>
+                <select
+                  value={snoozeChoice}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setSnoozeChoice(e.target.value)}
+                  disabled={actionBusy}
+                  className="h-6 px-1.5 rounded-md text-[10px] font-medium border border-amber-200 bg-white text-amber-800 focus:outline-none focus:ring-1 focus:ring-amber-300 disabled:opacity-50"
+                  aria-label="Select snooze duration"
+                >
+                  {SNOOZE_PRESETS.map((option) => (
+                    <option key={option} value={String(option)}>
+                      {option}m
+                    </option>
+                  ))}
+                  <option value="custom">Custom</option>
+                </select>
+                <button
+                  onClick={async (e) => {
+                    const minutes = await resolveSnoozeMinutes();
+                    if (minutes === null) return;
+                    handleAction(e, 'SNOOZE', minutes);
+                  }}
+                  disabled={actionBusy}
+                  className="h-6 px-2 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50"
+                >
+                  Snooze
+                </button>
+              </>
+            )}
+            {canEscalate && notification.type !== 'NOTIFICATION_ESCALATED' && (
+              <button
+                onClick={(e) => handleAction(e, 'ESCALATE')}
+                disabled={actionBusy}
+                className="h-6 px-2 rounded-md text-[10px] font-semibold bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+              >
+                Escalate
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Hover actions */}
+      {/* Hover actions — slide in from right with glass bg */}
       <div
         className={`
-          absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5
+          absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5
+          bg-white/90 backdrop-blur-sm rounded-lg shadow-sm border border-gray-100 px-0.5 py-0.5
           transition-all duration-150 ease-out
-          ${showActions ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-1 pointer-events-none'}
+          ${showActions ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'}
         `}
       >
         {!notification.isRead && (
           <button
             onClick={handleRead}
             title="Mark as read"
-            className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-colors"
+            className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-text-tertiary hover:text-brand-600 transition-colors"
           >
             <Check className="h-3.5 w-3.5" />
           </button>
         )}
         <button
           onClick={handleArchive}
-          title="Archive"
-          className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-colors"
+          title="Dismiss"
+          className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-gray-100 text-text-tertiary hover:text-text-primary transition-colors"
         >
           <Archive className="h-3.5 w-3.5" />
         </button>
         <button
           onClick={handleDelete}
           title="Delete"
-          className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-red-50 text-text-tertiary hover:text-red-600 transition-colors"
+          className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-red-50 text-text-tertiary hover:text-red-600 transition-colors"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -499,14 +644,14 @@ function EmptyState({
 }) {
   if (variant === 'all-caught-up') {
     return (
-      <div className="flex flex-col items-center justify-center py-16 px-6 text-center animate-fade-in">
-        <div className="h-14 w-14 rounded-2xl bg-green-50 flex items-center justify-center mb-4">
-          <PartyPopper className="h-7 w-7 text-green-500" />
+      <div className="flex flex-col items-center justify-center py-14 px-6 text-center animate-fade-in">
+        <div className="h-12 w-12 rounded-2xl bg-green-50 flex items-center justify-center mb-3 ring-1 ring-green-100">
+          <PartyPopper className="h-6 w-6 text-green-500" />
         </div>
         <p className="text-sm font-semibold text-text-primary mb-1">
-          All caught up! 🎉
+          All caught up!
         </p>
-        <p className="text-xs text-text-tertiary max-w-[220px]">
+        <p className="text-xs text-text-tertiary max-w-[220px] leading-relaxed">
           You&apos;ve read all your notifications. We&apos;ll let you know when
           something new arrives.
         </p>
@@ -516,14 +661,14 @@ function EmptyState({
 
   if (variant === 'no-match') {
     return (
-      <div className="flex flex-col items-center justify-center py-16 px-6 text-center animate-fade-in">
-        <div className="h-14 w-14 rounded-2xl bg-gray-50 flex items-center justify-center mb-4">
-          <Inbox className="h-7 w-7 text-gray-400" />
+      <div className="flex flex-col items-center justify-center py-14 px-6 text-center animate-fade-in">
+        <div className="h-12 w-12 rounded-2xl bg-gray-50 flex items-center justify-center mb-3 ring-1 ring-gray-100">
+          <Inbox className="h-6 w-6 text-gray-400" />
         </div>
         <p className="text-sm font-semibold text-text-primary mb-1">
           No matching notifications
         </p>
-        <p className="text-xs text-text-tertiary max-w-[220px]">
+        <p className="text-xs text-text-tertiary max-w-[220px] leading-relaxed">
           There are no notifications in this category right now.
         </p>
       </div>
@@ -531,14 +676,14 @@ function EmptyState({
   }
 
   return (
-    <div className="flex flex-col items-center justify-center py-16 px-6 text-center animate-fade-in">
-      <div className="h-14 w-14 rounded-2xl bg-surface-secondary flex items-center justify-center mb-4">
-        <BellOff className="h-7 w-7 text-text-tertiary" />
+    <div className="flex flex-col items-center justify-center py-14 px-6 text-center animate-fade-in">
+      <div className="h-12 w-12 rounded-2xl bg-surface-secondary flex items-center justify-center mb-3 ring-1 ring-gray-100">
+        <BellOff className="h-6 w-6 text-text-tertiary" />
       </div>
       <p className="text-sm font-semibold text-text-primary mb-1">
         No notifications yet
       </p>
-      <p className="text-xs text-text-tertiary max-w-[220px]">
+      <p className="text-xs text-text-tertiary max-w-[220px] leading-relaxed">
         When you receive notifications, they&apos;ll show up here. Stay tuned!
       </p>
     </div>
@@ -567,21 +712,34 @@ export default function NotificationCenter({
     unreadCount,
     isLoading,
     isConnected,
+    pagination,
+    preferences,
     fetchNotifications,
     markAsRead,
     markAllAsRead,
+    clearAllNotifications,
     archiveNotification,
     deleteNotification,
+    notificationAction,
   } = useNotificationStore();
+  const taskSnoozeMinutes = normalizeSnoozeMinutes(
+    preferences.defaultTaskSnoozeMinutes,
+    15
+  );
+  const callbackSnoozeMinutes = normalizeSnoozeMinutes(
+    preferences.defaultCallbackSnoozeMinutes,
+    30
+  );
 
   // Local state
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [isMarkingAll, setIsMarkingAll] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+  const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
 
   // ── Mount/unmount animation ───────────────────────────────────────────
 
@@ -605,7 +763,6 @@ export default function NotificationCenter({
       fetchNotifications({ limit: NOTIFICATION_PAGE_SIZE, page: 1 });
       setHasLoadedOnce(true);
       setPage(1);
-      setHasMore(true);
     }
   }, [isOpen, hasLoadedOnce, fetchNotifications]);
 
@@ -613,7 +770,6 @@ export default function NotificationCenter({
 
   useEffect(() => {
     if (!isOpen) return;
-    const tabDef = FILTER_TABS.find((t) => t.key === activeTab);
 
     // For 'unread', fetch with isRead=false; for others just client-side filter
     if (activeTab === 'unread') {
@@ -623,7 +779,6 @@ export default function NotificationCenter({
     }
     // For category tabs (leads/tasks/system) we filter client-side
     setPage(1);
-    setHasMore(true);
     // Scroll to top
     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activeTab, isOpen, fetchNotifications]);
@@ -688,7 +843,12 @@ export default function NotificationCenter({
       leads: notifications.filter(
         (n) => n.type.startsWith('LEAD_') || n.type.startsWith('PIPELINE_')
       ).length,
-      tasks: notifications.filter((n) => n.type.startsWith('TASK_')).length,
+      tasks: notifications.filter(
+        (n) =>
+          n.type.startsWith('TASK_') ||
+          n.type.startsWith('CALLBACK_') ||
+          n.type === 'NOTIFICATION_ESCALATED'
+      ).length,
       system: notifications.filter(
         (n) =>
           n.type.startsWith('SYSTEM_') ||
@@ -697,7 +857,8 @@ export default function NotificationCenter({
           n.type.startsWith('DIVISION_') ||
           n.type.startsWith('TEAM_') ||
           n.type.startsWith('CAMPAIGN_') ||
-          n.type.startsWith('AUTOMATION_')
+          n.type.startsWith('AUTOMATION_') ||
+          n.type.startsWith('NOTIFICATION_')
       ).length,
     };
     return counts;
@@ -710,6 +871,21 @@ export default function NotificationCenter({
     await markAllAsRead();
     setIsMarkingAll(false);
   }, [markAllAsRead]);
+
+  const handleClearAll = useCallback(async () => {
+    if (notifications.length === 0) return;
+    const confirmed = await premiumConfirm({
+      title: 'Clear all notifications?',
+      message: 'This will remove all notifications from your active list.',
+      confirmText: 'Clear all',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    setIsClearingAll(true);
+    await clearAllNotifications();
+    setIsClearingAll(false);
+  }, [notifications.length, clearAllNotifications]);
 
   const handleNotificationClick = useCallback(
     (n: AppNotification) => {
@@ -728,7 +904,7 @@ export default function NotificationCenter({
   );
 
   const handleLoadMore = useCallback(async () => {
-    if (isLoadingMore || !hasMore) return;
+    if (isLoadingMore || !pagination.hasNext) return;
     setIsLoadingMore(true);
     const nextPage = page + 1;
     try {
@@ -738,13 +914,34 @@ export default function NotificationCenter({
         ...(activeTab === 'unread' ? { isRead: false } : {}),
       });
       setPage(nextPage);
-      // If fewer results than page size, we've reached the end
-      // We rely on the store updating `notifications`; if the count hasn't grown much, stop
     } catch {
       // Ignore
     }
     setIsLoadingMore(false);
-  }, [isLoadingMore, hasMore, page, fetchNotifications, activeTab]);
+  }, [isLoadingMore, pagination.hasNext, page, fetchNotifications, activeTab]);
+
+  const handleNotificationAction = useCallback(
+    async (
+      id: string,
+      action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
+      minutes?: number
+    ) => {
+      setActionInFlightId(id);
+      try {
+        await notificationAction(id, action, minutes);
+      } catch (err: any) {
+        await premiumAlert({
+          title: 'Action failed',
+          message: err?.message || 'Failed to perform notification action',
+          confirmText: 'OK',
+          variant: 'danger',
+        });
+      } finally {
+        setActionInFlightId(null);
+      }
+    },
+    [notificationAction]
+  );
 
   const handleViewAll = useCallback(() => {
     router.push('/settings?tab=notifications');
@@ -752,7 +949,7 @@ export default function NotificationCenter({
   }, [router, onClose]);
 
   const handleSettings = useCallback(() => {
-    router.push('/settings?tab=notification-preferences');
+    router.push('/settings?tab=notifications');
     onClose();
   }, [router, onClose]);
 
@@ -764,14 +961,14 @@ export default function NotificationCenter({
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollEl;
-      if (scrollHeight - scrollTop - clientHeight < 80 && hasMore && !isLoadingMore) {
+      if (scrollHeight - scrollTop - clientHeight < 80 && pagination.hasNext && !isLoadingMore) {
         handleLoadMore();
       }
     };
 
     scrollEl.addEventListener('scroll', handleScroll, { passive: true });
     return () => scrollEl.removeEventListener('scroll', handleScroll);
-  }, [isOpen, hasMore, isLoadingMore, handleLoadMore]);
+  }, [isOpen, pagination.hasNext, isLoadingMore, handleLoadMore]);
 
   // ── Don't render if not open ──────────────────────────────────────────
 
@@ -789,68 +986,81 @@ export default function NotificationCenter({
 
   return (
     <>
-      {/* Backdrop overlay (subtle) */}
+      {/* Backdrop overlay — frosty glass for focus */}
       <div
         className={`
-          fixed inset-0 z-40 bg-black/10
+          fixed inset-0 z-40 bg-gray-900/20 backdrop-blur-[2px]
           transition-opacity duration-200
           ${isVisible ? 'opacity-100' : 'opacity-0'}
         `}
+        onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* Panel */}
+      {/* Panel — anchored to top-right of header */}
       <div
         ref={panelRef}
         role="dialog"
         aria-label="Notification Center"
         aria-modal="true"
         className={`
-          fixed top-12 right-4 z-50
-          w-[420px] max-w-[calc(100vw-2rem)]
-          bg-white border border-border-subtle rounded-2xl
-          shadow-float
+          fixed inset-x-2 top-16 z-50
+          sm:inset-x-auto sm:top-[3.75rem] sm:right-3
+          w-auto sm:w-[400px] max-w-[calc(100vw-1rem)] sm:max-w-[calc(100vw-1.5rem)]
+          bg-white rounded-2xl
+          shadow-[0_20px_60px_-10px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.05)]
           flex flex-col
-          max-h-[calc(100vh-5rem)]
-          transition-all duration-200 ease-out origin-top-right
+          max-h-[min(70vh,calc(100vh-5rem))]
+          sm:max-h-[min(580px,calc(100vh-5rem))]
+          transition-all duration-200 ease-out origin-top
+          sm:origin-top-right
           ${isVisible
             ? 'opacity-100 scale-100 translate-y-0'
-            : 'opacity-0 scale-95 -translate-y-1'}
+            : 'opacity-0 scale-[0.97] -translate-y-1'}
         `}
       >
+        {/* Pointer caret anchored to bell icon */}
+        <div className="hidden sm:block absolute -top-[7px] right-[52px] w-3.5 h-3.5 rotate-45 bg-white border-t border-l border-gray-200/80 rounded-tl-[3px] z-10" />
+
         {/* ─── Header ──────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-5 pt-4 pb-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex items-center gap-2">
-              <Bell className="h-4.5 w-4.5 text-text-primary" />
-              <h2 className="text-sm font-semibold text-text-primary">
-                Notifications
-              </h2>
-            </div>
+        <div className="relative z-20 flex items-center justify-between px-5 pt-4 pb-3">
+          <div className="flex items-center gap-2">
+            <Bell className="h-[18px] w-[18px] text-text-primary" />
+            <h2 className="text-[15px] font-semibold text-text-primary tracking-[-0.01em]">
+              Notifications
+            </h2>
             {unreadCount > 0 && (
-              <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-brand-500 text-white text-[10px] font-bold">
+              <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-brand-500 text-white text-[10px] font-bold tabular-nums">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
-            {/* Connection status indicator */}
+            {/* Connection status — minimal dot */}
             <div
-              title={isConnected ? 'Live updates active' : 'Reconnecting…'}
-              className="flex items-center gap-1"
-            >
-              {isConnected ? (
-                <Wifi className="h-3 w-3 text-green-500" />
-              ) : (
-                <WifiOff className="h-3 w-3 text-red-400 animate-pulse" />
-              )}
-            </div>
+              title={isConnected ? 'Live updates active' : 'Reconnecting...'}
+              className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400 animate-pulse'}`}
+            />
           </div>
 
           <div className="flex items-center gap-1">
+            {notifications.length > 0 && (
+              <button
+                onClick={handleClearAll}
+                disabled={isClearingAll}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+              >
+                {isClearingAll ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+                Clear all
+              </button>
+            )}
             {unreadCount > 0 && (
               <button
                 onClick={handleMarkAllRead}
                 disabled={isMarkingAll}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-brand-600 hover:bg-brand-500/10 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-brand-600 hover:bg-brand-50 transition-colors disabled:opacity-50"
               >
                 {isMarkingAll ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -862,7 +1072,7 @@ export default function NotificationCenter({
             )}
             <button
               onClick={onClose}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-colors"
+              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-text-tertiary hover:text-text-primary transition-colors"
               title="Close"
             >
               <X className="h-3.5 w-3.5" />
@@ -870,9 +1080,9 @@ export default function NotificationCenter({
           </div>
         </div>
 
-        {/* ─── Filter Tabs ─────────────────────────────────────────── */}
-        <div className="px-4 pb-2">
-          <div className="flex items-center gap-1 p-0.5 rounded-xl bg-surface-secondary/80">
+        {/* ─── Filter Tabs — pill style ────────────────────────────── */}
+        <div className="px-5 pb-3">
+          <div className="flex items-center gap-1">
             {FILTER_TABS.map((tab) => {
               const isActive = activeTab === tab.key;
               const count = tabCounts[tab.key];
@@ -881,18 +1091,20 @@ export default function NotificationCenter({
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
                   className={`
-                    relative flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium
-                    transition-all duration-150 ease-out flex-1 justify-center
+                    relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium
+                    transition-all duration-150 ease-out whitespace-nowrap
                     ${
                       isActive
-                        ? 'bg-white text-text-primary shadow-sm'
-                        : 'text-text-tertiary hover:text-text-secondary'
+                        ? 'bg-brand-600 text-white shadow-sm'
+                        : 'bg-gray-50 text-text-secondary hover:bg-gray-100 hover:text-text-primary'
                     }
                   `}
                 >
                   {tab.label}
-                  {count > 0 && !isActive && (
-                    <span className="text-[10px] text-text-tertiary">
+                  {count > 0 && (
+                    <span className={`text-[10px] font-semibold tabular-nums ${
+                      isActive ? 'text-white/80' : 'text-text-tertiary'
+                    }`}>
                       {count}
                     </span>
                   )}
@@ -903,17 +1115,16 @@ export default function NotificationCenter({
         </div>
 
         {/* ─── Divider ─────────────────────────────────────────────── */}
-        <div className="h-px bg-border-subtle" />
+        <div className="h-px bg-gradient-to-r from-transparent via-gray-200 to-transparent mx-4" />
 
         {/* ─── Notification List ───────────────────────────────────── */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto overscroll-contain min-h-0"
-          style={{ maxHeight: 'calc(100vh - 16rem)' }}
+          className="flex-1 overflow-y-auto overscroll-contain min-h-0 scrollbar-thin"
         >
           {/* Loading state */}
-          {isLoading && !hasLoadedOnce && (
-            <div className="divide-y divide-border-subtle/60">
+          {isLoading && notifications.length === 0 && (
+            <div>
               {Array.from({ length: 5 }).map((_, i) => (
                 <NotificationSkeleton key={i} />
               ))}
@@ -927,25 +1138,29 @@ export default function NotificationCenter({
 
           {/* Notifications grouped by date */}
           {!isLoading && filteredNotifications.length > 0 && (
-            <div className="pb-1">
+            <div>
               {groupedNotifications.map((group) => (
                 <Fragment key={group.label}>
-                  {/* Date group header */}
-                  <div className="sticky top-0 z-10 px-4 py-2 bg-white/95 backdrop-blur-sm">
+                  {/* Date group header — sticky with frosted glass */}
+                  <div className="sticky top-0 z-10 px-5 py-2 bg-white/90 backdrop-blur-md border-b border-gray-50">
                     <span className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">
                       {group.label}
                     </span>
                   </div>
 
                   {/* Notification items */}
-                  {group.items.map((notif, idx) => (
+                  {group.items.map((notif) => (
                     <NotificationItem
                       key={notif.id}
                       notification={notif}
                       onRead={markAsRead}
                       onArchive={archiveNotification}
                       onDelete={deleteNotification}
+                      onAction={handleNotificationAction}
+                      actionBusy={actionInFlightId === notif.id}
                       onClick={handleNotificationClick}
+                      taskSnoozeMinutes={taskSnoozeMinutes}
+                      callbackSnoozeMinutes={callbackSnoozeMinutes}
                     />
                   ))}
                 </Fragment>
@@ -956,13 +1171,13 @@ export default function NotificationCenter({
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-4 w-4 animate-spin text-text-tertiary" />
                   <span className="ml-2 text-xs text-text-tertiary">
-                    Loading more…
+                    Loading more...
                   </span>
                 </div>
               )}
 
               {/* End of list */}
-              {!hasMore && filteredNotifications.length > NOTIFICATION_PAGE_SIZE && (
+              {!pagination.hasNext && filteredNotifications.length > NOTIFICATION_PAGE_SIZE && (
                 <div className="flex items-center justify-center py-4">
                   <span className="text-[11px] text-text-tertiary">
                     You&apos;ve seen all notifications
@@ -973,19 +1188,20 @@ export default function NotificationCenter({
           )}
         </div>
 
-        {/* ─── Footer ──────────────────────────────────────────────── */}
-        <div className="border-t border-border-subtle">
-          <div className="flex items-center divide-x divide-border-subtle">
+        {/* ─── Footer — clean with subtle divider ──────────────────── */}
+        <div className="border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+          <div className="flex items-center">
             <button
               onClick={handleViewAll}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-secondary/60 transition-colors rounded-bl-2xl"
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-[12px] font-medium text-text-secondary hover:text-brand-600 hover:bg-brand-50/50 transition-colors rounded-bl-2xl"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               View all notifications
             </button>
+            <div className="w-px h-5 bg-gray-200" />
             <button
               onClick={handleSettings}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 text-[12px] font-medium text-text-secondary hover:text-text-primary hover:bg-surface-secondary/60 transition-colors rounded-br-2xl"
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-[12px] font-medium text-text-secondary hover:text-brand-600 hover:bg-brand-50/50 transition-colors rounded-br-2xl"
             >
               <Settings className="h-3.5 w-3.5" />
               Notification settings

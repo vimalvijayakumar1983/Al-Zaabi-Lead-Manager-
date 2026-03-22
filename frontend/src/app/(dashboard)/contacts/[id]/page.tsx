@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import type { Contact, Deal } from '@/types';
+import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
 import {
   ArrowLeft, Mail, Phone, Building2, MapPin, Globe, Linkedin,
   Twitter, Calendar, User2, Clock, Tag, Edit3, Trash2, Plus,
@@ -74,14 +75,26 @@ export default function ContactDetailPage() {
       setNoteText('');
       fetchContact();
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Unable to add note',
+        message: err.message || 'Something went wrong while adding note.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setAddingNote(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!confirm('Archive this contact?')) return;
+    const confirmed = await premiumConfirm({
+      title: 'Delete this contact?',
+      message: 'The contact will move to Recycle Bin and can be restored within 60 days.',
+      confirmText: 'Move to Recycle Bin',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     await api.deleteContact(contact!.id);
     router.push('/contacts');
   };
@@ -444,7 +457,12 @@ function DealForm({ contactId, onClose, onCreated }: { contactId: string; onClos
       });
       onCreated();
     } catch (err: any) {
-      alert(err.message);
+      await premiumAlert({
+        title: 'Unable to save changes',
+        message: err.message || 'Please review the form and try again.',
+        confirmText: 'OK',
+        variant: 'danger',
+      });
     } finally {
       setSaving(false);
     }
