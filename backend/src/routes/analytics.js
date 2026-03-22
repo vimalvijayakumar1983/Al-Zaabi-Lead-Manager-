@@ -91,6 +91,8 @@ const CALL_DISPOSITION_LABELS = {
 };
 
 const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
+const ACTIVE_PIPELINE_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION'];
+const PIPELINE_STATUS_ORDER = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST'];
 
 function parseMetadata(value) {
   if (!value) return {};
@@ -100,6 +102,61 @@ function parseMetadata(value) {
   } catch {
     return {};
   }
+}
+
+function normalizeProbability(rawProb, status) {
+  if (typeof rawProb === 'number' && Number.isFinite(rawProb)) {
+    const normalized = rawProb > 1 ? rawProb / 100 : rawProb;
+    return Math.min(1, Math.max(0, normalized));
+  }
+  const defaults = {
+    NEW: 0.1,
+    CONTACTED: 0.25,
+    QUALIFIED: 0.5,
+    PROPOSAL_SENT: 0.7,
+    NEGOTIATION: 0.85,
+    WON: 1,
+    LOST: 0,
+  };
+  return defaults[status] ?? 0.25;
+}
+
+function toNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function median(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const sorted = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (sorted.length === 0) return 0;
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  }
+  return Math.round(sorted[mid]);
+}
+
+function getMonthlyCohortKey(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return 'Unknown';
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function extractMonthlyTargetFromSettings(settings) {
+  const data = parseMetadata(settings);
+  const candidates = [
+    data?.reportTargets?.monthlyRevenueTarget,
+    data?.reporting?.monthlyRevenueTarget,
+    data?.targets?.monthlyRevenueTarget,
+    data?.targets?.monthlyRevenue,
+    data?.salesTargets?.monthlyRevenueTarget,
+  ];
+  for (const candidate of candidates) {
+    const numeric = toNumber(candidate, NaN);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
 }
 
 // ─── Dashboard Overview ──────────────────────────────────────────
@@ -782,6 +839,711 @@ router.get('/call-disposition-report', async (req, res, next) => {
     // If period is empty, return all-time scoped report instead of blank zeros.
     const fallbackReport = await buildReport(scopedBaseWhere, { periodFallback: true, fallbackReason: 'NO_CALLS_IN_SELECTED_PERIOD' });
     return res.json(fallbackReport);
+  } catch (err) { next(err); }
+});
+
+// ─── Pipeline Forecast & Health Report (Phase B) ─────────────────
+router.get('/pipeline-forecast-report', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d' } = req.query;
+    const { now, start, prevStart, prevEnd } = getPeriodDates(period);
+    const leadScope = getLeadWhere(req, divisionId);
+
+    const [activeLeads, curActive, prevActive, wonPeriodCount, prevWonCount, lostPeriodCount, wonPeriodRows] = await Promise.all([
+      prisma.lead.findMany({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES } },
+        select: {
+          id: true,
+          status: true,
+          budget: true,
+          conversionProb: true,
+          createdAt: true,
+          updatedAt: true,
+          stageId: true,
+          stage: { select: { id: true, name: true, color: true, order: true } },
+          assignedToId: true,
+          assignedTo: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES }, createdAt: { gte: start } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES }, createdAt: { gte: prevStart, lt: prevEnd } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: start } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } },
+      }),
+      prisma.lead.count({
+        where: { ...leadScope, status: 'LOST', updatedAt: { gte: start } },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: start } },
+        select: { budget: true, createdAt: true, wonAt: true, updatedAt: true },
+      }),
+    ]);
+
+    const staleThresholdDays = 14;
+    const stageMap = new Map();
+    const ageBuckets = [
+      { bucket: '0-7 days', count: 0, pipelineValue: 0, weightedValue: 0 },
+      { bucket: '8-14 days', count: 0, pipelineValue: 0, weightedValue: 0 },
+      { bucket: '15-30 days', count: 0, pipelineValue: 0, weightedValue: 0 },
+      { bucket: '31+ days', count: 0, pipelineValue: 0, weightedValue: 0 },
+    ];
+    const ownerMap = new Map();
+
+    let activePipelineValue = 0;
+    let weightedPipelineValue = 0;
+    let staleActiveLeads = 0;
+
+    for (const lead of activeLeads) {
+      const budget = Number(lead.budget || 0);
+      const probability = normalizeProbability(lead.conversionProb, lead.status);
+      const weighted = budget * probability;
+      const ageDays = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(lead.createdAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+      const staleDays = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(lead.updatedAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+
+      activePipelineValue += budget;
+      weightedPipelineValue += weighted;
+      if (staleDays > staleThresholdDays) staleActiveLeads += 1;
+
+      const stageLabel = lead.stage?.name || lead.status.replace(/_/g, ' ');
+      const stageKey = stageLabel.trim().toLowerCase();
+      if (!stageMap.has(stageKey)) {
+        stageMap.set(stageKey, {
+          stage: stageLabel,
+          color: lead.stage?.color || '#6366f1',
+          order: lead.stage?.order ?? 9999,
+          count: 0,
+          pipelineValue: 0,
+          weightedValue: 0,
+          totalProbability: 0,
+          totalAgeDays: 0,
+          stageIds: new Set(),
+          statusHints: new Set(),
+        });
+      }
+      const stageRow = stageMap.get(stageKey);
+      stageRow.count += 1;
+      stageRow.pipelineValue += budget;
+      stageRow.weightedValue += weighted;
+      stageRow.totalProbability += probability;
+      stageRow.totalAgeDays += ageDays;
+      if (lead.stageId) stageRow.stageIds.add(lead.stageId);
+      if (lead.status) stageRow.statusHints.add(lead.status);
+
+      if (ageDays <= 7) {
+        ageBuckets[0].count += 1;
+        ageBuckets[0].pipelineValue += budget;
+        ageBuckets[0].weightedValue += weighted;
+      } else if (ageDays <= 14) {
+        ageBuckets[1].count += 1;
+        ageBuckets[1].pipelineValue += budget;
+        ageBuckets[1].weightedValue += weighted;
+      } else if (ageDays <= 30) {
+        ageBuckets[2].count += 1;
+        ageBuckets[2].pipelineValue += budget;
+        ageBuckets[2].weightedValue += weighted;
+      } else {
+        ageBuckets[3].count += 1;
+        ageBuckets[3].pipelineValue += budget;
+        ageBuckets[3].weightedValue += weighted;
+      }
+
+      const ownerKey = lead.assignedToId || 'unassigned';
+      if (!ownerMap.has(ownerKey)) {
+        ownerMap.set(ownerKey, {
+          assigneeId: lead.assignedToId || null,
+          assigneeName: lead.assignedTo ? getDisplayName(lead.assignedTo) : 'Unassigned',
+          count: 0,
+          pipelineValue: 0,
+          weightedValue: 0,
+        });
+      }
+      const ownerRow = ownerMap.get(ownerKey);
+      ownerRow.count += 1;
+      ownerRow.pipelineValue += budget;
+      ownerRow.weightedValue += weighted;
+    }
+
+    const stageForecast = Array.from(stageMap.values())
+      .map((row) => ({
+        stage: row.stage,
+        color: row.color,
+        count: row.count,
+        pipelineValue: Math.round(row.pipelineValue),
+        weightedValue: Math.round(row.weightedValue),
+        avgProbability: row.count > 0 ? Math.round((row.totalProbability / row.count) * 10000) / 100 : 0,
+        avgAgeDays: row.count > 0 ? Math.round(row.totalAgeDays / row.count) : 0,
+        stageIds: Array.from(row.stageIds),
+        statusHints: Array.from(row.statusHints),
+      }))
+      .sort((a, b) => a.avgAgeDays - b.avgAgeDays || b.weightedValue - a.weightedValue);
+
+    const ownerForecast = Array.from(ownerMap.values())
+      .map((row) => ({
+        ...row,
+        pipelineValue: Math.round(row.pipelineValue),
+        weightedValue: Math.round(row.weightedValue),
+      }))
+      .sort((a, b) => b.weightedValue - a.weightedValue)
+      .slice(0, 15);
+
+    const wonRevenueInPeriod = Math.round(
+      wonPeriodRows.reduce((sum, row) => sum + Number(row.budget || 0), 0)
+    );
+    const avgSalesCycleDays = wonPeriodRows.length > 0
+      ? Math.round(
+        wonPeriodRows.reduce((sum, row) => {
+          const endDate = row.wonAt || row.updatedAt || row.createdAt;
+          const days = Math.max(
+            0,
+            (new Date(endDate).getTime() - new Date(row.createdAt).getTime()) / (24 * 60 * 60 * 1000)
+          );
+          return sum + days;
+        }, 0) / wonPeriodRows.length
+      )
+      : 0;
+
+    const closedInPeriod = wonPeriodCount + lostPeriodCount;
+    const winRate = closedInPeriod > 0 ? Math.round((wonPeriodCount / closedInPeriod) * 10000) / 100 : 0;
+
+    res.json({
+      summary: {
+        activeLeads: activeLeads.length,
+        activePipelineValue: Math.round(activePipelineValue),
+        weightedPipelineValue: Math.round(weightedPipelineValue),
+        forecastCoverageRatio: activePipelineValue > 0
+          ? Math.round((weightedPipelineValue / activePipelineValue) * 10000) / 100
+          : 0,
+        wonRevenueInPeriod,
+        avgSalesCycleDays,
+        staleActiveLeads,
+        staleThresholdDays,
+        winRate,
+      },
+      momentum: {
+        activeLeadsCurrent: curActive,
+        activeLeadsPrevious: prevActive,
+        activeLeadsGrowth: pctChange(curActive, prevActive),
+        wonCurrent: wonPeriodCount,
+        wonPrevious: prevWonCount,
+        wonGrowth: pctChange(wonPeriodCount, prevWonCount),
+      },
+      stageForecast,
+      ageBuckets: ageBuckets.map((bucket) => ({
+        ...bucket,
+        pipelineValue: Math.round(bucket.pipelineValue),
+        weightedValue: Math.round(bucket.weightedValue),
+      })),
+      ownerForecast,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── World-Class Phase 1 Reports ──────────────────────────────────
+router.get('/phase1-report', async (req, res, next) => {
+  try {
+    const { divisionId, period = '30d', targetRevenue } = req.query;
+    const { now, start, prevStart, prevEnd, days } = getPeriodDates(period);
+    const leadScope = getLeadWhere(req, divisionId);
+    const orgFilter = getOrgFilter(req, divisionId);
+
+    const periodLeadSelect = {
+      id: true,
+      status: true,
+      source: true,
+      budget: true,
+      conversionProb: true,
+      createdAt: true,
+      updatedAt: true,
+      wonAt: true,
+      firstRespondedAt: true,
+      slaStatus: true,
+      stageId: true,
+      stage: { select: { id: true, name: true, order: true, color: true } },
+      assignedToId: true,
+      assignedTo: { select: { id: true, firstName: true, lastName: true } },
+    };
+
+    const [organizations, activeLeads, periodLeads, prevPeriodLeads, wonInPeriodRows, wonInPrevPeriodRows] = await Promise.all([
+      prisma.organization.findMany({
+        where: { id: orgFilter },
+        select: { id: true, name: true, tradeName: true, settings: true },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, status: { in: ACTIVE_PIPELINE_STATUSES } },
+        select: {
+          id: true,
+          status: true,
+          source: true,
+          budget: true,
+          conversionProb: true,
+          createdAt: true,
+          updatedAt: true,
+          stageId: true,
+          stage: { select: { id: true, name: true, order: true, color: true } },
+          assignedToId: true,
+          assignedTo: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, createdAt: { gte: start } },
+        select: periodLeadSelect,
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, createdAt: { gte: prevStart, lt: prevEnd } },
+        select: periodLeadSelect,
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: start } },
+        select: { id: true, budget: true },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadScope, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } },
+        select: { id: true, budget: true },
+      }),
+    ]);
+
+    // Revenue Forecast vs Target
+    const targetFromQuery = toNumber(targetRevenue, NaN);
+    const configuredMonthlyTarget = Number.isFinite(targetFromQuery) && targetFromQuery > 0
+      ? targetFromQuery
+      : organizations.reduce((sum, org) => sum + extractMonthlyTargetFromSettings(org.settings), 0);
+    const targetRevenueInPeriod = configuredMonthlyTarget > 0
+      ? Math.round(configuredMonthlyTarget * (days / 30))
+      : 0;
+
+    let activePipelineValue = 0;
+    let expectedRevenue = 0;
+    let commitRevenue = 0;
+    let bestCaseRevenue = 0;
+
+    const stageVelocityMap = new Map();
+    for (const lead of activeLeads) {
+      const budget = Number(lead.budget || 0);
+      const probability = normalizeProbability(lead.conversionProb, lead.status);
+      const weighted = budget * probability;
+      const ageDays = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(lead.createdAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+      const staleDays = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(lead.updatedAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+
+      activePipelineValue += budget;
+      expectedRevenue += weighted;
+      if (probability >= 0.75) commitRevenue += budget;
+      if (probability >= 0.5) bestCaseRevenue += budget;
+
+      const stageLabel = lead.stage?.name || lead.status.replace(/_/g, ' ');
+      const stageKey = stageLabel.trim().toLowerCase();
+      if (!stageVelocityMap.has(stageKey)) {
+        stageVelocityMap.set(stageKey, {
+          stage: stageLabel,
+          order: Number.isFinite(lead.stage?.order) ? lead.stage.order : PIPELINE_STATUS_ORDER.indexOf(lead.status),
+          color: lead.stage?.color || '#6366f1',
+          count: 0,
+          pipelineValue: 0,
+          weightedValue: 0,
+          totalProbability: 0,
+          ageDaysList: [],
+          staleCount: 0,
+          stageIds: new Set(),
+          statusHints: new Set(),
+        });
+      }
+      const row = stageVelocityMap.get(stageKey);
+      row.count += 1;
+      row.pipelineValue += budget;
+      row.weightedValue += weighted;
+      row.totalProbability += probability;
+      row.ageDaysList.push(ageDays);
+      if (staleDays > 14) row.staleCount += 1;
+      if (lead.stageId) row.stageIds.add(lead.stageId);
+      if (lead.status) row.statusHints.add(lead.status);
+    }
+
+    const attainmentPct = targetRevenueInPeriod > 0
+      ? Math.round((expectedRevenue / targetRevenueInPeriod) * 10000) / 100
+      : 0;
+    const gapToTarget = targetRevenueInPeriod > 0
+      ? Math.max(0, Math.round(targetRevenueInPeriod - expectedRevenue))
+      : 0;
+    const wonRevenueCurrent = Math.round(wonInPeriodRows.reduce((sum, row) => sum + Number(row.budget || 0), 0));
+    const wonRevenuePrevious = Math.round(wonInPrevPeriodRows.reduce((sum, row) => sum + Number(row.budget || 0), 0));
+
+    const revenueForecast = {
+      summary: {
+        targetRevenue: targetRevenueInPeriod,
+        expectedRevenue: Math.round(expectedRevenue),
+        commitRevenue: Math.round(commitRevenue),
+        bestCaseRevenue: Math.round(bestCaseRevenue),
+        activePipelineValue: Math.round(activePipelineValue),
+        weightedCoverageRatio: activePipelineValue > 0
+          ? Math.round((expectedRevenue / activePipelineValue) * 10000) / 100
+          : 0,
+        attainmentPct,
+        gapToTarget,
+      },
+      trend: {
+        wonRevenueCurrent,
+        wonRevenuePrevious,
+        wonRevenueGrowth: pctChange(wonRevenueCurrent, wonRevenuePrevious),
+      },
+      targetMeta: {
+        targetSource: Number.isFinite(targetFromQuery) && targetFromQuery > 0 ? 'query' : 'organization_settings',
+        monthlyTargetConfigured: Math.round(configuredMonthlyTarget),
+      },
+    };
+
+    // Cohort Conversion (monthly cohorts)
+    const qualifiedStatuses = new Set(['QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON']);
+    const cohortMap = new Map();
+    for (const lead of periodLeads) {
+      const cohort = getMonthlyCohortKey(lead.createdAt);
+      if (!cohortMap.has(cohort)) {
+        cohortMap.set(cohort, {
+          cohort,
+          created: 0,
+          contacted: 0,
+          qualified: 0,
+          won: 0,
+          lost: 0,
+          cycleDays: [],
+        });
+      }
+      const row = cohortMap.get(cohort);
+      row.created += 1;
+      if (lead.status !== 'NEW') row.contacted += 1;
+      if (qualifiedStatuses.has(lead.status)) row.qualified += 1;
+      if (lead.status === 'WON') {
+        row.won += 1;
+        const wonAt = lead.wonAt || lead.updatedAt;
+        const daysToWin = Math.max(
+          0,
+          (new Date(wonAt).getTime() - new Date(lead.createdAt).getTime()) / (24 * 60 * 60 * 1000)
+        );
+        row.cycleDays.push(daysToWin);
+      }
+      if (lead.status === 'LOST') row.lost += 1;
+    }
+
+    const cohorts = Array.from(cohortMap.values())
+      .sort((a, b) => a.cohort.localeCompare(b.cohort))
+      .map((row) => ({
+        cohort: row.cohort,
+        created: row.created,
+        contactedRate: row.created > 0 ? Math.round((row.contacted / row.created) * 10000) / 100 : 0,
+        qualifiedRate: row.created > 0 ? Math.round((row.qualified / row.created) * 10000) / 100 : 0,
+        wonRate: row.created > 0 ? Math.round((row.won / row.created) * 10000) / 100 : 0,
+        lostRate: row.created > 0 ? Math.round((row.lost / row.created) * 10000) / 100 : 0,
+        avgSalesCycleDays: row.cycleDays.length > 0
+          ? Math.round(row.cycleDays.reduce((sum, value) => sum + value, 0) / row.cycleDays.length)
+          : 0,
+      }));
+
+    const cohortConversion = {
+      granularity: 'monthly',
+      cohorts,
+      summary: {
+        totalLeads: periodLeads.length,
+        cohorts: cohorts.length,
+      },
+    };
+
+    // Pipeline Velocity
+    const velocityStages = Array.from(stageVelocityMap.values())
+      .map((row) => ({
+        stage: row.stage,
+        color: row.color,
+        count: row.count,
+        pipelineValue: Math.round(row.pipelineValue),
+        weightedValue: Math.round(row.weightedValue),
+        avgProbability: row.count > 0 ? Math.round((row.totalProbability / row.count) * 10000) / 100 : 0,
+        medianAgeDays: median(row.ageDaysList),
+        avgAgeDays: row.count > 0
+          ? Math.round(row.ageDaysList.reduce((sum, value) => sum + value, 0) / row.count)
+          : 0,
+        staleRate: row.count > 0 ? Math.round((row.staleCount / row.count) * 10000) / 100 : 0,
+        stageIds: Array.from(row.stageIds),
+        statusHints: Array.from(row.statusHints),
+        order: Number.isFinite(row.order) && row.order >= 0 ? row.order : 999,
+      }))
+      .sort((a, b) => a.order - b.order || b.pipelineValue - a.pipelineValue);
+
+    for (let i = 0; i < velocityStages.length; i += 1) {
+      if (i === 0) {
+        velocityStages[i].conversionFromPrev = 100;
+      } else {
+        const prev = velocityStages[i - 1].count;
+        velocityStages[i].conversionFromPrev = prev > 0
+          ? Math.round((velocityStages[i].count / prev) * 10000) / 100
+          : 0;
+      }
+      delete velocityStages[i].order;
+    }
+
+    const bottlenecks = velocityStages
+      .filter((row) => row.medianAgeDays >= 14 || row.staleRate >= 35 || row.conversionFromPrev <= 35)
+      .slice(0, 5)
+      .map((row) => ({
+        stage: row.stage,
+        medianAgeDays: row.medianAgeDays,
+        staleRate: row.staleRate,
+        conversionFromPrev: row.conversionFromPrev,
+        reason: row.medianAgeDays >= 14
+          ? 'High median lead age'
+          : row.staleRate >= 35
+            ? 'High stale lead rate'
+            : 'Low stage conversion',
+      }));
+
+    const pipelineVelocity = {
+      summary: {
+        activeLeads: activeLeads.length,
+        avgStageMedianAgeDays: velocityStages.length > 0
+          ? Math.round(velocityStages.reduce((sum, row) => sum + row.medianAgeDays, 0) / velocityStages.length)
+          : 0,
+        staleActiveLeadRate: activeLeads.length > 0
+          ? Math.round((velocityStages.reduce((sum, row) => sum + Math.round((row.staleRate / 100) * row.count), 0) / activeLeads.length) * 10000) / 100
+          : 0,
+      },
+      stages: velocityStages,
+      bottlenecks,
+    };
+
+    // SLA Root Cause
+    const breachedSet = new Set(['BREACHED', 'ESCALATED']);
+    const breachedPeriodLeads = periodLeads.filter((lead) => breachedSet.has(lead.slaStatus));
+    const breachedLeadIds = new Set(breachedPeriodLeads.map((lead) => lead.id));
+
+    const responseDelayBuckets = [
+      { bucket: '0-15 min', count: 0 },
+      { bucket: '16-60 min', count: 0 },
+      { bucket: '1-4 hours', count: 0 },
+      { bucket: '4-24 hours', count: 0 },
+      { bucket: '24+ hours', count: 0 },
+    ];
+    let totalFirstResponseMs = 0;
+    let firstResponseSamples = 0;
+    for (const lead of periodLeads) {
+      if (!lead.firstRespondedAt) continue;
+      const delayMs = Math.max(0, new Date(lead.firstRespondedAt).getTime() - new Date(lead.createdAt).getTime());
+      const delayMinutes = delayMs / (1000 * 60);
+      totalFirstResponseMs += delayMs;
+      firstResponseSamples += 1;
+
+      if (delayMinutes <= 15) responseDelayBuckets[0].count += 1;
+      else if (delayMinutes <= 60) responseDelayBuckets[1].count += 1;
+      else if (delayMinutes <= 240) responseDelayBuckets[2].count += 1;
+      else if (delayMinutes <= 1440) responseDelayBuckets[3].count += 1;
+      else responseDelayBuckets[4].count += 1;
+    }
+
+    const sourceMap = new Map();
+    const stageMap = new Map();
+    const ownerMap = new Map();
+    for (const lead of periodLeads) {
+      const breached = breachedLeadIds.has(lead.id);
+
+      const sourceKey = lead.source || 'UNKNOWN';
+      if (!sourceMap.has(sourceKey)) sourceMap.set(sourceKey, { source: sourceKey, total: 0, breached: 0 });
+      const sourceRow = sourceMap.get(sourceKey);
+      sourceRow.total += 1;
+      if (breached) sourceRow.breached += 1;
+
+      const stageLabel = lead.stage?.name || lead.status.replace(/_/g, ' ');
+      const stageKey = stageLabel.trim().toLowerCase();
+      if (!stageMap.has(stageKey)) {
+        stageMap.set(stageKey, {
+          stage: stageLabel,
+          total: 0,
+          breached: 0,
+          stageIds: new Set(),
+          statusHints: new Set(),
+        });
+      }
+      const stageRow = stageMap.get(stageKey);
+      stageRow.total += 1;
+      if (breached) stageRow.breached += 1;
+      if (lead.stageId) stageRow.stageIds.add(lead.stageId);
+      if (lead.status) stageRow.statusHints.add(lead.status);
+
+      const ownerKey = lead.assignedToId || 'unassigned';
+      if (!ownerMap.has(ownerKey)) {
+        ownerMap.set(ownerKey, {
+          assigneeId: lead.assignedToId || null,
+          assigneeName: lead.assignedTo ? getDisplayName(lead.assignedTo) : 'Unassigned',
+          total: 0,
+          breached: 0,
+        });
+      }
+      const ownerRow = ownerMap.get(ownerKey);
+      ownerRow.total += 1;
+      if (breached) ownerRow.breached += 1;
+    }
+
+    const bySource = Array.from(sourceMap.values())
+      .map((row) => ({
+        source: row.source,
+        total: row.total,
+        breached: row.breached,
+        breachRate: row.total > 0 ? Math.round((row.breached / row.total) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.breachRate - a.breachRate || b.breached - a.breached);
+
+    const byStage = Array.from(stageMap.values())
+      .map((row) => ({
+        stage: row.stage,
+        total: row.total,
+        breached: row.breached,
+        breachRate: row.total > 0 ? Math.round((row.breached / row.total) * 10000) / 100 : 0,
+        stageIds: Array.from(row.stageIds),
+        statusHints: Array.from(row.statusHints),
+      }))
+      .sort((a, b) => b.breachRate - a.breachRate || b.breached - a.breached);
+
+    const byOwner = Array.from(ownerMap.values())
+      .map((row) => ({
+        ...row,
+        breachRate: row.total > 0 ? Math.round((row.breached / row.total) * 10000) / 100 : 0,
+      }))
+      .sort((a, b) => b.breachRate - a.breachRate || b.breached - a.breached)
+      .slice(0, 15);
+
+    const topDrivers = [];
+    const addDriver = (label, row) => {
+      if (!row || row.total < 3 || row.breachRate <= 0) return;
+      topDrivers.push({
+        driver: label,
+        item: row.source || row.stage || row.assigneeName || 'Unknown',
+        breachRate: row.breachRate,
+        breached: row.breached,
+        total: row.total,
+      });
+    };
+    addDriver('Source', bySource[0]);
+    addDriver('Stage', byStage[0]);
+    addDriver('Owner', byOwner[0]);
+
+    const slaRootCause = {
+      summary: {
+        periodLeads: periodLeads.length,
+        breachedLeads: breachedPeriodLeads.length,
+        breachRate: periodLeads.length > 0
+          ? Math.round((breachedPeriodLeads.length / periodLeads.length) * 10000) / 100
+          : 0,
+        avgFirstResponseHours: firstResponseSamples > 0
+          ? Math.round((totalFirstResponseMs / firstResponseSamples) / (1000 * 60 * 60) * 100) / 100
+          : 0,
+      },
+      responseDelayBuckets,
+      bySource,
+      byStage,
+      byOwner,
+      topDrivers,
+    };
+
+    const summarizePeriodWindow = (leads) => {
+      const total = Array.isArray(leads) ? leads.length : 0;
+      if (!total) {
+        return {
+          totalLeads: 0,
+          breachedLeads: 0,
+          breachRate: 0,
+          avgFirstResponseHours: 0,
+          qualifiedRate: 0,
+          wonRate: 0,
+        };
+      }
+      let breached = 0;
+      let responseSamples = 0;
+      let responseMsTotal = 0;
+      let qualified = 0;
+      let won = 0;
+
+      for (const lead of leads) {
+        if (breachedSet.has(lead.slaStatus)) breached += 1;
+        if (qualifiedStatuses.has(lead.status)) qualified += 1;
+        if (lead.status === 'WON') won += 1;
+        if (lead.firstRespondedAt) {
+          const delayMs = Math.max(0, new Date(lead.firstRespondedAt).getTime() - new Date(lead.createdAt).getTime());
+          responseMsTotal += delayMs;
+          responseSamples += 1;
+        }
+      }
+
+      return {
+        totalLeads: total,
+        breachedLeads: breached,
+        breachRate: Math.round((breached / total) * 10000) / 100,
+        avgFirstResponseHours: responseSamples > 0
+          ? Math.round((responseMsTotal / responseSamples) / (1000 * 60 * 60) * 100) / 100
+          : 0,
+        qualifiedRate: Math.round((qualified / total) * 10000) / 100,
+        wonRate: Math.round((won / total) * 10000) / 100,
+      };
+    };
+
+    const currentPeriodSummary = summarizePeriodWindow(periodLeads);
+    const previousPeriodSummary = summarizePeriodWindow(prevPeriodLeads);
+    const roundDelta = (cur, prev) => Math.round((toNumber(cur) - toNumber(prev)) * 100) / 100;
+    const executiveComparison = {
+      currentPeriod: {
+        start: start.toISOString(),
+        end: now.toISOString(),
+      },
+      previousPeriod: {
+        start: prevStart.toISOString(),
+        end: prevEnd.toISOString(),
+      },
+      wonRevenue: {
+        current: wonRevenueCurrent,
+        previous: wonRevenuePrevious,
+        growth: pctChange(wonRevenueCurrent, wonRevenuePrevious),
+      },
+      slaBreachRate: {
+        current: currentPeriodSummary.breachRate,
+        previous: previousPeriodSummary.breachRate,
+        delta: roundDelta(currentPeriodSummary.breachRate, previousPeriodSummary.breachRate),
+      },
+      firstResponseHours: {
+        current: currentPeriodSummary.avgFirstResponseHours,
+        previous: previousPeriodSummary.avgFirstResponseHours,
+        delta: roundDelta(currentPeriodSummary.avgFirstResponseHours, previousPeriodSummary.avgFirstResponseHours),
+      },
+      qualifiedRate: {
+        current: currentPeriodSummary.qualifiedRate,
+        previous: previousPeriodSummary.qualifiedRate,
+        delta: roundDelta(currentPeriodSummary.qualifiedRate, previousPeriodSummary.qualifiedRate),
+      },
+      wonRate: {
+        current: currentPeriodSummary.wonRate,
+        previous: previousPeriodSummary.wonRate,
+        delta: roundDelta(currentPeriodSummary.wonRate, previousPeriodSummary.wonRate),
+      },
+    };
+
+    return res.json({
+      revenueForecast,
+      cohortConversion,
+      pipelineVelocity,
+      slaRootCause,
+      executiveComparison,
+    });
   } catch (err) { next(err); }
 });
 

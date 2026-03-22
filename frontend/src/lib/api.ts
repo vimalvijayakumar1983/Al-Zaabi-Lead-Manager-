@@ -370,6 +370,16 @@ class ApiClient {
     return this.request<any>(`/analytics/call-disposition-report?${q}`);
   }
 
+  async getPipelineForecastReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/pipeline-forecast-report?${q}`);
+  }
+
+  async getPhase1Report(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/phase1-report?${q}`);
+  }
+
   async getDivisionComparison() {
     return this.request<any>('/analytics/division-comparison');
   }

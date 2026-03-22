@@ -11,11 +11,11 @@ import {
   Target, Zap, Activity, ArrowUpRight, ArrowDownRight, RefreshCw,
   Download, ChevronDown, Star, AlertCircle, CheckCircle2, Clock, Flame,
   Globe, Mail, Phone, MessageSquare, Award, Filter, ExternalLink,
-  Building2, ChevronRight, ArrowRight,
+  Building2, ChevronRight, ArrowRight, Printer,
 } from 'lucide-react';
 
 type Period = '7d' | '30d' | '90d' | '180d' | '365d';
-type Tab = 'overview' | 'pipeline' | 'team' | 'sources' | 'activities' | 'operations' | 'calls';
+type Tab = 'overview' | 'pipeline' | 'forecast' | 'phase1' | 'team' | 'sources' | 'activities' | 'operations' | 'calls';
 
 // ─── Utility ─────────────────────────────────────────────────────
 
@@ -89,6 +89,64 @@ function sourceColor(s: string) {
 
 function roleLabel(r: string) {
   return r?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || '';
+}
+
+type BenchmarkTone = 'elite' | 'healthy' | 'watch' | 'risk';
+
+function benchmarkTone(
+  value: number,
+  thresholds: { elite: number; healthy: number; watch: number },
+  direction: 'higher' | 'lower' = 'higher'
+): BenchmarkTone {
+  const v = Number.isFinite(value) ? value : 0;
+  if (direction === 'higher') {
+    if (v >= thresholds.elite) return 'elite';
+    if (v >= thresholds.healthy) return 'healthy';
+    if (v >= thresholds.watch) return 'watch';
+    return 'risk';
+  }
+  if (v <= thresholds.elite) return 'elite';
+  if (v <= thresholds.healthy) return 'healthy';
+  if (v <= thresholds.watch) return 'watch';
+  return 'risk';
+}
+
+function benchmarkBadgeClasses(tone: BenchmarkTone): string {
+  const map: Record<BenchmarkTone, string> = {
+    elite: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    healthy: 'bg-brand-50 text-brand-700 border-brand-200',
+    watch: 'bg-amber-50 text-amber-700 border-amber-200',
+    risk: 'bg-red-50 text-red-700 border-red-200',
+  };
+  return map[tone];
+}
+
+function benchmarkLabel(tone: BenchmarkTone): string {
+  const map: Record<BenchmarkTone, string> = {
+    elite: 'Elite',
+    healthy: 'Healthy',
+    watch: 'Watch',
+    risk: 'Risk',
+  };
+  return map[tone];
+}
+
+function formatSignedDelta(value: number, format: 'number' | 'currency' | 'percent' = 'number'): string {
+  const numeric = Number(value || 0);
+  const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : '';
+  const abs = Math.abs(numeric);
+  if (format === 'currency') return `${sign}${fmt(abs, 'currency')}`;
+  if (format === 'percent') return `${sign}${abs}%`;
+  return `${sign}${fmt(abs)}`;
+}
+
+function formatDateRangeShort(start?: string, end?: string): string {
+  if (!start || !end) return 'N/A';
+  const s = new Date(start);
+  const e = new Date(end);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return 'N/A';
+  const f = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${f(s)} - ${f(e)}`;
 }
 
 // ─── Drill-down link builder ──────────────────────────────────────
@@ -429,6 +487,8 @@ const PERIODS: { value: Period; label: string }[] = [
 const TABS: { value: Tab; label: string; icon: any }[] = [
   { value: 'overview', label: 'Overview', icon: BarChart3 },
   { value: 'pipeline', label: 'Pipeline', icon: TrendingUp },
+  { value: 'forecast', label: 'Forecast & Health', icon: Flame },
+  { value: 'phase1', label: 'World-Class Phase 1', icon: Award },
   { value: 'team', label: 'Team', icon: Users },
   { value: 'sources', label: 'Sources & Campaigns', icon: Target },
   { value: 'activities', label: 'Activities', icon: Activity },
@@ -467,9 +527,14 @@ export default function AnalyticsPage() {
   const [divisionComp, setDivisionComp] = useState<any[]>([]);
   const [taskSlaReport, setTaskSlaReport] = useState<any>(null);
   const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
+  const [pipelineForecastReport, setPipelineForecastReport] = useState<any>(null);
+  const [phase1Report, setPhase1Report] = useState<any>(null);
   const [taskSlaUnavailable, setTaskSlaUnavailable] = useState(false);
   const [callReportUnavailable, setCallReportUnavailable] = useState(false);
+  const [forecastReportUnavailable, setForecastReportUnavailable] = useState(false);
+  const [phase1ReportUnavailable, setPhase1ReportUnavailable] = useState(false);
   const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
+  const [phase1CompareEnabled, setPhase1CompareEnabled] = useState(true);
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -491,6 +556,7 @@ export default function AnalyticsPage() {
         period?: Period;
         activeTab?: Tab;
         selectedDivision?: string;
+        phase1CompareEnabled?: boolean;
       };
       if (parsed.period && PERIODS.some((p) => p.value === parsed.period)) {
         setPeriod(parsed.period);
@@ -500,6 +566,9 @@ export default function AnalyticsPage() {
       }
       if (typeof parsed.selectedDivision === 'string' && parsed.selectedDivision.trim()) {
         setSelectedDivision(parsed.selectedDivision);
+      }
+      if (typeof parsed.phase1CompareEnabled === 'boolean') {
+        setPhase1CompareEnabled(parsed.phase1CompareEnabled);
       }
     } catch {
       // ignore invalid localStorage state
@@ -512,12 +581,12 @@ export default function AnalyticsPage() {
     try {
       window.localStorage.setItem(
         ANALYTICS_PREFS_KEY,
-        JSON.stringify({ period, activeTab, selectedDivision })
+        JSON.stringify({ period, activeTab, selectedDivision, phase1CompareEnabled })
       );
     } catch {
       // ignore storage failures
     }
-  }, [period, activeTab, selectedDivision]);
+  }, [period, activeTab, selectedDivision, phase1CompareEnabled]);
 
   const divId = selectedDivision === 'all' ? undefined : selectedDivision;
   const selectedDivName = selectedDivision === 'all'
@@ -531,7 +600,7 @@ export default function AnalyticsPage() {
     else setRefreshing(true);
     try {
       const p = periodRef.current;
-      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp] = await Promise.allSettled([
+      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp, forecast, phase1] = await Promise.allSettled([
         api.getAnalyticsOverview(p, divId),
         api.getFunnel(divId),
         api.getTrends(p, divId),
@@ -542,6 +611,8 @@ export default function AnalyticsPage() {
         api.getScoreDistribution(divId),
         api.getTaskSLAReport(p, divId),
         api.getCallDispositionReport(p, divId),
+        api.getPipelineForecastReport(p, divId),
+        api.getPhase1Report(p, divId),
       ]);
 
       if (ov.status === 'fulfilled') setOverview(ov.value);
@@ -599,6 +670,22 @@ export default function AnalyticsPage() {
           setCallReportUnavailable(true);
           setCallReportLegacyFallback(false);
         }
+      }
+
+      if (forecast.status === 'fulfilled') {
+        setPipelineForecastReport(forecast.value || null);
+        setForecastReportUnavailable(false);
+      } else {
+        setPipelineForecastReport(null);
+        setForecastReportUnavailable(true);
+      }
+
+      if (phase1.status === 'fulfilled') {
+        setPhase1Report(phase1.value || null);
+        setPhase1ReportUnavailable(false);
+      } else {
+        setPhase1Report(null);
+        setPhase1ReportUnavailable(true);
       }
 
       if (isSuperAdmin && !divId) {
@@ -683,6 +770,119 @@ export default function AnalyticsPage() {
       return { name: 'call-intelligence-report', rows };
     }
 
+    if (activeTab === 'forecast') {
+      const summary = pipelineForecastReport?.summary || {};
+      const momentum = pipelineForecastReport?.momentum || {};
+      const stageForecast = Array.isArray(pipelineForecastReport?.stageForecast) ? pipelineForecastReport.stageForecast : [];
+      const ageBuckets = Array.isArray(pipelineForecastReport?.ageBuckets) ? pipelineForecastReport.ageBuckets : [];
+      const ownerForecast = Array.isArray(pipelineForecastReport?.ownerForecast) ? pipelineForecastReport.ownerForecast : [];
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Summary', metric: 'Active Leads', value: summary.activeLeads || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Active Pipeline Value', value: summary.activePipelineValue || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Weighted Pipeline Value', value: summary.weightedPipelineValue || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Forecast Coverage Ratio %', value: summary.forecastCoverageRatio || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Win Rate %', value: summary.winRate || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Won Revenue In Period', value: summary.wonRevenueInPeriod || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Avg Sales Cycle Days', value: summary.avgSalesCycleDays || 0, ...baseMeta },
+        { section: 'Summary', metric: 'Stale Active Leads', value: summary.staleActiveLeads || 0, ...baseMeta },
+        { section: 'Momentum', metric: 'Active Leads Growth %', value: momentum.activeLeadsGrowth || 0, ...baseMeta },
+        { section: 'Momentum', metric: 'Won Deals Growth %', value: momentum.wonGrowth || 0, ...baseMeta },
+        ...stageForecast.map((r: any) => ({
+          section: 'Stage Forecast',
+          metric: r.stage,
+          value: r.count,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          avgProbability: r.avgProbability,
+          avgAgeDays: r.avgAgeDays,
+          ...baseMeta,
+        })),
+        ...ageBuckets.map((r: any) => ({
+          section: 'Aging Bucket',
+          metric: r.bucket,
+          value: r.count,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          ...baseMeta,
+        })),
+        ...ownerForecast.map((r: any) => ({
+          section: 'Owner Forecast',
+          metric: r.assigneeName,
+          value: r.count,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          ...baseMeta,
+        })),
+      ];
+      return { name: 'pipeline-forecast-report', rows };
+    }
+
+    if (activeTab === 'phase1') {
+      const forecastSummary = phase1Report?.revenueForecast?.summary || {};
+      const forecastTrend = phase1Report?.revenueForecast?.trend || {};
+      const cohortRows = Array.isArray(phase1Report?.cohortConversion?.cohorts) ? phase1Report.cohortConversion.cohorts : [];
+      const velocityStages = Array.isArray(phase1Report?.pipelineVelocity?.stages) ? phase1Report.pipelineVelocity.stages : [];
+      const bottlenecks = Array.isArray(phase1Report?.pipelineVelocity?.bottlenecks) ? phase1Report.pipelineVelocity.bottlenecks : [];
+      const slaSummary = phase1Report?.slaRootCause?.summary || {};
+      const responseBuckets = Array.isArray(phase1Report?.slaRootCause?.responseDelayBuckets) ? phase1Report.slaRootCause.responseDelayBuckets : [];
+      const bySource = Array.isArray(phase1Report?.slaRootCause?.bySource) ? phase1Report.slaRootCause.bySource : [];
+      const byStage = Array.isArray(phase1Report?.slaRootCause?.byStage) ? phase1Report.slaRootCause.byStage : [];
+      const byOwner = Array.isArray(phase1Report?.slaRootCause?.byOwner) ? phase1Report.slaRootCause.byOwner : [];
+
+      const rows: Array<Record<string, unknown>> = [
+        { section: 'Revenue Forecast', metric: 'Target Revenue', value: forecastSummary.targetRevenue || 0, ...baseMeta },
+        { section: 'Revenue Forecast', metric: 'Expected Revenue', value: forecastSummary.expectedRevenue || 0, ...baseMeta },
+        { section: 'Revenue Forecast', metric: 'Commit Revenue', value: forecastSummary.commitRevenue || 0, ...baseMeta },
+        { section: 'Revenue Forecast', metric: 'Best Case Revenue', value: forecastSummary.bestCaseRevenue || 0, ...baseMeta },
+        { section: 'Revenue Forecast', metric: 'Attainment %', value: forecastSummary.attainmentPct || 0, ...baseMeta },
+        { section: 'Revenue Forecast', metric: 'Gap To Target', value: forecastSummary.gapToTarget || 0, ...baseMeta },
+        { section: 'Revenue Forecast Trend', metric: 'Won Revenue Current', value: forecastTrend.wonRevenueCurrent || 0, ...baseMeta },
+        { section: 'Revenue Forecast Trend', metric: 'Won Revenue Previous', value: forecastTrend.wonRevenuePrevious || 0, ...baseMeta },
+        { section: 'Revenue Forecast Trend', metric: 'Won Revenue Growth %', value: forecastTrend.wonRevenueGrowth || 0, ...baseMeta },
+        ...cohortRows.map((r: any) => ({
+          section: 'Cohort Conversion',
+          metric: r.cohort,
+          created: r.created,
+          contactedRate: r.contactedRate,
+          qualifiedRate: r.qualifiedRate,
+          wonRate: r.wonRate,
+          lostRate: r.lostRate,
+          avgSalesCycleDays: r.avgSalesCycleDays,
+          ...baseMeta,
+        })),
+        ...velocityStages.map((r: any) => ({
+          section: 'Pipeline Velocity',
+          metric: r.stage,
+          value: r.count,
+          conversionFromPrev: r.conversionFromPrev,
+          medianAgeDays: r.medianAgeDays,
+          staleRate: r.staleRate,
+          pipelineValue: r.pipelineValue,
+          weightedValue: r.weightedValue,
+          ...baseMeta,
+        })),
+        ...bottlenecks.map((r: any) => ({
+          section: 'Pipeline Bottleneck',
+          metric: r.stage,
+          reason: r.reason,
+          medianAgeDays: r.medianAgeDays,
+          staleRate: r.staleRate,
+          conversionFromPrev: r.conversionFromPrev,
+          ...baseMeta,
+        })),
+        { section: 'SLA Summary', metric: 'Period Leads', value: slaSummary.periodLeads || 0, ...baseMeta },
+        { section: 'SLA Summary', metric: 'Breached Leads', value: slaSummary.breachedLeads || 0, ...baseMeta },
+        { section: 'SLA Summary', metric: 'Breach Rate %', value: slaSummary.breachRate || 0, ...baseMeta },
+        { section: 'SLA Summary', metric: 'Avg First Response Hours', value: slaSummary.avgFirstResponseHours || 0, ...baseMeta },
+        ...responseBuckets.map((r: any) => ({ section: 'Response Delay Bucket', metric: r.bucket, value: r.count, ...baseMeta })),
+        ...bySource.slice(0, 15).map((r: any) => ({ section: 'SLA By Source', metric: r.source, total: r.total, breached: r.breached, breachRate: r.breachRate, ...baseMeta })),
+        ...byStage.slice(0, 15).map((r: any) => ({ section: 'SLA By Stage', metric: r.stage, total: r.total, breached: r.breached, breachRate: r.breachRate, ...baseMeta })),
+        ...byOwner.slice(0, 15).map((r: any) => ({ section: 'SLA By Owner', metric: r.assigneeName, total: r.total, breached: r.breached, breachRate: r.breachRate, ...baseMeta })),
+      ];
+      return { name: 'phase1-world-class-report', rows };
+    }
+
     const rows: Array<Record<string, unknown>> = [
       { section: 'Overview KPI', metric: 'New Leads', value: overview?.newLeads?.value ?? 0, ...baseMeta },
       { section: 'Overview KPI', metric: 'Won Leads', value: overview?.wonLeads?.value ?? 0, ...baseMeta },
@@ -693,7 +893,7 @@ export default function AnalyticsPage() {
       ...team.slice(0, 20).map((m: any) => ({ section: 'Team', metric: m.name, value: m.totalLeads, won: m.wonLeads, conversionRate: m.conversionRate, ...baseMeta })),
     ];
     return { name: `analytics-${activeTab}`, rows };
-  }, [activeTab, periodLabel, selectedDivName, taskSlaReport, callDispositionReport, overview, funnel, sources, team]);
+  }, [activeTab, periodLabel, selectedDivName, taskSlaReport, callDispositionReport, pipelineForecastReport, phase1Report, overview, funnel, sources, team]);
 
   const handleExportCsv = useCallback(() => {
     const payload = buildExportPayload();
@@ -764,6 +964,153 @@ export default function AnalyticsPage() {
     win.focus();
     win.print();
   }, [buildExportPayload, addToast, periodLabel, selectedDivName]);
+
+  const handlePrintPhaseOneBoard = useCallback(() => {
+    if (!phase1Report) {
+      addToast({ type: 'info', title: 'No Phase 1 data', message: 'Load data for Phase 1 first, then print board view.' });
+      return;
+    }
+
+    const revenueSummary = phase1Report?.revenueForecast?.summary || {};
+    const revenueTrend = phase1Report?.revenueForecast?.trend || {};
+    const velocitySummary = phase1Report?.pipelineVelocity?.summary || {};
+    const slaSummary = phase1Report?.slaRootCause?.summary || {};
+    const executiveComparison = phase1Report?.executiveComparison || {};
+    const cohorts = Array.isArray(phase1Report?.cohortConversion?.cohorts) ? phase1Report.cohortConversion.cohorts : [];
+    const bottlenecks = Array.isArray(phase1Report?.pipelineVelocity?.bottlenecks) ? phase1Report.pipelineVelocity.bottlenecks : [];
+    const topDrivers = Array.isArray(phase1Report?.slaRootCause?.topDrivers) ? phase1Report.slaRootCause.topDrivers : [];
+
+    const metricRows = [
+      {
+        label: 'Forecast Attainment',
+        value: fmt(revenueSummary.attainmentPct || 0, 'percent'),
+        benchmark: benchmarkLabel(benchmarkTone(Number(revenueSummary.attainmentPct || 0), { elite: 100, healthy: 85, watch: 65 }, 'higher')),
+      },
+      {
+        label: 'Won Revenue',
+        value: fmt(executiveComparison?.wonRevenue?.current ?? revenueTrend.wonRevenueCurrent ?? 0, 'currency'),
+        benchmark: benchmarkLabel(benchmarkTone(Number(executiveComparison?.wonRevenue?.growth ?? revenueTrend.wonRevenueGrowth ?? 0), { elite: 20, healthy: 5, watch: -5 }, 'higher')),
+      },
+      {
+        label: 'SLA Breach Rate',
+        value: fmt(slaSummary.breachRate || 0, 'percent'),
+        benchmark: benchmarkLabel(benchmarkTone(Number(slaSummary.breachRate || 0), { elite: 8, healthy: 15, watch: 25 }, 'lower')),
+      },
+      {
+        label: 'Stale Active Rate',
+        value: fmt(velocitySummary.staleActiveLeadRate || 0, 'percent'),
+        benchmark: benchmarkLabel(benchmarkTone(Number(velocitySummary.staleActiveLeadRate || 0), { elite: 10, healthy: 20, watch: 30 }, 'lower')),
+      },
+      {
+        label: 'First Response Time',
+        value: `${slaSummary.avgFirstResponseHours || 0} h`,
+        benchmark: benchmarkLabel(benchmarkTone(Number(slaSummary.avgFirstResponseHours || 0), { elite: 2, healthy: 8, watch: 24 }, 'lower')),
+      },
+      {
+        label: 'Won Growth',
+        value: fmt(executiveComparison?.wonRevenue?.growth ?? revenueTrend.wonRevenueGrowth ?? 0, 'percent'),
+        benchmark: benchmarkLabel(benchmarkTone(Number(executiveComparison?.wonRevenue?.growth ?? revenueTrend.wonRevenueGrowth ?? 0), { elite: 20, healthy: 5, watch: -5 }, 'higher')),
+      },
+    ];
+
+    const cardsHtml = metricRows.map((row) => `
+      <div class="metric-card">
+        <div class="metric-label">${htmlEscape(row.label)}</div>
+        <div class="metric-value">${htmlEscape(row.value)}</div>
+        <div class="metric-benchmark">${htmlEscape(row.benchmark)}</div>
+      </div>
+    `).join('');
+
+    const cohortsRows = cohorts.slice(0, 12).map((row: any) => `
+      <tr>
+        <td>${htmlEscape(row.cohort)}</td>
+        <td>${htmlEscape(row.created)}</td>
+        <td>${htmlEscape(`${row.qualifiedRate}%`)}</td>
+        <td>${htmlEscape(`${row.wonRate}%`)}</td>
+        <td>${htmlEscape(String(row.avgSalesCycleDays || 0))}</td>
+      </tr>
+    `).join('');
+
+    const bottleneckRows = bottlenecks.slice(0, 8).map((row: any) => `
+      <li><strong>${htmlEscape(row.stage)}</strong> - ${htmlEscape(row.reason)} (Median: ${htmlEscape(String(row.medianAgeDays))}d, Stale: ${htmlEscape(String(row.staleRate))}%)</li>
+    `).join('');
+
+    const driverRows = topDrivers.slice(0, 8).map((row: any) => `
+      <li><strong>${htmlEscape(row.driver)}</strong> - ${htmlEscape(row.item)} (${htmlEscape(String(row.breachRate))}% breach)</li>
+    `).join('');
+
+    const currentRange = formatDateRangeShort(executiveComparison?.currentPeriod?.start, executiveComparison?.currentPeriod?.end);
+    const previousRange = formatDateRangeShort(executiveComparison?.previousPeriod?.start, executiveComparison?.previousPeriod?.end);
+
+    const win = window.open('', '_blank', 'noopener,noreferrer,width=1300,height=900');
+    if (!win) {
+      addToast({ type: 'error', title: 'Popup blocked', message: 'Allow popups to print board view.' });
+      return;
+    }
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>Phase 1 Executive Board</title>
+          <style>
+            body { font-family: Inter, Arial, sans-serif; margin: 0; padding: 24px; color: #0f172a; background: #f8fafc; }
+            .sheet { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; }
+            h1 { margin: 0 0 6px 0; font-size: 22px; }
+            .meta { color: #64748b; font-size: 12px; margin-bottom: 14px; }
+            .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+            .metric-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; }
+            .metric-label { font-size: 11px; color: #64748b; }
+            .metric-value { font-size: 20px; font-weight: 700; margin: 6px 0; }
+            .metric-benchmark { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #eef2ff; color: #4338ca; }
+            .cols { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 12px; }
+            .card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; }
+            h2 { margin: 0 0 8px 0; font-size: 14px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; }
+            th { background: #f8fafc; }
+            ul { margin: 0; padding-left: 18px; font-size: 12px; }
+            li { margin-bottom: 5px; }
+            @media print {
+              body { background: #fff; padding: 0; }
+              .sheet { border: 0; border-radius: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="sheet">
+            <h1>World-Class Phase 1 - Executive Board</h1>
+            <div class="meta">
+              Division: ${htmlEscape(selectedDivName)} | Period: ${htmlEscape(periodLabel)} (${htmlEscape(currentRange)})
+              ${phase1CompareEnabled ? `| Compare: ${htmlEscape(previousRange)}` : ''}
+            </div>
+            <div class="grid">${cardsHtml}</div>
+            <div class="cols">
+              <div class="card">
+                <h2>Cohort Conversion Snapshot</h2>
+                <table>
+                  <thead>
+                    <tr><th>Cohort</th><th>Created</th><th>Qualified %</th><th>Won %</th><th>Cycle Days</th></tr>
+                  </thead>
+                  <tbody>${cohortsRows || '<tr><td colspan="5">No cohort data</td></tr>'}</tbody>
+                </table>
+              </div>
+              <div class="card">
+                <h2>Pipeline Bottlenecks</h2>
+                <ul>${bottleneckRows || '<li>No bottlenecks detected</li>'}</ul>
+              </div>
+              <div class="card">
+                <h2>SLA Root-Cause Signals</h2>
+                <ul>${driverRows || '<li>No strong risk drivers</li>'}</ul>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+    win.document.close();
+    win.focus();
+    win.print();
+  }, [phase1Report, addToast, selectedDivName, periodLabel, phase1CompareEnabled]);
 
   // ── Loading Skeleton ──────────────────────────────────────────────
   if (loading) {
@@ -1420,6 +1767,531 @@ export default function AnalyticsPage() {
     );
   };
 
+  // ── Forecast & Pipeline Health Tab ───────────────────────────────
+  const ForecastTab = () => {
+    const summary = pipelineForecastReport?.summary || {};
+    const momentum = pipelineForecastReport?.momentum || {};
+    const stageForecast = Array.isArray(pipelineForecastReport?.stageForecast) ? pipelineForecastReport.stageForecast : [];
+    const ageBuckets = Array.isArray(pipelineForecastReport?.ageBuckets) ? pipelineForecastReport.ageBuckets : [];
+    const ownerForecast = Array.isArray(pipelineForecastReport?.ownerForecast) ? pipelineForecastReport.ownerForecast : [];
+
+    return (
+      <div className="space-y-6">
+        {forecastReportUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Forecast report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiCard title="Active Pipeline" value={summary.activePipelineValue || 0} format="currency" icon={DollarSign} iconBg="bg-amber-50" iconColor="text-amber-600" />
+          <KpiCard title="Weighted Forecast" value={summary.weightedPipelineValue || 0} format="currency" icon={Target} iconBg="bg-brand-50" iconColor="text-brand-600" />
+          <KpiCard title="Win Rate" value={summary.winRate || 0} format="percent" icon={Trophy} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
+          <KpiCard title="Stale Active Leads" value={summary.staleActiveLeads || 0} icon={AlertCircle} iconBg="bg-red-50" iconColor="text-red-500" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Stage Pipeline Value</h2>
+            <BarChart
+              data={stageForecast.slice(0, 8).map((row: any) => ({
+                stage: row.stage,
+                value: row.pipelineValue,
+                stageIds: row.stageIds || [],
+                statusHints: row.statusHints || [],
+              }))}
+              xKey="stage"
+              yKey="value"
+              color="#f59e0b"
+              height={190}
+              onBarClick={(row) => {
+                const params: Record<string, string> = {};
+                if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
+                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
+                if (Object.keys(params).length > 0) drill(params);
+              }}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Stage Weighted Forecast</h2>
+            <BarChart
+              data={stageForecast.slice(0, 8).map((row: any) => ({
+                stage: row.stage,
+                value: row.weightedValue,
+                stageIds: row.stageIds || [],
+                statusHints: row.statusHints || [],
+              }))}
+              xKey="stage"
+              yKey="value"
+              color="#6366f1"
+              height={190}
+              onBarClick={(row) => {
+                const params: Record<string, string> = {};
+                if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
+                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
+                if (Object.keys(params).length > 0) drill(params);
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Pipeline Aging Risk</h2>
+            <BarChart
+              data={ageBuckets.map((row: any) => ({ bucket: row.bucket, count: row.count }))}
+              xKey="bucket"
+              yKey="count"
+              color="#ef4444"
+              height={170}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Momentum</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Active Leads Growth</p>
+                <p className={`text-xl font-semibold tabular-nums ${(momentum.activeLeadsGrowth || 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {fmt(momentum.activeLeadsGrowth || 0, 'percent')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Won Growth</p>
+                <p className={`text-xl font-semibold tabular-nums ${(momentum.wonGrowth || 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {fmt(momentum.wonGrowth || 0, 'percent')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Won Revenue (Period)</p>
+                <p className="text-lg font-semibold text-text-primary tabular-nums">
+                  {fmt(summary.wonRevenueInPeriod || 0, 'currency')}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Avg Sales Cycle</p>
+                <p className="text-lg font-semibold text-text-primary tabular-nums">
+                  {summary.avgSalesCycleDays || 0} days
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">Owner Forecast Load</h2>
+            <p className="text-xs text-text-tertiary mt-0.5">Weighted pipeline distribution by owner</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Owner</th>
+                  <th className="table-header px-4 py-3 text-left">Active Leads</th>
+                  <th className="table-header px-4 py-3 text-left">Pipeline Value</th>
+                  <th className="table-header px-4 py-3 text-left">Weighted Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ownerForecast.length === 0 ? (
+                  <tr><td colSpan={4} className="py-8 text-center text-sm text-text-tertiary">No owner forecast data available</td></tr>
+                ) : ownerForecast.map((row: any) => (
+                  <tr
+                    key={row.assigneeId || row.assigneeName}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => {
+                      const params: Record<string, string> = { status: 'NEW,CONTACTED,QUALIFIED,PROPOSAL_SENT,NEGOTIATION' };
+                      if (row.assigneeId) params.assignedToId = row.assigneeId;
+                      drill(params);
+                    }}
+                  >
+                    <td className="table-cell px-4">{row.assigneeName}</td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{fmt(row.pipelineValue || 0, 'currency')}</span></td>
+                    <td className="table-cell px-4"><span className="tabular-nums">{fmt(row.weightedValue || 0, 'currency')}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── World-Class Phase 1 Tab ───────────────────────────────────────
+  const PhaseOneTab = () => {
+    const revenue = phase1Report?.revenueForecast || {};
+    const revenueSummary = revenue.summary || {};
+    const revenueTrend = revenue.trend || {};
+    const cohorts = Array.isArray(phase1Report?.cohortConversion?.cohorts) ? phase1Report.cohortConversion.cohorts : [];
+    const velocity = phase1Report?.pipelineVelocity || {};
+    const velocitySummary = velocity.summary || {};
+    const velocityStages = Array.isArray(velocity.stages) ? velocity.stages : [];
+    const bottlenecks = Array.isArray(velocity.bottlenecks) ? velocity.bottlenecks : [];
+    const sla = phase1Report?.slaRootCause || {};
+    const slaSummary = sla.summary || {};
+    const responseDelayBuckets = Array.isArray(sla.responseDelayBuckets) ? sla.responseDelayBuckets : [];
+    const slaBySource = Array.isArray(sla.bySource) ? sla.bySource : [];
+    const slaByStage = Array.isArray(sla.byStage) ? sla.byStage : [];
+    const slaByOwner = Array.isArray(sla.byOwner) ? sla.byOwner : [];
+    const topDrivers = Array.isArray(sla.topDrivers) ? sla.topDrivers : [];
+    const executiveComparison = phase1Report?.executiveComparison || {};
+    const comparisonCurrentRange = formatDateRangeShort(executiveComparison?.currentPeriod?.start, executiveComparison?.currentPeriod?.end);
+    const comparisonPreviousRange = formatDateRangeShort(executiveComparison?.previousPeriod?.start, executiveComparison?.previousPeriod?.end);
+
+    const deltaClass = (delta: number, lowerIsBetter = false) => {
+      if (!Number.isFinite(delta) || delta === 0) return 'text-text-tertiary';
+      const improved = lowerIsBetter ? delta < 0 : delta > 0;
+      return improved ? 'text-emerald-600' : 'text-red-500';
+    };
+
+    const executiveTiles: Array<{
+      key: string;
+      title: string;
+      value: string;
+      subtitle: string;
+      tone: BenchmarkTone;
+      delta?: number;
+      deltaFormat?: 'number' | 'currency' | 'percent';
+      deltaSuffix?: string;
+      lowerIsBetter?: boolean;
+    }> = [
+      {
+        key: 'attainment',
+        title: 'Forecast Attainment',
+        value: fmt(revenueSummary.attainmentPct || 0, 'percent'),
+        subtitle: `Target ${fmt(revenueSummary.targetRevenue || 0, 'currency')}`,
+        tone: benchmarkTone(Number(revenueSummary.attainmentPct || 0), { elite: 100, healthy: 85, watch: 65 }, 'higher'),
+      },
+      {
+        key: 'wonRevenue',
+        title: 'Won Revenue',
+        value: fmt(executiveComparison?.wonRevenue?.current ?? revenueTrend.wonRevenueCurrent ?? 0, 'currency'),
+        subtitle: phase1CompareEnabled
+          ? `Prev ${fmt(executiveComparison?.wonRevenue?.previous ?? revenueTrend.wonRevenuePrevious ?? 0, 'currency')}`
+          : `Growth ${fmt(executiveComparison?.wonRevenue?.growth ?? revenueTrend.wonRevenueGrowth ?? 0, 'percent')}`,
+        delta: Number(executiveComparison?.wonRevenue?.growth ?? revenueTrend.wonRevenueGrowth ?? 0),
+        deltaFormat: 'percent' as const,
+        tone: benchmarkTone(Number(executiveComparison?.wonRevenue?.growth ?? revenueTrend.wonRevenueGrowth ?? 0), { elite: 20, healthy: 5, watch: -5 }, 'higher'),
+      },
+      {
+        key: 'breachRate',
+        title: 'SLA Breach Rate',
+        value: fmt(slaSummary.breachRate || 0, 'percent'),
+        subtitle: phase1CompareEnabled
+          ? `Prev ${fmt(executiveComparison?.slaBreachRate?.previous || 0, 'percent')}`
+          : `${slaSummary.breachedLeads || 0} breached of ${slaSummary.periodLeads || 0}`,
+        delta: Number(executiveComparison?.slaBreachRate?.delta || 0),
+        deltaFormat: 'percent' as const,
+        lowerIsBetter: true,
+        tone: benchmarkTone(Number(slaSummary.breachRate || 0), { elite: 8, healthy: 15, watch: 25 }, 'lower'),
+      },
+      {
+        key: 'response',
+        title: 'First Response Time',
+        value: `${slaSummary.avgFirstResponseHours || 0} h`,
+        subtitle: phase1CompareEnabled
+          ? `Prev ${executiveComparison?.firstResponseHours?.previous || 0} h`
+          : 'Average first-touch delay',
+        delta: Number(executiveComparison?.firstResponseHours?.delta || 0),
+        deltaSuffix: 'h',
+        lowerIsBetter: true,
+        tone: benchmarkTone(Number(slaSummary.avgFirstResponseHours || 0), { elite: 2, healthy: 8, watch: 24 }, 'lower'),
+      },
+      {
+        key: 'wonRate',
+        title: 'Cohort Won Rate',
+        value: fmt(executiveComparison?.wonRate?.current || 0, 'percent'),
+        subtitle: phase1CompareEnabled
+          ? `Prev ${fmt(executiveComparison?.wonRate?.previous || 0, 'percent')}`
+          : 'Period-level cohort close rate',
+        delta: Number(executiveComparison?.wonRate?.delta || 0),
+        deltaFormat: 'percent' as const,
+        tone: benchmarkTone(Number(executiveComparison?.wonRate?.current || 0), { elite: 22, healthy: 12, watch: 6 }, 'higher'),
+      },
+      {
+        key: 'staleRate',
+        title: 'Stale Active Lead Rate',
+        value: fmt(velocitySummary.staleActiveLeadRate || 0, 'percent'),
+        subtitle: `${velocitySummary.activeLeads || 0} active leads`,
+        tone: benchmarkTone(Number(velocitySummary.staleActiveLeadRate || 0), { elite: 10, healthy: 20, watch: 30 }, 'lower'),
+      },
+    ];
+
+    return (
+      <div className="space-y-6">
+        {phase1ReportUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            World-class Phase 1 endpoint is unavailable in this deployment. Showing empty state.
+          </div>
+        )}
+
+        <div className="card p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-text-primary">Executive Snapshot</p>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                Current window: {comparisonCurrentRange}
+                {phase1CompareEnabled ? ` • Compare: ${comparisonPreviousRange}` : ''}
+              </p>
+            </div>
+            <button
+              onClick={() => setPhase1CompareEnabled((v) => !v)}
+              className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                phase1CompareEnabled
+                  ? 'border-brand-200 bg-brand-50 text-brand-700'
+                  : 'border-border-subtle bg-surface-secondary text-text-secondary'
+              }`}
+            >
+              Compare vs previous window: {phase1CompareEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          {executiveTiles.map((tile) => {
+            const tone = tile.tone as BenchmarkTone;
+            return (
+              <div key={tile.key} className="card p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-text-secondary uppercase tracking-wide">{tile.title}</p>
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-2xs font-semibold ${benchmarkBadgeClasses(tone)}`}>
+                    {benchmarkLabel(tone)}
+                  </span>
+                </div>
+                <p className="mt-2 text-2xl font-bold text-text-primary tabular-nums tracking-tight">{tile.value}</p>
+                <p className="mt-1 text-xs text-text-tertiary">{tile.subtitle}</p>
+                {phase1CompareEnabled && Number.isFinite(tile.delta as number) && (
+                  <p className={`mt-1 text-xs font-semibold tabular-nums ${deltaClass(Number(tile.delta || 0), tile.lowerIsBetter)}`}>
+                    {tile.deltaSuffix
+                      ? `${formatSignedDelta(Number(tile.delta || 0), 'number')}${tile.deltaSuffix}`
+                      : formatSignedDelta(Number(tile.delta || 0), tile.deltaFormat || 'number')}
+                    {' '}vs previous
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Revenue Forecast vs Target</h2>
+            <BarChart
+              data={[
+                { label: 'Target', value: revenueSummary.targetRevenue || 0 },
+                { label: 'Expected', value: revenueSummary.expectedRevenue || 0 },
+                { label: 'Commit', value: revenueSummary.commitRevenue || 0 },
+                { label: 'Best Case', value: revenueSummary.bestCaseRevenue || 0 },
+              ]}
+              xKey="label"
+              yKey="value"
+              color="#6366f1"
+              height={190}
+            />
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Gap to Target</p>
+                <p className="text-sm font-semibold text-red-500 tabular-nums">{fmt(revenueSummary.gapToTarget || 0, 'currency')}</p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Won Revenue Growth</p>
+                <p className={`text-sm font-semibold tabular-nums ${(revenueTrend.wonRevenueGrowth || 0) >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {fmt(revenueTrend.wonRevenueGrowth || 0, 'percent')}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">Pipeline Velocity (Stage Aging)</h2>
+            <BarChart
+              data={velocityStages.slice(0, 8).map((row: any) => ({
+                stage: row.stage,
+                medianAgeDays: row.medianAgeDays,
+                stageIds: row.stageIds || [],
+                statusHints: row.statusHints || [],
+              }))}
+              xKey="stage"
+              yKey="medianAgeDays"
+              color="#ef4444"
+              height={190}
+              onBarClick={(row) => {
+                const params: Record<string, string> = {};
+                if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
+                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
+                if (Object.keys(params).length > 0) drill(params);
+              }}
+            />
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Avg Stage Median Age</p>
+                <p className="text-sm font-semibold text-text-primary tabular-nums">{velocitySummary.avgStageMedianAgeDays || 0} days</p>
+              </div>
+              <div className="rounded-lg border border-border-subtle p-3">
+                <p className="text-2xs text-text-tertiary">Stale Active Lead Rate</p>
+                <p className="text-sm font-semibold text-amber-600 tabular-nums">{fmt(velocitySummary.staleActiveLeadRate || 0, 'percent')}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-text-primary">Cohort Conversion</h2>
+              <p className="text-xs text-text-tertiary mt-0.5">Monthly cohorts with conversion progression</p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Cohort</th>
+                  <th className="table-header px-4 py-3 text-left">Created</th>
+                  <th className="table-header px-4 py-3 text-left">Contacted %</th>
+                  <th className="table-header px-4 py-3 text-left">Qualified %</th>
+                  <th className="table-header px-4 py-3 text-left">Won %</th>
+                  <th className="table-header px-4 py-3 text-left">Lost %</th>
+                  <th className="table-header px-4 py-3 text-left">Avg Cycle (days)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cohorts.length === 0 ? (
+                  <tr><td colSpan={7} className="py-8 text-center text-sm text-text-tertiary">No cohort data for this period</td></tr>
+                ) : cohorts.map((row: any) => (
+                  <tr key={row.cohort} className="table-row">
+                    <td className="table-cell px-4">{row.cohort}</td>
+                    <td className="table-cell px-4 tabular-nums">{row.created}</td>
+                    <td className="table-cell px-4 tabular-nums">{row.contactedRate}%</td>
+                    <td className="table-cell px-4 tabular-nums">{row.qualifiedRate}%</td>
+                    <td className="table-cell px-4 tabular-nums">{row.wonRate}%</td>
+                    <td className="table-cell px-4 tabular-nums">{row.lostRate}%</td>
+                    <td className="table-cell px-4 tabular-nums">{row.avgSalesCycleDays}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">SLA by Source</h2>
+            <BarChart
+              data={slaBySource.slice(0, 8).map((row: any) => ({ source: row.source, breachRate: row.breachRate }))}
+              xKey="source"
+              yKey="breachRate"
+              color="#ef4444"
+              height={170}
+              onBarClick={(row) => {
+                if (row?.source) drill({ source: String(row.source) });
+              }}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">SLA by Stage</h2>
+            <BarChart
+              data={slaByStage.slice(0, 8).map((row: any) => ({
+                stage: row.stage,
+                breachRate: row.breachRate,
+                stageIds: row.stageIds || [],
+                statusHints: row.statusHints || [],
+              }))}
+              xKey="stage"
+              yKey="breachRate"
+              color="#f59e0b"
+              height={170}
+              onBarClick={(row) => {
+                const params: Record<string, string> = {};
+                if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
+                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
+                if (Object.keys(params).length > 0) drill(params);
+              }}
+            />
+          </div>
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-4">First Response Delay</h2>
+            <BarChart
+              data={responseDelayBuckets.map((row: any) => ({ bucket: row.bucket, count: row.count }))}
+              xKey="bucket"
+              yKey="count"
+              color="#6366f1"
+              height={170}
+            />
+          </div>
+        </div>
+
+        {bottlenecks.length > 0 && (
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-3">Pipeline Bottlenecks</h2>
+            <div className="space-y-2">
+              {bottlenecks.map((row: any) => (
+                <div key={`${row.stage}-${row.reason}`} className="rounded-lg border border-border-subtle px-3 py-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-semibold text-text-primary">{row.stage}</span>
+                  <span className="text-text-secondary">• {row.reason}</span>
+                  <span className="text-amber-600">Median age: {row.medianAgeDays}d</span>
+                  <span className="text-red-500">Stale: {row.staleRate}%</span>
+                  <span className="text-brand-600">Conversion: {row.conversionFromPrev}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {topDrivers.length > 0 && (
+          <div className="card p-5">
+            <h2 className="text-sm font-semibold text-text-primary mb-3">SLA Root-Cause Signals</h2>
+            <div className="flex flex-wrap gap-2">
+              {topDrivers.map((driver: any, idx: number) => (
+                <span key={`${driver.driver}-${driver.item}-${idx}`} className="inline-flex items-center gap-1 rounded-full bg-red-50 text-red-600 px-2.5 py-1 text-xs font-medium">
+                  {driver.driver}: {driver.item} ({driver.breachRate}%)
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border-subtle">
+            <h2 className="text-sm font-semibold text-text-primary">SLA Breach by Owner</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-border-subtle">
+                  <th className="table-header px-4 py-3 text-left">Owner</th>
+                  <th className="table-header px-4 py-3 text-left">Total Leads</th>
+                  <th className="table-header px-4 py-3 text-left">Breached</th>
+                  <th className="table-header px-4 py-3 text-left">Breach Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {slaByOwner.length === 0 ? (
+                  <tr><td colSpan={4} className="py-8 text-center text-sm text-text-tertiary">No owner SLA data available</td></tr>
+                ) : slaByOwner.map((row: any) => (
+                  <tr
+                    key={row.assigneeId || row.assigneeName}
+                    className="table-row cursor-pointer hover:bg-surface-secondary"
+                    onClick={() => {
+                      if (row.assigneeId) drill({ assignedToId: row.assigneeId });
+                    }}
+                  >
+                    <td className="table-cell px-4">{row.assigneeName}</td>
+                    <td className="table-cell px-4 tabular-nums">{row.total}</td>
+                    <td className="table-cell px-4 tabular-nums">{row.breached}</td>
+                    <td className="table-cell px-4 tabular-nums">{row.breachRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Operations (Task + SLA) Tab ──────────────────────────────────
   const OperationsTab = () => {
     const summary = taskSlaReport?.summary || {};
@@ -1760,6 +2632,17 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          {activeTab === 'phase1' && (
+            <button
+              onClick={handlePrintPhaseOneBoard}
+              className="btn-secondary h-9 px-3 text-sm flex items-center gap-1.5"
+              title="Open print-ready executive board"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              Board View
+            </button>
+          )}
+
           <button
             onClick={handleExportCsv}
             className="btn-secondary h-9 px-3 text-sm flex items-center gap-1.5"
@@ -1807,6 +2690,8 @@ export default function AnalyticsPage() {
       {/* Tab content */}
       {activeTab === 'overview' && <OverviewTab />}
       {activeTab === 'pipeline' && <PipelineTab />}
+      {activeTab === 'forecast' && <ForecastTab />}
+      {activeTab === 'phase1' && <PhaseOneTab />}
       {activeTab === 'team' && <TeamTab />}
       {activeTab === 'sources' && <SourcesTab />}
       {activeTab === 'activities' && <ActivitiesTab />}
