@@ -200,15 +200,17 @@ server.listen(PORT, () => {
     }
   }, 80000);
 
-  // Purge recycle bin records after startup load settles
-  setTimeout(() => {
-    try {
-      startRecycleBinPurgeScheduler();
-      logger.info('[Startup] RecycleBinPurge scheduler initialized');
-    } catch (err) {
-      logger.error('[Startup] Failed to initialize RecycleBinPurge scheduler:', err.message);
-    }
-  }, 95000);
+  // Start the task reminder scheduler (due-soon & overdue pop-ups)
+  startTaskReminderScheduler();
+
+  // Start soft-loop inactivity safety net (Will Call Us Again)
+  startWillCallAgainSafetyNetScheduler();
+
+  // Start unread reminder escalation monitor
+  startNotificationEscalationScheduler();
+
+  // Purge recycle bin records that crossed retention window
+  startRecycleBinPurgeScheduler();
 });
 
 // Graceful shutdown

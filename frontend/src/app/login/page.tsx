@@ -33,6 +33,11 @@ export default function LoginPage() {
       if (isRegister) {
         await register({ email, password, firstName, lastName, organizationName: orgName });
       } else {
+        if (rememberMe) {
+          localStorage.setItem(REMEMBER_KEY, btoa(JSON.stringify({ email, password })));
+        } else {
+          localStorage.removeItem(REMEMBER_KEY);
+        }
         const response = await login(email, password);
         // Store division data for SUPER_ADMIN users
         if (response && typeof response === 'object') {
