@@ -84,16 +84,18 @@ router.get('/', validateQuery(paginationSchema.extend({
   statuses: z.string().optional(),
   priority: z.string().optional(),
   priorities: z.string().optional(),
+  type: z.string().optional(),
   assigneeId: z.string().optional(),
   leadId: z.string().optional(),
   overdue: z.coerce.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, assigneeId, leadId, overdue } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, type, assigneeId, leadId, overdue } = req.validatedQuery;
 
     const where = {};
     const allowedStatuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
     const allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+    const allowedTypes = ['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'];
 
     const parsedStatuses = (statuses || '')
       .split(',')
@@ -132,6 +134,10 @@ router.get('/', validateQuery(paginationSchema.extend({
       where.priority = parsedPriorities[0];
     } else if (priority && allowedPriorities.includes(String(priority).toUpperCase())) {
       where.priority = String(priority).toUpperCase();
+    }
+
+    if (type && allowedTypes.includes(String(type).toUpperCase())) {
+      where.type = String(type).toUpperCase();
     }
 
     if (search?.trim()) {
