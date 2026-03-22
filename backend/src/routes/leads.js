@@ -186,6 +186,7 @@ const leadFilterSchema = paginationSchema.extend({
   customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
   divisionId: z.string().optional(),
   callOutcome: z.string().optional(), // comma-separated CallDisposition values
+  callOutcomeReason: z.string().optional(), // comma-separated reason labels/keys for latest call
   minCallCount: z.coerce.number().int().min(0).optional(),
   maxCallCount: z.coerce.number().int().min(0).optional(),
   showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
@@ -198,7 +199,7 @@ const aiSummaryRequestSchema = z.object({
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, callOutcomeReason, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
 
     const where = {
       organizationId: { in: req.orgIds },
@@ -341,10 +342,11 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
       if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
     }
-    // Call outcome filtering (match against each lead's latest call only)
-    if (callOutcome) {
-      const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
-      if (outcomes.length > 0) {
+    // Call outcome/reason filtering (match against each lead's latest call only)
+    if (callOutcome || callOutcomeReason) {
+      const outcomes = callOutcome ? callOutcome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const reasons = callOutcomeReason ? callOutcomeReason.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      if (outcomes.length > 0 || reasons.length > 0) {
         let scopedOrgIds = req.orgIds;
         if (typeof where.organizationId === 'string') {
           scopedOrgIds = [where.organizationId];
@@ -354,6 +356,8 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
 
         const builtinOutcomes = new Set(outcomes.filter((o) => BUILTIN_CALL_OUTCOMES.has(o)));
         const customOutcomes = new Set(outcomes.filter((o) => !BUILTIN_CALL_OUTCOMES.has(o)));
+        const normalize = (value) => String(value || '').trim().toLowerCase();
+        const reasonSet = new Set(reasons.map(normalize).filter(Boolean));
 
         const lastCalls = await getLatestCallsByLead({
           orgIds: scopedOrgIds,
@@ -362,11 +366,31 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
 
         const matchedLeadIds = lastCalls
           .filter((row) => {
-            if (builtinOutcomes.has(row.disposition)) return true;
-            if (row.disposition !== 'OTHER') return false;
             const md = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
-            const key = typeof md.dispositionKey === 'string' ? md.dispositionKey : '';
-            return key ? customOutcomes.has(key) : false;
+
+            const outcomeMatches = (() => {
+              if (outcomes.length === 0) return true;
+              if (builtinOutcomes.has(row.disposition)) return true;
+              if (row.disposition !== 'OTHER') return false;
+              const key = typeof md.dispositionKey === 'string' ? md.dispositionKey : '';
+              return key ? customOutcomes.has(key) : false;
+            })();
+            if (!outcomeMatches) return false;
+
+            const reasonMatches = (() => {
+              if (reasonSet.size === 0) return true;
+              // Reason drill is currently used for NOT_INTERESTED analytics.
+              if (row.disposition !== 'NOT_INTERESTED') return false;
+              const extractedReason =
+                md.notInterestedReasonLabel ||
+                md.notInterestedReason ||
+                md.reasonLabel ||
+                md.reason ||
+                null;
+              const reason = String(extractedReason || 'Unspecified').trim() || 'Unspecified';
+              return reasonSet.has(normalize(reason));
+            })();
+            return reasonMatches;
           })
           .map((row) => row.leadId);
 

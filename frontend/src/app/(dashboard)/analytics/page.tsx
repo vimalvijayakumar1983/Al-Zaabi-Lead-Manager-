@@ -2153,7 +2153,12 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#ef4444"
                 height={180}
-                onBarClick={() => drill({ callOutcome: 'NOT_INTERESTED' })}
+                onBarClick={(row) => {
+                  const reason = String(row?.reason || '').trim();
+                  const params: Record<string, string> = { callOutcome: 'NOT_INTERESTED' };
+                  if (reason) params.callOutcomeReason = reason;
+                  drill(params);
+                }}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No Not Interested reason data yet</p></div>

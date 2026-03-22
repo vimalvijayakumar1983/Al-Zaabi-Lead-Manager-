@@ -27,6 +27,7 @@ export interface FilterState {
   conversionMax: string;
   stageId: string;
   callOutcome: string;      // comma-separated CallDisposition values
+  callOutcomeReason: string; // comma-separated latest-call reason labels/keys
   minCallCount: string;
   maxCallCount: string;
   divisionId: string;
@@ -56,6 +57,7 @@ export const emptyFilters: FilterState = {
   conversionMax: '',
   stageId: '',
   callOutcome: '',
+  callOutcomeReason: '',
   minCallCount: '',
   maxCallCount: '',
   divisionId: '',
@@ -1108,6 +1110,7 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
     const outcomeLabels = outcomes.map(v => callOutcomeOptions.find(o => o.value === v)?.label || v);
     badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
   }
+  if (filters.callOutcomeReason) badges.push({ key: 'callOutcomeReason', label: `Reason: ${filters.callOutcomeReason}` });
   if (filters.divisionId) {
     let divName = filters.divisionId;
     try {
