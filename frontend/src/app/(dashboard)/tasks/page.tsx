@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
@@ -244,6 +245,7 @@ function StatCard({
 // ─── Main Tasks Page ────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 export default function TasksPage() {
+  const searchParams = useSearchParams();
   const { user: currentUser } = useAuthStore();
   const addToast = useNotificationStore((s) => s.addToast);
 
@@ -281,6 +283,32 @@ export default function TasksPage() {
 
   // ── Task Form ─────────────────────────────────────────────────────
   const [showForm, setShowForm] = useState(false);
+
+  // ── Hydrate filters from URL (for report drill-down links) ───────
+  useEffect(() => {
+    const status = searchParams.get('status');
+    const statuses = searchParams.get('statuses');
+    const priority = searchParams.get('priority');
+    const priorities = searchParams.get('priorities');
+    const type = searchParams.get('type');
+    const assigneeId = searchParams.get('assigneeId');
+    const overdue = searchParams.get('overdue');
+    const search = searchParams.get('search');
+
+    if (status) setStatusFilters([status]);
+    else if (statuses) setStatusFilters(statuses.split(',').map((s) => s.trim()).filter(Boolean));
+
+    if (priority) setPriorityFilters([priority]);
+    else if (priorities) setPriorityFilters(priorities.split(',').map((p) => p.trim()).filter(Boolean));
+
+    if (type) setTypeFilter(type);
+    if (assigneeId) setAssigneeFilter(assigneeId);
+    if (overdue === '1' || overdue === 'true') setDatePreset('overdue');
+    if (search) {
+      setSearchInput(search);
+      setSearchQuery(search);
+    }
+  }, [searchParams]);
 
   // ── Debounced search ──────────────────────────────────────────────
   useEffect(() => {
