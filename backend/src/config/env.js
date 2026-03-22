@@ -23,6 +23,24 @@ const config = {
     pass: process.env.SMTP_PASS,
   },
 
+  // IMAP (Incoming)
+  imap: {
+    host: process.env.IMAP_HOST,
+    port: parseInt(process.env.IMAP_PORT, 10) || 993,
+    user: process.env.IMAP_USER,
+    pass: process.env.IMAP_PASS,
+    security: process.env.IMAP_SECURITY || 'ssl',
+  },
+
+  // POP3 (Incoming)
+  pop3: {
+    host: process.env.POP3_HOST,
+    port: parseInt(process.env.POP3_PORT, 10) || 995,
+    user: process.env.POP3_USER,
+    pass: process.env.POP3_PASS,
+    security: process.env.POP3_SECURITY || 'ssl',
+  },
+
   // WhatsApp
   whatsapp: {
     apiUrl: process.env.WHATSAPP_API_URL,

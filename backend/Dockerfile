@@ -31,4 +31,5 @@ ENV NODE_ENV=production
 EXPOSE 4000
 
 # Run migrations and start server
-CMD ["sh", "-c", "npx prisma migrate deploy && node prisma/seed.js; node src/index.js"]
+# Resolve any previously failed migrations before deploying
+CMD ["sh", "-c", "npx prisma migrate resolve --rolled-back 20260313000000_add_notifications_integrations_apikeys 2>/dev/null; npx prisma migrate resolve --rolled-back 20260318200000_add_sla_tracking 2>/dev/null; npx prisma migrate deploy && node prisma/seed.js; node src/index.js"]

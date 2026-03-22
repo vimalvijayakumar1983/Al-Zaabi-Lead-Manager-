@@ -2,6 +2,7 @@ const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
+const { prisma } = require('../config/database');
 
 const clients = new Map(); // userId -> Set<ws>
 
@@ -75,4 +76,52 @@ const notifyOrganization = (orgUserIds, event) => {
   }
 };
 
-module.exports = { setupWebSocket, notifyUser, notifyOrganization };
+/**
+ * Broadcast a data-change event to all users in an organization (except the actor).
+ * This lets other users' UIs auto-refresh when someone makes a change.
+ *
+ * @param {string} orgId - Organization ID
+ * @param {string} entity - Entity type (e.g. 'lead', 'contact', 'task', 'deal', 'campaign')
+ * @param {string} action - Action type (e.g. 'created', 'updated', 'deleted', 'bulk_updated')
+ * @param {string} actorId - User who performed the action (excluded from broadcast)
+ * @param {object} [meta] - Optional metadata (e.g. entity ID)
+ */
+const broadcastDataChange = async (orgId, entity, action, actorId, meta = {}) => {
+  try {
+    // Find all active users in this org (and parent/child orgs for super admins)
+    const orgIds = [orgId];
+    const parentOrg = await prisma.organization.findUnique({ where: { id: orgId }, select: { parentId: true } });
+    if (parentOrg?.parentId) {
+      orgIds.push(parentOrg.parentId);
+    }
+    const childOrgs = await prisma.organization.findMany({
+      where: { parentId: orgId },
+      select: { id: true },
+    });
+    orgIds.push(...childOrgs.map(c => c.id));
+
+    const whereClause = { organizationId: { in: orgIds }, isActive: true };
+    if (actorId) whereClause.id = { not: actorId };
+
+    const users = await prisma.user.findMany({
+      where: whereClause,
+      select: { id: true },
+    });
+
+    const event = {
+      type: 'data_changed',
+      entity,
+      action,
+      ...meta,
+      timestamp: new Date().toISOString(),
+    };
+
+    for (const user of users) {
+      notifyUser(user.id, event);
+    }
+  } catch (err) {
+    logger.error('broadcastDataChange error:', err);
+  }
+};
+
+module.exports = { setupWebSocket, notifyUser, notifyOrganization, broadcastDataChange, _clients: clients };

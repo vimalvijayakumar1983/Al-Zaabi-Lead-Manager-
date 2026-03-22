@@ -12,6 +12,7 @@ import {
   Zap,
   Megaphone,
   UserCog,
+  Archive,
   Plus,
   ArrowRight,
   Hash,
@@ -45,6 +46,7 @@ export default function CommandPalette() {
     { id: 'nav-automations', label: 'Go to Automations', icon: Zap, action: () => router.push('/automations'), category: 'Navigation', shortcut: '6' },
     { id: 'nav-campaigns', label: 'Go to Campaigns', icon: Megaphone, action: () => router.push('/campaigns'), category: 'Navigation', shortcut: '7' },
     { id: 'nav-team', label: 'Go to Team', icon: UserCog, action: () => router.push('/team'), category: 'Navigation', shortcut: '8' },
+    { id: 'nav-recycle-bin', label: 'Go to Recycle Bin', icon: Archive, action: () => router.push('/recycle-bin'), category: 'Navigation' },
     // Actions
     { id: 'action-new-lead', label: 'Create New Lead', description: 'Add a new lead to the system', icon: Plus, action: () => { router.push('/leads'); setTimeout(() => window.dispatchEvent(new CustomEvent('open-lead-form')), 100); }, category: 'Actions' },
     { id: 'action-new-task', label: 'Create New Task', description: 'Add a new task', icon: Plus, action: () => router.push('/tasks'), category: 'Actions' },
