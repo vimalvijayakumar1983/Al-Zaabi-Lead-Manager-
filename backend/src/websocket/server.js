@@ -80,15 +80,13 @@ const notifyOrganization = (orgUserIds, event) => {
  * Broadcast a data-change event to all users in an organization (except the actor).
  * This lets other users' UIs auto-refresh when someone makes a change.
  *
- * @param {string} orgId - Organization ID
- * @param {string} entity - Entity type (e.g. 'lead', 'contact', 'task', 'deal', 'campaign')
- * @param {string} action - Action type (e.g. 'created', 'updated', 'deleted', 'bulk_updated')
- * @param {string} actorId - User who performed the action (excluded from broadcast)
- * @param {object} [meta] - Optional metadata (e.g. entity ID)
+ * Approach: find users in the same org + parent + children (quick), then also
+ * include every SUPER_ADMIN user (they can see all divisions including orphans
+ * with parentId=null that aren't linked into the org tree).
  */
 const broadcastDataChange = async (orgId, entity, action, actorId, meta = {}) => {
   try {
-    // Find all active users in this org (and parent/child orgs for super admins)
+    // Collect related orgs (parent + children of the source org)
     const orgIds = [orgId];
     const parentOrg = await prisma.organization.findUnique({ where: { id: orgId }, select: { parentId: true } });
     if (parentOrg?.parentId) {
@@ -100,13 +98,29 @@ const broadcastDataChange = async (orgId, entity, action, actorId, meta = {}) =>
     });
     orgIds.push(...childOrgs.map(c => c.id));
 
-    const whereClause = { organizationId: { in: orgIds }, isActive: true };
-    if (actorId) whereClause.id = { not: actorId };
+    // Users in the org tree
+    const treeWhere = { organizationId: { in: orgIds }, isActive: true };
+    if (actorId) treeWhere.id = { not: actorId };
+    const treeUsers = await prisma.user.findMany({ where: treeWhere, select: { id: true } });
 
-    const users = await prisma.user.findMany({
-      where: whereClause,
-      select: { id: true },
+    // SUPER_ADMIN users — they may sit in a GROUP org disconnected from orphan divisions
+    const saWhere = { role: 'SUPER_ADMIN', isActive: true };
+    if (actorId) saWhere.id = { not: actorId };
+    const superAdmins = await prisma.user.findMany({ where: saWhere, select: { id: true } });
+
+    // Users who have a DivisionMembership to this org
+    const memberRows = await prisma.divisionMembership.findMany({
+      where: { divisionId: orgId },
+      select: { userId: true },
     });
+    const memberUserIds = memberRows.map(m => m.userId);
+
+    // Deduplicate
+    const userIdSet = new Set();
+    for (const u of treeUsers) userIdSet.add(u.id);
+    for (const u of superAdmins) userIdSet.add(u.id);
+    for (const uid of memberUserIds) userIdSet.add(uid);
+    if (actorId) userIdSet.delete(actorId);
 
     const event = {
       type: 'data_changed',
@@ -116,8 +130,8 @@ const broadcastDataChange = async (orgId, entity, action, actorId, meta = {}) =>
       timestamp: new Date().toISOString(),
     };
 
-    for (const user of users) {
-      notifyUser(user.id, event);
+    for (const userId of userIdSet) {
+      notifyUser(userId, event);
     }
   } catch (err) {
     logger.error('broadcastDataChange error:', err);

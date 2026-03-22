@@ -33,8 +33,11 @@ async function resolveOrganizationId(phoneNumberId, displayPhoneNumber) {
   const displayCanon = displayPhoneNumber ? normalizePhone(displayPhoneNumber) : '';
 
   const orgs = await prisma.organization.findMany({
-    select: { id: true, settings: true },
+    select: { id: true, name: true, type: true, settings: true },
   });
+
+  // Collect ALL matching orgs first so we can log duplicates, then return the best one
+  const allMatches = [];
 
   // Pass 1 — Phone Number ID (WABA)
   for (const org of orgs) {
@@ -44,24 +47,47 @@ async function resolveOrganizationId(phoneNumberId, displayPhoneNumber) {
       for (const entry of numbers) {
         const entryId = canonicalWaPhoneNumberId(entry?.phoneNumberId);
         if (entryId && entryId === idCanon) {
-          console.log('[WhatsApp Inbound] Matched division/org by whatsappNumbers[].phoneNumberId', {
-            webhookPhoneNumberId: phoneNumberId,
-            canonicalId: idCanon,
+          allMatches.push({
             organizationId: org.id,
+            organizationName: org.name,
+            organizationType: org.type,
+            matchedBy: 'whatsappNumbers[].phoneNumberId',
             label: entry?.label || null,
           });
-          return org.id;
         }
       }
     }
     const singleId = canonicalWaPhoneNumberId(settings.whatsappPhoneNumberId);
     if (singleId && singleId === idCanon) {
-      console.log('[WhatsApp Inbound] Matched division/org by legacy whatsappPhoneNumberId', {
-        webhookPhoneNumberId: phoneNumberId,
+      allMatches.push({
         organizationId: org.id,
+        organizationName: org.name,
+        organizationType: org.type,
+        matchedBy: 'legacy whatsappPhoneNumberId',
+        label: null,
       });
-      return org.id;
     }
+  }
+
+  if (allMatches.length > 0) {
+    if (allMatches.length > 1) {
+      console.warn('[WhatsApp Inbound] DUPLICATE: multiple orgs have phone_number_id', {
+        phoneNumberId,
+        canonicalId: idCanon,
+        matches: allMatches,
+      });
+    }
+    // Prefer DIVISION over GROUP; among divisions, prefer the one with a token (sendable)
+    const preferred = allMatches.find(m => m.organizationType === 'DIVISION') || allMatches[0];
+    console.log('[WhatsApp Inbound] Matched division/org by whatsappNumbers[].phoneNumberId', {
+      webhookPhoneNumberId: phoneNumberId,
+      canonicalId: idCanon,
+      organizationId: preferred.organizationId,
+      organizationName: preferred.organizationName,
+      label: preferred.label,
+      totalMatches: allMatches.length,
+    });
+    return preferred.organizationId;
   }
 
   // Pass 2 — Display business line (e.g. Meta sample uses display_phone_number when test ID differs)
@@ -87,12 +113,21 @@ async function resolveOrganizationId(phoneNumberId, displayPhoneNumber) {
 
   const globalId = canonicalWaPhoneNumberId(config.whatsapp?.phoneNumberId);
   if (globalId && globalId === idCanon) {
-    const first = await prisma.organization.findFirst({ select: { id: true } });
-    console.log('[WhatsApp Inbound] Matched org via env WHATSAPP_PHONE_NUMBER_ID → first org fallback', {
-      webhookPhoneNumberId: phoneNumberId,
-      organizationId: first?.id ?? null,
+    // Prefer a DIVISION over a GROUP; within divisions prefer one that has
+    // a sendable token in its own settings so outbound works too.
+    const allOrgsForFallback = await prisma.organization.findMany({
+      select: { id: true, name: true, type: true },
+      orderBy: { createdAt: 'asc' },
     });
-    return first?.id ?? null;
+    const division = allOrgsForFallback.find(o => o.type === 'DIVISION') || allOrgsForFallback[0];
+    console.log('[WhatsApp Inbound] Matched org via env WHATSAPP_PHONE_NUMBER_ID → fallback', {
+      webhookPhoneNumberId: phoneNumberId,
+      organizationId: division?.id ?? null,
+      organizationName: division?.name ?? null,
+      organizationType: division?.type ?? null,
+      hint: 'Set Phone Number ID in the division\'s Settings → WhatsApp to avoid env fallback',
+    });
+    return division?.id ?? null;
   }
 
   const fallbackOrgId = config.whatsapp?.unmatchedFallbackOrgId;
