@@ -33,6 +33,76 @@ function isMissing(value: any) {
   return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
 }
 
+function toIsoOrNull(raw: any): string | null {
+  if (isMissing(raw)) return null;
+  if (raw instanceof Date) {
+    return Number.isNaN(raw.getTime()) ? null : raw.toISOString();
+  }
+  if (typeof raw === 'number') {
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  const value = String(raw).trim();
+  if (!value) return null;
+
+  const normalizedLocal = value.includes(' ') && !value.includes('T') ? value.replace(' ', 'T') : value;
+  let parsed = new Date(normalizedLocal);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+
+  const localeMatch = value.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,?\s+(\d{1,2})(?::(\d{2}))?\s*([AP]M)?)?$/i
+  );
+  if (localeMatch) {
+    const month = Number(localeMatch[1]);
+    const day = Number(localeMatch[2]);
+    const year = Number(localeMatch[3]);
+    let hour = Number(localeMatch[4] || 0);
+    const minute = Number(localeMatch[5] || 0);
+    const meridiem = (localeMatch[6] || '').toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return null;
+}
+
+function resolveDateFieldValue(
+  values: Record<string, any>,
+  fields: any[],
+  kind: 'callback' | 'meeting' | 'appointment'
+) {
+  const keyHints: Record<string, string[]> = {
+    callback: ['callbackDate', 'callbackAt', 'callbackDateTime', 'scheduledCallbackAt', 'followUpAt', 'callback_date'],
+    meeting: ['meetingDate', 'meetingAt', 'meetingDateTime', 'scheduledMeetingAt'],
+    appointment: ['appointmentDate', 'appointmentAt', 'appointmentDateTime', 'scheduledAppointmentAt'],
+  };
+  const regexHints: Record<string, RegExp> = {
+    callback: /callback|call\s*later|follow.?up|schedule/i,
+    meeting: /meeting|consultation/i,
+    appointment: /appointment|booking/i,
+  };
+
+  for (const key of keyHints[kind] || []) {
+    if (!isMissing(values[key])) return values[key];
+  }
+
+  const datetimeFields = (fields || []).filter((field) => field?.type === 'datetime');
+  const hintedField = datetimeFields.find((field) =>
+    regexHints[kind].test(`${field.key || ''} ${field.label || ''}`)
+  );
+  if (hintedField && !isMissing(values[hintedField.key])) {
+    return values[hintedField.key];
+  }
+
+  const requiredDateField = datetimeFields.find((field) => field.required === true && !isMissing(values[field.key]));
+  if (requiredDateField) {
+    return values[requiredDateField.key];
+  }
+
+  return null;
+}
+
 export function LogCallModalDynamic({
   onClose,
   onSubmit,
@@ -86,14 +156,16 @@ export function LogCallModalDynamic({
     setSubmitting(true);
     try {
       const values = form.dynamicFieldValues || {};
-      const toIsoOrNull = (raw: any) => (raw ? new Date(String(raw)).toISOString() : null);
+      const callbackRaw = resolveDateFieldValue(values, visibleFields, 'callback');
+      const meetingRaw = resolveDateFieldValue(values, visibleFields, 'meeting');
+      const appointmentRaw = resolveDateFieldValue(values, visibleFields, 'appointment');
       await onSubmit({
         disposition: form.disposition,
         notes: form.notes || null,
         duration: form.duration ? parseInt(form.duration, 10) * 60 : null,
-        callbackDate: toIsoOrNull(values.callbackDate),
-        meetingDate: toIsoOrNull(values.meetingDate),
-        appointmentDate: toIsoOrNull(values.appointmentDate),
+        callbackDate: toIsoOrNull(callbackRaw),
+        meetingDate: toIsoOrNull(meetingRaw),
+        appointmentDate: toIsoOrNull(appointmentRaw),
         expectedCallbackWindow: values.expectedCallbackWindow || null,
         notInterestedReason: values.notInterestedReason || null,
         notInterestedOtherText: values.notInterestedOtherText?.trim?.() || null,

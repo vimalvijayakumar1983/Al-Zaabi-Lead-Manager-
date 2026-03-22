@@ -193,6 +193,84 @@ function asObject(value) {
   return (typeof value === 'object' && value !== null) ? value : {};
 }
 
+function hasValue(value) {
+  return !(value === undefined || value === null || (typeof value === 'string' && value.trim() === ''));
+}
+
+function parseLooseDateInput(value) {
+  if (!hasValue(value)) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === 'number') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const normalizedLocal = raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw;
+  let parsed = new Date(normalizedLocal);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+
+  // Support locale-style values (MM/DD/YYYY hh:mm AM/PM) from non-standard pickers.
+  const localeMatch = raw.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,?\s+(\d{1,2})(?::(\d{2}))?\s*([AP]M)?)?$/i
+  );
+  if (localeMatch) {
+    const month = Number(localeMatch[1]);
+    const day = Number(localeMatch[2]);
+    const year = Number(localeMatch[3]);
+    let hour = Number(localeMatch[4] || 0);
+    const minute = Number(localeMatch[5] || 0);
+    const meridiem = (localeMatch[6] || '').toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+
+  return null;
+}
+
+function pickDispositionDateValue(kind, fieldValues, fields = []) {
+  const values = asObject(fieldValues);
+  const datetimeFields = Array.isArray(fields)
+    ? fields.filter((field) => field?.type === 'datetime')
+    : [];
+
+  const keyHints = {
+    callback: ['callbackDate', 'callbackAt', 'callbackDateTime', 'scheduledCallbackAt', 'followUpAt', 'callback_date'],
+    meeting: ['meetingDate', 'meetingAt', 'meetingDateTime', 'scheduledMeetingAt'],
+    appointment: ['appointmentDate', 'appointmentAt', 'appointmentDateTime', 'scheduledAppointmentAt'],
+  };
+  const labelHintRegex = {
+    callback: /callback|call\s*later|follow.?up|schedule/i,
+    meeting: /meeting|consultation/i,
+    appointment: /appointment|booking/i,
+  };
+
+  for (const key of keyHints[kind] || []) {
+    if (hasValue(values[key])) return values[key];
+  }
+
+  const hintedField = datetimeFields.find((field) =>
+    labelHintRegex[kind].test(`${field.key || ''} ${field.label || ''}`)
+  );
+  if (hintedField && hasValue(values[hintedField.key])) {
+    return values[hintedField.key];
+  }
+
+  const requiredField = datetimeFields.find(
+    (field) => field.required === true && hasValue(values[field.key])
+  );
+  if (requiredField) {
+    return values[requiredField.key];
+  }
+
+  return null;
+}
+
 async function resolveTargetOrgId(req, divisionId) {
   if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) return divisionId;
   return req.user.organizationId;
@@ -416,9 +494,12 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
       });
     }
 
-    const callbackDateValue = mergedFieldValues.callbackDate || null;
-    const meetingDateValue = mergedFieldValues.meetingDate || null;
-    const appointmentDateValue = mergedFieldValues.appointmentDate || null;
+    const callbackDateValue = pickDispositionDateValue('callback', mergedFieldValues, effectiveDefinition.fields || []);
+    const meetingDateValue = pickDispositionDateValue('meeting', mergedFieldValues, effectiveDefinition.fields || []);
+    const appointmentDateValue = pickDispositionDateValue('appointment', mergedFieldValues, effectiveDefinition.fields || []);
+    const callbackDateParsed = parseLooseDateInput(callbackDateValue);
+    const meetingDateParsed = parseLooseDateInput(meetingDateValue);
+    const appointmentDateParsed = parseLooseDateInput(appointmentDateValue);
     const expectedCallbackWindowValue = mergedFieldValues.expectedCallbackWindow || null;
     const notInterestedReasonValue = mergedFieldValues.notInterestedReason || null;
     const notInterestedOtherTextValue = mergedFieldValues.notInterestedOtherText || null;
@@ -434,14 +515,13 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
 
     // Keep strict built-in validations for backward compatibility.
     if (storedDisposition === 'CALL_LATER') {
-      if (!callbackDateValue) {
+      if (!callbackDateParsed) {
         return res.status(400).json({
           error: 'A specific date and time is required for "Call Later". The client requested a scheduled callback — please enter exactly when to call.',
           field: 'callbackDate',
         });
       }
-      const scheduledTime = new Date(callbackDateValue);
-      if (scheduledTime <= new Date()) {
+      if (callbackDateParsed <= new Date()) {
         return res.status(400).json({
           error: 'The scheduled callback date/time must be in the future.',
           field: 'callbackDate',
@@ -493,7 +573,9 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
 
     // Create follow-up task if applicable
     if (data.createFollowUp && autoAction?.taskType) {
-      const dueAt = callbackDateValue || meetingDateValue || appointmentDateValue
+      const dueAt = callbackDateParsed?.toISOString()
+        || meetingDateParsed?.toISOString()
+        || appointmentDateParsed?.toISOString()
         || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // default: tomorrow
 
       const task = await prisma.task.create({
@@ -619,9 +701,9 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         disposition: storedDisposition,
         notes: data.notes || null,
         duration: data.duration || null,
-        callbackDate: callbackDateValue ? new Date(callbackDateValue) : null,
-        meetingDate: meetingDateValue ? new Date(meetingDateValue) : null,
-        appointmentDate: appointmentDateValue ? new Date(appointmentDateValue) : null,
+        callbackDate: callbackDateParsed,
+        meetingDate: meetingDateParsed,
+        appointmentDate: appointmentDateParsed,
         followUpTaskId,
         metadata: callMetadata,
       },
