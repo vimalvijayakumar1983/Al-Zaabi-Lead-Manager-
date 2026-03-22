@@ -1,6 +1,5 @@
 const { Router } = require('express');
 const { z } = require('zod');
-const { Prisma } = require('@prisma/client');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
@@ -47,32 +46,32 @@ function getDisplayName(obj) {
 }
 
 async function getLatestCallsByLead({ orgIds, assignedToId, leadIds } = {}) {
-  const conditions = [Prisma.sql`l.is_archived = false`];
+  if (Array.isArray(leadIds) && leadIds.length === 0) return [];
 
-  if (Array.isArray(orgIds) && orgIds.length > 0) {
-    conditions.push(Prisma.sql`l.organization_id IN (${Prisma.join(orgIds)})`);
-  }
-  if (assignedToId) {
-    conditions.push(Prisma.sql`l.assigned_to_id = ${assignedToId}`);
-  }
-  if (Array.isArray(leadIds)) {
-    if (leadIds.length === 0) return [];
-    conditions.push(Prisma.sql`cl.lead_id IN (${Prisma.join(leadIds)})`);
+  const where = {};
+  if (Array.isArray(leadIds) && leadIds.length > 0) {
+    where.leadId = { in: leadIds };
+  } else if ((Array.isArray(orgIds) && orgIds.length > 0) || assignedToId) {
+    where.lead = {
+      isArchived: false,
+      ...(Array.isArray(orgIds) && orgIds.length > 0 ? { organizationId: { in: orgIds } } : {}),
+      ...(assignedToId ? { assignedToId } : {}),
+    };
   }
 
-  const rows = await prisma.$queryRaw`
-    SELECT DISTINCT ON (cl.lead_id)
-      cl.lead_id AS "leadId",
-      cl.disposition::text AS "disposition",
-      cl.notes AS "notes",
-      cl.created_at AS "createdAt",
-      cl.metadata AS "metadata"
-    FROM call_logs cl
-    JOIN leads l ON l.id = cl.lead_id
-    WHERE ${Prisma.join(conditions, Prisma.sql` AND `)}
-    ORDER BY cl.lead_id, cl.created_at DESC, cl.id DESC
-  `;
-  return Array.isArray(rows) ? rows : [];
+  return prisma.callLog.findMany({
+    where,
+    // Deterministic latest call per lead to keep filter + table consistent
+    orderBy: [{ leadId: 'asc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    distinct: ['leadId'],
+    select: {
+      leadId: true,
+      disposition: true,
+      notes: true,
+      createdAt: true,
+      metadata: true,
+    },
+  });
 }
 
 function readNumericCustomValue(customData, key) {
