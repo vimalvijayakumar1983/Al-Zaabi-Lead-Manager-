@@ -467,6 +467,8 @@ export default function AnalyticsPage() {
   const [divisionComp, setDivisionComp] = useState<any[]>([]);
   const [taskSlaReport, setTaskSlaReport] = useState<any>(null);
   const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
+  const [taskSlaUnavailable, setTaskSlaUnavailable] = useState(false);
+  const [callReportUnavailable, setCallReportUnavailable] = useState(false);
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -549,8 +551,20 @@ export default function AnalyticsPage() {
       if (cam.status === 'fulfilled') setCampaigns(Array.isArray(cam.value) ? cam.value : []);
       if (act.status === 'fulfilled') setActivities(act.value);
       if (sd.status === 'fulfilled') setScoreDistrib(Array.isArray(sd.value) ? sd.value : []);
-      if (taskSla.status === 'fulfilled') setTaskSlaReport(taskSla.value || null);
-      if (callDisp.status === 'fulfilled') setCallDispositionReport(callDisp.value || null);
+      if (taskSla.status === 'fulfilled') {
+        setTaskSlaReport(taskSla.value || null);
+        setTaskSlaUnavailable(false);
+      } else {
+        setTaskSlaReport(null);
+        setTaskSlaUnavailable(true);
+      }
+      if (callDisp.status === 'fulfilled') {
+        setCallDispositionReport(callDisp.value || null);
+        setCallReportUnavailable(false);
+      } else {
+        setCallDispositionReport(null);
+        setCallReportUnavailable(true);
+      }
 
       if (isSuperAdmin && !divId) {
         api.getDivisionComparison().then(d => setDivisionComp(Array.isArray(d) ? d : [])).catch(() => {});
@@ -1386,6 +1400,11 @@ export default function AnalyticsPage() {
 
     return (
       <div className="space-y-6">
+        {taskSlaUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Task &amp; SLA report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <KpiCard title="Open Tasks" value={summary.openTasks || 0} icon={Clock} iconBg="bg-amber-50" iconColor="text-amber-600" />
           <KpiCard title="Overdue Tasks" value={summary.overdueTasks || 0} icon={AlertCircle} iconBg="bg-red-50" iconColor="text-red-500" href="/tasks?filter=overdue" />
@@ -1510,9 +1529,20 @@ export default function AnalyticsPage() {
     const notInterested = callDispositionReport?.notInterested || { total: 0, reasons: [] };
     const completed = callDispositionReport?.alreadyCompletedServices || { total: 0, locations: [] };
     const willCall = callDispositionReport?.willCallAgain || { total: 0, expectedCallbackWindows: [] };
+    const usedPeriodFallback = callDispositionReport?.meta?.periodFallback === true;
 
     return (
       <div className="space-y-6">
+        {callReportUnavailable && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Call Intelligence report endpoint is unavailable in the current deployment. Showing empty state.
+          </div>
+        )}
+        {usedPeriodFallback && !callReportUnavailable && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            No calls found in selected period; showing all-time call intelligence for this scope.
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <KpiCard title="Total Calls" value={summary.totalCalls || 0} icon={Phone} iconBg="bg-brand-50" iconColor="text-brand-600" />
           <KpiCard title="Reachability Ratio" value={summary.reachabilityRatio || 0} format="percent" icon={Target} iconBg="bg-emerald-50" iconColor="text-emerald-600" />

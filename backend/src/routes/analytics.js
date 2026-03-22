@@ -43,7 +43,12 @@ function getTaskWhere(req, divisionId, extra = {}) {
   if (req.isRestrictedRole) {
     where.assigneeId = req.user.id;
   } else {
-    where.assignee = { organizationId: getOrgFilter(req, divisionId) };
+    // Include tasks by assignee org OR linked lead org to avoid undercounting
+    // historical/cross-division records in reporting.
+    where.OR = [
+      { assignee: { organizationId: getOrgFilter(req, divisionId) } },
+      { lead: { organizationId: getOrgFilter(req, divisionId) } },
+    ];
   }
   return where;
 }
@@ -643,128 +648,140 @@ router.get('/call-disposition-report', async (req, res, next) => {
     const { divisionId, period = '30d' } = req.query;
     const { start } = getPeriodDates(period);
     const orgFilter = getOrgFilter(req, divisionId);
+    const scopedBaseWhere = req.isRestrictedRole
+      ? { userId: req.user.id }
+      : { lead: { organizationId: orgFilter } };
 
-    const callWhere = req.isRestrictedRole
-      ? { userId: req.user.id, createdAt: { gte: start } }
-      : { lead: { organizationId: orgFilter, isArchived: false }, createdAt: { gte: start } };
+    const buildReport = async (where, meta = {}) => {
+      const [totalCalls, notReachedCalls, dispositionRows, uniqueLeadRows, durationAgg, notInterestedRows, completedRows, willCallRows] = await Promise.all([
+        prisma.callLog.count({ where }),
+        prisma.callLog.count({ where: { ...where, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+        prisma.callLog.groupBy({ by: ['disposition'], where, _count: { _all: true } }),
+        prisma.callLog.findMany({ where, select: { leadId: true }, distinct: ['leadId'] }),
+        prisma.callLog.aggregate({ where, _avg: { duration: true } }),
+        prisma.callLog.findMany({
+          where: { ...where, disposition: 'NOT_INTERESTED' },
+          select: { metadata: true, notes: true },
+        }),
+        prisma.callLog.findMany({
+          where: { ...where, disposition: 'ALREADY_COMPLETED_SERVICES' },
+          select: { metadata: true },
+        }),
+        prisma.callLog.findMany({
+          where: { ...where, disposition: 'WILL_CALL_US_AGAIN' },
+          select: { metadata: true },
+        }),
+      ]);
 
-    const [totalCalls, notReachedCalls, dispositionRows, uniqueLeadRows, durationAgg, notInterestedRows, completedRows, willCallRows] = await Promise.all([
-      prisma.callLog.count({ where: callWhere }),
-      prisma.callLog.count({ where: { ...callWhere, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
-      prisma.callLog.groupBy({ by: ['disposition'], where: callWhere, _count: { _all: true } }),
-      prisma.callLog.findMany({ where: callWhere, select: { leadId: true }, distinct: ['leadId'] }),
-      prisma.callLog.aggregate({ where: callWhere, _avg: { duration: true } }),
-      prisma.callLog.findMany({
-        where: { ...callWhere, disposition: 'NOT_INTERESTED' },
-        select: { metadata: true, notes: true },
-      }),
-      prisma.callLog.findMany({
-        where: { ...callWhere, disposition: 'ALREADY_COMPLETED_SERVICES' },
-        select: { metadata: true },
-      }),
-      prisma.callLog.findMany({
-        where: { ...callWhere, disposition: 'WILL_CALL_US_AGAIN' },
-        select: { metadata: true },
-      }),
-    ]);
+      const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
+      const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
 
-    const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
-    const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
+      const byDisposition = dispositionRows
+        .map((row) => {
+          const count = row._count._all || 0;
+          return {
+            disposition: row.disposition,
+            label: CALL_DISPOSITION_LABELS[row.disposition] || row.disposition?.replace(/_/g, ' ') || 'Unknown',
+            count,
+            percent: totalCalls > 0 ? Math.round((count / totalCalls) * 10000) / 100 : 0,
+          };
+        })
+        .sort((a, b) => b.count - a.count);
 
-    const byDisposition = dispositionRows
-      .map((row) => {
-        const count = row._count._all || 0;
-        return {
-          disposition: row.disposition,
-          label: CALL_DISPOSITION_LABELS[row.disposition] || row.disposition?.replace(/_/g, ' ') || 'Unknown',
+      const reasonMap = new Map();
+      for (const row of notInterestedRows) {
+        const metadata = parseMetadata(row.metadata);
+        const extractedReason =
+          metadata?.notInterestedReasonLabel ||
+          metadata?.notInterestedReason ||
+          metadata?.reasonLabel ||
+          metadata?.reason ||
+          null;
+        const reason = String(extractedReason || 'Unspecified').trim() || 'Unspecified';
+        reasonMap.set(reason, (reasonMap.get(reason) || 0) + 1);
+      }
+      const notInterestedTotal = notInterestedRows.length;
+      const notInterestedReasons = Array.from(reasonMap.entries())
+        .map(([reason, count]) => ({
+          reason,
           count,
-          percent: totalCalls > 0 ? Math.round((count / totalCalls) * 10000) / 100 : 0,
-        };
-      })
-      .sort((a, b) => b.count - a.count);
+          percent: notInterestedTotal > 0 ? Math.round((count / notInterestedTotal) * 10000) / 100 : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
 
-    const reasonMap = new Map();
-    for (const row of notInterestedRows) {
-      const metadata = parseMetadata(row.metadata);
-      const extractedReason =
-        metadata?.notInterestedReasonLabel ||
-        metadata?.notInterestedReason ||
-        metadata?.reasonLabel ||
-        metadata?.reason ||
-        null;
-      const reason = String(extractedReason || 'Unspecified').trim() || 'Unspecified';
-      reasonMap.set(reason, (reasonMap.get(reason) || 0) + 1);
+      const completedLocationMap = new Map();
+      for (const row of completedRows) {
+        const metadata = parseMetadata(row.metadata);
+        const label =
+          metadata?.completedServiceLocationLabel ||
+          metadata?.completedServiceLocation ||
+          'Unspecified';
+        const location = String(label).trim() || 'Unspecified';
+        completedLocationMap.set(location, (completedLocationMap.get(location) || 0) + 1);
+      }
+      const completedTotal = completedRows.length;
+      const completedServiceLocations = Array.from(completedLocationMap.entries())
+        .map(([location, count]) => ({
+          location,
+          count,
+          percent: completedTotal > 0 ? Math.round((count / completedTotal) * 10000) / 100 : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      const callbackWindowMap = new Map();
+      for (const row of willCallRows) {
+        const metadata = parseMetadata(row.metadata);
+        const label =
+          metadata?.expectedCallbackWindowLabel ||
+          metadata?.expectedCallbackWindow ||
+          'Unspecified';
+        const window = String(label).trim() || 'Unspecified';
+        callbackWindowMap.set(window, (callbackWindowMap.get(window) || 0) + 1);
+      }
+      const willCallTotal = willCallRows.length;
+      const expectedCallbackWindows = Array.from(callbackWindowMap.entries())
+        .map(([window, count]) => ({
+          window,
+          count,
+          percent: willCallTotal > 0 ? Math.round((count / willCallTotal) * 10000) / 100 : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      return {
+        summary: {
+          totalCalls,
+          uniqueLeadsTouched: uniqueLeadRows.length,
+          reachedCalls,
+          notReachedCalls,
+          reachabilityRatio,
+          avgDurationSeconds: Math.round(Number(durationAgg._avg.duration || 0)),
+        },
+        byDisposition,
+        notInterested: {
+          total: notInterestedTotal,
+          reasons: notInterestedReasons,
+        },
+        alreadyCompletedServices: {
+          total: completedTotal,
+          locations: completedServiceLocations,
+        },
+        willCallAgain: {
+          total: willCallTotal,
+          expectedCallbackWindows,
+        },
+        meta,
+      };
+    };
+
+    const periodWhere = { ...scopedBaseWhere, createdAt: { gte: start } };
+    const periodReport = await buildReport(periodWhere, { periodFallback: false });
+    if (periodReport.summary.totalCalls > 0) {
+      return res.json(periodReport);
     }
-    const notInterestedTotal = notInterestedRows.length;
-    const notInterestedReasons = Array.from(reasonMap.entries())
-      .map(([reason, count]) => ({
-        reason,
-        count,
-        percent: notInterestedTotal > 0 ? Math.round((count / notInterestedTotal) * 10000) / 100 : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
 
-    const completedLocationMap = new Map();
-    for (const row of completedRows) {
-      const metadata = parseMetadata(row.metadata);
-      const label =
-        metadata?.completedServiceLocationLabel ||
-        metadata?.completedServiceLocation ||
-        'Unspecified';
-      const location = String(label).trim() || 'Unspecified';
-      completedLocationMap.set(location, (completedLocationMap.get(location) || 0) + 1);
-    }
-    const completedTotal = completedRows.length;
-    const completedServiceLocations = Array.from(completedLocationMap.entries())
-      .map(([location, count]) => ({
-        location,
-        count,
-        percent: completedTotal > 0 ? Math.round((count / completedTotal) * 10000) / 100 : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
-
-    const callbackWindowMap = new Map();
-    for (const row of willCallRows) {
-      const metadata = parseMetadata(row.metadata);
-      const label =
-        metadata?.expectedCallbackWindowLabel ||
-        metadata?.expectedCallbackWindow ||
-        'Unspecified';
-      const window = String(label).trim() || 'Unspecified';
-      callbackWindowMap.set(window, (callbackWindowMap.get(window) || 0) + 1);
-    }
-    const willCallTotal = willCallRows.length;
-    const expectedCallbackWindows = Array.from(callbackWindowMap.entries())
-      .map(([window, count]) => ({
-        window,
-        count,
-        percent: willCallTotal > 0 ? Math.round((count / willCallTotal) * 10000) / 100 : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
-
-    res.json({
-      summary: {
-        totalCalls,
-        uniqueLeadsTouched: uniqueLeadRows.length,
-        reachedCalls,
-        notReachedCalls,
-        reachabilityRatio,
-        avgDurationSeconds: Math.round(Number(durationAgg._avg.duration || 0)),
-      },
-      byDisposition,
-      notInterested: {
-        total: notInterestedTotal,
-        reasons: notInterestedReasons,
-      },
-      alreadyCompletedServices: {
-        total: completedTotal,
-        locations: completedServiceLocations,
-      },
-      willCallAgain: {
-        total: willCallTotal,
-        expectedCallbackWindows,
-      },
-    });
+    // If period is empty, return all-time scoped report instead of blank zeros.
+    const fallbackReport = await buildReport(scopedBaseWhere, { periodFallback: true, fallbackReason: 'NO_CALLS_IN_SELECTED_PERIOD' });
+    return res.json(fallbackReport);
   } catch (err) { next(err); }
 });
 
