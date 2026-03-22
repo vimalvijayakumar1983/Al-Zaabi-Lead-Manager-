@@ -758,7 +758,7 @@ function buildWhatsAppNumberLookup(settings) {
   const numbers = Array.isArray(settings?.whatsappNumbers) ? settings.whatsappNumbers : [];
   for (const n of numbers) {
     const id = trimSettingStr(n?.phoneNumberId);
-    if (id) byPhoneId[id] = n;
+    if (id) byPhoneId[id] = n; // skip empty id (displayPhone-only rows)
   }
   const legId = trimSettingStr(settings?.whatsappPhoneNumberId);
   if (legId && !byPhoneId[legId]) {
@@ -782,6 +782,7 @@ function sanitizeWhatsAppSettingsForClient(settings) {
       return {
         label: trimSettingStr(n?.label) || '',
         phoneNumberId,
+        displayPhone: trimSettingStr(n?.displayPhone) || '',
         token: hasToken ? WHATSAPP_SECRET_MASK : '',
         hasToken,
       };
@@ -793,6 +794,7 @@ function sanitizeWhatsAppSettingsForClient(settings) {
       numbers = [{
         label: '',
         phoneNumberId: singleId,
+        displayPhone: '',
         token: singleTok ? WHATSAPP_SECRET_MASK : '',
         hasToken: !!singleTok,
       }];
@@ -816,18 +818,22 @@ function mergeWhatsAppSettingsFromBody(existingSettings, body) {
   const mergedNumbers = incoming
     .map((n) => {
       const phoneNumberId = trimSettingStr(n?.phoneNumberId);
+      const prev = byPhoneId[phoneNumberId];
       let token = trimSettingStr(n?.token);
       if (!token || token === WHATSAPP_SECRET_MASK) {
-        const prev = byPhoneId[phoneNumberId];
         token = prev ? trimSettingStr(prev.token) : '';
       }
+      const displayPhone = n?.displayPhone != null && String(n.displayPhone).trim()
+        ? String(n.displayPhone).trim()
+        : (prev?.displayPhone != null ? String(prev.displayPhone).trim() : undefined);
       return {
         label: n?.label != null && String(n.label).trim() ? String(n.label).trim() : undefined,
         phoneNumberId,
+        displayPhone: displayPhone || undefined,
         token: token || undefined,
       };
     })
-    .filter((n) => n.phoneNumberId);
+    .filter((n) => trimSettingStr(n.phoneNumberId) || trimSettingStr(n.displayPhone));
 
   let whatsappWebhookVerifyToken;
   if (body.whatsappWebhookVerifyToken === undefined || body.whatsappWebhookVerifyToken === null) {
@@ -870,6 +876,8 @@ const whatsAppSaveSchema = z.object({
   whatsappNumbers: z.array(z.object({
     label: z.string().optional().nullable(),
     phoneNumberId: z.string(),
+    /** Digits or E.164; matched to webhook metadata.display_phone_number for routing */
+    displayPhone: z.string().optional().nullable(),
     token: z.string().optional().nullable(),
   })).optional(),
   whatsappWebhookVerifyToken: z.string().optional().nullable(),

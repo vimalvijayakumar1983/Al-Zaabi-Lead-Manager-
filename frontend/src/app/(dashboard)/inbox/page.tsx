@@ -287,6 +287,8 @@ function InboxContent() {
       if (channelFilter !== 'ALL') params.channel = channelFilter;
       if (debouncedSearch) params.search = debouncedSearch;
       if (statusFilter) params.status = statusFilter;
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      if (activeDivisionId) params.divisionId = activeDivisionId;
 
       const res = await api.getInboxConversations(params);
       setConversations(res.conversations || []);
@@ -302,7 +304,8 @@ function InboxContent() {
     const background = options?.background === true;
     try {
       if (!background) setLoadingMessages(true);
-      const res = await api.getInboxMessages(leadId);
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const res = await api.getInboxMessages(leadId, activeDivisionId ? { divisionId: activeDivisionId } : undefined);
       setMessages(res.messages || []);
       setLeadInfo(res.lead || null);
 
@@ -337,7 +340,8 @@ function InboxContent() {
 
   // ─── Load stats ───────────────────────────────────────────────────
   useEffect(() => {
-    api.getInboxStats().then(setStats).catch(() => {});
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getInboxStats(activeDivisionId || undefined).then(setStats).catch(() => {});
   }, []);
 
   useEffect(() => { loadConversations(); }, [loadConversations]);

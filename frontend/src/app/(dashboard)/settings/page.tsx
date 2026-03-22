@@ -604,7 +604,7 @@ function OrganizationSection() {
 /* ─── WhatsApp Section (admin only, per division) ───────────────── */
 const WHATSAPP_TOKEN_MASK = '••••••••';
 
-type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; token: string };
+type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; displayPhone: string; token: string };
 
 function WhatsAppSection() {
   const { user } = useAuthStore();
@@ -637,15 +637,16 @@ function WhatsAppSection() {
             id: `n-${i}-${n.phoneNumberId || i}`,
             label: n.label || '',
             phoneNumberId: n.phoneNumberId || '',
+            displayPhone: n.displayPhone || '',
             token: n.hasToken ? WHATSAPP_TOKEN_MASK : (n.token || ''),
           })),
         );
       } else {
-        setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
+        setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load WhatsApp settings');
-      setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', token: '' }]);
+      setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
     } finally {
       setLoading(false);
     }
@@ -660,7 +661,7 @@ function WhatsAppSection() {
   }, [isSuperAdmin, selectedDivisionId, loadWhatsAppSettings]);
 
   const addNumber = () => {
-    setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', token: '' }]);
+    setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
   };
 
   const removeNumber = (id: string) => {
@@ -678,12 +679,13 @@ function WhatsAppSection() {
     setSuccess(false);
     try {
       const payload = numbers
-        .filter((n) => n.phoneNumberId.trim() || n.token.trim())
-        .map(({ label, phoneNumberId, token }) => {
+        .filter((n) => n.phoneNumberId.trim() || n.token.trim() || n.displayPhone.trim())
+        .map(({ label, phoneNumberId, displayPhone, token }) => {
           const t = token.trim();
           return {
             label: label.trim() || undefined,
             phoneNumberId: phoneNumberId.trim(),
+            displayPhone: displayPhone.trim() || undefined,
             token: t === WHATSAPP_TOKEN_MASK ? WHATSAPP_TOKEN_MASK : (t || undefined),
           };
         });
@@ -808,6 +810,22 @@ function WhatsAppSection() {
               </div>
             </div>
             <div>
+              <label className="label">Display phone (optional, for webhook routing)</label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                <input
+                  type="text"
+                  className="input pl-10 font-mono text-sm"
+                  value={entry.displayPhone}
+                  onChange={(e) => updateNumber(entry.id, 'displayPhone', e.target.value)}
+                  placeholder="e.g. +16505551111 — must match webhook metadata.display_phone_number"
+                />
+              </div>
+              <p className="text-xs text-text-tertiary mt-1">
+                If Meta sends a test <code className="text-2xs">phone_number_id</code> that does not match your real WABA ID, set this to the same business line as in the webhook (digits only also work).
+              </p>
+            </div>
+            <div>
               <label className="label">Access Token</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
@@ -860,6 +878,7 @@ function WhatsAppSection() {
           <li><strong>Access token</strong> is under Temporary or system user token</li>
           <li>Use the same <strong>Verify token</strong> in Meta webhook configuration</li>
           <li>Each division can use its own WhatsApp Business number and tokens.</li>
+          <li>Optional <strong>Display phone</strong> helps route webhooks when the test payload uses a placeholder Phone Number ID.</li>
         </ul>
       </div>
       </>

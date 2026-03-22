@@ -62,6 +62,12 @@ const getLeadInitials = (obj: { firstName?: string; lastName?: string }) => {
   return (parts[0]?.[0] || '?').toUpperCase();
 };
 
+function sortCommunicationsByDate(comms: { createdAt?: string | Date }[]) {
+  return [...comms].sort(
+    (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+  );
+}
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -545,24 +551,26 @@ export default function LeadDetailPage() {
 
   // Load chat messages when Communications tab is active
   // The backend auto-marks unread messages as read when fetched
-  const loadChatMessages = useCallback(async () => {
+  const loadChatMessages = useCallback(async (backgroundPoll?: boolean) => {
+    const background = backgroundPoll === true;
     if (!id) return;
     if (!background) setChatLoading(true);
     try {
-      const data = await api.getInboxMessages(id, { limit: 100 });
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const divisionId = lead?.organizationId || activeDivisionId || undefined;
+      const data = await api.getInboxMessages(id, { limit: 100, ...(divisionId ? { divisionId } : {}) });
       setChatMessages(data.messages || []);
       // Backend marks messages as read on fetch; reset local unread count
       setUnreadCommsCount(0);
     } catch {
       // Fallback to lead's communications if inbox API fails
       if (lead?.communications) {
-        setChatMessages(sortMessagesByDate(lead.communications));
+        setChatMessages(sortCommunicationsByDate(lead.communications));
       }
     } finally {
       if (!background) setChatLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, sortMessagesByDate]);
+  }, [id, lead?.organizationId, lead?.communications]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {

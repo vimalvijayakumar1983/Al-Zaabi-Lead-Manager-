@@ -2,7 +2,22 @@ const { Router } = require('express');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
-const { processInboundWhatsAppMessage } = require('../services/whatsappInbound');
+const { processInboundWhatsAppMessage, normalizePhone } = require('../services/whatsappInbound');
+
+/** Prefer contact row whose wa_id matches the message sender (newer payloads include multiple contacts). */
+function resolveContactProfileName(value, fromWaId) {
+  const contacts = value?.contacts;
+  if (!Array.isArray(contacts) || contacts.length === 0) return undefined;
+  const fromNorm = normalizePhone(fromWaId);
+  if (fromNorm) {
+    for (const c of contacts) {
+      if (normalizePhone(c.wa_id) === fromNorm) {
+        return c.profile?.name;
+      }
+    }
+  }
+  return contacts[0]?.profile?.name;
+}
 
 const router = Router();
 
@@ -143,7 +158,7 @@ router.post('/', (req, res) => {
           }
         }
 
-        const contactName = value.contacts?.[0]?.profile?.name;
+        const contactName = resolveContactProfileName(value, from);
 
         logger.info('[WhatsApp Webhook] Incoming message', {
           phoneNumberId,
@@ -170,6 +185,7 @@ router.post('/', (req, res) => {
         setImmediate(() => {
           processInboundWhatsAppMessage({
             phoneNumberId,
+            displayPhoneNumber,
             from,
             messageId,
             bodyText,

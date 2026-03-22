@@ -24,12 +24,15 @@ async function resolveSendConfig(organizationId) {
     const settings = typeof org?.settings === 'object' ? org.settings : {};
     const numbers = settings.whatsappNumbers;
     if (Array.isArray(numbers) && numbers.length > 0) {
-      const first = numbers[0];
-      const id = trimStr(first?.phoneNumberId);
-      const token = trimStr(first?.token);
       const apiUrl = trimStr(settings.whatsappApiUrl) || globalApiUrl;
-      if (id && token) {
-        return { phoneNumberId: id, token, apiUrl: apiUrl || null };
+      // Prefer first row that can send (id + token); skip displayPhone-only routing rows
+      const sendable = numbers.find((n) => trimStr(n?.phoneNumberId) && trimStr(n?.token));
+      if (sendable) {
+        return {
+          phoneNumberId: trimStr(sendable.phoneNumberId),
+          token: trimStr(sendable.token),
+          apiUrl: apiUrl || null,
+        };
       }
     }
     const orgPhoneNumberId = trimStr(settings.whatsappPhoneNumberId);

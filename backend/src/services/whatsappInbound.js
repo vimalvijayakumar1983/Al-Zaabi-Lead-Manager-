@@ -10,28 +10,38 @@ function normalizePhone(waId) {
   return String(waId || '').replace(/\D/g, '');
 }
 
+/** Meta phone_number_id values are numeric; normalize so JSON number vs string still matches. */
+function canonicalWaPhoneNumberId(id) {
+  return String(id ?? '').replace(/\D/g, '');
+}
+
 /**
- * Resolve organizationId from webhook phone_number_id.
- * Checks settings.whatsappNumbers[] first, then settings.whatsappPhoneNumberId, then env.
- * Normalizes all IDs to string for comparison (Meta may send number or string).
+ * Resolve organizationId from webhook metadata.
+ * 1) Match settings.whatsappNumbers[].phoneNumberId (canonical digits)
+ * 2) Match optional settings.whatsappNumbers[].displayPhone to metadata.display_phone_number (digits)
+ * 3) Legacy whatsappPhoneNumberId
+ * 4) Env WHATSAPP_PHONE_NUMBER_ID → first org (legacy)
+ * 5) Env WHATSAPP_UNMATCHED_FALLBACK_ORG_ID (must exist)
  */
-async function resolveOrganizationId(phoneNumberId) {
-  const id = String(phoneNumberId ?? '').trim();
-  if (!id) return null;
+async function resolveOrganizationId(phoneNumberId, displayPhoneNumber) {
+  const idCanon = canonicalWaPhoneNumberId(phoneNumberId);
+  const displayCanon = displayPhoneNumber ? normalizePhone(displayPhoneNumber) : '';
 
   const orgs = await prisma.organization.findMany({
     select: { id: true, settings: true },
   });
 
+  // Pass 1 — Phone Number ID (WABA)
   for (const org of orgs) {
     const settings = typeof org.settings === 'object' ? org.settings : {};
     const numbers = settings.whatsappNumbers;
     if (Array.isArray(numbers)) {
       for (const entry of numbers) {
-        const entryId = String(entry?.phoneNumberId ?? '').trim();
-        if (entryId && entryId === id) {
-          console.log('[WhatsApp Inbound] Matched division/org by whatsappNumbers[]', {
-            webhookPhoneNumberId: id,
+        const entryId = canonicalWaPhoneNumberId(entry?.phoneNumberId);
+        if (entryId && entryId === idCanon) {
+          console.log('[WhatsApp Inbound] Matched division/org by whatsappNumbers[].phoneNumberId', {
+            webhookPhoneNumberId: phoneNumberId,
+            canonicalId: idCanon,
             organizationId: org.id,
             label: entry?.label || null,
           });
@@ -39,35 +49,77 @@ async function resolveOrganizationId(phoneNumberId) {
         }
       }
     }
-    const singleId = String(settings.whatsappPhoneNumberId ?? '').trim();
-    if (singleId && singleId === id) {
+    const singleId = canonicalWaPhoneNumberId(settings.whatsappPhoneNumberId);
+    if (singleId && singleId === idCanon) {
       console.log('[WhatsApp Inbound] Matched division/org by legacy whatsappPhoneNumberId', {
-        webhookPhoneNumberId: id,
+        webhookPhoneNumberId: phoneNumberId,
         organizationId: org.id,
       });
       return org.id;
     }
   }
 
-  const globalId = config.whatsapp?.phoneNumberId;
-  if (globalId && String(globalId).trim() === id) {
+  // Pass 2 — Display business line (e.g. Meta sample uses display_phone_number when test ID differs)
+  if (displayCanon) {
+    for (const org of orgs) {
+      const settings = typeof org.settings === 'object' ? org.settings : {};
+      const numbers = settings.whatsappNumbers;
+      if (!Array.isArray(numbers)) continue;
+      for (const entry of numbers) {
+        const configuredDisplay = normalizePhone(entry?.displayPhone);
+        if (configuredDisplay && configuredDisplay === displayCanon) {
+          console.log('[WhatsApp Inbound] Matched division/org by whatsappNumbers[].displayPhone', {
+            display_phone_number: displayPhoneNumber,
+            canonicalDisplay: displayCanon,
+            organizationId: org.id,
+            label: entry?.label || null,
+          });
+          return org.id;
+        }
+      }
+    }
+  }
+
+  const globalId = canonicalWaPhoneNumberId(config.whatsapp?.phoneNumberId);
+  if (globalId && globalId === idCanon) {
     const first = await prisma.organization.findFirst({ select: { id: true } });
     console.log('[WhatsApp Inbound] Matched org via env WHATSAPP_PHONE_NUMBER_ID → first org fallback', {
-      webhookPhoneNumberId: id,
+      webhookPhoneNumberId: phoneNumberId,
       organizationId: first?.id ?? null,
     });
     return first?.id ?? null;
   }
 
-  console.warn('[WhatsApp Inbound] No division/org for this phone_number_id — message not saved to inbox', {
-    webhookPhoneNumberId: id,
+  const fallbackOrgId = config.whatsapp?.unmatchedFallbackOrgId;
+  if (fallbackOrgId && String(fallbackOrgId).trim()) {
+    const exists = await prisma.organization.findUnique({
+      where: { id: String(fallbackOrgId).trim() },
+      select: { id: true },
+    });
+    if (exists) {
+      console.warn('[WhatsApp Inbound] Using WHATSAPP_UNMATCHED_FALLBACK_ORG_ID (no phone_number_id/display match)', {
+        webhookPhoneNumberId: phoneNumberId,
+        display_phone_number: displayPhoneNumber || null,
+        organizationId: exists.id,
+      });
+      return exists.id;
+    }
+    logger.warn('WhatsApp inbound: WHATSAPP_UNMATCHED_FALLBACK_ORG_ID is set but organization not found', {
+      fallbackOrgId,
+    });
+  }
+
+  console.warn('[WhatsApp Inbound] No division/org for this webhook — message not saved to inbox', {
+    webhookPhoneNumberId: phoneNumberId,
+    canonicalId: idCanon,
+    display_phone_number: displayPhoneNumber || null,
     scannedOrgs: orgs.length,
-    hint: 'Add this Phone Number ID under Settings → WhatsApp for the correct division.',
+    hint: 'Set Phone Number ID (and optionally Display phone) under Settings → WhatsApp for the division, or set WHATSAPP_UNMATCHED_FALLBACK_ORG_ID for dev.',
   });
 
   logger.warn('WhatsApp inbound: no organization for phone_number_id', {
-    phoneNumberId: id,
-    hint: 'Add this Phone Number ID in Settings → WhatsApp (admin). Or set WHATSAPP_PHONE_NUMBER_ID in .env.',
+    phoneNumberId: idCanon || phoneNumberId,
+    hint: 'Add this Phone Number ID in Settings → WhatsApp (admin). Or set WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_UNMATCHED_FALLBACK_ORG_ID in .env.',
   });
   return null;
 }
@@ -111,9 +163,17 @@ async function findOrCreateLead(organizationId, phoneNormalized, contactName) {
 
 /**
  * Process one inbound WhatsApp message: resolve org, find-or-create lead, log communication + activity.
+ * Idempotent on Meta message id. Bumps lead.updatedAt so inbox conversation ordering refreshes.
  */
-async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, bodyText, contactName }) {
-  const organizationId = await resolveOrganizationId(phoneNumberId);
+async function processInboundWhatsAppMessage({
+  phoneNumberId,
+  displayPhoneNumber,
+  from,
+  messageId,
+  bodyText,
+  contactName,
+}) {
+  const organizationId = await resolveOrganizationId(phoneNumberId, displayPhoneNumber);
   if (!organizationId) {
     return;
   }
@@ -128,6 +188,7 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
     organizationType: orgRow?.type,
     parentId: orgRow?.parentId,
     businessPhoneNumberId: phoneNumberId,
+    display_phone_number: displayPhoneNumber || null,
     senderWaId: from,
     messageId,
   });
@@ -139,6 +200,22 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
     return;
   }
 
+  if (messageId) {
+    const dup = await prisma.communication.findFirst({
+      where: {
+        channel: 'WHATSAPP',
+        direction: 'INBOUND',
+        metadata: { path: ['messageId'], equals: String(messageId) },
+      },
+      select: { id: true, leadId: true },
+    });
+    if (dup) {
+      logger.info('WhatsApp inbound: duplicate webhook (messageId already stored), skipping', { messageId, communicationId: dup.id });
+      console.log('[WhatsApp Inbound] Duplicate messageId ignored', { messageId, existingCommunicationId: dup.id });
+      return;
+    }
+  }
+
   const lead = await findOrCreateLead(organizationId, phoneNormalized, contactName);
   const body = bodyText || '(no text)';
 
@@ -148,9 +225,17 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
       channel: 'WHATSAPP',
       direction: 'INBOUND',
       body,
-      metadata: { messageId, from: `+${phoneNormalized}` },
+      metadata: {
+        messageId: messageId || undefined,
+        from: `+${phoneNormalized}`,
+      },
       userId: null,
     },
+  });
+
+  await prisma.lead.update({
+    where: { id: lead.id },
+    data: { updatedAt: new Date() },
   });
 
   broadcastDataChange(lead.organizationId, 'communication', 'created', null, { entityId: lead.id }).catch(() => {});
@@ -171,7 +256,7 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
     messageId,
   });
 
-  console.log('[WhatsApp Inbound] Inbox row created (Communication)', {
+  console.log('[WhatsApp Inbound] Inbox row created (Communication) + lead.updatedAt bumped', {
     leadId: lead.id,
     organizationId: lead.organizationId,
     channel: 'WHATSAPP',
@@ -181,4 +266,10 @@ async function processInboundWhatsAppMessage({ phoneNumberId, from, messageId, b
   });
 }
 
-module.exports = { processInboundWhatsAppMessage, resolveOrganizationId, findOrCreateLead, normalizePhone };
+module.exports = {
+  processInboundWhatsAppMessage,
+  resolveOrganizationId,
+  findOrCreateLead,
+  normalizePhone,
+  canonicalWaPhoneNumberId,
+};

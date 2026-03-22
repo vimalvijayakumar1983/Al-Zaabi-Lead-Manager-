@@ -48,6 +48,8 @@ const config = {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
     webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    /** When no division matches webhook phone_number_id / display phone, route inbound here (dev / single-tenant). Must be a valid Organization id. */
+    unmatchedFallbackOrgId: process.env.WHATSAPP_UNMATCHED_FALLBACK_ORG_ID || null,
   },
 
   // AI

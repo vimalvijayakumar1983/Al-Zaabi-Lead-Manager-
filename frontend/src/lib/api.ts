@@ -895,7 +895,7 @@ class ApiClient {
   async getWhatsAppSettings(divisionId?: string) {
     const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
     return this.request<{
-      whatsappNumbers: Array<{ label: string; phoneNumberId: string; token: string; hasToken?: boolean }>;
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
       whatsappWebhookVerifyToken: string;
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
@@ -904,7 +904,7 @@ class ApiClient {
 
   async saveWhatsAppSettings(
     data: {
-      whatsappNumbers: Array<{ label?: string; phoneNumberId: string; token?: string }>;
+      whatsappNumbers: Array<{ label?: string; phoneNumberId: string; displayPhone?: string; token?: string }>;
       whatsappWebhookVerifyToken?: string;
       whatsappApiUrl?: string;
     },
@@ -912,7 +912,7 @@ class ApiClient {
   ) {
     const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
     return this.request<{
-      whatsappNumbers: Array<{ label: string; phoneNumberId: string; token: string; hasToken?: boolean }>;
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
       whatsappWebhookVerifyToken: string;
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
@@ -1364,21 +1364,34 @@ class ApiClient {
   }
   // ─── Inbox / Omnichannel ──────────────────────────────────────────
 
-  async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {
+  async getInboxConversations(params?: {
+    channel?: string;
+    search?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+    /** Align with GET /leads — SUPER_ADMIN division switcher scopes inbox to one division */
+    divisionId?: string;
+  }) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.search) q.set('search', params.search);
     if (params?.status) q.set('status', params.status);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations?${q.toString()}`);
   }
 
-  async getInboxMessages(leadId: string, params?: { channel?: string; page?: number; limit?: number }) {
+  async getInboxMessages(
+    leadId: string,
+    params?: { channel?: string; page?: number; limit?: number; divisionId?: string }
+  ) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations/${leadId}/messages?${q.toString()}`);
   }
 
@@ -1389,8 +1402,9 @@ class ApiClient {
     });
   }
 
-  async getInboxStats() {
-    return this.request<any>('/inbox/stats');
+  async getInboxStats(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {
