@@ -231,7 +231,7 @@ function LeadsContent() {
     const paramKeys: (keyof FilterState)[] = [
       'status', 'source', 'assignedToId', 'stageId', 'campaign',
       'minScore', 'maxScore', 'search', 'company', 'location',
-      'callOutcome',
+      'callOutcome', 'divisionId',
     ];
     let hasUrlParams = false;
     for (const key of paramKeys) {
@@ -438,7 +438,13 @@ function LeadsContent() {
         // 3. Restore active view filters (skip if already restored from sessionStorage)
         const savedViewId = loadActiveViewId();
         const hasSessionState = restoredViewState.current !== null;
-        if (savedViewId && savedViewId !== 'all' && !hasSessionState) {
+        const urlFilterKeys = [
+          'status', 'source', 'assignedToId', 'stageId', 'campaign',
+          'minScore', 'maxScore', 'search', 'company', 'location',
+          'callOutcome', 'divisionId',
+        ];
+        const hasUrlDrilldownParams = urlFilterKeys.some((key) => !!searchParams.get(key));
+        if (savedViewId && savedViewId !== 'all' && !hasSessionState && !hasUrlDrilldownParams) {
           const allViews = [...SYSTEM_VIEWS, ...serverViews];
           const view = allViews.find(v => v.id === savedViewId);
           if (view) {
