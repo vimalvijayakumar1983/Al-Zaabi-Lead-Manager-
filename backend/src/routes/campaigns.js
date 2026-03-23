@@ -359,7 +359,12 @@ async function fetchAudiencePreview(req, campaign, filters = {}, limit = 200) {
 
 router.get('/stats', async (req, res, next) => {
   try {
-    const orgFilter = { organizationId: { in: req.orgIds } };
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
+    if (divisionId && !req.orgIds.includes(divisionId)) {
+      return res.status(403).json({ error: 'Access denied to specified division' });
+    }
+    const scopedOrgWhere = divisionId ? divisionId : { in: req.orgIds };
+    const orgFilter = { organizationId: scopedOrgWhere };
 
     const [campaigns, leads, assignmentStats] = await Promise.all([
       prisma.campaign.findMany({
@@ -373,7 +378,7 @@ router.get('/stats', async (req, res, next) => {
         },
       }),
       prisma.lead.findMany({
-        where: { organizationId: { in: req.orgIds }, campaign: { not: null } },
+        where: { organizationId: scopedOrgWhere, campaign: { not: null } },
         select: {
           campaign: true,
           status: true,
@@ -382,7 +387,7 @@ router.get('/stats', async (req, res, next) => {
       }),
       prisma.leadCampaignAssignment.groupBy({
         by: ['campaignId'],
-        where: { organizationId: { in: req.orgIds } },
+        where: { organizationId: scopedOrgWhere },
         _count: { leadId: true },
       }),
     ]);
@@ -530,6 +535,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
 
     const { skip, take } = paginate(page, limit);
 
+    const scopedOrgWhere = where.organizationId;
     const [campaigns, total] = await Promise.all([
       prisma.campaign.findMany({
         where,
@@ -549,7 +555,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
     const [leadsForCampaigns, assignmentRows] = await Promise.all([
       prisma.lead.findMany({
         where: {
-          organizationId: { in: req.orgIds },
+          organizationId: scopedOrgWhere,
           campaign: { in: campaignNames },
         },
         select: {
@@ -560,7 +566,7 @@ router.get('/', validateQuery(listCampaignsQuerySchema), async (req, res, next) 
       }),
       prisma.leadCampaignAssignment.groupBy({
         by: ['campaignId'],
-        where: { organizationId: { in: req.orgIds }, campaignId: { in: campaignIds } },
+        where: { organizationId: scopedOrgWhere, campaignId: { in: campaignIds } },
         _count: { leadId: true },
       }),
     ]);
@@ -630,6 +636,9 @@ router.post('/', validate(createCampaignSchema), async (req, res, next) => {
     const { name, type, status, budget, description, startDate, endDate, metadata, templateId, campaignCode, organizationId } =
       req.validated;
 
+    if (req.isSuperAdmin && !organizationId) {
+      return res.status(400).json({ error: 'Division is required for super admin campaign creation' });
+    }
     const targetOrgId = organizationId || req.orgId;
     if (!req.orgIds.includes(targetOrgId)) {
       return res.status(403).json({ error: 'Access denied to specified organization' });

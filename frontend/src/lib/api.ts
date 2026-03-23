@@ -574,8 +574,9 @@ class ApiClient {
     return this.request<Campaign>(`/campaigns/${id}/duplicate`, { method: 'POST' });
   }
 
-  async getCampaignStats() {
-    return this.request<CampaignDashboardStats>('/campaigns/stats');
+  async getCampaignStats(divisionId?: string) {
+    const query = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<CampaignDashboardStats>(`/campaigns/stats${query}`);
   }
 
   async bulkUpdateCampaigns(ids: string[], data: { status?: string }) {

@@ -885,6 +885,9 @@ function CampaignFormModal({
       newErrors.targetConversions = 'Must be a positive number';
     if (form.targetRevenue && (isNaN(Number(form.targetRevenue)) || Number(form.targetRevenue) < 0))
       newErrors.targetRevenue = 'Must be a positive number';
+    if (isSuperAdmin && !form.organizationId) {
+      newErrors.organizationId = 'Division is required';
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }
@@ -1058,6 +1061,7 @@ function CampaignFormModal({
                   </option>
                 ))}
               </select>
+              {errors.organizationId && <p className={errorClass}>{errors.organizationId}</p>}
             </div>
           )}
 
@@ -1361,36 +1365,14 @@ function OfferStudioModal({
 
   useEffect(() => {
     const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
-    const activeDivisionId =
-      typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId') || undefined) : undefined;
+    const activeDivisionId = typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId') || undefined) : undefined;
+    const divisionScopeId = campaignOrgId || activeDivisionId;
     setLoading(true);
     Promise.all([
       loadAssignments(),
       loadAnalytics(),
-      api.getCampaignTemplates().then((rows) => setTemplates(Array.isArray(rows) ? rows : [])).catch(() => setTemplates([])),
-      (async () => {
-        try {
-          const scopedRows = await api.getTags(campaignOrgId || activeDivisionId);
-          const scopedTags = Array.isArray(scopedRows) ? scopedRows : [];
-          if (scopedTags.length > 0) {
-            setAvailableTags(scopedTags);
-            return;
-          }
-
-          // Fallback: show all tags user can access, useful when current division has no tags yet.
-          const allRows = await api.getTags();
-          const allTags = Array.isArray(allRows) ? allRows : [];
-          const dedup = new Map<string, { id: string; name: string; color?: string }>();
-          for (const tag of allTags) {
-            const key = String(tag?.name || '').trim().toLowerCase();
-            if (!key || dedup.has(key)) continue;
-            dedup.set(key, tag);
-          }
-          setAvailableTags(Array.from(dedup.values()));
-        } catch {
-          setAvailableTags([]);
-        }
-      })(),
+      api.getCampaignTemplates(divisionScopeId).then((rows) => setTemplates(Array.isArray(rows) ? rows : [])).catch(() => setTemplates([])),
+      api.getTags(divisionScopeId).then((rows) => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([])),
     ]).finally(() => setLoading(false));
   }, [campaign, loadAssignments, loadAnalytics]);
 
@@ -1503,15 +1485,19 @@ function OfferStudioModal({
       return;
     }
     try {
+      const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
+      const activeDivisionId = typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId') || undefined) : undefined;
+      const divisionScopeId = campaignOrgId || activeDivisionId;
       await api.createCampaignTemplate({
         name,
         description: `Offer studio template for ${campaign.name}`,
+        divisionId: divisionScopeId,
         config: {
           filters,
           applyConfig,
         },
       });
-      const rows = await api.getCampaignTemplates();
+      const rows = await api.getCampaignTemplates(divisionScopeId);
       setTemplates(Array.isArray(rows) ? rows : []);
       setTemplateName('');
       addToast('success', 'Template saved');
@@ -1659,7 +1645,7 @@ function OfferStudioModal({
                     })}
                   </div>
                 ) : (
-                  <p className="text-xs text-text-tertiary mb-3">No saved tags found in this division. You can still add custom tags below.</p>
+                  <p className="text-xs text-text-tertiary mb-3">No saved tags found for this division. You can still add custom tags below.</p>
                 )}
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
@@ -1789,6 +1775,12 @@ export default function CampaignsPage() {
     if (!user?.organization?.children) return [];
     return user.organization.children;
   }, [user]);
+  const [activeDivisionId, setActiveDivisionId] = useState('');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const id = localStorage.getItem('activeDivisionId') || '';
+    setActiveDivisionId(id);
+  }, []);
 
   // Data state
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -1881,6 +1873,7 @@ export default function CampaignsPage() {
       if (filters.types.length > 0) params.type = filters.types.join(',');
       if (filters.statuses.length > 0) params.status = filters.statuses.join(',');
       if (filters.divisions.length > 0) params.divisionId = filters.divisions[0];
+      else if (isSuperAdmin && activeDivisionId) params.divisionId = activeDivisionId;
       if (filters.sort) params.sort = filters.sort;
 
       // Date range
@@ -1905,13 +1898,16 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize, filters]);
+  }, [currentPage, pageSize, filters, isSuperAdmin, activeDivisionId]);
 
   // ------ Fetch stats ------
   const fetchStats = useCallback(async () => {
     setStatsLoading(true);
     try {
-      const data = await (api as unknown as Record<string, Function>).getCampaignStats();
+      const divisionId = filters.divisions.length > 0
+        ? filters.divisions[0]
+        : (isSuperAdmin ? activeDivisionId : undefined);
+      const data = await (api as unknown as Record<string, Function>).getCampaignStats(divisionId);
       setStats(data as CampaignDashboardStats);
     } catch {
       // Compute from local data as fallback
@@ -1919,7 +1915,7 @@ export default function CampaignsPage() {
     } finally {
       setStatsLoading(false);
     }
-  }, []);
+  }, [filters.divisions, isSuperAdmin, activeDivisionId]);
 
   useEffect(() => {
     fetchCampaigns();
@@ -3059,7 +3055,10 @@ export default function CampaignsPage() {
       {createModalOpen && (
         <CampaignFormModal
           mode="create"
-          initialData={EMPTY_FORM_DATA}
+          initialData={{
+            ...EMPTY_FORM_DATA,
+            organizationId: isSuperAdmin ? activeDivisionId : '',
+          }}
           divisions={divisions}
           isSuperAdmin={isSuperAdmin}
           onSubmit={handleCreateCampaign}
