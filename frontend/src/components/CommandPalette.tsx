@@ -43,6 +43,7 @@ export default function CommandPalette() {
     { id: 'nav-pipeline', label: 'Go to Pipeline', icon: Kanban, action: () => router.push('/pipeline'), category: 'Navigation', shortcut: '3' },
     { id: 'nav-tasks', label: 'Go to Tasks', icon: CheckSquare, action: () => router.push('/tasks'), category: 'Navigation', shortcut: '4' },
     { id: 'nav-analytics', label: 'Go to Analytics', icon: BarChart3, action: () => router.push('/analytics'), category: 'Navigation', shortcut: '5' },
+    { id: 'nav-report-builder', label: 'Go to Report Builder', icon: BarChart3, action: () => router.push('/report-builder'), category: 'Navigation' },
     { id: 'nav-automations', label: 'Go to Automations', icon: Zap, action: () => router.push('/automations'), category: 'Navigation', shortcut: '6' },
     { id: 'nav-campaigns', label: 'Go to Campaigns', icon: Megaphone, action: () => router.push('/campaigns'), category: 'Navigation', shortcut: '7' },
     { id: 'nav-team', label: 'Go to Team', icon: UserCog, action: () => router.push('/team'), category: 'Navigation', shortcut: '8' },

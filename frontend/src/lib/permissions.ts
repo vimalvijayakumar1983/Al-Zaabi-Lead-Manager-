@@ -9,6 +9,7 @@ export const FEATURES = [
   { key: 'pipeline', label: 'Pipeline', section: 'Navigation' },
   { key: 'tasks', label: 'Tasks', section: 'Navigation' },
   { key: 'analytics', label: 'Analytics', section: 'Navigation' },
+  { key: 'reports', label: 'Report Builder', section: 'Navigation' },
   { key: 'automations', label: 'Automations', section: 'Navigation' },
   { key: 'campaigns', label: 'Campaigns', section: 'Navigation' },
   { key: 'integrations', label: 'Integrations', section: 'Navigation' },
@@ -27,11 +28,11 @@ export const FEATURES = [
 export type FeatureKey = (typeof FEATURES)[number]['key'];
 
 const DEFAULT_PERMISSIONS: Record<string, Record<string, boolean>> = {
-  SUPER_ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, recycleBin: true, divisions: true, deleteData: true, exportData: true },
-  ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, recycleBin: true, divisions: false, deleteData: true, exportData: true },
-  MANAGER: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, automations: true, campaigns: true, integrations: false, import: false, team: true, roles: false, settings: false, invite: true, notifications: true, recycleBin: true, divisions: false, deleteData: false, exportData: true },
-  SALES_REP: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: false, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, recycleBin: true, divisions: false, deleteData: false, exportData: false },
-  VIEWER: { dashboard: true, leads: true, contacts: true, inbox: false, pipeline: true, tasks: false, analytics: true, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, recycleBin: false, divisions: false, deleteData: false, exportData: false },
+  SUPER_ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, reports: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, recycleBin: true, divisions: true, deleteData: true, exportData: true },
+  ADMIN: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, reports: true, automations: true, campaigns: true, integrations: true, import: true, team: true, roles: true, settings: true, invite: true, notifications: true, recycleBin: true, divisions: false, deleteData: true, exportData: true },
+  MANAGER: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: true, reports: true, automations: true, campaigns: true, integrations: false, import: false, team: true, roles: false, settings: false, invite: true, notifications: true, recycleBin: true, divisions: false, deleteData: false, exportData: true },
+  SALES_REP: { dashboard: true, leads: true, contacts: true, inbox: true, pipeline: true, tasks: true, analytics: false, reports: false, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, recycleBin: true, divisions: false, deleteData: false, exportData: false },
+  VIEWER: { dashboard: true, leads: true, contacts: true, inbox: false, pipeline: true, tasks: false, analytics: true, reports: true, automations: false, campaigns: false, integrations: false, import: false, team: false, roles: false, settings: false, invite: false, notifications: true, recycleBin: false, divisions: false, deleteData: false, exportData: false },
 };
 
 function mergeRolePermissions(

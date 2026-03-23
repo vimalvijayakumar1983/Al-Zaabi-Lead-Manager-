@@ -40,6 +40,7 @@ const navItems = [
   { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
   { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
+  { href: '/report-builder', label: 'Report Builder', icon: BarChart3, permission: 'reports' },
   { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone, shortcut: '7', permission: 'campaigns' },
   { href: '/integrations', label: 'Integrations', icon: Plug2, permission: 'integrations' },

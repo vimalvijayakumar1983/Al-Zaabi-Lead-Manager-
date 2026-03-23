@@ -1473,6 +1473,53 @@ class ApiClient {
       body: JSON.stringify({ views, divisionId }),
     });
   }
+
+  // ─── Report Builder ───────────────────────────────────────────────
+  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs', divisionId?: string) {
+    const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/report-builder/catalog?${q.toString()}`);
+  }
+
+  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' }) {
+    const q = new URLSearchParams();
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    if (params?.dataset) q.set('dataset', params.dataset);
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return this.request<any[]>(`/report-builder/definitions${suffix}`);
+  }
+
+  async createReportDefinition(data: any) {
+    return this.request<any>('/report-builder/definitions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateReportDefinition(id: string, data: any) {
+    return this.request<any>(`/report-builder/definitions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteReportDefinition(id: string) {
+    return this.request<any>(`/report-builder/definitions/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs'; divisionId?: string; config: any }) {
+    return this.request<any>('/report-builder/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async runReport(id: string) {
+    return this.request<any>(`/report-builder/run/${id}`, {
+      method: 'POST',
+    });
+  }
 }
 
 export const api = new ApiClient();
