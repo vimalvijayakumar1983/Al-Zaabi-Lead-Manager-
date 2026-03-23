@@ -53,6 +53,7 @@ model Organization {
   divisionMemberships DivisionMembership[] @relation("DivisionMembers")
   customRoles         CustomRole[]
   savedViews          SavedView[]
+  reportDefinitions   ReportDefinition[]
 
   @@index([parentId])
   @@map("organizations")
@@ -111,6 +112,7 @@ model User {
   customRole           CustomRole?    @relation("UserCustomRole", fields: [customRoleId], references: [id], onDelete: SetNull)
   createdCustomRoles   CustomRole[]   @relation("CustomRoleCreator")
   createdViews         SavedView[]    @relation("ViewCreator")
+  createdReports       ReportDefinition[] @relation("ReportCreator")
 
   @@index([organizationId])
   @@map("users")
@@ -1102,6 +1104,32 @@ model SavedView {
   @@index([divisionId])
   @@index([createdById])
   @@map("saved_views")
+}
+
+model ReportDefinition {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  dataset        String
+  config         Json     @default("{}")
+  visibility     String   @default("everyone") // everyone, private, specific_users, specific_roles
+  visibleToUsers String[] @default([])
+  visibleToRoles String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  divisionId     String?
+
+  createdById    String
+  createdBy      User @relation("ReportCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([divisionId])
+  @@index([createdById])
+  @@map("report_definitions")
 }
 
 model EmailSettings {
