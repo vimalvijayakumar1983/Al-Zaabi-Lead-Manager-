@@ -1455,7 +1455,7 @@ function OfferStudioModal({
 
   useEffect(() => {
     const term = filters.search.trim();
-    if (filters.selectedLeads.length > 0 || term.length < 2) {
+    if (term.length < 2) {
       setSearchSuggestions([]);
       setSearchSuggestionsLoading(false);
       return;
@@ -1467,13 +1467,15 @@ function OfferStudioModal({
         const divisionScopeId = getDivisionScopeId();
         const res = await api.getLeads({
           page: 1,
-          limit: 8,
+          limit: 20,
           search: term,
           ...(divisionScopeId ? { divisionId: divisionScopeId } : {}),
         });
         if (cancelled) return;
         const rows = Array.isArray(res?.data) ? res.data : [];
-        setSearchSuggestions(rows);
+        const selectedIds = new Set(filters.selectedLeads.map((lead) => lead.id));
+        const filteredRows = rows.filter((lead: any) => !selectedIds.has(lead.id));
+        setSearchSuggestions(filteredRows);
         setSearchDropdownOpen(true);
       } catch {
         if (cancelled) return;
@@ -1770,7 +1772,9 @@ function OfferStudioModal({
                     ) : searchSuggestions.length === 0 ? (
                       <p className="px-3 py-2 text-sm text-text-secondary">No matching leads found</p>
                     ) : (
-                      searchSuggestions.map((lead) => (
+                      searchSuggestions
+                        .filter((lead) => !filters.selectedLeads.some((sel) => sel.id === lead.id))
+                        .map((lead) => (
                         <button
                           key={lead.id}
                           type="button"
