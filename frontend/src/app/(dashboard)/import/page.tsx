@@ -73,10 +73,34 @@ interface ImportHistoryItem {
   user?: { firstName: string; lastName: string; email: string };
 }
 
+interface ManagedLeadSourceOption {
+  key: string;
+  label: string;
+  source: string;
+  isActive?: boolean;
+}
+
 const MODULES = [
   { key: 'leads', label: 'Leads', icon: Users, description: 'Import sales leads and prospects', color: 'brand' },
   { key: 'contacts', label: 'Contacts', icon: Contact, description: 'Import contacts and relationships', color: 'emerald' },
   { key: 'campaigns', label: 'Campaigns', icon: Megaphone, description: 'Import marketing campaigns', color: 'purple' },
+];
+
+const FALLBACK_IMPORT_SOURCES: ManagedLeadSourceOption[] = [
+  { key: 'WEBSITE_FORM', label: 'Website Form', source: 'WEBSITE_FORM', isActive: true },
+  { key: 'LIVE_CHAT', label: 'Live Chat Widget', source: 'LIVE_CHAT', isActive: true },
+  { key: 'LANDING_PAGE', label: 'Landing Page', source: 'LANDING_PAGE', isActive: true },
+  { key: 'WHATSAPP', label: 'WhatsApp', source: 'WHATSAPP', isActive: true },
+  { key: 'FACEBOOK_ADS', label: 'Facebook Ads', source: 'FACEBOOK_ADS', isActive: true },
+  { key: 'GOOGLE_ADS', label: 'Google Ads', source: 'GOOGLE_ADS', isActive: true },
+  { key: 'TIKTOK_ADS', label: 'TikTok Ads', source: 'TIKTOK_ADS', isActive: true },
+  { key: 'MANUAL', label: 'Manual', source: 'MANUAL', isActive: true },
+  { key: 'CSV_IMPORT', label: 'CSV Import', source: 'CSV_IMPORT', isActive: true },
+  { key: 'API', label: 'API', source: 'API', isActive: true },
+  { key: 'REFERRAL', label: 'Referral', source: 'REFERRAL', isActive: true },
+  { key: 'EMAIL', label: 'Email', source: 'EMAIL', isActive: true },
+  { key: 'PHONE', label: 'Phone', source: 'PHONE', isActive: true },
+  { key: 'OTHER', label: 'Other', source: 'OTHER', isActive: true },
 ];
 
 export default function ImportPage() {
@@ -159,10 +183,21 @@ function ImportWizard() {
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
+  const [leadSourceOptions, setLeadSourceOptions] = useState<ManagedLeadSourceOption[]>(FALLBACK_IMPORT_SOURCES);
   const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     api.getUsers().then(setUsers).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getLeadSources(activeDivisionId || undefined)
+      .then((data: any) => {
+        const sources = Array.isArray(data?.sources) ? data.sources : [];
+        setLeadSourceOptions(sources.length > 0 ? sources : FALLBACK_IMPORT_SOURCES);
+      })
+      .catch(() => setLeadSourceOptions(FALLBACK_IMPORT_SOURCES));
   }, []);
 
   useEffect(() => {
@@ -674,14 +709,11 @@ function ImportWizard() {
                   <label className="label">Default Source</label>
                   <select value={defaultSource} onChange={(e) => setDefaultSource(e.target.value)} className="input">
                     <option value="">CSV Import (default)</option>
-                    <option value="WEBSITE_FORM">Website Form</option>
-                    <option value="LIVE_CHAT">Live Chat Widget</option>
-                    <option value="FACEBOOK_ADS">Facebook Ads</option>
-                    <option value="GOOGLE_ADS">Google Ads</option>
-                    <option value="REFERRAL">Referral</option>
-                    <option value="EMAIL">Email</option>
-                    <option value="PHONE">Phone</option>
-                    <option value="OTHER">Other</option>
+                    {leadSourceOptions.map((src) => (
+                      <option key={src.key} value={src.key}>
+                        {src.label}{src.isActive === false ? ' (Inactive)' : ''}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -769,13 +801,11 @@ function ImportWizard() {
                   <label className="label">Default Source</label>
                   <select value={defaultSource} onChange={(e) => setDefaultSource(e.target.value)} className="input">
                     <option value="">CSV Import (default)</option>
-                    <option value="WEBSITE_FORM">Website Form</option>
-                    <option value="FACEBOOK_ADS">Facebook Ads</option>
-                    <option value="GOOGLE_ADS">Google Ads</option>
-                    <option value="REFERRAL">Referral</option>
-                    <option value="EMAIL">Email</option>
-                    <option value="PHONE">Phone</option>
-                    <option value="OTHER">Other</option>
+                    {leadSourceOptions.map((src) => (
+                      <option key={src.key} value={src.key}>
+                        {src.label}{src.isActive === false ? ' (Inactive)' : ''}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
