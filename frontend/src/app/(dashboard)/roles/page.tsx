@@ -304,6 +304,7 @@ const MODULE_VISIBILITY_KEYS: FeatureKey[] = [
   'pipeline',
   'tasks',
   'analytics',
+  'reports',
   'automations',
   'campaigns',
   'integrations',

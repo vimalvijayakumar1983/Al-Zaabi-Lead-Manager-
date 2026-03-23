@@ -8,6 +8,7 @@ const { executeAutomations } = require('../services/automationEngine');
 const { rescoreAndPersist } = require('../utils/leadScoring');
 const { broadcastDataChange } = require('../websocket/server');
 const { regenerateLeadSummaryById } = require('../services/aiService');
+const { resolveStatusForStage } = require('../utils/statusStageMapping');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -169,8 +170,17 @@ router.post('/move', validate(z.object({
       return res.status(400).json({ error: 'Cannot move lead to a stage in a different division' });
     }
 
-    // ── Smart status sync: map pipeline stage name → lead status ──
-    let newStatus = mapStageToStatus(stage.name, stage.isWonStage, stage.isLostStage, lead.status);
+    // ── Smart status sync: manual mapping (if set) → fallback mapping ──
+    const org = await prisma.organization.findUnique({
+      where: { id: lead.organizationId },
+      select: { settings: true },
+    });
+    let newStatus = resolveStatusForStage({
+      stage,
+      currentStatus: lead.status,
+      settings: org?.settings || {},
+      divisionId: lead.organizationId,
+    });
 
     // ── Smart wonAt/lostAt handling ──
     // Set date when entering terminal stage, clear when leaving it

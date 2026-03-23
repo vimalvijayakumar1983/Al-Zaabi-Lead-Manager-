@@ -53,6 +53,7 @@ const callLogRoutes = require('./routes/call-logs');
 const roleRoutes = require('./routes/roles');
 const savedViewRoutes = require('./routes/saved-views');
 const recycleBinRoutes = require('./routes/recycle-bin');
+const reportBuilderRoutes = require('./routes/report-builder');
 
 const app = express();
 const server = createServer(app);
@@ -147,6 +148,7 @@ const routeMounts = [
   ['/roles', roleRoutes],
   ['/saved-views', savedViewRoutes],
   ['/recycle-bin', recycleBinRoutes],
+  ['/report-builder', reportBuilderRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {

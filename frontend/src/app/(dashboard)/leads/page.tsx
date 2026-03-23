@@ -1,8 +1,8 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
@@ -33,12 +33,28 @@ const statusColors: Record<string, string> = {
   DO_NOT_CALL: 'bg-red-900 text-white',
 };
 
-const sourceLabels: Record<string, string> = {
+type LeadSourceOption = {
+  key: string;
+  label: string;
+  source: string;
+  isSystem?: boolean;
+  isActive?: boolean;
+};
+
+const defaultSourceLabels: Record<string, string> = {
   WEBSITE_FORM: 'Website Form', LIVE_CHAT: 'Live Chat Widget', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
   FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', TIKTOK_ADS: 'TikTok Ads',
   MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',
 };
+
+const DEFAULT_LEAD_SOURCE_OPTIONS: LeadSourceOption[] = Object.entries(defaultSourceLabels).map(([key, label]) => ({
+  key,
+  label,
+  source: key,
+  isSystem: true,
+  isActive: true,
+}));
 
 // ─── Call disposition labels for display ────
 const dispositionLabels: Record<string, string> = {
@@ -53,6 +69,7 @@ const dispositionLabels: Record<string, string> = {
   ALREADY_COMPLETED_SERVICES: 'Already Completed Services',
   WRONG_NUMBER: 'Wrong Number', DO_NOT_CALL: 'Do Not Call', OTHER: 'Other',
 };
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
 // Color-coded outcome groups
 const dispositionColor = (d: string): string => {
@@ -65,6 +82,11 @@ const dispositionColor = (d: string): string => {
 };
 
 type ViewMode = 'table' | 'cards' | 'kanban';
+const DRILLDOWN_FILTER_KEYS: (keyof FilterState)[] = [
+  'status', 'source', 'assignedToId', 'stageId', 'campaign',
+  'minScore', 'maxScore', 'search', 'company', 'location',
+  'callOutcome', 'callOutcomeReason', 'callOutcomeMode', 'divisionId',
+];
 
 // ─── Phone formatting - auto-add UAE country code if missing ────
 const formatPhone = (phone: string | null | undefined): string => {
@@ -194,6 +216,7 @@ export default function LeadsPage() {
 function LeadsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const pathname = usePathname();
   const addToast = useNotificationStore((s) => s.addToast);
   const analyticsScope = searchParams.get('analyticsScope');
 
@@ -229,13 +252,8 @@ function LeadsContent() {
   const [filters, setFilters] = useState<FilterState>(() => {
     // URL params take priority (for drill-down from analytics)
     const initial = { ...emptyFilters };
-    const paramKeys: (keyof FilterState)[] = [
-      'status', 'source', 'assignedToId', 'stageId', 'campaign',
-      'minScore', 'maxScore', 'search', 'company', 'location',
-      'callOutcome', 'divisionId',
-    ];
     let hasUrlParams = false;
-    for (const key of paramKeys) {
+    for (const key of DRILLDOWN_FILTER_KEYS) {
       const val = searchParams.get(key);
       if (val) { initial[key] = val; hasUrlParams = true; }
     }
@@ -262,6 +280,8 @@ function LeadsContent() {
 
   // Status labels (custom per division)
   const [statusLabelsMap, setStatusLabelsMap] = useState<Record<string, string>>({});
+  const [leadSourceOptions, setLeadSourceOptions] = useState<LeadSourceOption[]>(DEFAULT_LEAD_SOURCE_OPTIONS);
+  const [callOutcomeOptions, setCallOutcomeOptions] = useState<Array<{ value: string; label: string; icon?: string; group?: string; isActive?: boolean }>>([]);
   useEffect(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
@@ -271,9 +291,51 @@ function LeadsContent() {
       .then(data => { if (data.statusLabels) setStatusLabelsMap(data.statusLabels); })
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getLeadSources(activeDivisionId || undefined)
+      .then((data: any) => {
+        const next = Array.isArray(data?.sources) ? data.sources.filter((s: any) => s?.isActive !== false) : [];
+        if (next.length > 0) {
+          setLeadSourceOptions(next);
+        } else {
+          setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS);
+        }
+      })
+      .catch(() => setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS));
+  }, []);
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getDispositionStudio(activeDivisionId || undefined)
+      .then((data: any) => {
+        const options = Array.isArray(data?.dispositions)
+          ? [...data.dispositions]
+              .sort((a: any, b: any) => Number(a?.sortOrder || 0) - Number(b?.sortOrder || 0))
+              .map((d: any) => ({
+                value: String(d?.key || ''),
+                label: String(d?.label || d?.key || ''),
+                icon: d?.icon || '📝',
+                group: d?.category || 'Other',
+                isActive: d?.isActive !== false,
+              }))
+              .filter((d: any) => d.value && d.label)
+          : [];
+        setCallOutcomeOptions(options);
+      })
+      .catch(() => setCallOutcomeOptions([]));
+  }, []);
   const getStatusLabel = (status: string): string => {
     return statusLabelsMap[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
   };
+  const getLeadSourceLabel = useCallback((lead: Lead): string => {
+    const key = (lead.sourceDetail || '').trim();
+    if (key) {
+      const custom = leadSourceOptions.find((s) => s.key === key);
+      if (custom) return custom.label;
+    }
+    const direct = leadSourceOptions.find((s) => s.key === lead.source || s.source === lead.source);
+    return direct?.label || defaultSourceLabels[lead.source] || lead.source;
+  }, [leadSourceOptions]);
 
   // Saved views
   const [activeViewId, setActiveViewId] = useState(() => loadActiveViewId());
@@ -351,6 +413,8 @@ function LeadsContent() {
       if (filters.conversionMax) params.conversionMax = filters.conversionMax;
       if (filters.stageId) params.stageId = filters.stageId;
       if (filters.callOutcome) params.callOutcome = filters.callOutcome;
+      if (filters.callOutcomeReason) params.callOutcomeReason = filters.callOutcomeReason;
+      if (filters.callOutcomeMode) params.callOutcomeMode = filters.callOutcomeMode;
       if (filters.minCallCount) params.minCallCount = filters.minCallCount;
       if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
       if (filters.divisionId) params.divisionId = filters.divisionId;
@@ -444,12 +508,7 @@ function LeadsContent() {
         // 3. Restore active view filters (skip if already restored from sessionStorage)
         const savedViewId = loadActiveViewId();
         const hasSessionState = restoredViewState.current !== null;
-        const urlFilterKeys = [
-          'status', 'source', 'assignedToId', 'stageId', 'campaign',
-          'minScore', 'maxScore', 'search', 'company', 'location',
-          'callOutcome', 'divisionId',
-        ];
-        const hasUrlDrilldownParams = urlFilterKeys.some((key) => !!searchParams.get(key));
+        const hasUrlDrilldownParams = DRILLDOWN_FILTER_KEYS.some((key) => !!searchParams.get(key));
         if (savedViewId && savedViewId !== 'all' && !hasSessionState && !hasUrlDrilldownParams) {
           const allViews = [...SYSTEM_VIEWS, ...serverViews];
           const view = allViews.find(v => v.id === savedViewId);
@@ -479,6 +538,36 @@ function LeadsContent() {
   useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
+
+  // One-time drill-down params should not keep applying by default
+  // on subsequent division loads/navigation.
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    let changed = false;
+    for (const key of DRILLDOWN_FILTER_KEYS) {
+      if (params.has(key)) {
+        params.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  }, [searchParams, router, pathname]);
+
+  // Clean stale stage filters restored from old session/drill-down context
+  // (e.g. stage IDs from a different division).
+  useEffect(() => {
+    if (!filters.stageId || stages.length === 0) return;
+    const validStageIds = new Set(stages.map((s) => s.id));
+    const requested = String(filters.stageId).split(',').map((s) => s.trim()).filter(Boolean);
+    const stillValid = requested.filter((id) => validStageIds.has(id));
+    if (stillValid.length === requested.length) return;
+    setFilters((prev) => ({ ...prev, stageId: stillValid.join(',') }));
+    setPagination((p) => ({ ...p, page: 1 }));
+    setActiveViewId('all');
+    saveActiveViewId('all');
+  }, [filters.stageId, stages]);
 
   // ─── Store lead navigation data for detail page ← → navigation ─────
   useEffect(() => {
@@ -805,10 +894,15 @@ function LeadsContent() {
     saveActiveViewId('all');
   };
 
+  const getDisplaySerialForRow = (rowIndex: number) => {
+    const base = Math.max(0, (pagination.page - 1) * pagination.limit);
+    return base + rowIndex + 1;
+  };
+
   const exportCSV = () => {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
     const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
-    const rows = leads.map((l) =>
+    const rows = leads.map((l, rowIndex) =>
       visibleCols.map((c) => {
         switch (c.id) {
           case 'name': return getDisplayName(l);
@@ -817,7 +911,7 @@ function LeadsContent() {
           case 'company': return l.company || '';
           case 'jobTitle': return l.jobTitle || '';
           case 'status': return (l as any).stage?.name || l.status;
-          case 'source': return l.sourceDetail ? `${l.source} (${l.sourceDetail})` : l.source;
+          case 'source': return getLeadSourceLabel(l);
           case 'score': return (l.score ?? 0).toString();
           case 'budget': return l.budget?.toString() || '';
           case 'location': return l.location || '';
@@ -848,6 +942,9 @@ function LeadsContent() {
           case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
           default:
             if (c.id.startsWith('cf_')) {
+              if (isAutoSerialCustomField(c)) {
+                return String(getDisplaySerialForRow(rowIndex));
+              }
               const fn = c.id.slice(3);
               const cd = (l.customData || {}) as Record<string, unknown>;
               const v = cd[fn];
@@ -901,7 +998,18 @@ function LeadsContent() {
 
   // ─── Cell Renderer ──────────────────────────────────────────────
 
-  const renderCell = (col: ColumnDef, lead: Lead) => {
+  const isAutoSerialCustomField = (col: ColumnDef) => {
+    if (!col.isCustom || col.customFieldType !== 'NUMBER' || !col.id.startsWith('cf_')) return false;
+    const fieldName = col.id.slice(3);
+    const cf = customFields.find((f) => f.name === fieldName);
+    if (String(cf?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE) return true;
+    const normalizedName = String(fieldName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedLabel = String(cf?.label || col.label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const serialAliases = new Set(['sn', 'sno', 'serialno', 'serialnumber', 'srno']);
+    return serialAliases.has(normalizedName) || serialAliases.has(normalizedLabel);
+  };
+
+  const renderCell = (col: ColumnDef, lead: Lead, rowIndex: number) => {
     switch (col.id) {
       case 'select':
         return (
@@ -968,7 +1076,7 @@ function LeadsContent() {
         );
       }
       case 'source':
-        return <span className="text-sm text-gray-700">{sourceLabels[lead.source] || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}</span>;
+        return <span className="text-sm text-gray-700">{getLeadSourceLabel(lead)}</span>;
       case 'score':
         const score = lead.score ?? 0;
         return (
@@ -1154,6 +1262,10 @@ function LeadsContent() {
       default:
         // Custom field columns (id starts with cf_)
         if (col.id.startsWith('cf_') && col.isCustom) {
+          if (isAutoSerialCustomField(col)) {
+            return <span className="text-sm text-gray-700 font-medium">{getDisplaySerialForRow(rowIndex)}</span>;
+          }
+
           const fieldName = col.id.slice(3); // remove 'cf_' prefix
           const customData = (lead.customData || {}) as Record<string, unknown>;
           const value = customData[fieldName];
@@ -1401,12 +1513,20 @@ function LeadsContent() {
               users={users}
               tags={allTags}
               stages={stages}
+              sourceOptions={leadSourceOptions.filter((s) => s.isActive !== false).map((s) => ({ value: s.key, label: s.label }))}
+              callOutcomeOptions={callOutcomeOptions}
               onClose={() => setShowAdvancedFilters(false)}
             />
           )}
 
           {/* Active Filter Badges */}
-          <FilterBadges filters={filters} onRemove={handleRemoveFilter} stages={stages} />
+          <FilterBadges
+            filters={filters}
+            onRemove={handleRemoveFilter}
+            stages={stages}
+            sourceOptions={leadSourceOptions.filter((s) => s.isActive !== false).map((s) => ({ value: s.key, label: s.label }))}
+            callOutcomeOptions={callOutcomeOptions}
+          />
 
           {/* Lead quick actions floating menu (portal) */}
           {quickActionPosition && activeQuickLead && typeof document !== 'undefined' && createPortal(
@@ -1563,7 +1683,7 @@ function LeadsContent() {
                         </div>
                       </td></tr>
                     ) : (
-                      leads.map((lead) => (
+                      leads.map((lead, rowIndex) => (
                         <tr key={lead.id}
                           className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
                           onClick={(e) => {
@@ -1572,7 +1692,7 @@ function LeadsContent() {
                             router.push(`/leads/${lead.id}`);
                           }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead)}</td>
+                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
                           ))}
                         </tr>
                       ))
@@ -1632,7 +1752,7 @@ function LeadsContent() {
                             </div>
                             <span className="text-xs font-semibold tabular-nums" style={{ color: (lead.score ?? 0) >= 70 ? '#16a34a' : (lead.score ?? 0) >= 40 ? '#d97706' : '#dc2626' }}>{lead.score ?? 0}</span>
                           </div>
-                          <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}</span>
+                          <span className="text-xs text-gray-400">{getLeadSourceLabel(lead)}</span>
                           {lead._count?.callLogs ? (
                             <span className="inline-flex items-center gap-1 text-xs text-gray-500">
                               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1738,7 +1858,7 @@ function LeadsContent() {
           users={users}
         />
       )}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} />}
+      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} sourceOptions={leadSourceOptions} />}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
     </>
@@ -1817,11 +1937,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
   );
 }
 
-const LEAD_SOURCES = [
-  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
-  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT',
-  'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
-] as const;
+const FALLBACK_SOURCE_OPTIONS = DEFAULT_LEAD_SOURCE_OPTIONS;
 
 interface CreateLeadModalProps {
   onClose: () => void;
@@ -1830,6 +1946,7 @@ interface CreateLeadModalProps {
   users?: User[];
   currentUserId?: string;
   userRole?: string;
+  sourceOptions?: LeadSourceOption[];
 }
 
 function CreateLeadModal({
@@ -1839,6 +1956,7 @@ function CreateLeadModal({
   users = [],
   currentUserId,
   userRole,
+  sourceOptions = FALLBACK_SOURCE_OPTIONS,
 }: CreateLeadModalProps) {
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
@@ -1867,6 +1985,10 @@ function CreateLeadModal({
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const effectiveSourceOptions = useMemo(
+    () => (sourceOptions.length > 0 ? sourceOptions.filter((s) => s.isActive !== false) : FALLBACK_SOURCE_OPTIONS),
+    [sourceOptions]
+  );
 
   // Fetch available tags for the division
   useEffect(() => {
@@ -1998,6 +2120,23 @@ function CreateLeadModal({
           delete submitData.name;
         }
 
+        // Map selected source key to backend fields (source enum + optional sourceDetail key)
+        if (typeof submitData.source === 'string' && submitData.source.trim() !== '') {
+          const selectedKey = submitData.source.trim();
+          const selected = effectiveSourceOptions.find((s) => s.key === selectedKey);
+          if (selected) {
+            submitData.source = selected.source;
+            if (selected.key !== selected.source) {
+              submitData.sourceDetail = selected.key;
+            } else {
+              delete submitData.sourceDetail;
+            }
+          } else {
+            submitData.source = 'OTHER';
+            submitData.sourceDetail = selectedKey;
+          }
+        }
+
         // Clean up empty strings
         Object.keys(submitData).forEach((key) => {
           if (submitData[key] === '') {
@@ -2029,7 +2168,7 @@ function CreateLeadModal({
         setIsSubmitting(false);
       }
     },
-    [formData, validate, onSubmit, customFields]
+    [customFields, effectiveSourceOptions, formData, onSubmit, validate]
   );
 
   const renderInput = (
@@ -2157,9 +2296,9 @@ function CreateLeadModal({
                     className="input w-full"
                   >
                     <option value="">Select source…</option>
-                    {LEAD_SOURCES.map((src) => (
-                      <option key={src} value={src}>
-                        {src}
+                    {effectiveSourceOptions.map((src) => (
+                      <option key={src.key} value={src.key}>
+                        {src.label}
                       </option>
                     ))}
                   </select>
@@ -2303,6 +2442,7 @@ function CreateLeadModal({
                     }
 
                     if (cf.type === 'NUMBER') {
+                      const isAutoSerial = String(cf.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE;
                       return (
                         <div key={cf.id}>
                           <label className="label">{cf.label}</label>
@@ -2311,7 +2451,12 @@ function CreateLeadModal({
                             value={String(formData[fieldKey] ?? '')}
                             onChange={(e) => updateField(fieldKey, e.target.value)}
                             className="input w-full"
+                            placeholder={isAutoSerial ? 'Auto-generated' : undefined}
+                            disabled={isAutoSerial}
                           />
+                          {isAutoSerial && (
+                            <p className="mt-1 text-[11px] text-gray-500">This serial is assigned automatically when the lead is created.</p>
+                          )}
                         </div>
                       );
                     }

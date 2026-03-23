@@ -34,6 +34,121 @@ async function getCustomLabelMap(orgIds) {
 
 const upload = multer({ limits: { fileSize: 25 * 1024 * 1024 } }); // 25MB
 
+const STANDARD_LEAD_SOURCE_VALUES = [
+  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+];
+const STANDARD_LEAD_SOURCE_SET = new Set(STANDARD_LEAD_SOURCE_VALUES);
+const DEFAULT_MANAGED_LEAD_SOURCES = [
+  { key: 'WEBSITE_FORM', label: 'Website Form', source: 'WEBSITE_FORM', isSystem: true, isActive: true },
+  { key: 'LIVE_CHAT', label: 'Live Chat Widget', source: 'LIVE_CHAT', isSystem: true, isActive: true },
+  { key: 'LANDING_PAGE', label: 'Landing Page', source: 'LANDING_PAGE', isSystem: true, isActive: true },
+  { key: 'WHATSAPP', label: 'WhatsApp', source: 'WHATSAPP', isSystem: true, isActive: true },
+  { key: 'FACEBOOK_ADS', label: 'Facebook Ads', source: 'FACEBOOK_ADS', isSystem: true, isActive: true },
+  { key: 'GOOGLE_ADS', label: 'Google Ads', source: 'GOOGLE_ADS', isSystem: true, isActive: true },
+  { key: 'TIKTOK_ADS', label: 'TikTok Ads', source: 'TIKTOK_ADS', isSystem: true, isActive: true },
+  { key: 'MANUAL', label: 'Manual', source: 'MANUAL', isSystem: true, isActive: true },
+  { key: 'CSV_IMPORT', label: 'CSV Import', source: 'CSV_IMPORT', isSystem: true, isActive: true },
+  { key: 'API', label: 'API', source: 'API', isSystem: true, isActive: true },
+  { key: 'REFERRAL', label: 'Referral', source: 'REFERRAL', isSystem: true, isActive: true },
+  { key: 'EMAIL', label: 'Email', source: 'EMAIL', isSystem: true, isActive: true },
+  { key: 'PHONE', label: 'Phone', source: 'PHONE', isSystem: true, isActive: true },
+  { key: 'OTHER', label: 'Other', source: 'OTHER', isSystem: true, isActive: true },
+];
+
+function sanitizeSourceKey(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_')
+    .slice(0, 64);
+}
+
+function normalizeLeadSourceCatalog(raw) {
+  const systemMap = new Map(DEFAULT_MANAGED_LEAD_SOURCES.map((s) => [s.key, { ...s }]));
+  const customMap = new Map();
+
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const fallbackKey = sanitizeSourceKey(entry.label || '');
+      const key = sanitizeSourceKey(entry.key || fallbackKey);
+      const label = String(entry.label || '').trim();
+      if (!key || !label) continue;
+
+      const normalizedSource = STANDARD_LEAD_SOURCE_SET.has(String(entry.source || '').toUpperCase())
+        ? String(entry.source).toUpperCase()
+        : 'OTHER';
+      const isActive = entry.isActive !== false;
+
+      if (systemMap.has(key)) {
+        const system = systemMap.get(key);
+        system.label = label;
+        system.source = system.key;
+        system.isActive = isActive;
+      } else {
+        customMap.set(key, {
+          key,
+          label,
+          source: normalizedSource,
+          isSystem: false,
+          isActive,
+        });
+      }
+    }
+  }
+
+  const system = DEFAULT_MANAGED_LEAD_SOURCES.map((s) => systemMap.get(s.key) || { ...s });
+  const custom = Array.from(customMap.values()).sort((a, b) => a.label.localeCompare(b.label));
+  return [...system, ...custom];
+}
+
+async function getLeadSourceCatalogForOrg(organizationId) {
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { settings: true },
+  });
+  const settings = (org?.settings && typeof org.settings === 'object') ? org.settings : {};
+  return normalizeLeadSourceCatalog(settings.leadSources);
+}
+
+function buildLeadSourceLookup(catalog) {
+  const lookup = new Map();
+  for (const item of catalog || []) {
+    if (!item?.key) continue;
+    const keyToken = sanitizeSourceKey(item.key);
+    if (keyToken) lookup.set(keyToken, item);
+    const labelToken = sanitizeSourceKey(item.label);
+    if (labelToken && !lookup.has(labelToken)) lookup.set(labelToken, item);
+  }
+  return lookup;
+}
+
+function resolveImportSource(rawValue, lookup) {
+  if (rawValue === undefined || rawValue === null) return null;
+  const raw = String(rawValue).trim();
+  if (!raw) return null;
+
+  const token = sanitizeSourceKey(raw);
+  const matched = lookup.get(token);
+  if (matched) {
+    const normalizedSource = STANDARD_LEAD_SOURCE_SET.has(String(matched.source || '').toUpperCase())
+      ? String(matched.source).toUpperCase()
+      : 'OTHER';
+    return {
+      source: normalizedSource,
+      sourceDetail: matched.key !== normalizedSource ? matched.key : null,
+    };
+  }
+
+  if (STANDARD_LEAD_SOURCE_SET.has(token)) {
+    return { source: token, sourceDetail: null };
+  }
+  return null;
+}
+
 // ─── Lead field definitions for mapping ─────────────────────────
 const LEAD_FIELDS = [
   { key: 'name', label: 'Name', required: true, type: 'string' },
@@ -41,7 +156,7 @@ const LEAD_FIELDS = [
   { key: 'phone', label: 'Phone', required: false, type: 'string' },
   { key: 'company', label: 'Company', required: false, type: 'string' },
   { key: 'jobTitle', label: 'Job Title', required: false, type: 'string' },
-  { key: 'source', label: 'Lead Source', required: false, type: 'enum', options: ['WEBSITE_FORM','LANDING_PAGE','WHATSAPP','FACEBOOK_ADS','GOOGLE_ADS','TIKTOK_ADS','MANUAL','CSV_IMPORT','API','REFERRAL','EMAIL','PHONE','OTHER'] },
+  { key: 'source', label: 'Lead Source', required: false, type: 'enum', options: STANDARD_LEAD_SOURCE_VALUES },
   { key: 'status', label: 'Status', required: false, type: 'enum', options: ['NEW','CONTACTED','QUALIFIED','PROPOSAL_SENT','NEGOTIATION','WON','LOST'] },
   { key: 'budget', label: 'Budget', required: false, type: 'number' },
   { key: 'productInterest', label: 'Product Interest', required: false, type: 'string' },
@@ -59,7 +174,7 @@ const CONTACT_FIELDS = [
   { key: 'company', label: 'Company', required: false, type: 'string' },
   { key: 'jobTitle', label: 'Job Title', required: false, type: 'string' },
   { key: 'department', label: 'Department', required: false, type: 'string' },
-  { key: 'source', label: 'Source', required: false, type: 'enum', options: ['WEBSITE_FORM','LANDING_PAGE','WHATSAPP','FACEBOOK_ADS','GOOGLE_ADS','TIKTOK_ADS','MANUAL','CSV_IMPORT','API','REFERRAL','EMAIL','PHONE','OTHER'] },
+  { key: 'source', label: 'Source', required: false, type: 'enum', options: STANDARD_LEAD_SOURCE_VALUES },
   { key: 'lifecycle', label: 'Lifecycle Stage', required: false, type: 'enum', options: ['SUBSCRIBER','LEAD','MARKETING_QUALIFIED','SALES_QUALIFIED','OPPORTUNITY','CUSTOMER','EVANGELIST','OTHER'] },
   { key: 'type', label: 'Contact Type', required: false, type: 'enum', options: ['PROSPECT','CUSTOMER','PARTNER','VENDOR','INFLUENCER','OTHER'] },
   { key: 'salutation', label: 'Salutation', required: false, type: 'string' },
@@ -182,10 +297,16 @@ router.get('/fields/:module', async (req, res, next) => {
     if (!fields) {
       return res.status(400).json({ error: `Unknown module: ${req.params.module}. Supported: ${Object.keys(MODULE_FIELDS).join(', ')}` });
     }
+    let resolvedFields = [...fields];
+    if (req.params.module === 'leads' || req.params.module === 'contacts') {
+      const sourceCatalog = await getLeadSourceCatalogForOrg(req.orgId);
+      const sourceKeys = sourceCatalog.map((s) => s.key);
+      resolvedFields = resolvedFields.map((f) => (f.key === 'source' ? { ...f, options: sourceKeys } : f));
+    }
 
     // Apply custom labels from field config
     const customLabelMap = await getCustomLabelMap(req.orgIds);
-    let allFields = fields.map(f => ({
+    let allFields = resolvedFields.map(f => ({
       ...f,
       customLabel: customLabelMap[f.key] || null,
       label: customLabelMap[f.key] || f.label,
@@ -222,9 +343,15 @@ router.post('/preview', upload.single('file'), async (req, res, next) => {
     if (!fields) {
       return res.status(400).json({ error: `Unknown module: ${module}` });
     }
+    let resolvedFields = [...fields];
+    if (module === 'leads' || module === 'contacts') {
+      const sourceCatalog = await getLeadSourceCatalogForOrg(req.orgId);
+      const sourceKeys = sourceCatalog.map((s) => s.key);
+      resolvedFields = resolvedFields.map((f) => (f.key === 'source' ? { ...f, options: sourceKeys } : f));
+    }
 
     // Include custom fields for leads & contacts
-    let allFields = [...fields];
+    let allFields = [...resolvedFields];
     if (module === 'leads' || module === 'contacts') {
       const customFields = await prisma.customField.findMany({
         where: { organizationId: { in: req.orgIds } },
@@ -289,6 +416,9 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
 
     // Determine target org for newly created records
     const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+    const sourceCatalog = await getLeadSourceCatalogForOrg(targetOrgId);
+    const sourceLookup = buildLeadSourceLookup(sourceCatalog);
+    const defaultSourceResolved = resolveImportSource(defaultSource, sourceLookup) || { source: 'CSV_IMPORT', sourceDetail: null };
 
     const rows = await parseFileToRows(req.file);
     if (rows.length === 0) {
@@ -367,13 +497,21 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
 
           // Type coercion
           if (mapped.budget) mapped.budget = parseFloat(mapped.budget) || null;
-          // Preserve the original source text the user entered (e.g. "internal segmentation")
-          const rawSourceText = mapped.source ? mapped.source.trim() : null;
-          if (mapped.source && !LEAD_FIELDS.find(f => f.key === 'source').options.includes(mapped.source.toUpperCase())) {
+          // Resolve source against managed source catalog (supports custom source keys/labels).
+          const rawSourceText = mapped.source ? String(mapped.source).trim() : '';
+          const resolvedRowSource = resolveImportSource(mapped.source, sourceLookup);
+          if (resolvedRowSource) {
+            mapped.source = resolvedRowSource.source;
+            mapped.sourceDetail = resolvedRowSource.sourceDetail || null;
+          } else if (rawSourceText) {
+            // Unknown value: preserve original in sourceDetail while keeping source enum compatible.
             mapped.sourceDetail = rawSourceText;
-            mapped.source = defaultSource || 'CSV_IMPORT';
-          } else if (mapped.source) {
-            mapped.source = mapped.source.toUpperCase();
+            mapped.source = defaultSourceResolved.source || 'CSV_IMPORT';
+          } else {
+            mapped.source = defaultSourceResolved.source || 'CSV_IMPORT';
+            if (defaultSourceResolved.sourceDetail) {
+              mapped.sourceDetail = defaultSourceResolved.sourceDetail;
+            }
           }
           if (mapped.status && !LEAD_FIELDS.find(f => f.key === 'status').options.includes(mapped.status.toUpperCase())) {
             delete mapped.status;
@@ -463,8 +601,10 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             phone: mapped.phone || null,
             company: mapped.company || null,
             jobTitle: mapped.jobTitle || null,
-            source: mapped.source || defaultSource || 'CSV_IMPORT',
-            sourceDetail: mapped.sourceDetail || null,
+            source: mapped.source || defaultSourceResolved.source || 'CSV_IMPORT',
+            sourceDetail: mapped.sourceDetail !== undefined
+              ? (mapped.sourceDetail || null)
+              : (defaultSourceResolved.sourceDetail || null),
             status: mapped.status || defaultStatus || 'NEW',
             budget: mapped.budget || null,
             productInterest: mapped.productInterest || null,
@@ -559,10 +699,11 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             mapped.type = mapped.type.toUpperCase();
           }
 
-          if (mapped.source && !CONTACT_FIELDS.find(f => f.key === 'source').options.includes(mapped.source.toUpperCase())) {
-            mapped.source = defaultSource || 'CSV_IMPORT';
-          } else if (mapped.source) {
-            mapped.source = mapped.source.toUpperCase();
+          const resolvedRowSource = resolveImportSource(mapped.source, sourceLookup);
+          if (resolvedRowSource) {
+            mapped.source = resolvedRowSource.source;
+          } else {
+            mapped.source = defaultSourceResolved.source || 'CSV_IMPORT';
           }
 
           // Date coercion
@@ -632,7 +773,7 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             company: mapped.company || null,
             jobTitle: mapped.jobTitle || null,
             department: mapped.department || null,
-            source: mapped.source || defaultSource || 'CSV_IMPORT',
+            source: mapped.source || defaultSourceResolved.source || 'CSV_IMPORT',
             lifecycle: mapped.lifecycle || defaultStatus || 'SUBSCRIBER',
             type: mapped.type || 'PROSPECT',
             salutation: mapped.salutation || null,

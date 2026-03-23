@@ -11,6 +11,7 @@ const { broadcastDataChange } = require('../websocket/server');
 const { regenerateLeadSummaryById } = require('../services/aiService');
 const { sendText: sendWhatsAppText, sendMedia: sendWhatsAppMedia, uploadMedia: uploadWhatsAppMedia } = require('../services/whatsappService');
 const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
+const { findStageForStatus } = require('../utils/statusStageMapping');
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -745,17 +746,6 @@ const statusUpdateSchema = z.object({
   status: z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'NEGOTIATION', 'WON', 'LOST']),
 });
 
-// Map lead status to pipeline stage name for auto-sync
-const STATUS_TO_STAGE_NAME = {
-  NEW: 'New Lead',
-  CONTACTED: 'Contacted',
-  QUALIFIED: 'Qualified',
-  PROPOSAL_SENT: 'Proposal Sent',
-  NEGOTIATION: 'Negotiation',
-  WON: 'Won',
-  LOST: 'Lost',
-};
-
 router.patch('/conversations/:leadId/status', async (req, res, next) => {
   try {
     const { leadId } = req.params;
@@ -769,15 +759,25 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
 
     const updateData = { status: parsed.data.status };
 
-    // Auto-sync pipeline stage to match the new status
-    const stageName = STATUS_TO_STAGE_NAME[parsed.data.status];
-    if (stageName) {
-      const matchingStage = await prisma.pipelineStage.findFirst({
-        where: { organizationId: lead.organizationId, name: { equals: stageName, mode: 'insensitive' } },
-      });
-      if (matchingStage) {
-        updateData.stageId = matchingStage.id;
-      }
+    // Auto-sync pipeline stage using manual mapping (if configured) + fallback.
+    const [orgStages, org] = await Promise.all([
+      prisma.pipelineStage.findMany({
+        where: { organizationId: lead.organizationId },
+        orderBy: { order: 'asc' },
+      }),
+      prisma.organization.findUnique({
+        where: { id: lead.organizationId },
+        select: { settings: true },
+      }),
+    ]);
+    const matchingStage = findStageForStatus({
+      targetStatus: parsed.data.status,
+      stages: orgStages,
+      settings: org?.settings || {},
+      divisionId: lead.organizationId,
+    });
+    if (matchingStage) {
+      updateData.stageId = matchingStage.id;
     }
 
     const updated = await prisma.lead.update({

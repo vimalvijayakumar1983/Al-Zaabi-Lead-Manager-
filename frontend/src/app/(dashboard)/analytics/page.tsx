@@ -173,9 +173,10 @@ function LineChart({ data, series, height = 220 }: {
 
 // ─── Bar Chart ────────────────────────────────────────────────────
 
-function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160, onBarClick }: {
+function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160, onBarClick, tooltipFormatter }: {
   data: any[]; xKey: string; yKey: string; color: string;
   secondaryKey?: string; secondaryColor?: string; height?: number; onBarClick?: (row: any) => void;
+  tooltipFormatter?: (row: any) => string;
 }) {
   if (!data.length) return <div className="flex items-center justify-center h-32 text-sm text-text-tertiary">No data</div>;
   const maxVal = Math.max(...data.map(d => Number(d[yKey] || 0)), 1);
@@ -200,7 +201,9 @@ function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, heigh
             </div>
             <span className="text-xs text-text-tertiary truncate w-full text-center">{d[xKey]}</span>
             <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap hidden group-hover:block z-20 pointer-events-none">
-              {d[xKey]}: {fmt(Number(d[yKey] || 0))}{secondaryKey && ` / ${fmt(Number(d[secondaryKey] || 0))} won`}
+              {tooltipFormatter
+                ? tooltipFormatter(d)
+                : `${d[xKey]}: ${fmt(Number(d[yKey] || 0))}${secondaryKey ? ` / ${fmt(Number(d[secondaryKey] || 0))} won` : ''}`}
             </div>
           </div>
         );
@@ -476,6 +479,7 @@ export default function AnalyticsPage() {
   const [forecastReportUnavailable, setForecastReportUnavailable] = useState(false);
   const [phase1ReportUnavailable, setPhase1ReportUnavailable] = useState(false);
   const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
+  const [callDrillMode, setCallDrillMode] = useState<'latest' | 'any'>('latest');
 
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -497,6 +501,7 @@ export default function AnalyticsPage() {
         period?: Period;
         activeTab?: Tab;
         selectedDivision?: string;
+        callDrillMode?: 'latest' | 'any';
       };
       if (parsed.period && PERIODS.some((p) => p.value === parsed.period)) {
         setPeriod(parsed.period);
@@ -506,6 +511,9 @@ export default function AnalyticsPage() {
       }
       if (typeof parsed.selectedDivision === 'string' && parsed.selectedDivision.trim()) {
         setSelectedDivision(parsed.selectedDivision);
+      }
+      if (parsed.callDrillMode === 'latest' || parsed.callDrillMode === 'any') {
+        setCallDrillMode(parsed.callDrillMode);
       }
     } catch {
       // ignore invalid localStorage state
@@ -518,12 +526,12 @@ export default function AnalyticsPage() {
     try {
       window.localStorage.setItem(
         ANALYTICS_PREFS_KEY,
-        JSON.stringify({ period, activeTab, selectedDivision })
+        JSON.stringify({ period, activeTab, selectedDivision, callDrillMode })
       );
     } catch {
       // ignore storage failures
     }
-  }, [period, activeTab, selectedDivision]);
+  }, [period, activeTab, selectedDivision, callDrillMode]);
 
   const divId = selectedDivision === 'all' ? undefined : selectedDivision;
   const selectedDivName = selectedDivision === 'all'
@@ -547,7 +555,7 @@ export default function AnalyticsPage() {
         api.getActivitiesAnalytics(p, divId),
         api.getScoreDistribution(divId),
         api.getTaskSLAReport(p, divId),
-        api.getCallDispositionReport(p, divId),
+        api.getCallDispositionReport(p, divId, callDrillMode),
         api.getPipelineForecastReport(p, divId),
         api.getPhase1Report(p, divId),
       ]);
@@ -634,7 +642,7 @@ export default function AnalyticsPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [isSuperAdmin, divId]);
+  }, [isSuperAdmin, divId, callDrillMode]);
 
   useEffect(() => { fetchData(); }, [period, selectedDivision, fetchData]);
 
@@ -659,6 +667,8 @@ export default function AnalyticsPage() {
 
   const drill = (params: Record<string, string>) => router.push(drillLink(withDivisionScope(params)));
   const drillTasks = (params: Record<string, string>) => router.push(taskDrillLink(withDivisionScope(params)));
+  const drillCalls = (params: Record<string, string>) =>
+    router.push(drillLink(withDivisionScope({ ...params, callOutcomeMode: callDrillMode })));
 
   const buildExportPayload = useCallback(() => {
     const baseMeta = {
@@ -1606,7 +1616,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -1627,7 +1636,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -1782,10 +1790,12 @@ export default function AnalyticsPage() {
 
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Pipeline Velocity (Stage Aging)</h2>
+            <p className="text-2xs text-text-tertiary mb-2">Bars show median stage age (days), not lead count.</p>
             <BarChart
               data={velocityStages.slice(0, 8).map((row: any) => ({
                 stage: row.stage,
                 medianAgeDays: row.medianAgeDays,
+                count: row.count,
                 stageIds: row.stageIds || [],
                 statusHints: row.statusHints || [],
               }))}
@@ -1793,10 +1803,10 @@ export default function AnalyticsPage() {
               yKey="medianAgeDays"
               color="#ef4444"
               height={190}
+              tooltipFormatter={(row) => `${row.stage}: ${row.medianAgeDays} days (leads: ${row.count || 0})`}
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -1882,7 +1892,6 @@ export default function AnalyticsPage() {
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
-                if (Array.isArray(row?.statusHints) && row.statusHints.length > 0) params.status = row.statusHints.join(',');
                 if (Object.keys(params).length > 0) drill(params);
               }}
             />
@@ -2133,6 +2142,36 @@ export default function AnalyticsPage() {
             No calls found in selected period; showing all-time call intelligence for this scope.
           </div>
         )}
+        <div className="card p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-semibold text-text-primary">Lead drill-down mode</p>
+            <p className="text-2xs text-text-tertiary">
+              Latest only shows current lead state. Any historical call matches chart/event counts.
+            </p>
+          </div>
+          <div className="inline-flex rounded-lg border border-border-subtle overflow-hidden">
+            <button
+              onClick={() => setCallDrillMode('latest')}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                callDrillMode === 'latest'
+                  ? 'bg-brand-600 text-white'
+                  : 'bg-white text-text-secondary hover:bg-surface-secondary'
+              }`}
+            >
+              Latest only
+            </button>
+            <button
+              onClick={() => setCallDrillMode('any')}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                callDrillMode === 'any'
+                  ? 'bg-brand-600 text-white'
+                  : 'bg-white text-text-secondary hover:bg-surface-secondary'
+              }`}
+            >
+              Any historical call
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <KpiCard title="Total Calls" value={summary.totalCalls || 0} icon={Phone} iconBg="bg-brand-50" iconColor="text-brand-600" />
           <KpiCard title="Reachability Ratio" value={summary.reachabilityRatio || 0} format="percent" icon={Target} iconBg="bg-emerald-50" iconColor="text-emerald-600" />
@@ -2157,7 +2196,12 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#ef4444"
                 height={180}
-                onBarClick={() => drill({ callOutcome: 'NOT_INTERESTED' })}
+                onBarClick={(row) => {
+                  const reason = String(row?.reason || '').trim();
+                  const params: Record<string, string> = { callOutcome: 'NOT_INTERESTED' };
+                  if (reason) params.callOutcomeReason = reason;
+                  drillCalls(params);
+                }}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No Not Interested reason data yet</p></div>
@@ -2175,7 +2219,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#10b981"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
+                onBarClick={() => drillCalls({ callOutcome: 'ALREADY_COMPLETED_SERVICES' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No completed service location data yet</p></div>
@@ -2190,7 +2234,7 @@ export default function AnalyticsPage() {
                 yKey="count"
                 color="#6366f1"
                 height={170}
-                onBarClick={() => drill({ callOutcome: 'WILL_CALL_US_AGAIN' })}
+                onBarClick={() => drillCalls({ callOutcome: 'WILL_CALL_US_AGAIN' })}
               />
             ) : (
               <div className="empty-state py-8"><p className="text-sm text-text-tertiary">No callback window data yet</p></div>
@@ -2224,7 +2268,7 @@ export default function AnalyticsPage() {
                   <tr
                     key={row.disposition}
                     className="table-row cursor-pointer hover:bg-surface-secondary"
-                    onClick={() => drill({ callOutcome: row.disposition })}
+                    onClick={() => drillCalls({ callOutcome: row.disposition })}
                   >
                     <td className="table-cell px-4">{row.label}</td>
                     <td className="table-cell px-4"><span className="tabular-nums">{row.count}</span></td>

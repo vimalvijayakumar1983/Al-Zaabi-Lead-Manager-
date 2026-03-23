@@ -15,6 +15,7 @@ import type {
   RecycleScope,
 } from '@/types';
 import { CallDispositionStudioSection } from './call-disposition-studio';
+import { LeadSourcesSection } from './lead-sources-section';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
@@ -36,6 +37,7 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, adminOnly: true },
   { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
+  { key: 'leadSources', label: 'Lead Sources', icon: Tag, adminOnly: true },
   { key: 'pipelineStages', label: 'Pipeline Stages', icon: GitBranch, adminOnly: true },
   { key: 'callDispositions', label: 'Call Dispositions', icon: Phone, adminOnly: true },
   { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
@@ -117,6 +119,7 @@ export default function SettingsPage() {
             <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
           )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
+          {activeTab === 'leadSources' && isAdmin && <LeadSourcesSection isSuperAdmin={isSuperAdmin} />}
           {activeTab === 'pipelineStages' && isAdmin && <PipelineStagesSection />}
           {activeTab === 'callDispositions' && isAdmin && <CallDispositionStudioSection />}
           {activeTab === 'email' && isAdmin && <EmailSettingsSection />}
@@ -2097,6 +2100,16 @@ const FIELD_TYPE_CONFIG: Record<FieldType, { label: string; icon: React.Componen
   EMAIL:       { label: 'Email',        icon: AtSign,     color: 'bg-indigo-100 text-indigo-700', description: 'Email address' },
   PHONE:       { label: 'Phone',        icon: Phone,      color: 'bg-pink-100 text-pink-700',    description: 'Phone number' },
 };
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
+const LEAD_STATUS_OPTIONS = [
+  { key: 'NEW', default: 'New', color: 'bg-indigo-100 text-indigo-800' },
+  { key: 'CONTACTED', default: 'Contacted', color: 'bg-blue-100 text-blue-800' },
+  { key: 'QUALIFIED', default: 'Qualified', color: 'bg-cyan-100 text-cyan-800' },
+  { key: 'PROPOSAL_SENT', default: 'Proposal Sent', color: 'bg-amber-100 text-amber-800' },
+  { key: 'NEGOTIATION', default: 'Negotiation', color: 'bg-purple-100 text-purple-800' },
+  { key: 'WON', default: 'Won', color: 'bg-green-100 text-green-800' },
+  { key: 'LOST', default: 'Lost', color: 'bg-red-100 text-red-800' },
+];
 
 /* ─── Built-in Field Definitions (fallback if API unavailable) ──────── */
 
@@ -2485,7 +2498,7 @@ function CustomFieldsSection() {
   const [editingField, setEditingField] = useState<CustomField | null>(null);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'pipelineStages' | 'tags'>('builtin');
+  const [activeSection, setActiveSection] = useState<'builtin' | 'custom' | 'statusLabels' | 'statusMapping' | 'pipelineStages' | 'tags'>('builtin');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
   const [editingStatusKey, setEditingStatusKey] = useState<string | null>(null);
   const [statusUnsaved, setStatusUnsaved] = useState(false);
@@ -2499,7 +2512,10 @@ function CustomFieldsSection() {
   const [showAddTag, setShowAddTag] = useState(false);
 
   const fetchTags = async () => {
-    if (!effectiveDivisionId) return;
+    if (!effectiveDivisionId) {
+      setTags([]);
+      return;
+    }
     setLoadingTags(true);
     try {
       const data: any = await api.getTags(effectiveDivisionId);
@@ -2511,6 +2527,12 @@ function CustomFieldsSection() {
   // Pipeline Stages
   const [pipelineStages, setPipelineStages] = useState<any[]>([]);
   const [loadingStages, setLoadingStages] = useState(false);
+  const [statusStageRows, setStatusStageRows] = useState<any[]>([]);
+  const [loadingStatusMapping, setLoadingStatusMapping] = useState(false);
+  const [savingStatusMapping, setSavingStatusMapping] = useState(false);
+  const [cloningStatusMapping, setCloningStatusMapping] = useState(false);
+  const [showCloneMappingModal, setShowCloneMappingModal] = useState(false);
+  const [selectedCloneDivisionIds, setSelectedCloneDivisionIds] = useState<string[]>([]);
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('#6366f1');
@@ -2605,10 +2627,26 @@ function CustomFieldsSection() {
     setLoadingStages(false);
   }, [effectiveDivisionId]);
 
+  const fetchStatusStageMapping = useCallback(async () => {
+    if (!effectiveDivisionId) {
+      setStatusStageRows([]);
+      return;
+    }
+    setLoadingStatusMapping(true);
+    try {
+      const data = await api.getStatusStageMapping(effectiveDivisionId);
+      setStatusStageRows(Array.isArray((data as any)?.rows) ? (data as any).rows : []);
+    } catch {
+      setStatusStageRows([]);
+    }
+    setLoadingStatusMapping(false);
+  }, [effectiveDivisionId]);
+
   useEffect(() => {
     if (activeSection === 'pipelineStages') fetchPipelineStages();
+    if (activeSection === 'statusMapping') fetchStatusStageMapping();
     if (activeSection === 'tags') fetchTags();
-  }, [activeSection, fetchPipelineStages, effectiveDivisionId]);
+  }, [activeSection, fetchPipelineStages, fetchStatusStageMapping, effectiveDivisionId]);
 
   // ─── Computed stats ────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -2681,6 +2719,100 @@ function CustomFieldsSection() {
       setToast({ type: 'error', message: err.message || 'Failed to save status labels' });
     }
     setSavingStatus(false);
+  };
+
+  const saveStatusStageMapping = async () => {
+    if (!effectiveDivisionId) {
+      setToast({ type: 'error', message: 'Please select a division to save mapping' });
+      return;
+    }
+    setSavingStatusMapping(true);
+    try {
+      const mappings = statusStageRows.reduce((acc: Record<string, string>, row: any) => {
+        if (row?.stageId && row?.mappedStatus) acc[row.stageId] = row.mappedStatus;
+        return acc;
+      }, {});
+      await api.saveStatusStageMapping(effectiveDivisionId, mappings);
+      setToast({ type: 'success', message: 'Status mapping saved successfully' });
+      await fetchStatusStageMapping();
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to save status mapping' });
+    }
+    setSavingStatusMapping(false);
+  };
+
+  const cloneStatusStageMappingToAllDivisions = async () => {
+    if (!isSuperAdmin) return;
+    if (!effectiveDivisionId) {
+      setToast({ type: 'error', message: 'Please select a source division first' });
+      return;
+    }
+    const sourceDivision = divisions.find((d) => d.id === effectiveDivisionId);
+    const confirmed = await premiumConfirm({
+      title: 'Apply template mapping to all divisions?',
+      message: `This will copy the status-stage mapping from "${sourceDivision?.name || 'selected division'}" to all other divisions.`,
+      confirmText: 'Apply to All Divisions',
+      cancelText: 'Cancel',
+      variant: 'info',
+    });
+    if (!confirmed) return;
+
+    setCloningStatusMapping(true);
+    try {
+      // Persist current source division mapping first, so clone uses latest edits.
+      const currentMappings = statusStageRows.reduce((acc: Record<string, string>, row: any) => {
+        if (row?.stageId && row?.mappedStatus) acc[row.stageId] = row.mappedStatus;
+        return acc;
+      }, {});
+      await api.saveStatusStageMapping(effectiveDivisionId, currentMappings);
+      const result = await api.cloneStatusStageMappingToAll(effectiveDivisionId);
+      setToast({
+        type: 'success',
+        message: `Template mapping applied to ${result.clonedTo} division${result.clonedTo === 1 ? '' : 's'}`,
+      });
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to apply template mapping' });
+    }
+    setCloningStatusMapping(false);
+  };
+
+  const openCloneToSelectedModal = () => {
+    if (!isSuperAdmin) return;
+    if (!effectiveDivisionId) {
+      setToast({ type: 'error', message: 'Please select a source division first' });
+      return;
+    }
+    const targetIds = divisions
+      .filter((d) => d.id !== effectiveDivisionId)
+      .map((d) => d.id);
+    setSelectedCloneDivisionIds(targetIds);
+    setShowCloneMappingModal(true);
+  };
+
+  const applyStatusMappingToSelectedDivisions = async () => {
+    if (!effectiveDivisionId) return;
+    if (selectedCloneDivisionIds.length === 0) {
+      setToast({ type: 'error', message: 'Please select at least one target division' });
+      return;
+    }
+    setCloningStatusMapping(true);
+    try {
+      // Persist current source division mapping first, so clone uses latest edits.
+      const currentMappings = statusStageRows.reduce((acc: Record<string, string>, row: any) => {
+        if (row?.stageId && row?.mappedStatus) acc[row.stageId] = row.mappedStatus;
+        return acc;
+      }, {});
+      await api.saveStatusStageMapping(effectiveDivisionId, currentMappings);
+      const result = await api.cloneStatusStageMappingToAll(effectiveDivisionId, selectedCloneDivisionIds);
+      setToast({
+        type: 'success',
+        message: `Template mapping applied to ${result.clonedTo} division${result.clonedTo === 1 ? '' : 's'}`,
+      });
+      setShowCloneMappingModal(false);
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || 'Failed to apply template mapping' });
+    }
+    setCloningStatusMapping(false);
   };
 
   // ─── Pipeline stage handlers ─────────────────────────────────────
@@ -2824,6 +2956,10 @@ function CustomFieldsSection() {
     });
     return groups;
   }, [filteredBuiltInFields]);
+  const statusLabelCount = LEAD_STATUS_OPTIONS.length;
+  const statusMappingTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(statusStageRows.length);
+  const pipelineStagesTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(pipelineStages.length);
+  const tagsTabCount = !effectiveDivisionId && isSuperAdmin ? '—' : String(tags.length);
 
   // ─── Division selector label ───────────────────────────────────────
   const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
@@ -2985,6 +3121,11 @@ function CustomFieldsSection() {
           >
             <Tag className="h-4 w-4" />
             Status Labels
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'statusLabels' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {statusLabelCount}
+            </span>
           </button>
           <button
             onClick={() => setActiveSection('pipelineStages')}
@@ -2999,7 +3140,23 @@ function CustomFieldsSection() {
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
               activeSection === 'pipelineStages' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
             }`}>
-              {pipelineStages.length}
+              {pipelineStagesTabCount}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveSection('statusMapping')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeSection === 'statusMapping'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <ArrowUpDown className="h-4 w-4" />
+            Status Mapping
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+              activeSection === 'statusMapping' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {statusMappingTabCount}
             </span>
           </button>
           <button
@@ -3015,7 +3172,7 @@ function CustomFieldsSection() {
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
               activeSection === 'tags' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'
             }`}>
-              {tags.length}
+              {tagsTabCount}
             </span>
           </button>
         </div>
@@ -3182,19 +3339,27 @@ function CustomFieldsSection() {
         ) : activeSection === 'statusLabels' ? (
           /* ═══ STATUS LABELS TAB ═══════════════════════════════════ */
           <div>
-            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+            <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
               <p className="text-xs text-gray-500">Customize how pipeline statuses are displayed. Changes apply to stat cards, badges, filters, and dropdowns.</p>
+              <button
+                onClick={() => {
+                  setActiveSection('pipelineStages');
+                  if (effectiveDivisionId) setShowAddStage(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors whitespace-nowrap"
+                title="Create a new workflow status via Pipeline Stage"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Create New Status
+              </button>
             </div>
+            {!effectiveDivisionId && isSuperAdmin && (
+              <div className="px-5 py-3 border-b border-amber-200 bg-amber-50 text-[11px] text-amber-700">
+                Select a specific division from Scope to create new workflow statuses (pipeline stages).
+              </div>
+            )}
             <div className="divide-y divide-gray-100">
-              {[
-                { key: 'NEW', default: 'New', color: 'bg-indigo-100 text-indigo-800' },
-                { key: 'CONTACTED', default: 'Contacted', color: 'bg-blue-100 text-blue-800' },
-                { key: 'QUALIFIED', default: 'Qualified', color: 'bg-cyan-100 text-cyan-800' },
-                { key: 'PROPOSAL_SENT', default: 'Proposal Sent', color: 'bg-amber-100 text-amber-800' },
-                { key: 'NEGOTIATION', default: 'Negotiation', color: 'bg-purple-100 text-purple-800' },
-                { key: 'WON', default: 'Won', color: 'bg-green-100 text-green-800' },
-                { key: 'LOST', default: 'Lost', color: 'bg-red-100 text-red-800' },
-              ].map(status => (
+              {LEAD_STATUS_OPTIONS.map(status => (
                 <div key={status.key} className="flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition-colors">
                   <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.color}`}>
                     {statusLabels[status.key] || status.default}
@@ -3261,6 +3426,190 @@ function CustomFieldsSection() {
                   Save Status Labels
                 </button>
               </div>
+            )}
+          </div>
+        ) : activeSection === 'statusMapping' ? (
+          /* ═══ STATUS ↔ PIPELINE MAPPING TAB ═══════════════════════ */
+          <div>
+            {!effectiveDivisionId ? (
+              <div className="p-10 text-center">
+                <div className="h-14 w-14 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                  <ArrowUpDown className="h-7 w-7 text-amber-500" />
+                </div>
+                <p className="text-sm font-medium text-gray-700">Select a Division</p>
+                <p className="text-xs text-gray-400 mt-1">Status mapping is managed per division. Please select a specific division from Scope.</p>
+              </div>
+            ) : (
+              <>
+                <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-gray-500">Map each pipeline stage to a lead status for this division. Manual mapping overrides keyword/flag fallback.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isSuperAdmin && (
+                      <button
+                        onClick={openCloneToSelectedModal}
+                        disabled={cloningStatusMapping || loadingStatusMapping}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      >
+                        <Filter className="h-3.5 w-3.5" />
+                        Apply to Selected
+                      </button>
+                    )}
+                    {isSuperAdmin && (
+                      <button
+                        onClick={cloneStatusStageMappingToAllDivisions}
+                        disabled={cloningStatusMapping || loadingStatusMapping}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                      >
+                        {cloningStatusMapping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        Apply to All Divisions
+                      </button>
+                    )}
+                    <button
+                      onClick={saveStatusStageMapping}
+                      disabled={savingStatusMapping || loadingStatusMapping}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    >
+                      {savingStatusMapping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      Save Mapping
+                    </button>
+                  </div>
+                </div>
+
+                {loadingStatusMapping ? (
+                  <div className="p-10 text-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-indigo-500 mx-auto" />
+                    <p className="text-sm text-gray-500 mt-2">Loading mapping...</p>
+                  </div>
+                ) : statusStageRows.length === 0 ? (
+                  <div className="p-10 text-center">
+                    <div className="h-14 w-14 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                      <ArrowUpDown className="h-7 w-7 text-gray-400" />
+                    </div>
+                    <p className="text-sm font-medium text-gray-700">No pipeline stages found</p>
+                    <p className="text-xs text-gray-400 mt-1">Create pipeline stages first, then map them to statuses.</p>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="px-5 py-2.5 border-b border-gray-100 bg-gray-50">
+                      <div className="grid grid-cols-12 gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        <div className="col-span-4">Pipeline Stage</div>
+                        <div className="col-span-2 text-center">Source</div>
+                        <div className="col-span-3 text-center">Mapped Status</div>
+                        <div className="col-span-3 text-center">Fallback</div>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {statusStageRows.map((row: any, idx: number) => (
+                        <div key={row.stageId} className={`grid grid-cols-12 gap-2 items-center px-5 py-3 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                          <div className="col-span-4">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-medium text-gray-900">{row.stageName}</p>
+                              {row.isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">Default</span>}
+                              {row.isWonStage && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Won</span>}
+                              {row.isLostStage && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Lost</span>}
+                            </div>
+                          </div>
+                          <div className="col-span-2 text-center">
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${row.source === 'manual' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
+                              {row.source === 'manual' ? 'Manual' : 'Fallback'}
+                            </span>
+                          </div>
+                          <div className="col-span-3">
+                            <select
+                              value={row.mappedStatus}
+                              onChange={(e) => setStatusStageRows((prev) => prev.map((r: any) => r.stageId === row.stageId ? { ...r, mappedStatus: e.target.value, source: 'manual' } : r))}
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                              {LEAD_STATUS_OPTIONS.map((s) => (
+                                <option key={s.key} value={s.key}>{s.default}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-3 text-center">
+                            <span className="text-xs text-gray-500">{row.fallbackStatus?.replace(/_/g, ' ') || '-'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Clone to selected divisions modal */}
+                {showCloneMappingModal && (
+                  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+                      <div className="px-6 py-5 border-b border-gray-100">
+                        <h3 className="text-base font-semibold text-gray-900">Apply mapping to selected divisions</h3>
+                        <p className="text-sm text-gray-500 mt-1">Choose target divisions for cloning current status-stage mapping.</p>
+                      </div>
+                      <div className="px-6 py-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <p className="text-xs text-gray-500">
+                            Source: <span className="font-medium text-gray-700">{divisions.find((d) => d.id === effectiveDivisionId)?.name || 'Selected Division'}</span>
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setSelectedCloneDivisionIds(divisions.filter((d) => d.id !== effectiveDivisionId).map((d) => d.id))}
+                              className="text-xs text-indigo-600 hover:text-indigo-700"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              onClick={() => setSelectedCloneDivisionIds([])}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                          {divisions.filter((d) => d.id !== effectiveDivisionId).map((division) => {
+                            const checked = selectedCloneDivisionIds.includes(division.id);
+                            return (
+                              <label key={division.id} className="flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer hover:bg-gray-50">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedCloneDivisionIds((prev) => (prev.includes(division.id) ? prev : [...prev, division.id]));
+                                    } else {
+                                      setSelectedCloneDivisionIds((prev) => prev.filter((id) => id !== division.id));
+                                    }
+                                  }}
+                                  className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                />
+                                <span className="flex-1 text-gray-700">{division.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[11px] text-gray-500 mt-2">
+                          {selectedCloneDivisionIds.length} division{selectedCloneDivisionIds.length === 1 ? '' : 's'} selected
+                        </p>
+                      </div>
+                      <div className="px-6 py-4 bg-gray-50 flex items-center justify-end gap-3">
+                        <button
+                          onClick={() => setShowCloneMappingModal(false)}
+                          className="px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={applyStatusMappingToSelectedDivisions}
+                          disabled={cloningStatusMapping || selectedCloneDivisionIds.length === 0}
+                          className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
+                        >
+                          {cloningStatusMapping && <Loader2 className="h-4 w-4 animate-spin" />}
+                          Apply Mapping
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : activeSection === 'pipelineStages' ? (
@@ -3933,6 +4282,9 @@ function CustomFieldModal({
   const [description, setDescription] = useState(field?.description || '');
   const [placeholder, setPlaceholder] = useState(field?.placeholder || '');
   const [defaultValue, setDefaultValue] = useState(field?.defaultValue || '');
+  const [autoSerial, setAutoSerial] = useState(
+    field?.type === 'NUMBER' && String(field?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE
+  );
   const [divisionId, setDivisionId] = useState<string>(() => {
     if (!allowGlobalScope) {
       return field?.divisionId || selectedDivisionId || divisions[0]?.id || '';
@@ -3954,6 +4306,12 @@ function CustomFieldModal({
       setDivisionId(selectedDivisionId || divisions[0]?.id || '');
     }
   }, [allowGlobalScope, divisionId, divisions, selectedDivisionId]);
+
+  useEffect(() => {
+    if (type !== 'NUMBER' && autoSerial) {
+      setAutoSerial(false);
+    }
+  }, [type, autoSerial]);
 
   const addOption = () => {
     const val = newOption.trim();
@@ -3984,7 +4342,10 @@ function CustomFieldModal({
         showInDetail,
         description: description || undefined,
         placeholder: placeholder || undefined,
-        defaultValue: defaultValue || undefined,
+        defaultValue:
+          type === 'NUMBER' && autoSerial
+            ? AUTO_SERIAL_DEFAULT_VALUE
+            : (defaultValue || undefined),
         divisionId: allowGlobalScope ? divisionId || null : divisionId || selectedDivisionId || null,
       };
 
@@ -4165,6 +4526,17 @@ function CustomFieldModal({
 
               {showAdvanced && (
                 <div className="mt-3 space-y-3 pl-5 border-l-2 border-gray-200">
+                  {type === 'NUMBER' && (
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <label className="text-sm font-medium text-gray-900">Auto-generate serial number</label>
+                          <p className="text-[11px] text-gray-500">Assigns next serial automatically for new leads and backfills empty values.</p>
+                        </div>
+                        <FieldToggle checked={autoSerial} onChange={() => setAutoSerial(!autoSerial)} size="md" />
+                      </div>
+                    </div>
+                  )}
                   {/* Description */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Help Text / Description</label>
@@ -4194,7 +4566,8 @@ function CustomFieldModal({
                       className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       value={defaultValue}
                       onChange={(e) => setDefaultValue(e.target.value)}
-                      placeholder="Auto-filled value for new leads"
+                      placeholder={type === 'NUMBER' && autoSerial ? 'Disabled while auto-serial is enabled' : 'Auto-filled value for new leads'}
+                      disabled={type === 'NUMBER' && autoSerial}
                     />
                   </div>
                 </div>
@@ -4232,8 +4605,8 @@ function CustomFieldModal({
                   <input
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400"
                     type="number"
-                    placeholder={placeholder || '0'}
-                    defaultValue={defaultValue}
+                    placeholder={type === 'NUMBER' && autoSerial ? 'Auto-generated serial (1, 2, 3...)' : (placeholder || '0')}
+                    defaultValue={type === 'NUMBER' && autoSerial ? '' : defaultValue}
                     disabled
                   />
                 )}

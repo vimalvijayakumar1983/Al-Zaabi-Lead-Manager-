@@ -14,9 +14,11 @@ const { executeAutomations } = require('../services/automationEngine');
 const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 const { upsertRecycleBinItem } = require('../services/recycleBinService');
 const { generateLeadSummaryInsights, regenerateLeadSummaryById } = require('../services/aiService');
+const { findStageForStatus } = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
 
 function refreshLeadAISummaryAsync(leadId) {
   if (!leadId) return;
@@ -31,6 +33,12 @@ const BUILTIN_CALL_OUTCOMES = new Set([
   'FOLLOW_UP_EMAIL', 'QUALIFIED', 'PROPOSAL_REQUESTED', 'DO_NOT_CALL', 'OTHER',
 ]);
 
+const LEAD_SOURCE_VALUES = [
+  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+];
+const LEAD_SOURCE_SET = new Set(LEAD_SOURCE_VALUES);
+
 // Smart name display — deduplicates when firstName and lastName are identical
 function getDisplayName(obj) {
   const fn = (obj?.firstName || '').trim();
@@ -43,6 +51,90 @@ function getDisplayName(obj) {
   return `${fn} ${ln}`;
 }
 
+async function getLatestCallsByLead({ orgIds, assignedToId, leadIds } = {}) {
+  if (Array.isArray(leadIds) && leadIds.length === 0) return [];
+
+  const where = {};
+  if (Array.isArray(leadIds) && leadIds.length > 0) {
+    where.leadId = { in: leadIds };
+  } else if ((Array.isArray(orgIds) && orgIds.length > 0) || assignedToId) {
+    where.lead = {
+      isArchived: false,
+      ...(Array.isArray(orgIds) && orgIds.length > 0 ? { organizationId: { in: orgIds } } : {}),
+      ...(assignedToId ? { assignedToId } : {}),
+    };
+  }
+
+  return prisma.callLog.findMany({
+    where,
+    // Deterministic latest call per lead to keep filter + table consistent
+    orderBy: [{ leadId: 'asc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    distinct: ['leadId'],
+    select: {
+      leadId: true,
+      disposition: true,
+      notes: true,
+      createdAt: true,
+      metadata: true,
+    },
+  });
+}
+
+function readNumericCustomValue(customData, key) {
+  if (!customData || typeof customData !== 'object') return null;
+  const value = customData[key];
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num);
+}
+
+async function getNextAutoSerialValue(tx, organizationId, fieldName) {
+  const leads = await tx.lead.findMany({
+    where: { organizationId },
+    select: { customData: true },
+  });
+  let maxValue = 0;
+  for (const lead of leads) {
+    const current = readNumericCustomValue(lead.customData, fieldName);
+    if (current !== null && current > maxValue) maxValue = current;
+  }
+  return maxValue + 1;
+}
+
+async function getApplicableAutoSerialFields(tx, targetOrgId) {
+  const org = await tx.organization.findUnique({
+    where: { id: targetOrgId },
+    select: { id: true, type: true, parentId: true },
+  });
+  const groupOrgId = org?.type === 'GROUP' ? org.id : (org?.parentId || targetOrgId);
+
+  const [globalFields, divisionFields] = await Promise.all([
+    tx.customField.findMany({
+      where: {
+        organizationId: groupOrgId,
+        divisionId: null,
+        type: 'NUMBER',
+        defaultValue: AUTO_SERIAL_DEFAULT_VALUE,
+      },
+      orderBy: { order: 'asc' },
+    }),
+    tx.customField.findMany({
+      where: {
+        organizationId: targetOrgId,
+        type: 'NUMBER',
+        defaultValue: AUTO_SERIAL_DEFAULT_VALUE,
+      },
+      orderBy: { order: 'asc' },
+    }),
+  ]);
+
+  const byName = new Map();
+  for (const field of globalFields) byName.set(field.name, field);
+  for (const field of divisionFields) byName.set(field.name, field);
+  return Array.from(byName.values());
+}
+
 // ─── Schemas ─────────────────────────────────────────────────────
 const createLeadSchema = z.object({
   name: z.string().optional(),
@@ -52,10 +144,8 @@ const createLeadSchema = z.object({
   phone: z.string().optional().nullable(),
   company: z.string().optional().nullable(),
   jobTitle: z.string().optional().nullable(),
-  source: z.enum([
-    'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
-    'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
-  ]).optional(),
+  source: z.enum(LEAD_SOURCE_VALUES).optional(),
+  sourceDetail: z.string().max(120).optional().nullable(),
   budget: z.number().optional().nullable(),
   productInterest: z.string().optional().nullable(),
   location: z.string().optional().nullable(),
@@ -100,6 +190,8 @@ const leadFilterSchema = paginationSchema.extend({
   customField: z.string().optional(), // JSON encoded: {"fieldName":"value"} for custom field filtering
   divisionId: z.string().optional(),
   callOutcome: z.string().optional(), // comma-separated CallDisposition values
+  callOutcomeReason: z.string().optional(), // comma-separated reason labels/keys for latest call
+  callOutcomeMode: z.enum(['latest', 'any']).optional(), // default latest; any is for analytics drill-down
   minCallCount: z.coerce.number().int().min(0).optional(),
   maxCallCount: z.coerce.number().int().min(0).optional(),
   showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
@@ -112,7 +204,7 @@ const aiSummaryRequestSchema = z.object({
 // ─── List Leads ──────────────────────────────────────────────────
 router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, callOutcomeReason, callOutcomeMode, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
 
     const where = {
       organizationId: { in: req.orgIds },
@@ -149,10 +241,35 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
     if (source) {
-      if (source.includes(',')) {
-        where.source = { in: source.split(',').map(s => s.trim()) };
+      const selected = source.split(',').map((s) => s.trim()).filter(Boolean);
+      const builtIn = selected.filter((s) => LEAD_SOURCE_SET.has(s));
+      const customKeys = selected.filter((s) => !LEAD_SOURCE_SET.has(s));
+
+      if (customKeys.length === 0) {
+        if (builtIn.length > 1) {
+          where.source = { in: builtIn };
+        } else if (builtIn.length === 1) {
+          where.source = builtIn[0];
+        }
       } else {
-        where.source = source;
+        const sourceClauses = [];
+        if (builtIn.length > 0) {
+          sourceClauses.push(
+            builtIn.length > 1
+              ? { source: { in: builtIn } }
+              : { source: builtIn[0] }
+          );
+        }
+        sourceClauses.push(
+          customKeys.length > 1
+            ? { sourceDetail: { in: customKeys } }
+            : { sourceDetail: customKeys[0] }
+        );
+
+        where.AND = [
+          ...(where.AND || []),
+          { OR: sourceClauses },
+        ];
       }
     }
     if (assignedToId && !req.isRestrictedRole) {
@@ -255,29 +372,115 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       if (conversionMin !== undefined) where.conversionProb.gte = conversionMin;
       if (conversionMax !== undefined) where.conversionProb.lte = conversionMax;
     }
-    // Call outcome filtering (filter leads by their last/any call disposition)
-    if (callOutcome) {
-      const outcomes = callOutcome.split(',').map(s => s.trim()).filter(Boolean);
-      if (outcomes.length > 0) {
-        const builtinOutcomes = outcomes.filter(o => BUILTIN_CALL_OUTCOMES.has(o));
-        const customOutcomes = outcomes.filter(o => !builtinOutcomes.includes(o));
-        const callOutcomeOr = [];
-        if (builtinOutcomes.length > 0) {
-          callOutcomeOr.push({
-            disposition: builtinOutcomes.length === 1 ? builtinOutcomes[0] : { in: builtinOutcomes },
+    // Call outcome/reason filtering
+    // - latest (default): aligns with Leads "Last Call Outcome".
+    // - any: aligns analytics drill-down with call-log aggregate counts.
+    if (callOutcome || callOutcomeReason) {
+      const outcomes = callOutcome ? callOutcome.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const reasons = callOutcomeReason ? callOutcomeReason.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      if (outcomes.length > 0 || reasons.length > 0) {
+        let scopedOrgIds = req.orgIds;
+        if (typeof where.organizationId === 'string') {
+          scopedOrgIds = [where.organizationId];
+        } else if (where.organizationId && Array.isArray(where.organizationId.in)) {
+          scopedOrgIds = where.organizationId.in;
+        }
+
+        const builtinOutcomes = new Set(outcomes.filter((o) => BUILTIN_CALL_OUTCOMES.has(o)));
+        const customOutcomes = new Set(outcomes.filter((o) => !BUILTIN_CALL_OUTCOMES.has(o)));
+        const reasonValues = reasons.map((r) => String(r || '').trim()).filter(Boolean);
+        const normalize = (value) => String(value || '').trim().toLowerCase();
+        const reasonSet = new Set(reasonValues.map(normalize));
+        const mode = callOutcomeMode === 'any' ? 'any' : 'latest';
+
+        let matchedLeadIds = [];
+        if (mode === 'latest') {
+          const lastCalls = await getLatestCallsByLead({
+            orgIds: scopedOrgIds,
+            assignedToId: req.isRestrictedRole ? req.user.id : undefined,
           });
-        }
-        if (customOutcomes.length > 0) {
-          callOutcomeOr.push({
-            OR: customOutcomes.map((key) => ({
-              disposition: 'OTHER',
-              metadata: { path: ['dispositionKey'], equals: key },
-            })),
+
+          matchedLeadIds = lastCalls
+            .filter((row) => {
+              const md = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
+
+              const outcomeMatches = (() => {
+                if (outcomes.length === 0) return true;
+                if (builtinOutcomes.has(row.disposition)) return true;
+                if (row.disposition !== 'OTHER') return false;
+                const key = typeof md.dispositionKey === 'string' ? md.dispositionKey : '';
+                return key ? customOutcomes.has(key) : false;
+              })();
+              if (!outcomeMatches) return false;
+
+              const reasonMatches = (() => {
+                if (reasonSet.size === 0) return true;
+                if (row.disposition !== 'NOT_INTERESTED') return false;
+                const extractedReason =
+                  md.notInterestedReasonLabel ||
+                  md.notInterestedReason ||
+                  md.reasonLabel ||
+                  md.reason ||
+                  null;
+                const reason = String(extractedReason || 'Unspecified').trim() || 'Unspecified';
+                return reasonSet.has(normalize(reason));
+              })();
+              return reasonMatches;
+            })
+            .map((row) => row.leadId);
+        } else {
+          const outcomeOr = [];
+          if (builtinOutcomes.size > 0) {
+            outcomeOr.push({ disposition: { in: Array.from(builtinOutcomes) } });
+          }
+          if (customOutcomes.size > 0) {
+            outcomeOr.push({
+              AND: [
+                { disposition: 'OTHER' },
+                {
+                  OR: Array.from(customOutcomes).map((key) => ({
+                    metadata: { path: ['dispositionKey'], equals: key },
+                  })),
+                },
+              ],
+            });
+          }
+
+          const anyCallWhere = {
+            lead: {
+              organizationId: { in: scopedOrgIds },
+              isArchived: false,
+              ...(req.isRestrictedRole ? { assignedToId: req.user.id } : {}),
+            },
+            ...(outcomeOr.length > 0 ? { AND: [{ OR: outcomeOr }] } : {}),
+          };
+
+          if (reasonValues.length > 0) {
+            const reasonOr = reasonValues.flatMap((reason) => ([
+              { metadata: { path: ['notInterestedReasonLabel'], equals: reason } },
+              { metadata: { path: ['notInterestedReason'], equals: reason } },
+              { metadata: { path: ['reasonLabel'], equals: reason } },
+              { metadata: { path: ['reason'], equals: reason } },
+            ]));
+            anyCallWhere.AND = [
+              ...(anyCallWhere.AND || []),
+              { disposition: 'NOT_INTERESTED' },
+              { OR: reasonOr },
+            ];
+          }
+
+          const matchedCalls = await prisma.callLog.findMany({
+            where: anyCallWhere,
+            select: { leadId: true },
+            distinct: ['leadId'],
           });
+          matchedLeadIds = matchedCalls.map((row) => row.leadId);
         }
-        if (callOutcomeOr.length > 0) {
-          where.callLogs = { some: callOutcomeOr.length === 1 ? callOutcomeOr[0] : { OR: callOutcomeOr } };
-        }
+
+        where.AND = [
+          ...(where.AND || []),
+          { id: { in: matchedLeadIds.length > 0 ? matchedLeadIds : ['__none__'] } },
+        ];
       }
     }
     // Custom field filtering (JSON encoded)
@@ -354,11 +557,8 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     let lastCallOutcomeMap = {};
     if (leadIds.length > 0) {
       // Fetch last call log per lead (most recent call's disposition + date)
-      const lastCallLogs = await prisma.callLog.findMany({
-        where: { leadId: { in: leadIds } },
-        orderBy: { createdAt: 'desc' },
-        distinct: ['leadId'],
-        select: { leadId: true, disposition: true, notes: true, createdAt: true, metadata: true },
+      const lastCallLogs = await getLatestCallsByLead({
+        leadIds,
       });
       for (const cl of lastCallLogs) {
         const md = (typeof cl.metadata === 'object' && cl.metadata !== null) ? cl.metadata : {};
@@ -585,8 +785,18 @@ router.get('/filter-values', async (req, res, next) => {
 // ─── Tags List ──────────────────────────────────────────────────
 router.get('/tags', async (req, res, next) => {
   try {
+    const organizationId = typeof req.query.organizationId === 'string' ? req.query.organizationId : undefined;
+
+    let orgScope = req.orgIds;
+    if (organizationId) {
+      if (!req.orgIds.includes(organizationId)) {
+        return res.status(403).json({ error: 'Access denied to this division' });
+      }
+      orgScope = [organizationId];
+    }
+
     const tags = await prisma.tag.findMany({
-      where: { organizationId: { in: req.orgIds } },
+      where: { organizationId: { in: orgScope } },
       select: { id: true, name: true, color: true },
       orderBy: { name: 'asc' },
     });
@@ -1038,9 +1248,22 @@ router.post('/', validate(createLeadSchema), async (req, res, next) => {
     const { tags: tagNames, ...leadData } = data;
 
     const lead = await prisma.$transaction(async (tx) => {
+      const customData =
+        leadData.customData && typeof leadData.customData === 'object'
+          ? { ...leadData.customData }
+          : {};
+
+      const autoSerialFields = await getApplicableAutoSerialFields(tx, targetOrgId);
+      for (const field of autoSerialFields) {
+        const existingValue = readNumericCustomValue(customData, field.name);
+        if (existingValue !== null) continue;
+        customData[field.name] = await getNextAutoSerialValue(tx, targetOrgId, field.name);
+      }
+
       const created = await tx.lead.create({
         data: {
           ...leadData,
+          customData: Object.keys(customData).length > 0 ? customData : leadData.customData,
           score,
           conversionProb,
           organizationId: targetOrgId,
@@ -1150,6 +1373,10 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
     const data = req.validated;
     delete data.divisionId; // not applicable for update
 
+    if (Object.prototype.hasOwnProperty.call(data, 'sourceDetail') && (data.sourceDetail === '' || data.sourceDetail === undefined)) {
+      data.sourceDetail = null;
+    }
+
     // Smart-split unified "name" field into firstName / lastName
     if (data.name) {
       const parts = data.name.trim().split(/\s+/);
@@ -1191,42 +1418,24 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     // ── Reverse sync: status change → find matching pipeline stage ──
     if (updateData.status && updateData.status !== existing.status && !updateData.stageId) {
-      const statusToKeywords = {
-        NEW:       ['new', 'untouched', 'fresh', 'incoming'],
-        CONTACTED: ['contact', 'touched', 'follow', 'reach', 'called', 'engaged'],
-        QUALIFIED: ['qualif', 'interested', 'hot', 'warm', 'ready'],
-        WON:       ['won', 'converted', 'signed', 'closed won'],
-        LOST:      ['lost', 'dead', 'rejected', 'disqualif', 'closed lost'],
-      };
-
-      const keywords = statusToKeywords[updateData.status] || [];
-      if (keywords.length > 0) {
-        const orgStages = await prisma.pipelineStage.findMany({
+      const [orgStages, org] = await Promise.all([
+        prisma.pipelineStage.findMany({
           where: { organizationId: existing.organizationId },
           orderBy: { order: 'asc' },
-        });
-
-        // Find best matching stage by keyword
-        let matchedStage = null;
-        for (const stage of orgStages) {
-          const sName = stage.name.toLowerCase();
-          if (keywords.some(kw => sName.includes(kw))) {
-            matchedStage = stage;
-            break;
-          }
-        }
-
-        // Also check isWonStage / isLostStage flags
-        if (!matchedStage && updateData.status === 'WON') {
-          matchedStage = orgStages.find(s => s.isWonStage);
-        }
-        if (!matchedStage && updateData.status === 'LOST') {
-          matchedStage = orgStages.find(s => s.isLostStage);
-        }
-
-        if (matchedStage && matchedStage.id !== existing.stageId) {
-          updateData.stageId = matchedStage.id;
-        }
+        }),
+        prisma.organization.findUnique({
+          where: { id: existing.organizationId },
+          select: { settings: true },
+        }),
+      ]);
+      const matchedStage = findStageForStatus({
+        targetStatus: updateData.status,
+        stages: orgStages,
+        settings: org?.settings || {},
+        divisionId: existing.organizationId,
+      });
+      if (matchedStage && matchedStage.id !== existing.stageId) {
+        updateData.stageId = matchedStage.id;
       }
     }
 
