@@ -1273,15 +1273,28 @@ function OfferStudioModal({
   onApplied: () => void;
   addToast: (type: 'success' | 'error', message: string) => void;
 }) {
+  type OfferAudienceFilters = {
+    search: string;
+    scorePreset: string;
+    minScore: string;
+    maxScore: string;
+    noCallsPreset: string;
+    noCallsInDays: string;
+    minCallPreset: string;
+    minCallCount: string;
+    tagsAny: string[];
+  };
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [analytics, setAnalytics] = useState<any>(null);
   const [previewRows, setPreviewRows] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
+  const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color?: string }>>([]);
+  const [customTagInput, setCustomTagInput] = useState('');
   const [templates, setTemplates] = useState<any[]>([]);
   const [templateName, setTemplateName] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<OfferAudienceFilters>({
     search: '',
     scorePreset: 'all',
     minScore: '',
@@ -1290,7 +1303,7 @@ function OfferStudioModal({
     noCallsInDays: '',
     minCallPreset: '',
     minCallCount: '',
-    tagsAny: '',
+    tagsAny: [],
   });
   const [applyConfig, setApplyConfig] = useState({
     source: 'RULE',
@@ -1323,7 +1336,7 @@ function OfferStudioModal({
 
     if (filters.noCallsInDays) payload.noCallsInDays = Number(filters.noCallsInDays);
     if (filters.minCallCount) payload.minCallCount = Number(filters.minCallCount);
-    if (filters.tagsAny.trim()) payload.tagsAny = filters.tagsAny.split(',').map((t) => t.trim()).filter(Boolean);
+    if (filters.tagsAny.length > 0) payload.tagsAny = filters.tagsAny;
     return payload;
   }
 
@@ -1347,13 +1360,15 @@ function OfferStudioModal({
   }, [campaign.id]);
 
   useEffect(() => {
+    const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
     setLoading(true);
     Promise.all([
       loadAssignments(),
       loadAnalytics(),
       api.getCampaignTemplates().then((rows) => setTemplates(Array.isArray(rows) ? rows : [])).catch(() => setTemplates([])),
+      api.getTags(campaignOrgId).then((rows) => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([])),
     ]).finally(() => setLoading(false));
-  }, [loadAssignments, loadAnalytics]);
+  }, [campaign, loadAssignments, loadAnalytics]);
 
   async function handlePreview() {
     setPreviewLoading(true);
@@ -1413,7 +1428,18 @@ function OfferStudioModal({
     const tpl = templates.find((t) => t.id === templateId);
     const cfg = tpl?.config || {};
     if (cfg.filters && typeof cfg.filters === 'object') {
-      const merged = { ...filters, ...cfg.filters };
+      const incomingFilters = cfg.filters as Record<string, unknown>;
+      const rawTagsAny = incomingFilters.tagsAny;
+      const normalizedTagsAny = Array.isArray(rawTagsAny)
+        ? rawTagsAny.map((x) => String(x).trim()).filter(Boolean)
+        : (typeof rawTagsAny === 'string'
+          ? rawTagsAny.split(',').map((t) => t.trim()).filter(Boolean)
+          : filters.tagsAny);
+      const merged = {
+        ...filters,
+        ...incomingFilters,
+        tagsAny: normalizedTagsAny,
+      } as OfferAudienceFilters;
       if (!merged.scorePreset) {
         merged.scorePreset = merged.minScore || merged.maxScore ? 'custom' : 'all';
       }
@@ -1422,6 +1448,28 @@ function OfferStudioModal({
     if (cfg.applyConfig && typeof cfg.applyConfig === 'object') {
       setApplyConfig((prev) => ({ ...prev, ...cfg.applyConfig }));
     }
+  }
+
+  function toggleTag(tagName: string) {
+    setFilters((prev) => ({
+      ...prev,
+      tagsAny: prev.tagsAny.includes(tagName)
+        ? prev.tagsAny.filter((name) => name !== tagName)
+        : [...prev.tagsAny, tagName],
+    }));
+  }
+
+  function addCustomTags() {
+    const names = customTagInput
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (names.length === 0) return;
+    setFilters((prev) => ({
+      ...prev,
+      tagsAny: Array.from(new Set(prev.tagsAny.concat(names))),
+    }));
+    setCustomTagInput('');
   }
 
   async function saveTemplate() {
@@ -1563,7 +1611,65 @@ function OfferStudioModal({
                 <option value="5">At least 5 calls</option>
                 <option value="10">At least 10 calls</option>
               </select>
-              <input className="input" placeholder="Tags (comma separated)" value={filters.tagsAny} onChange={(e) => setFilters((p) => ({ ...p, tagsAny: e.target.value }))} />
+              <div className="md:col-span-2 xl:col-span-3 rounded-xl border border-gray-200 p-3">
+                <p className="text-xs font-semibold text-text-secondary mb-2">Tags (available + custom)</p>
+                {availableTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {availableTags.map((tag) => {
+                      const isSelected = filters.tagsAny.includes(tag.name);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onClick={() => toggleTag(tag.name)}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs border transition-colors ${
+                            isSelected
+                              ? 'bg-brand-50 text-brand-700 border-brand-200'
+                              : 'bg-white text-text-secondary border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                          {tag.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-text-tertiary mb-3">No saved tags found. Add custom tags below.</p>
+                )}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    className="input flex-1"
+                    placeholder="Add custom tag(s), comma separated"
+                    value={customTagInput}
+                    onChange={(e) => setCustomTagInput(e.target.value)}
+                  />
+                  <button type="button" className="btn-secondary px-3 py-2 text-sm" onClick={addCustomTags}>
+                    Add Tag
+                  </button>
+                  {filters.tagsAny.length > 0 && (
+                    <button
+                      type="button"
+                      className="px-3 py-2 text-sm rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                      onClick={() => setFilters((p) => ({ ...p, tagsAny: [] }))}
+                    >
+                      Clear Tags
+                    </button>
+                  )}
+                </div>
+                {filters.tagsAny.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {filters.tagsAny.map((name) => (
+                      <span key={name} className="inline-flex items-center gap-1 rounded-full bg-gray-100 text-gray-700 px-2 py-0.5 text-xs">
+                        {name}
+                        <button type="button" onClick={() => toggleTag(name)} className="text-gray-400 hover:text-gray-700">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button className="btn-secondary px-4 py-2 text-sm" onClick={handlePreview} disabled={previewLoading}>
