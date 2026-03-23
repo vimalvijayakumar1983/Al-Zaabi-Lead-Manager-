@@ -588,6 +588,12 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           distinct: ['leadId'],
           select: { leadId: true, channel: true, body: true, createdAt: true },
         }),
+        prisma.communication.findMany({
+          where: { leadId: { in: leadIds } },
+          orderBy: { createdAt: 'asc' },
+          distinct: ['leadId'],
+          select: { leadId: true, channel: true, body: true, createdAt: true },
+        }),
       ]);
 
       // Build channel counts map: { leadId: { WHATSAPP: 3, EMAIL: 5, ... } }
@@ -607,6 +613,15 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         lastMessageMap[msg.leadId] = {
           channel: msg.channel,
           body: msg.body?.substring(0, 100) || '',
+          createdAt: msg.createdAt,
+        };
+      }
+
+      // Build first message map (channel lead came from + first message text)
+      for (const msg of firstMessages) {
+        firstMessageMap[msg.leadId] = {
+          channel: msg.channel,
+          body: msg.body?.substring(0, 200) || '',
           createdAt: msg.createdAt,
         };
       }

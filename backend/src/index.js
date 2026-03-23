@@ -1,3 +1,6 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), override: true });
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -37,6 +40,7 @@ const automationRoutes = require('./routes/automations');
 const analyticsRoutes = require('./routes/analytics');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
+const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
 const integrationsRoutes = require('./routes/integrations');
@@ -57,25 +61,31 @@ const server = createServer(app);
 // ─── Global Middleware ───────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use(helmet());
-app.use(cors({
+// CORS: allow all origins in development; in production use FRONTEND_URL whitelist
+const corsOptions = {
+  credentials: true,
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
-    const allowed = config.frontendUrl.split(',').map(u => u.trim().replace(/\/$/, ''));
+    // In development, allow any origin
+    if (config.nodeEnv === 'development') return callback(null, true);
+    const allowed = (config.frontendUrl || '')
+      .split(',')
+      .map(u => u.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+    if (allowed.length === 0) return callback(null, true);
     const normalized = origin.replace(/\/$/, '');
-    // Check exact match or Vercel preview deployments
     if (allowed.includes(normalized) || /\.vercel\.app$/.test(normalized)) {
       return callback(null, true);
     }
     callback(new Error('Not allowed by CORS'));
   },
-  credentials: true,
-}));
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Static File Serving (uploads) ─────────────────────────────────
-const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Also serve under /api/uploads so the Next.js proxy can reach files
 app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -125,6 +135,7 @@ const routeMounts = [
   ['/analytics', analyticsRoutes],
   ['/users', userRoutes],
   ['/webhooks', webhookRoutes],
+  ['/whatsapp/webhook', whatsappWebhookRoutes],
   ['/import', importRoutes],
   ['/settings', settingsRoutes],
   ['/integrations', integrationsRoutes],
@@ -191,15 +202,17 @@ server.listen(PORT, () => {
     }
   }, 80000);
 
-  // Purge recycle bin records after startup load settles
-  setTimeout(() => {
-    try {
-      startRecycleBinPurgeScheduler();
-      logger.info('[Startup] RecycleBinPurge scheduler initialized');
-    } catch (err) {
-      logger.error('[Startup] Failed to initialize RecycleBinPurge scheduler:', err.message);
-    }
-  }, 95000);
+  // Start the task reminder scheduler (due-soon & overdue pop-ups)
+  startTaskReminderScheduler();
+
+  // Start soft-loop inactivity safety net (Will Call Us Again)
+  startWillCallAgainSafetyNetScheduler();
+
+  // Start unread reminder escalation monitor
+  startNotificationEscalationScheduler();
+
+  // Purge recycle bin records that crossed retention window
+  startRecycleBinPurgeScheduler();
 });
 
 // Graceful shutdown

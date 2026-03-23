@@ -4,10 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { prisma } = require('../config/database');
+const { logger } = require('../config/logger');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
 const { regenerateLeadSummaryById } = require('../services/aiService');
+const { sendText: sendWhatsAppText, sendMedia: sendWhatsAppMedia, uploadMedia: uploadWhatsAppMedia } = require('../services/whatsappService');
+const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
 const { findStageForStatus } = require('../utils/statusStageMapping');
 
 // ─── Display name helper (deduplication) ─────────────────────────
@@ -100,6 +103,34 @@ router.get('/attachments/file/:id', async (req, res, next) => {
 // All routes below require authentication
 router.use(authenticate, orgScope);
 
+/**
+ * Inbox org scope — align with GET /leads: SUPER_ADMIN may pass ?divisionId= to scope to one division
+ * (required when that division is not under req.orgIds, e.g. parentId=null misconfiguration).
+ */
+function buildInboxOrgFilter(req, divisionIdRaw) {
+  const divisionId = divisionIdRaw && String(divisionIdRaw).trim();
+  if (divisionId) {
+    if (req.isSuperAdmin) {
+      return divisionId;
+    }
+    if (req.orgIds.includes(divisionId)) {
+      return divisionId;
+    }
+  }
+  return { in: req.orgIds };
+}
+
+/** Lead visible in inbox: org-scoped, or any org if SUPER_ADMIN (matches leads list + orphan divisions). */
+async function findInboxLead(req, leadId) {
+  let lead = await prisma.lead.findFirst({
+    where: { id: leadId, organizationId: { in: req.orgIds } },
+  });
+  if (!lead && req.isSuperAdmin) {
+    lead = await prisma.lead.findFirst({ where: { id: leadId } });
+  }
+  return lead;
+}
+
 // ─── Channel metadata helpers ─────────────────────────────────────
 
 const PLATFORM_MAP = {
@@ -126,13 +157,15 @@ function resolvePlatform(comm) {
 
 router.get('/conversations', async (req, res, next) => {
   try {
-    const { channel, search, status, page = '1', limit = '30' } = req.query;
+    const { channel, search, status, page = '1', limit = '30', divisionId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
+    const orgFilter = buildInboxOrgFilter(req, divisionId);
+
     // Find leads that have communications
     const where = {
-      organizationId: { in: req.orgIds },
+      organizationId: orgFilter,
       isArchived: false,
       communications: { some: {} },
     };
@@ -220,6 +253,7 @@ router.get('/conversations', async (req, res, next) => {
           platform,
           platformInfo: PLATFORM_MAP[platform] || PLATFORM_MAP.CHAT,
           createdAt: lastMsg.createdAt,
+          metadata: lastMsg.metadata || {},
         } : null,
       };
     });
@@ -241,21 +275,30 @@ router.get('/conversations', async (req, res, next) => {
 router.get('/conversations/:leadId/messages', async (req, res, next) => {
   try {
     const { leadId } = req.params;
-    const { channel, page = '1', limit = '50' } = req.query;
+    const { channel, page = '1', limit = '50', divisionId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
-    // Verify lead belongs to org
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-      select: {
-        id: true, firstName: true, lastName: true, email: true, phone: true,
-        company: true, status: true, score: true, source: true, jobTitle: true,
-        createdAt: true, budget: true, organizationId: true,
-        assignedTo: { select: { id: true, firstName: true, lastName: true } },
-        stage: { select: { id: true, name: true, color: true } },
-      },
+    const orgFilter = buildInboxOrgFilter(req, divisionId);
+    const divisionScoped = Boolean(divisionId && String(divisionId).trim());
+
+    const leadSelect = {
+      id: true, firstName: true, lastName: true, email: true, phone: true,
+      company: true, status: true, score: true, source: true, jobTitle: true,
+      createdAt: true, budget: true, organizationId: true,
+      assignedTo: { select: { id: true, firstName: true, lastName: true } },
+      stage: { select: { id: true, name: true, color: true } },
+    };
+
+    // Verify lead belongs to org (or scoped division for SUPER_ADMIN)
+    let lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: orgFilter },
+      select: leadSelect,
     });
+    // SUPER_ADMIN without explicit divisionId: same as findInboxLead (orphan / out-of-tree orgs)
+    if (!lead && req.isSuperAdmin && !divisionScoped) {
+      lead = await prisma.lead.findFirst({ where: { id: leadId }, select: leadSelect });
+    }
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const msgWhere = { leadId };
@@ -268,18 +311,20 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       }
     }
 
-    const [messages, total] = await Promise.all([
+    // Fetch newest-first so page 1 = latest messages; then reverse for chronological display
+    const [rawMessages, total] = await Promise.all([
       prisma.communication.findMany({
         where: msgWhere,
         include: {
           user: { select: { id: true, firstName: true, lastName: true } },
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: 'desc' },
         skip,
         take,
       }),
       prisma.communication.count({ where: msgWhere }),
     ]);
+    const messages = rawMessages.reverse();
 
     // Look up attachment records for this lead to patch URLs
     const leadAttachments = await prisma.attachment.findMany({
@@ -345,10 +390,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
   try {
     const { leadId, channel, body, subject, platform, metadata = {} } = req.validated;
 
-    // Verify lead
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // Store platform in metadata for CHAT channels
@@ -391,13 +433,30 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
       data: { updatedAt: new Date() },
     });
 
-    // TODO: Dispatch to actual channel APIs (WhatsApp Business API, Facebook Graph API, etc.)
-    // This is where platform-specific sending logic would go:
-    // - WHATSAPP: Call WhatsApp Business API
-    // - FACEBOOK: Call Facebook Messenger Send API
-    // - INSTAGRAM: Call Instagram Messaging API
-    // - EMAIL: Call email service (SendGrid, etc.)
-    // - GOOGLE: Call Google Business Messages API
+    // Dispatch to WhatsApp when channel is WHATSAPP
+    if (channel === 'WHATSAPP') {
+      const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
+      if (!phone) {
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: { ...(communication.metadata || {}), sendError: 'Lead has no phone number' } },
+        }).catch(() => {});
+        return res.status(400).json({ error: 'Lead has no phone number' });
+      }
+      try {
+        await sendWhatsAppText(phone, body, lead.organizationId);
+        const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+        if (rawDigits && rawDigits !== phone) {
+          await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
+      } catch (sendErr) {
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: { ...(communication.metadata || {}), sendError: sendErr.message } },
+        }).catch(() => {});
+        throw sendErr;
+      }
+    }
 
     const enriched = {
       ...communication,
@@ -443,10 +502,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       return res.status(400).json({ error: 'leadId and channel are required' });
     }
 
-    // Verify lead
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // Build attachment metadata — store base64 in DB for serverless persistence
@@ -505,8 +561,9 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     }
 
     // Update communication metadata with persistent URLs
+    let finalMetadata = msgMetadata;
     if (savedAttachments.length > 0) {
-      const updatedMeta = {
+      finalMetadata = {
         ...msgMetadata,
         attachments: savedAttachments.map(a => ({
           id: a.id,
@@ -518,8 +575,44 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       };
       await prisma.communication.update({
         where: { id: communication.id },
-        data: { metadata: updatedMeta },
+        data: { metadata: finalMetadata },
       });
+      communication.metadata = finalMetadata;
+    }
+
+    // ─── Send via WhatsApp API if channel is WHATSAPP ───────────
+    if (channel === 'WHATSAPP' && lead.phone) {
+      const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
+      if (phone) {
+        // Send each attachment as a separate WhatsApp media message
+        for (const att of savedAttachments) {
+          try {
+            const waMediaType = att.mimeType.startsWith('image/') ? 'image'
+              : att.mimeType.startsWith('video/') ? 'video'
+              : att.mimeType.startsWith('audio/') ? 'audio'
+              : 'document';
+            const buf = Buffer.from(att.data.replace(/^data:[^;]+;base64,/, ''), 'base64');
+            const { mediaId } = await uploadWhatsAppMedia(buf, att.mimeType, att.filename, lead.organizationId);
+            const caption = (savedAttachments.length === 1 && body) ? body : undefined;
+            await sendWhatsAppMedia(phone, waMediaType, mediaId, caption, att.filename, lead.organizationId);
+          } catch (waErr) {
+            logger.error('WhatsApp media send failed for attachment', { err: waErr.message, filename: att.filename });
+          }
+        }
+        // If there's a text body and either no attachments or multiple attachments (caption only sent with single), send text separately
+        if (body && (savedAttachments.length !== 1)) {
+          try {
+            await sendWhatsAppText(phone, body, lead.organizationId);
+          } catch (waErr) {
+            logger.error('WhatsApp text send failed', { err: waErr.message });
+          }
+        }
+        // Normalize lead phone if needed
+        const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+        if (rawDigits && rawDigits !== phone) {
+          await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
+      }
     }
 
     // Activity log
@@ -564,9 +657,7 @@ router.get('/conversations/:leadId/attachments', async (req, res, next) => {
   try {
     const { leadId } = req.params;
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const attachments = await prisma.attachment.findMany({
@@ -591,9 +682,7 @@ router.post('/conversations/:leadId/read', async (req, res, next) => {
   try {
     const { leadId } = req.params;
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // Mark all unread inbound messages for this lead as read
@@ -614,7 +703,8 @@ router.post('/conversations/:leadId/read', async (req, res, next) => {
 
 router.get('/stats', async (req, res, next) => {
   try {
-    const orgFilter = { in: req.orgIds };
+    const { divisionId } = req.query;
+    const orgFilter = buildInboxOrgFilter(req, divisionId);
 
     const [totalConversations, byChannel, recentInbound, totalMessages] = await Promise.all([
       prisma.lead.count({
@@ -664,9 +754,7 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid status value', details: parsed.error.errors });
     }
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const updateData = { status: parsed.data.status };
@@ -717,9 +805,7 @@ router.post('/conversations/:leadId/notes', async (req, res, next) => {
       return res.status(400).json({ error: 'Note body is required', details: parsed.error.errors });
     }
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const note = await prisma.leadNote.create({
@@ -746,9 +832,7 @@ router.get('/conversations/:leadId/notes', async (req, res, next) => {
   try {
     const { leadId } = req.params;
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const notes = await prisma.leadNote.findMany({
@@ -775,7 +859,7 @@ router.patch('/messages/:messageId', validate(z.object({
       include: { lead: { select: { organizationId: true } } },
     });
     if (!message) return res.status(404).json({ error: 'Message not found' });
-    if (message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
+    if (!req.isSuperAdmin && message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     // Only the sender can edit their own outbound messages
@@ -809,7 +893,7 @@ router.delete('/messages/:messageId', async (req, res, next) => {
       include: { lead: { select: { organizationId: true } } },
     });
     if (!message) return res.status(404).json({ error: 'Message not found' });
-    if (message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
+    if (!req.isSuperAdmin && message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     // Only the sender can delete their own outbound messages

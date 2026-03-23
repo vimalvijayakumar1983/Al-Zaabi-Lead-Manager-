@@ -796,8 +796,31 @@ class ApiClient {
   }
 
   // Communications
+  async getCommunications(leadId: string) {
+    return this.request<any[]>('/communications/lead/' + leadId);
+  }
+
+  /** Leads that have at least one WhatsApp message, with last message preview (for Communication → WhatsApp tab). */
+  async getWhatsAppConversations() {
+    return this.request<Array<{ lead: { id: string; firstName: string; lastName: string; phone: string | null }; lastMessage: { body: string; createdAt: string; direction: string } }>>('/communications/whatsapp-conversations');
+  }
+
   async sendEmail(data: { leadId: string; to: string; subject: string; body: string }) {
     return this.request<any>('/communications/send-email', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsApp(data: { leadId: string; body: string }) {
+    return this.request<any>('/communications/send-whatsapp', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsAppTemplate(data: { leadId: string; templateName?: string; languageCode?: string }) {
+    return this.request<any>('/communications/send-whatsapp-template', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -866,6 +889,34 @@ class ApiClient {
 
   async updateOrganization(data: { name?: string; domain?: string | null; settings?: Record<string, any> }) {
     return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  /** WhatsApp Cloud API credentials — stored per division (SUPER_ADMIN: pass divisionId). */
+  async getWhatsAppSettings(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+    }>(`/settings/whatsapp${qs}`);
+  }
+
+  async saveWhatsAppSettings(
+    data: {
+      whatsappNumbers: Array<{ label?: string; phoneNumberId: string; displayPhone?: string; token?: string }>;
+      whatsappWebhookVerifyToken?: string;
+      whatsappApiUrl?: string;
+    },
+    divisionId?: string,
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+    }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async getNotificationPreferences() {
@@ -1366,21 +1417,34 @@ class ApiClient {
   }
   // ─── Inbox / Omnichannel ──────────────────────────────────────────
 
-  async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {
+  async getInboxConversations(params?: {
+    channel?: string;
+    search?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+    /** Align with GET /leads — SUPER_ADMIN division switcher scopes inbox to one division */
+    divisionId?: string;
+  }) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.search) q.set('search', params.search);
     if (params?.status) q.set('status', params.status);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations?${q.toString()}`);
   }
 
-  async getInboxMessages(leadId: string, params?: { channel?: string; page?: number; limit?: number }) {
+  async getInboxMessages(
+    leadId: string,
+    params?: { channel?: string; page?: number; limit?: number; divisionId?: string }
+  ) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations/${leadId}/messages?${q.toString()}`);
   }
 
@@ -1391,8 +1455,9 @@ class ApiClient {
     });
   }
 
-  async getInboxStats() {
-    return this.request<any>('/inbox/stats');
+  async getInboxStats(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {

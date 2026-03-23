@@ -1,5 +1,6 @@
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
+const { sendText } = require('./whatsappService');
 const { notifyUser, broadcastDataChange } = require('../websocket/server');
 const { sendEmail, sendTemplateEmail } = require('./emailService');
 const { getNextAssignee } = require('./leadAssignment');
@@ -595,8 +596,8 @@ const executeSingleAction = async (action, context) => {
       break;
     }
 
-    default:
-      logger.warn(`Unknown automation action type: ${action.type}`);
+      default:
+        logger.warn(`Unknown automation action type: ${action.type}`);
   }
 };
 

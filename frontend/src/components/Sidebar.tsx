@@ -14,6 +14,7 @@ import {
   BarChart3,
   Zap,
   Megaphone,
+  MessageCircle,
   UserCog,
   Search,
   ChevronsLeft,

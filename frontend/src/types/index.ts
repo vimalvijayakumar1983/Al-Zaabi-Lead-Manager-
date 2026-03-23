@@ -135,6 +135,7 @@ export interface Lead {
   attachments?: Attachment[];
   _count?: { activities: number; tasks: number; communications: number; callLogs: number };
   channelCounts?: Record<string, number>;
+  firstMessage?: { channel: string; body: string; createdAt: string } | null;
   unreadChannelCounts?: Record<string, number>;
   unreadCommunications?: number;
   lastInboundMessage?: { channel: string; body: string; createdAt: string } | null;
