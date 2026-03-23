@@ -281,6 +281,7 @@ function LeadsContent() {
   // Status labels (custom per division)
   const [statusLabelsMap, setStatusLabelsMap] = useState<Record<string, string>>({});
   const [leadSourceOptions, setLeadSourceOptions] = useState<LeadSourceOption[]>(DEFAULT_LEAD_SOURCE_OPTIONS);
+  const [callOutcomeOptions, setCallOutcomeOptions] = useState<Array<{ value: string; label: string; icon?: string; group?: string; isActive?: boolean }>>([]);
   useEffect(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
@@ -302,6 +303,26 @@ function LeadsContent() {
         }
       })
       .catch(() => setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS));
+  }, []);
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getDispositionStudio(activeDivisionId || undefined)
+      .then((data: any) => {
+        const options = Array.isArray(data?.dispositions)
+          ? [...data.dispositions]
+              .sort((a: any, b: any) => Number(a?.sortOrder || 0) - Number(b?.sortOrder || 0))
+              .map((d: any) => ({
+                value: String(d?.key || ''),
+                label: String(d?.label || d?.key || ''),
+                icon: d?.icon || '📝',
+                group: d?.category || 'Other',
+                isActive: d?.isActive !== false,
+              }))
+              .filter((d: any) => d.value && d.label)
+          : [];
+        setCallOutcomeOptions(options);
+      })
+      .catch(() => setCallOutcomeOptions([]));
   }, []);
   const getStatusLabel = (status: string): string => {
     return statusLabelsMap[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
@@ -1492,6 +1513,7 @@ function LeadsContent() {
               tags={allTags}
               stages={stages}
               sourceOptions={leadSourceOptions.filter((s) => s.isActive !== false).map((s) => ({ value: s.key, label: s.label }))}
+              callOutcomeOptions={callOutcomeOptions}
               onClose={() => setShowAdvancedFilters(false)}
             />
           )}
@@ -1502,6 +1524,7 @@ function LeadsContent() {
             onRemove={handleRemoveFilter}
             stages={stages}
             sourceOptions={leadSourceOptions.filter((s) => s.isActive !== false).map((s) => ({ value: s.key, label: s.label }))}
+            callOutcomeOptions={callOutcomeOptions}
           />
 
           {/* Lead quick actions floating menu (portal) */}

@@ -92,7 +92,7 @@ const defaultSourceOptions = [
   { value: 'OTHER', label: 'Other' },
 ];
 
-const callOutcomeOptions = [
+const defaultCallOutcomeOptions = [
   { value: 'CALLBACK', label: 'Call Back Requested', icon: '🔄', group: 'Follow-up' },
   { value: 'CALL_LATER', label: 'Call Later (Scheduled)', icon: '🕐', group: 'Follow-up' },
   { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', icon: '☎️', group: 'Follow-up' },
@@ -188,6 +188,7 @@ interface AdvancedFiltersProps {
   tags?: { id: string; name: string; color: string }[];
   stages?: { id: string; name: string }[];
   sourceOptions?: { value: string; label: string }[];
+  callOutcomeOptions?: { value: string; label: string; icon?: string; group?: string; isActive?: boolean }[];
   onClose: () => void;
 }
 
@@ -277,9 +278,19 @@ function toggleMulti(current: string, value: string): string {
 }
 
 // ─── Main Component ───────────────────────────────────────────────
-export function AdvancedFilters({ filters, onChange, users, tags: availableTags = [], stages = [], sourceOptions = [], onClose }: AdvancedFiltersProps) {
+export function AdvancedFilters({
+  filters,
+  onChange,
+  users,
+  tags: availableTags = [],
+  stages = [],
+  sourceOptions = [],
+  callOutcomeOptions = [],
+  onClose,
+}: AdvancedFiltersProps) {
   const [local, setLocal] = useState<FilterState>({ ...filters });
   const effectiveSourceOptions = sourceOptions.length > 0 ? sourceOptions : defaultSourceOptions;
+  const effectiveCallOutcomeOptions = callOutcomeOptions.length > 0 ? callOutcomeOptions : defaultCallOutcomeOptions;
 
   // Load divisions from localStorage
   const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
@@ -690,30 +701,45 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
           <div className="p-4">
             <label className="label mb-1.5">Last Call Outcome <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-0.5">
-              {['Positive', 'Follow-up', 'Retry', 'Closed', 'Other'].map((group) => {
-                const groupOptions = callOutcomeOptions.filter(o => o.group === group);
-                if (groupOptions.length === 0) return null;
-                return (
-                  <div key={group}>
-                    <div className="text-2xs font-semibold text-gray-400 uppercase tracking-wide px-1 pt-1.5 pb-0.5">{group}</div>
-                    {groupOptions.map((o) => {
-                      const isSelected = selectedCallOutcomes.includes(o.value);
-                      return (
-                        <label key={o.value} className="flex items-center gap-2 cursor-pointer px-1 py-1 rounded hover:bg-gray-50">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => setLocal({ ...local, callOutcome: toggleMulti(local.callOutcome, o.value) })}
-                            className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
-                          />
-                          <span className="text-sm">{o.icon}</span>
-                          <span className={`text-sm ${isSelected ? 'text-brand-700 font-medium' : 'text-gray-600'}`}>{o.label}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                );
-              })}
+              {(() => {
+                const preferredOrder = ['Positive', 'Follow-up', 'Retry', 'Closed', 'Other'];
+                const grouped = new Map<string, typeof effectiveCallOutcomeOptions>();
+                for (const option of effectiveCallOutcomeOptions) {
+                  const key = option.group || 'Other';
+                  if (!grouped.has(key)) grouped.set(key, []);
+                  grouped.get(key)?.push(option);
+                }
+                const orderedGroups = [
+                  ...preferredOrder.filter((g) => grouped.has(g)),
+                  ...Array.from(grouped.keys()).filter((g) => !preferredOrder.includes(g)),
+                ];
+                return orderedGroups.map((group) => {
+                  const groupOptions = grouped.get(group) || [];
+                  if (groupOptions.length === 0) return null;
+                  return (
+                    <div key={group}>
+                      <div className="text-2xs font-semibold text-gray-400 uppercase tracking-wide px-1 pt-1.5 pb-0.5">{group}</div>
+                      {groupOptions.map((o) => {
+                        const isSelected = selectedCallOutcomes.includes(o.value);
+                        return (
+                          <label key={o.value} className="flex items-center gap-2 cursor-pointer px-1 py-1 rounded hover:bg-gray-50">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => setLocal({ ...local, callOutcome: toggleMulti(local.callOutcome, o.value) })}
+                              className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                            />
+                            <span className="text-sm">{o.icon || '📝'}</span>
+                            <span className={`text-sm ${isSelected ? 'text-brand-700 font-medium' : 'text-gray-600'} ${o.isActive === false ? 'opacity-70' : ''}`}>
+                              {o.label}{o.isActive === false ? ' (Inactive)' : ''}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  );
+                });
+              })()}
             </div>
             {selectedCallOutcomes.length > 0 && (
               <button
@@ -1066,11 +1092,13 @@ export function FilterBadges({
   onRemove,
   stages,
   sourceOptions = [],
+  callOutcomeOptions = [],
 }: {
   filters: FilterState;
   onRemove: (key: keyof FilterState) => void;
   stages?: { id: string; name: string }[];
   sourceOptions?: { value: string; label: string }[];
+  callOutcomeOptions?: { value: string; label: string; icon?: string; group?: string; isActive?: boolean }[];
 }) {
   const badges: { key: keyof FilterState; label: string }[] = [];
   const sourceLabelMap = new Map((sourceOptions.length > 0 ? sourceOptions : defaultSourceOptions).map((s) => [s.value, s.label]));
@@ -1123,7 +1151,8 @@ export function FilterBadges({
   if (filters.conversionMax) badges.push({ key: 'conversionMax', label: `Conv <= ${filters.conversionMax}%` });
   if (filters.callOutcome) {
     const outcomes = parseMulti(filters.callOutcome);
-    const outcomeLabels = outcomes.map(v => callOutcomeOptions.find(o => o.value === v)?.label || v);
+    const mapSource = callOutcomeOptions.length > 0 ? callOutcomeOptions : defaultCallOutcomeOptions;
+    const outcomeLabels = outcomes.map(v => mapSource.find(o => o.value === v)?.label || v);
     badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
   }
   if (filters.callOutcomeReason) badges.push({ key: 'callOutcomeReason', label: `Reason: ${filters.callOutcomeReason}` });
