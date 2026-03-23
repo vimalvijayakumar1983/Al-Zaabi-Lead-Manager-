@@ -1761,7 +1761,7 @@ function OfferStudioModal({
                   setFilters((p) => ({
                     ...p,
                     noCallsPreset: e.target.value,
-                    noCallsInDays: e.target.value,
+                    noCallsInDays: e.target.value === 'custom' ? p.noCallsInDays : e.target.value,
                   }))
                 }
               >
@@ -1771,7 +1771,23 @@ function OfferStudioModal({
                 <option value="30">No calls in 30 days</option>
                 <option value="60">No calls in 60 days</option>
                 <option value="90">No calls in 90 days</option>
+                <option value="custom">Custom days...</option>
               </select>
+              {filters.noCallsPreset === 'custom' && (
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  placeholder="Custom no-call days"
+                  value={filters.noCallsInDays}
+                  onChange={(e) =>
+                    setFilters((p) => ({
+                      ...p,
+                      noCallsInDays: e.target.value,
+                    }))
+                  }
+                />
+              )}
               <select
                 className="input"
                 value={filters.minCallPreset}
@@ -1779,7 +1795,7 @@ function OfferStudioModal({
                   setFilters((p) => ({
                     ...p,
                     minCallPreset: e.target.value,
-                    minCallCount: e.target.value,
+                    minCallCount: e.target.value === 'custom' ? p.minCallCount : e.target.value,
                   }))
                 }
               >
@@ -1789,7 +1805,23 @@ function OfferStudioModal({
                 <option value="3">At least 3 calls</option>
                 <option value="5">At least 5 calls</option>
                 <option value="10">At least 10 calls</option>
+                <option value="custom">Custom count...</option>
               </select>
+              {filters.minCallPreset === 'custom' && (
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  placeholder="Custom minimum call count"
+                  value={filters.minCallCount}
+                  onChange={(e) =>
+                    setFilters((p) => ({
+                      ...p,
+                      minCallCount: e.target.value,
+                    }))
+                  }
+                />
+              )}
               <div className="md:col-span-2 xl:col-span-3 rounded-xl border border-gray-200 p-3">
                 <p className="text-xs font-semibold text-text-secondary mb-2">Tags (available + custom)</p>
                 {availableTags.length > 0 ? (
