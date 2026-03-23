@@ -532,7 +532,7 @@ export default function ReportBuilderPage() {
           <div className="flex items-center gap-2">
             <BarChart3 className="h-5 w-5 text-brand-600" />
             <div>
-              <h2 className="text-base font-semibold text-text-primary">World-Class Report Builder — Phase 1 + 2</h2>
+              <h2 className="text-base font-semibold text-text-primary">Enterprise Report Builder</h2>
               <p className="text-xs text-text-tertiary">
                 Build any report across built-in columns and custom fields with formulas, pivot, funnel, and cohort blocks.
               </p>
