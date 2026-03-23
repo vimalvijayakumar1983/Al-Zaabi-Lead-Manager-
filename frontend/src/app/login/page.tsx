@@ -9,7 +9,7 @@ import { Sparkles, ArrowRight, Eye, EyeOff, Zap, Shield, BarChart3 } from 'lucid
 const REMEMBER_EMAIL_KEY = 'alzaabi_remember_email';
 
 const features = [
-  { icon: Zap, title: 'Smart Automation', description: 'Automate follow-ups, assignments, and scoring' },
+  { icon: Zap, title: 'Advance Automation', description: 'Automate follow-ups, assignments, and scoring' },
   { icon: BarChart3, title: 'Advanced Analytics', description: 'Real-time insights and conversion funnels' },
   { icon: Shield, title: 'Enterprise Security', description: 'Role-based access and audit logging' },
 ];
