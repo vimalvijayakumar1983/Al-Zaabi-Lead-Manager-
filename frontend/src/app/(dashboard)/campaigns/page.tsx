@@ -1268,11 +1268,13 @@ function SaveFilterModal({
 /* ---- Offer Studio Modal ---- */
 function OfferStudioModal({
   campaign,
+  divisionLabel,
   onClose,
   onApplied,
   addToast,
 }: {
   campaign: Campaign;
+  divisionLabel?: string;
   onClose: () => void;
   onApplied: () => void;
   addToast: (type: 'success' | 'error', message: string) => void;
@@ -1513,6 +1515,9 @@ function OfferStudioModal({
           <div>
             <h3 className="text-lg font-bold text-text-primary">Offer Studio — {campaign.name}</h3>
             <p className="text-sm text-text-secondary">Build audience conditions, preview, apply and track offer lifecycle.</p>
+            <p className="mt-1 text-xs inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 text-indigo-700 px-2 py-0.5">
+              Division: {divisionLabel || 'Current Division'}
+            </p>
           </div>
           <button className="p-2 rounded-lg hover:bg-gray-100" onClick={onClose}>
             <X className="w-5 h-5" />
@@ -1867,6 +1872,7 @@ export default function CampaignsPage() {
       const params: Record<string, string | number> = {
         page: currentPage,
         limit: pageSize,
+        includeOrganization: 'true',
       };
 
       if (filters.search) params.search = filters.search;
@@ -1899,6 +1905,23 @@ export default function CampaignsPage() {
       setLoading(false);
     }
   }, [currentPage, pageSize, filters, isSuperAdmin, activeDivisionId]);
+
+  const resolveCampaignDivisionLabel = useCallback((campaign: Campaign | null) => {
+    if (!campaign) return 'Current Division';
+    const extra = campaign as unknown as Record<string, unknown>;
+    const org = extra.organization as { name?: string } | undefined;
+    if (org?.name) return org.name;
+    const orgId = extra.organizationId as string | undefined;
+    if (orgId) {
+      const match = divisions.find((d) => d.id === orgId);
+      if (match?.name) return match.name;
+    }
+    if (isSuperAdmin && activeDivisionId) {
+      const active = divisions.find((d) => d.id === activeDivisionId);
+      if (active?.name) return active.name;
+    }
+    return user?.organization?.name || 'Current Division';
+  }, [divisions, isSuperAdmin, activeDivisionId, user?.organization?.name]);
 
   // ------ Fetch stats ------
   const fetchStats = useCallback(async () => {
@@ -3099,6 +3122,7 @@ export default function CampaignsPage() {
       {offerStudioOpen && offerStudioCampaign && (
         <OfferStudioModal
           campaign={offerStudioCampaign}
+          divisionLabel={resolveCampaignDivisionLabel(offerStudioCampaign)}
           onClose={() => {
             setOfferStudioOpen(false);
             setOfferStudioCampaign(null);
