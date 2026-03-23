@@ -2038,7 +2038,7 @@ function OfferStudioModal({
                       <th className="py-2 pr-3">Score</th>
                       <th className="py-2 pr-3">Assigned At</th>
                       <th className="py-2 pr-3">Assigned By</th>
-                      <th className="py-2 pr-0">Lifecycle</th>
+                      <th className="py-2 pr-0 w-[170px]">Lifecycle</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2052,15 +2052,22 @@ function OfferStudioModal({
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row.lead?.score ?? '—'}</td>
                         <td className="py-2 pr-3 text-sm text-text-secondary">{new Date(row.assignedAt).toLocaleDateString()}</td>
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row.assignedBy ? `${row.assignedBy.firstName} ${row.assignedBy.lastName}` : 'System'}</td>
-                        <td className="py-2 pr-0">
-                          <select className="input h-9 text-sm" value={row.status} onChange={(e) => updateAssignmentStatus(row.id, e.target.value)}>
-                            <option value="ELIGIBLE">Eligible</option>
-                            <option value="CONTACTED">Contacted</option>
-                            <option value="ACCEPTED">Accepted</option>
-                            <option value="REDEEMED">Redeemed</option>
-                            <option value="EXPIRED">Expired</option>
-                            <option value="REJECTED">Rejected</option>
-                          </select>
+                        <td className="py-2 pr-0 align-middle">
+                          <div className="relative w-full max-w-[170px]">
+                            <select
+                              className="h-9 w-full appearance-none rounded-lg border border-gray-200 bg-white pl-3 pr-8 text-sm font-medium text-text-primary shadow-xs focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                              value={row.status}
+                              onChange={(e) => updateAssignmentStatus(row.id, e.target.value)}
+                            >
+                              <option value="ELIGIBLE">Eligible</option>
+                              <option value="CONTACTED">Contacted</option>
+                              <option value="ACCEPTED">Accepted</option>
+                              <option value="REDEEMED">Redeemed</option>
+                              <option value="EXPIRED">Expired</option>
+                              <option value="REJECTED">Rejected</option>
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                          </div>
                         </td>
                       </tr>
                     ))}
