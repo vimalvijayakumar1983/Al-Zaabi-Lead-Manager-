@@ -238,12 +238,27 @@ async function buildAudienceLeadWhere(req, campaign, filters = {}) {
     where.createdAt = { lte: addDays(filters.createdBeforeDays) };
   }
   if (filters.search) {
+    const searchTerm = String(filters.search).trim();
+    const tokens = searchTerm.split(/\s+/).filter(Boolean);
+    const tokenizedMatch =
+      tokens.length > 1
+        ? {
+            AND: tokens.map((token) => ({
+              OR: [
+                { firstName: { contains: token, mode: 'insensitive' } },
+                { lastName: { contains: token, mode: 'insensitive' } },
+                { company: { contains: token, mode: 'insensitive' } },
+              ],
+            })),
+          }
+        : null;
     where.OR = [
-      { firstName: { contains: filters.search, mode: 'insensitive' } },
-      { lastName: { contains: filters.search, mode: 'insensitive' } },
-      { email: { contains: filters.search, mode: 'insensitive' } },
-      { phone: { contains: filters.search } },
-      { company: { contains: filters.search, mode: 'insensitive' } },
+      { firstName: { contains: searchTerm, mode: 'insensitive' } },
+      { lastName: { contains: searchTerm, mode: 'insensitive' } },
+      { email: { contains: searchTerm, mode: 'insensitive' } },
+      { phone: { contains: searchTerm } },
+      { company: { contains: searchTerm, mode: 'insensitive' } },
+      ...(tokenizedMatch ? [tokenizedMatch] : []),
     ];
   }
 
