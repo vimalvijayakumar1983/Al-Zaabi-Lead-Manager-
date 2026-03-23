@@ -1361,12 +1361,36 @@ function OfferStudioModal({
 
   useEffect(() => {
     const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
+    const activeDivisionId =
+      typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId') || undefined) : undefined;
     setLoading(true);
     Promise.all([
       loadAssignments(),
       loadAnalytics(),
       api.getCampaignTemplates().then((rows) => setTemplates(Array.isArray(rows) ? rows : [])).catch(() => setTemplates([])),
-      api.getTags(campaignOrgId).then((rows) => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([])),
+      (async () => {
+        try {
+          const scopedRows = await api.getTags(campaignOrgId || activeDivisionId);
+          const scopedTags = Array.isArray(scopedRows) ? scopedRows : [];
+          if (scopedTags.length > 0) {
+            setAvailableTags(scopedTags);
+            return;
+          }
+
+          // Fallback: show all tags user can access, useful when current division has no tags yet.
+          const allRows = await api.getTags();
+          const allTags = Array.isArray(allRows) ? allRows : [];
+          const dedup = new Map<string, { id: string; name: string; color?: string }>();
+          for (const tag of allTags) {
+            const key = String(tag?.name || '').trim().toLowerCase();
+            if (!key || dedup.has(key)) continue;
+            dedup.set(key, tag);
+          }
+          setAvailableTags(Array.from(dedup.values()));
+        } catch {
+          setAvailableTags([]);
+        }
+      })(),
     ]).finally(() => setLoading(false));
   }, [campaign, loadAssignments, loadAnalytics]);
 
@@ -1635,7 +1659,7 @@ function OfferStudioModal({
                     })}
                   </div>
                 ) : (
-                  <p className="text-xs text-text-tertiary mb-3">No saved tags found. Add custom tags below.</p>
+                  <p className="text-xs text-text-tertiary mb-3">No saved tags found in this division. You can still add custom tags below.</p>
                 )}
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
