@@ -173,9 +173,10 @@ function LineChart({ data, series, height = 220 }: {
 
 // ─── Bar Chart ────────────────────────────────────────────────────
 
-function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160, onBarClick }: {
+function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, height = 160, onBarClick, tooltipFormatter }: {
   data: any[]; xKey: string; yKey: string; color: string;
   secondaryKey?: string; secondaryColor?: string; height?: number; onBarClick?: (row: any) => void;
+  tooltipFormatter?: (row: any) => string;
 }) {
   if (!data.length) return <div className="flex items-center justify-center h-32 text-sm text-text-tertiary">No data</div>;
   const maxVal = Math.max(...data.map(d => Number(d[yKey] || 0)), 1);
@@ -200,7 +201,9 @@ function BarChart({ data, xKey, yKey, color, secondaryKey, secondaryColor, heigh
             </div>
             <span className="text-xs text-text-tertiary truncate w-full text-center">{d[xKey]}</span>
             <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap hidden group-hover:block z-20 pointer-events-none">
-              {d[xKey]}: {fmt(Number(d[yKey] || 0))}{secondaryKey && ` / ${fmt(Number(d[secondaryKey] || 0))} won`}
+              {tooltipFormatter
+                ? tooltipFormatter(d)
+                : `${d[xKey]}: ${fmt(Number(d[yKey] || 0))}${secondaryKey ? ` / ${fmt(Number(d[secondaryKey] || 0))} won` : ''}`}
             </div>
           </div>
         );
@@ -1787,10 +1790,12 @@ export default function AnalyticsPage() {
 
           <div className="card p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-4">Pipeline Velocity (Stage Aging)</h2>
+            <p className="text-2xs text-text-tertiary mb-2">Bars show median stage age (days), not lead count.</p>
             <BarChart
               data={velocityStages.slice(0, 8).map((row: any) => ({
                 stage: row.stage,
                 medianAgeDays: row.medianAgeDays,
+                count: row.count,
                 stageIds: row.stageIds || [],
                 statusHints: row.statusHints || [],
               }))}
@@ -1798,6 +1803,7 @@ export default function AnalyticsPage() {
               yKey="medianAgeDays"
               color="#ef4444"
               height={190}
+              tooltipFormatter={(row) => `${row.stage}: ${row.medianAgeDays} days (leads: ${row.count || 0})`}
               onBarClick={(row) => {
                 const params: Record<string, string> = {};
                 if (Array.isArray(row?.stageIds) && row.stageIds.length > 0) params.stageId = row.stageIds.join(',');
