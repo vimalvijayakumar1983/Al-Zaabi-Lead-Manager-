@@ -92,7 +92,15 @@ const defaultSourceOptions = [
   { value: 'OTHER', label: 'Other' },
 ];
 
-const defaultCallOutcomeOptions = [
+type CallOutcomeOption = {
+  value: string;
+  label: string;
+  icon?: string;
+  group?: string;
+  isActive?: boolean;
+};
+
+const defaultCallOutcomeOptions: CallOutcomeOption[] = [
   { value: 'CALLBACK', label: 'Call Back Requested', icon: '🔄', group: 'Follow-up' },
   { value: 'CALL_LATER', label: 'Call Later (Scheduled)', icon: '🕐', group: 'Follow-up' },
   { value: 'CALL_AGAIN', label: 'Call Again (Anytime)', icon: '☎️', group: 'Follow-up' },
@@ -188,7 +196,7 @@ interface AdvancedFiltersProps {
   tags?: { id: string; name: string; color: string }[];
   stages?: { id: string; name: string }[];
   sourceOptions?: { value: string; label: string }[];
-  callOutcomeOptions?: { value: string; label: string; icon?: string; group?: string; isActive?: boolean }[];
+  callOutcomeOptions?: CallOutcomeOption[];
   onClose: () => void;
 }
 
@@ -703,7 +711,7 @@ export function AdvancedFilters({
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-0.5">
               {(() => {
                 const preferredOrder = ['Positive', 'Follow-up', 'Retry', 'Closed', 'Other'];
-                const grouped = new Map<string, typeof effectiveCallOutcomeOptions>();
+                const grouped = new Map<string, CallOutcomeOption[]>();
                 for (const option of effectiveCallOutcomeOptions) {
                   const key = option.group || 'Other';
                   if (!grouped.has(key)) grouped.set(key, []);
@@ -1098,7 +1106,7 @@ export function FilterBadges({
   onRemove: (key: keyof FilterState) => void;
   stages?: { id: string; name: string }[];
   sourceOptions?: { value: string; label: string }[];
-  callOutcomeOptions?: { value: string; label: string; icon?: string; group?: string; isActive?: boolean }[];
+  callOutcomeOptions?: CallOutcomeOption[];
 }) {
   const badges: { key: keyof FilterState; label: string }[] = [];
   const sourceLabelMap = new Map((sourceOptions.length > 0 ? sourceOptions : defaultSourceOptions).map((s) => [s.value, s.label]));
