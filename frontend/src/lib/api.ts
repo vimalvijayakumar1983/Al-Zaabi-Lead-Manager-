@@ -947,6 +947,21 @@ class ApiClient {
     return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[]; statusLabels?: Record<string, string> }>(`/settings/field-config${q}`);
   }
 
+  async getLeadSources(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ sources: Array<{ key: string; label: string; source: string; isSystem: boolean; isActive: boolean }> }>(`/settings/lead-sources${q}`);
+  }
+
+  async saveLeadSources(payload: {
+    sources: Array<{ key?: string; label: string; source?: string; isSystem?: boolean; isActive?: boolean }>;
+    divisionId?: string | null;
+  }) {
+    return this.request<{ success: boolean; sources: Array<{ key: string; label: string; source: string; isSystem: boolean; isActive: boolean }> }>('/settings/lead-sources', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async saveStatusLabels(divisionId: string | null, labels: Record<string, string>) {
     return this.request<{ success: boolean }>('/settings/status-labels', {
       method: 'PUT',

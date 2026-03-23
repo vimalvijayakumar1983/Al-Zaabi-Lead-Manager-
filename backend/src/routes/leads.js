@@ -33,6 +33,12 @@ const BUILTIN_CALL_OUTCOMES = new Set([
   'FOLLOW_UP_EMAIL', 'QUALIFIED', 'PROPOSAL_REQUESTED', 'DO_NOT_CALL', 'OTHER',
 ]);
 
+const LEAD_SOURCE_VALUES = [
+  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+];
+const LEAD_SOURCE_SET = new Set(LEAD_SOURCE_VALUES);
+
 // Smart name display — deduplicates when firstName and lastName are identical
 function getDisplayName(obj) {
   const fn = (obj?.firstName || '').trim();
@@ -138,10 +144,8 @@ const createLeadSchema = z.object({
   phone: z.string().optional().nullable(),
   company: z.string().optional().nullable(),
   jobTitle: z.string().optional().nullable(),
-  source: z.enum([
-    'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
-    'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
-  ]).optional(),
+  source: z.enum(LEAD_SOURCE_VALUES).optional(),
+  sourceDetail: z.string().max(120).optional().nullable(),
   budget: z.number().optional().nullable(),
   productInterest: z.string().optional().nullable(),
   location: z.string().optional().nullable(),
@@ -237,10 +241,35 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
     if (source) {
-      if (source.includes(',')) {
-        where.source = { in: source.split(',').map(s => s.trim()) };
+      const selected = source.split(',').map((s) => s.trim()).filter(Boolean);
+      const builtIn = selected.filter((s) => LEAD_SOURCE_SET.has(s));
+      const customKeys = selected.filter((s) => !LEAD_SOURCE_SET.has(s));
+
+      if (customKeys.length === 0) {
+        if (builtIn.length > 1) {
+          where.source = { in: builtIn };
+        } else if (builtIn.length === 1) {
+          where.source = builtIn[0];
+        }
       } else {
-        where.source = source;
+        const sourceClauses = [];
+        if (builtIn.length > 0) {
+          sourceClauses.push(
+            builtIn.length > 1
+              ? { source: { in: builtIn } }
+              : { source: builtIn[0] }
+          );
+        }
+        sourceClauses.push(
+          customKeys.length > 1
+            ? { sourceDetail: { in: customKeys } }
+            : { sourceDetail: customKeys[0] }
+        );
+
+        where.AND = [
+          ...(where.AND || []),
+          { OR: sourceClauses },
+        ];
       }
     }
     if (assignedToId && !req.isRestrictedRole) {
@@ -1328,6 +1357,10 @@ router.put('/:id', validate(updateLeadSchema), async (req, res, next) => {
 
     const data = req.validated;
     delete data.divisionId; // not applicable for update
+
+    if (Object.prototype.hasOwnProperty.call(data, 'sourceDetail') && (data.sourceDetail === '' || data.sourceDetail === undefined)) {
+      data.sourceDetail = null;
+    }
 
     // Smart-split unified "name" field into firstName / lastName
     if (data.name) {

@@ -49,6 +49,97 @@ const notificationPreferencesSchema = z.object({
   defaultCallbackSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
 });
 
+const LEAD_SOURCE_VALUES = [
+  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+];
+
+const DEFAULT_LEAD_SOURCES = [
+  { key: 'WEBSITE_FORM', label: 'Website Form', source: 'WEBSITE_FORM', isSystem: true, isActive: true },
+  { key: 'LIVE_CHAT', label: 'Live Chat Widget', source: 'LIVE_CHAT', isSystem: true, isActive: true },
+  { key: 'LANDING_PAGE', label: 'Landing Page', source: 'LANDING_PAGE', isSystem: true, isActive: true },
+  { key: 'WHATSAPP', label: 'WhatsApp', source: 'WHATSAPP', isSystem: true, isActive: true },
+  { key: 'FACEBOOK_ADS', label: 'Facebook Ads', source: 'FACEBOOK_ADS', isSystem: true, isActive: true },
+  { key: 'GOOGLE_ADS', label: 'Google Ads', source: 'GOOGLE_ADS', isSystem: true, isActive: true },
+  { key: 'TIKTOK_ADS', label: 'TikTok Ads', source: 'TIKTOK_ADS', isSystem: true, isActive: true },
+  { key: 'MANUAL', label: 'Manual', source: 'MANUAL', isSystem: true, isActive: true },
+  { key: 'CSV_IMPORT', label: 'CSV Import', source: 'CSV_IMPORT', isSystem: true, isActive: true },
+  { key: 'API', label: 'API', source: 'API', isSystem: true, isActive: true },
+  { key: 'REFERRAL', label: 'Referral', source: 'REFERRAL', isSystem: true, isActive: true },
+  { key: 'EMAIL', label: 'Email', source: 'EMAIL', isSystem: true, isActive: true },
+  { key: 'PHONE', label: 'Phone', source: 'PHONE', isSystem: true, isActive: true },
+  { key: 'OTHER', label: 'Other', source: 'OTHER', isSystem: true, isActive: true },
+];
+
+const leadSourcesUpdateSchema = z.object({
+  divisionId: z.string().uuid().optional().nullable(),
+  sources: z.array(z.object({
+    key: z.string().max(64).optional(),
+    label: z.string().min(1).max(120),
+    source: z.string().max(64).optional(),
+    isActive: z.boolean().optional(),
+    isSystem: z.boolean().optional(),
+  })).min(1),
+});
+
+function sanitizeLeadSourceKey(value) {
+  const upper = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+  return upper.slice(0, 64);
+}
+
+function normalizeLeadSources(raw) {
+  const systemMap = new Map(DEFAULT_LEAD_SOURCES.map((s) => [s.key, { ...s }]));
+  const customMap = new Map();
+
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const fallbackKey = sanitizeLeadSourceKey(entry.label || '');
+      const key = sanitizeLeadSourceKey(entry.key || fallbackKey);
+      const label = String(entry.label || '').trim();
+      if (!key || !label) continue;
+
+      const normalizedSource = LEAD_SOURCE_VALUES.includes(String(entry.source || '').toUpperCase())
+        ? String(entry.source).toUpperCase()
+        : 'OTHER';
+      const isActive = entry.isActive !== false;
+
+      if (systemMap.has(key)) {
+        const system = systemMap.get(key);
+        system.label = label;
+        system.isActive = isActive;
+        system.source = system.key; // Keep system key/source aligned
+      } else {
+        customMap.set(key, {
+          key,
+          label,
+          source: normalizedSource,
+          isSystem: false,
+          isActive,
+        });
+      }
+    }
+  }
+
+  const system = DEFAULT_LEAD_SOURCES.map((s) => systemMap.get(s.key) || { ...s });
+  const custom = Array.from(customMap.values()).sort((a, b) => a.label.localeCompare(b.label));
+  return [...system, ...custom];
+}
+
+function resolveLeadSourceOrgId(req, divisionId) {
+  if (divisionId) {
+    if (!req.orgIds.includes(divisionId)) return null;
+    if (!req.isSuperAdmin && divisionId !== req.orgId) return null;
+    return divisionId;
+  }
+  return req.orgId;
+}
+
 // ─── Get Profile ────────────────────────────────────────────────
 router.get('/profile', async (req, res, next) => {
   try {
@@ -184,6 +275,54 @@ router.put('/organization', authorize('ADMIN'), validate(z.object({
     if (err.code === 'P2002') {
       return res.status(409).json({ error: 'Domain already in use' });
     }
+    next(err);
+  }
+});
+
+// ─── Lead Sources (managed source list for Leads module) ──────────
+router.get('/lead-sources', async (req, res, next) => {
+  try {
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
+    const targetOrgId = resolveLeadSourceOrgId(req, divisionId);
+    if (!targetOrgId) return res.status(403).json({ error: 'Access denied to specified division' });
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = (org?.settings && typeof org.settings === 'object') ? org.settings : {};
+    const sources = normalizeLeadSources(settings.leadSources);
+    res.json({ sources });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/lead-sources', authorize('ADMIN'), validate(leadSourcesUpdateSchema), async (req, res, next) => {
+  try {
+    const { divisionId, sources } = req.validated;
+    const targetOrgId = resolveLeadSourceOrgId(req, divisionId || undefined);
+    if (!targetOrgId) return res.status(403).json({ error: 'Access denied to specified division' });
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = (org?.settings && typeof org.settings === 'object') ? org.settings : {};
+    const normalized = normalizeLeadSources(sources);
+
+    await prisma.organization.update({
+      where: { id: targetOrgId },
+      data: {
+        settings: {
+          ...settings,
+          leadSources: normalized,
+        },
+      },
+    });
+
+    res.json({ success: true, sources: normalized });
+  } catch (err) {
     next(err);
   }
 });

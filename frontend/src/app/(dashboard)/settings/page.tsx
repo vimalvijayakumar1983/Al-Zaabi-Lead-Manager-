@@ -15,6 +15,7 @@ import type {
   RecycleScope,
 } from '@/types';
 import { CallDispositionStudioSection } from './call-disposition-studio';
+import { LeadSourcesSection } from './lead-sources-section';
 import {
   User2, Lock, Building2, Bell, Shield, AlertTriangle, Check,
   Mail, Phone, Globe, Crown, ChevronRight, Eye, EyeOff,
@@ -26,7 +27,7 @@ import {
   Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'leadSources' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
@@ -34,6 +35,7 @@ const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
   { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
+  { key: 'leadSources', label: 'Lead Sources', icon: Tag, adminOnly: true },
   { key: 'pipelineStages', label: 'Pipeline Stages', icon: GitBranch, adminOnly: true },
   { key: 'callDispositions', label: 'Call Dispositions', icon: Phone, adminOnly: true },
   { key: 'email', label: 'Email Settings', icon: Mail, adminOnly: true },
@@ -114,6 +116,7 @@ export default function SettingsPage() {
             <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
           )}
           {activeTab === 'customFields' && isAdmin && <CustomFieldsSection />}
+          {activeTab === 'leadSources' && isAdmin && <LeadSourcesSection isSuperAdmin={isSuperAdmin} />}
           {activeTab === 'pipelineStages' && isAdmin && <PipelineStagesSection />}
           {activeTab === 'callDispositions' && isAdmin && <CallDispositionStudioSection />}
           {activeTab === 'email' && isAdmin && <EmailSettingsSection />}

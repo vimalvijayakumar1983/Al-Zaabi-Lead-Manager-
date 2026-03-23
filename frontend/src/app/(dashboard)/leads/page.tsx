@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -33,12 +33,28 @@ const statusColors: Record<string, string> = {
   DO_NOT_CALL: 'bg-red-900 text-white',
 };
 
-const sourceLabels: Record<string, string> = {
+type LeadSourceOption = {
+  key: string;
+  label: string;
+  source: string;
+  isSystem?: boolean;
+  isActive?: boolean;
+};
+
+const defaultSourceLabels: Record<string, string> = {
   WEBSITE_FORM: 'Website Form', LIVE_CHAT: 'Live Chat Widget', LANDING_PAGE: 'Landing Page', WHATSAPP: 'WhatsApp',
   FACEBOOK_ADS: 'Facebook Ads', GOOGLE_ADS: 'Google Ads', TIKTOK_ADS: 'TikTok Ads',
   MANUAL: 'Manual', CSV_IMPORT: 'CSV Import', API: 'API', REFERRAL: 'Referral',
   EMAIL: 'Email', PHONE: 'Phone', OTHER: 'Other',
 };
+
+const DEFAULT_LEAD_SOURCE_OPTIONS: LeadSourceOption[] = Object.entries(defaultSourceLabels).map(([key, label]) => ({
+  key,
+  label,
+  source: key,
+  isSystem: true,
+  isActive: true,
+}));
 
 // ─── Call disposition labels for display ────
 const dispositionLabels: Record<string, string> = {
@@ -264,6 +280,7 @@ function LeadsContent() {
 
   // Status labels (custom per division)
   const [statusLabelsMap, setStatusLabelsMap] = useState<Record<string, string>>({});
+  const [leadSourceOptions, setLeadSourceOptions] = useState<LeadSourceOption[]>(DEFAULT_LEAD_SOURCE_OPTIONS);
   useEffect(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
@@ -273,9 +290,31 @@ function LeadsContent() {
       .then(data => { if (data.statusLabels) setStatusLabelsMap(data.statusLabels); })
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getLeadSources(activeDivisionId || undefined)
+      .then((data: any) => {
+        const next = Array.isArray(data?.sources) ? data.sources.filter((s: any) => s?.isActive !== false) : [];
+        if (next.length > 0) {
+          setLeadSourceOptions(next);
+        } else {
+          setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS);
+        }
+      })
+      .catch(() => setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS));
+  }, []);
   const getStatusLabel = (status: string): string => {
     return statusLabelsMap[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
   };
+  const getLeadSourceLabel = useCallback((lead: Lead): string => {
+    const key = (lead.sourceDetail || '').trim();
+    if (key) {
+      const custom = leadSourceOptions.find((s) => s.key === key);
+      if (custom) return custom.label;
+    }
+    const direct = leadSourceOptions.find((s) => s.key === lead.source || s.source === lead.source);
+    return direct?.label || defaultSourceLabels[lead.source] || lead.source;
+  }, [leadSourceOptions]);
 
   // Saved views
   const [activeViewId, setActiveViewId] = useState(() => loadActiveViewId());
@@ -851,7 +890,7 @@ function LeadsContent() {
           case 'company': return l.company || '';
           case 'jobTitle': return l.jobTitle || '';
           case 'status': return (l as any).stage?.name || l.status;
-          case 'source': return l.sourceDetail ? `${l.source} (${l.sourceDetail})` : l.source;
+          case 'source': return getLeadSourceLabel(l);
           case 'score': return (l.score ?? 0).toString();
           case 'budget': return l.budget?.toString() || '';
           case 'location': return l.location || '';
@@ -1016,7 +1055,7 @@ function LeadsContent() {
         );
       }
       case 'source':
-        return <span className="text-sm text-gray-700">{sourceLabels[lead.source] || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}</span>;
+        return <span className="text-sm text-gray-700">{getLeadSourceLabel(lead)}</span>;
       case 'score':
         const score = lead.score ?? 0;
         return (
@@ -1452,12 +1491,18 @@ function LeadsContent() {
               users={users}
               tags={allTags}
               stages={stages}
+              sourceOptions={leadSourceOptions.filter((s) => s.isActive !== false).map((s) => ({ value: s.key, label: s.label }))}
               onClose={() => setShowAdvancedFilters(false)}
             />
           )}
 
           {/* Active Filter Badges */}
-          <FilterBadges filters={filters} onRemove={handleRemoveFilter} stages={stages} />
+          <FilterBadges
+            filters={filters}
+            onRemove={handleRemoveFilter}
+            stages={stages}
+            sourceOptions={leadSourceOptions.filter((s) => s.isActive !== false).map((s) => ({ value: s.key, label: s.label }))}
+          />
 
           {/* Lead quick actions floating menu (portal) */}
           {quickActionPosition && activeQuickLead && typeof document !== 'undefined' && createPortal(
@@ -1683,7 +1728,7 @@ function LeadsContent() {
                             </div>
                             <span className="text-xs font-semibold tabular-nums" style={{ color: (lead.score ?? 0) >= 70 ? '#16a34a' : (lead.score ?? 0) >= 40 ? '#d97706' : '#dc2626' }}>{lead.score ?? 0}</span>
                           </div>
-                          <span className="text-xs text-gray-400">{sourceLabels[lead.source] || lead.source}{lead.sourceDetail ? ` (${lead.sourceDetail})` : ''}</span>
+                          <span className="text-xs text-gray-400">{getLeadSourceLabel(lead)}</span>
                           {lead._count?.callLogs ? (
                             <span className="inline-flex items-center gap-1 text-xs text-gray-500">
                               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1784,7 +1829,7 @@ function LeadsContent() {
           users={users}
         />
       )}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} />}
+      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} sourceOptions={leadSourceOptions} />}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
     </>
@@ -1863,11 +1908,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
   );
 }
 
-const LEAD_SOURCES = [
-  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
-  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT',
-  'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
-] as const;
+const FALLBACK_SOURCE_OPTIONS = DEFAULT_LEAD_SOURCE_OPTIONS;
 
 interface CreateLeadModalProps {
   onClose: () => void;
@@ -1876,6 +1917,7 @@ interface CreateLeadModalProps {
   users?: User[];
   currentUserId?: string;
   userRole?: string;
+  sourceOptions?: LeadSourceOption[];
 }
 
 function CreateLeadModal({
@@ -1885,6 +1927,7 @@ function CreateLeadModal({
   users = [],
   currentUserId,
   userRole,
+  sourceOptions = FALLBACK_SOURCE_OPTIONS,
 }: CreateLeadModalProps) {
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
@@ -1913,6 +1956,10 @@ function CreateLeadModal({
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const effectiveSourceOptions = useMemo(
+    () => (sourceOptions.length > 0 ? sourceOptions.filter((s) => s.isActive !== false) : FALLBACK_SOURCE_OPTIONS),
+    [sourceOptions]
+  );
 
   // Fetch available tags for the division
   useEffect(() => {
@@ -2044,6 +2091,23 @@ function CreateLeadModal({
           delete submitData.name;
         }
 
+        // Map selected source key to backend fields (source enum + optional sourceDetail key)
+        if (typeof submitData.source === 'string' && submitData.source.trim() !== '') {
+          const selectedKey = submitData.source.trim();
+          const selected = effectiveSourceOptions.find((s) => s.key === selectedKey);
+          if (selected) {
+            submitData.source = selected.source;
+            if (selected.key !== selected.source) {
+              submitData.sourceDetail = selected.key;
+            } else {
+              delete submitData.sourceDetail;
+            }
+          } else {
+            submitData.source = 'OTHER';
+            submitData.sourceDetail = selectedKey;
+          }
+        }
+
         // Clean up empty strings
         Object.keys(submitData).forEach((key) => {
           if (submitData[key] === '') {
@@ -2075,7 +2139,7 @@ function CreateLeadModal({
         setIsSubmitting(false);
       }
     },
-    [formData, validate, onSubmit, customFields]
+    [customFields, effectiveSourceOptions, formData, onSubmit, validate]
   );
 
   const renderInput = (
@@ -2203,9 +2267,9 @@ function CreateLeadModal({
                     className="input w-full"
                   >
                     <option value="">Select source…</option>
-                    {LEAD_SOURCES.map((src) => (
-                      <option key={src} value={src}>
-                        {src}
+                    {effectiveSourceOptions.map((src) => (
+                      <option key={src.key} value={src.key}>
+                        {src.label}
                       </option>
                     ))}
                   </select>

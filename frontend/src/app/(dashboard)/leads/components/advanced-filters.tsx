@@ -76,7 +76,7 @@ const statusOptions = [
   { value: 'LOST', label: 'Lost' },
 ];
 
-const sourceOptions = [
+const defaultSourceOptions = [
   { value: 'WEBSITE_FORM', label: 'Website Form' },
   { value: 'LIVE_CHAT', label: 'Live Chat Widget' },
   { value: 'LANDING_PAGE', label: 'Landing Page' },
@@ -187,6 +187,7 @@ interface AdvancedFiltersProps {
   users: User[];
   tags?: { id: string; name: string; color: string }[];
   stages?: { id: string; name: string }[];
+  sourceOptions?: { value: string; label: string }[];
   onClose: () => void;
 }
 
@@ -276,8 +277,9 @@ function toggleMulti(current: string, value: string): string {
 }
 
 // ─── Main Component ───────────────────────────────────────────────
-export function AdvancedFilters({ filters, onChange, users, tags: availableTags = [], stages = [], onClose }: AdvancedFiltersProps) {
+export function AdvancedFilters({ filters, onChange, users, tags: availableTags = [], stages = [], sourceOptions = [], onClose }: AdvancedFiltersProps) {
   const [local, setLocal] = useState<FilterState>({ ...filters });
+  const effectiveSourceOptions = sourceOptions.length > 0 ? sourceOptions : defaultSourceOptions;
 
   // Load divisions from localStorage
   const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
@@ -651,7 +653,7 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
               <div>
                 <label className="label">Source <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
                 <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-2 mt-0.5 space-y-1">
-                  {sourceOptions.map((o) => {
+                  {effectiveSourceOptions.map((o) => {
                     const isSelected = selectedSources.includes(o.value);
                     return (
                       <label key={o.value} className="flex items-center gap-1.5 cursor-pointer">
@@ -1059,8 +1061,19 @@ export function AdvancedFilters({ filters, onChange, users, tags: availableTags 
   );
 }
 
-export function FilterBadges({ filters, onRemove, stages }: { filters: FilterState; onRemove: (key: keyof FilterState) => void; stages?: { id: string; name: string }[] }) {
+export function FilterBadges({
+  filters,
+  onRemove,
+  stages,
+  sourceOptions = [],
+}: {
+  filters: FilterState;
+  onRemove: (key: keyof FilterState) => void;
+  stages?: { id: string; name: string }[];
+  sourceOptions?: { value: string; label: string }[];
+}) {
   const badges: { key: keyof FilterState; label: string }[] = [];
+  const sourceLabelMap = new Map((sourceOptions.length > 0 ? sourceOptions : defaultSourceOptions).map((s) => [s.value, s.label]));
 
   // Handle multi-select status display
   if (filters.status) {
@@ -1077,7 +1090,8 @@ export function FilterBadges({ filters, onRemove, stages }: { filters: FilterSta
     if (sources.length > 1) {
       badges.push({ key: 'source', label: `Source: ${sources.length} selected` });
     } else {
-      badges.push({ key: 'source', label: `Source: ${filters.source.replace(/_/g, ' ')}` });
+      const sourceLabel = sourceLabelMap.get(filters.source) || filters.source.replace(/_/g, ' ');
+      badges.push({ key: 'source', label: `Source: ${sourceLabel}` });
     }
   }
   if (filters.assignedToId) badges.push({ key: 'assignedToId', label: filters.assignedToId === '__unassigned__' ? 'Unassigned' : 'Assigned' });
