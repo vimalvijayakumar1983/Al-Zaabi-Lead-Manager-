@@ -1283,9 +1283,12 @@ function OfferStudioModal({
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [filters, setFilters] = useState({
     search: '',
+    scorePreset: 'all',
     minScore: '',
     maxScore: '',
+    noCallsPreset: '',
     noCallsInDays: '',
+    minCallPreset: '',
     minCallCount: '',
     tagsAny: '',
   });
@@ -1295,6 +1298,34 @@ function OfferStudioModal({
     notes: '',
     overwriteExisting: false,
   });
+
+  const scorePresetOptions: Array<{ value: string; label: string; min?: number; max?: number }> = [
+    { value: 'all', label: 'All scores' },
+    { value: 'cold', label: 'Cold (0-24)', min: 0, max: 24 },
+    { value: 'warm', label: 'Warm (25-49)', min: 25, max: 49 },
+    { value: 'hot', label: 'Hot (50-74)', min: 50, max: 74 },
+    { value: 'priority', label: 'Priority (75-100)', min: 75, max: 100 },
+    { value: 'custom', label: 'Custom range' },
+  ];
+
+  function buildAudiencePayloadFromFilters() {
+    const payload: Record<string, any> = {};
+    if (filters.search.trim()) payload.search = filters.search.trim();
+
+    const selectedScorePreset = scorePresetOptions.find((opt) => opt.value === filters.scorePreset);
+    if (filters.scorePreset === 'custom') {
+      if (filters.minScore) payload.minScore = Number(filters.minScore);
+      if (filters.maxScore) payload.maxScore = Number(filters.maxScore);
+    } else if (selectedScorePreset && selectedScorePreset.value !== 'all') {
+      if (selectedScorePreset.min !== undefined) payload.minScore = selectedScorePreset.min;
+      if (selectedScorePreset.max !== undefined) payload.maxScore = selectedScorePreset.max;
+    }
+
+    if (filters.noCallsInDays) payload.noCallsInDays = Number(filters.noCallsInDays);
+    if (filters.minCallCount) payload.minCallCount = Number(filters.minCallCount);
+    if (filters.tagsAny.trim()) payload.tagsAny = filters.tagsAny.split(',').map((t) => t.trim()).filter(Boolean);
+    return payload;
+  }
 
   const loadAssignments = useCallback(async () => {
     try {
@@ -1327,13 +1358,7 @@ function OfferStudioModal({
   async function handlePreview() {
     setPreviewLoading(true);
     try {
-      const payload: Record<string, any> = {};
-      if (filters.search.trim()) payload.search = filters.search.trim();
-      if (filters.minScore) payload.minScore = Number(filters.minScore);
-      if (filters.maxScore) payload.maxScore = Number(filters.maxScore);
-      if (filters.noCallsInDays) payload.noCallsInDays = Number(filters.noCallsInDays);
-      if (filters.minCallCount) payload.minCallCount = Number(filters.minCallCount);
-      if (filters.tagsAny.trim()) payload.tagsAny = filters.tagsAny.split(',').map((t) => t.trim()).filter(Boolean);
+      const payload: Record<string, any> = buildAudiencePayloadFromFilters();
       payload.excludeAssignedToCampaign = true;
       const result = await api.previewCampaignAudience(campaign.id, payload);
       const rows = Array.isArray(result?.leads) ? result.leads : [];
@@ -1357,12 +1382,7 @@ function OfferStudioModal({
       if (previewRows.length > 0) payload.leadIds = previewRows.map((l) => l.id);
       else {
         payload.filters = {
-          ...(filters.search.trim() ? { search: filters.search.trim() } : {}),
-          ...(filters.minScore ? { minScore: Number(filters.minScore) } : {}),
-          ...(filters.maxScore ? { maxScore: Number(filters.maxScore) } : {}),
-          ...(filters.noCallsInDays ? { noCallsInDays: Number(filters.noCallsInDays) } : {}),
-          ...(filters.minCallCount ? { minCallCount: Number(filters.minCallCount) } : {}),
-          ...(filters.tagsAny.trim() ? { tagsAny: filters.tagsAny.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
+          ...buildAudiencePayloadFromFilters(),
           excludeAssignedToCampaign: true,
         };
       }
@@ -1393,7 +1413,11 @@ function OfferStudioModal({
     const tpl = templates.find((t) => t.id === templateId);
     const cfg = tpl?.config || {};
     if (cfg.filters && typeof cfg.filters === 'object') {
-      setFilters((prev) => ({ ...prev, ...cfg.filters }));
+      const merged = { ...filters, ...cfg.filters };
+      if (!merged.scorePreset) {
+        merged.scorePreset = merged.minScore || merged.maxScore ? 'custom' : 'all';
+      }
+      setFilters(merged);
     }
     if (cfg.applyConfig && typeof cfg.applyConfig === 'object') {
       setApplyConfig((prev) => ({ ...prev, ...cfg.applyConfig }));
@@ -1480,10 +1504,65 @@ function OfferStudioModal({
             <h4 className="font-semibold text-text-primary mb-3">Audience Rules</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               <input className="input" placeholder="Search name / email / phone / company" value={filters.search} onChange={(e) => setFilters((p) => ({ ...p, search: e.target.value }))} />
-              <input className="input" type="number" placeholder="Min score" value={filters.minScore} onChange={(e) => setFilters((p) => ({ ...p, minScore: e.target.value }))} />
-              <input className="input" type="number" placeholder="Max score" value={filters.maxScore} onChange={(e) => setFilters((p) => ({ ...p, maxScore: e.target.value }))} />
-              <input className="input" type="number" placeholder="No calls in N days" value={filters.noCallsInDays} onChange={(e) => setFilters((p) => ({ ...p, noCallsInDays: e.target.value }))} />
-              <input className="input" type="number" placeholder="Min call count" value={filters.minCallCount} onChange={(e) => setFilters((p) => ({ ...p, minCallCount: e.target.value }))} />
+              <select
+                className="input"
+                value={filters.scorePreset}
+                onChange={(e) =>
+                  setFilters((p) => ({
+                    ...p,
+                    scorePreset: e.target.value,
+                    ...(e.target.value !== 'custom' ? { minScore: '', maxScore: '' } : {}),
+                  }))
+                }
+              >
+                {scorePresetOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {filters.scorePreset === 'custom' && (
+                <>
+                  <input className="input" type="number" placeholder="Custom min score" value={filters.minScore} onChange={(e) => setFilters((p) => ({ ...p, minScore: e.target.value }))} />
+                  <input className="input" type="number" placeholder="Custom max score" value={filters.maxScore} onChange={(e) => setFilters((p) => ({ ...p, maxScore: e.target.value }))} />
+                </>
+              )}
+              <select
+                className="input"
+                value={filters.noCallsPreset}
+                onChange={(e) =>
+                  setFilters((p) => ({
+                    ...p,
+                    noCallsPreset: e.target.value,
+                    noCallsInDays: e.target.value,
+                  }))
+                }
+              >
+                <option value="">Any call recency</option>
+                <option value="7">No calls in 7 days</option>
+                <option value="14">No calls in 14 days</option>
+                <option value="30">No calls in 30 days</option>
+                <option value="60">No calls in 60 days</option>
+                <option value="90">No calls in 90 days</option>
+              </select>
+              <select
+                className="input"
+                value={filters.minCallPreset}
+                onChange={(e) =>
+                  setFilters((p) => ({
+                    ...p,
+                    minCallPreset: e.target.value,
+                    minCallCount: e.target.value,
+                  }))
+                }
+              >
+                <option value="">Any call count</option>
+                <option value="1">At least 1 call</option>
+                <option value="2">At least 2 calls</option>
+                <option value="3">At least 3 calls</option>
+                <option value="5">At least 5 calls</option>
+                <option value="10">At least 10 calls</option>
+              </select>
               <input className="input" placeholder="Tags (comma separated)" value={filters.tagsAny} onChange={(e) => setFilters((p) => ({ ...p, tagsAny: e.target.value }))} />
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
