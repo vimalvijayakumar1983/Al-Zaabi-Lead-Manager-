@@ -457,6 +457,7 @@ class ApiClient {
     assignToIds?: string[];
     defaultStatus?: string;
     defaultSource?: string;
+    defaultCampaignIds?: string[];
   }) {
     const formData = new FormData();
     formData.append('file', file);
@@ -467,6 +468,9 @@ class ApiClient {
     if (options.assignToIds && options.assignToIds.length > 0) formData.append('assignToIds', JSON.stringify(options.assignToIds));
     if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
     if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
+    if (options.defaultCampaignIds && options.defaultCampaignIds.length > 0) {
+      formData.append('defaultCampaignIds', JSON.stringify(options.defaultCampaignIds));
+    }
     const token = this.getToken();
     const res = await fetch(`${API_URL}/import/execute`, {
       method: 'POST',
@@ -586,6 +590,59 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ ids }),
     });
+  }
+
+  async getCampaignTemplates(divisionId?: string) {
+    const query = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any[]>(`/campaigns/templates${query}`);
+  }
+
+  async createCampaignTemplate(data: { name: string; description?: string | null; config?: Record<string, any>; isActive?: boolean; divisionId?: string }) {
+    return this.request<any>('/campaigns/templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateCampaignTemplate(id: string, data: Partial<{ name: string; description: string | null; config: Record<string, any>; isActive: boolean }>) {
+    return this.request<any>(`/campaigns/templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCampaignTemplate(id: string) {
+    return this.request<{ success: boolean }>(`/campaigns/templates/${id}`, { method: 'DELETE' });
+  }
+
+  async previewCampaignAudience(campaignId: string, filters: Record<string, any>) {
+    return this.request<any>(`/campaigns/${campaignId}/assignments/preview`, {
+      method: 'POST',
+      body: JSON.stringify(filters || {}),
+    });
+  }
+
+  async applyCampaignAudience(campaignId: string, payload: Record<string, any>) {
+    return this.request<any>(`/campaigns/${campaignId}/assignments/apply`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getCampaignAssignments(campaignId: string, params?: Record<string, string | number>) {
+    const query = params ? `?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}` : '';
+    return this.request<any>(`/campaigns/${campaignId}/assignments${query}`);
+  }
+
+  async updateCampaignAssignment(assignmentId: string, payload: Record<string, any>) {
+    return this.request<any>(`/campaigns/assignments/${assignmentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getCampaignOfferAnalytics(campaignId: string) {
+    return this.request<any>(`/campaigns/${campaignId}/offer-analytics`);
   }
 
   // ─── Integrations ──────────────────────────────────────────────
@@ -1490,12 +1547,12 @@ class ApiClient {
   }
 
   // ─── Report Builder ───────────────────────────────────────────────
-  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines', divisionId?: string) {
+  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines', divisionId?: string) {
     const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/report-builder/catalog?${q.toString()}`);
   }
 
-  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines' }) {
+  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines' }) {
     const q = new URLSearchParams();
     if (params?.divisionId) q.set('divisionId', params.divisionId);
     if (params?.dataset) q.set('dataset', params.dataset);
@@ -1523,7 +1580,7 @@ class ApiClient {
     });
   }
 
-  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
+  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
     return this.request<any>('/report-builder/preview', {
       method: 'POST',
       body: JSON.stringify(payload),

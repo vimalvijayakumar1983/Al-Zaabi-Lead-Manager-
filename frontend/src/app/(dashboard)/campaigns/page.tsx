@@ -72,6 +72,7 @@ interface CampaignDashboardStats {
 
 interface CampaignFormData {
   name: string;
+  campaignCode: string;
   type: string;
   status: string;
   budget: string;
@@ -181,6 +182,7 @@ const DEFAULT_FILTER_STATE: FilterState = {
 
 const EMPTY_FORM_DATA: CampaignFormData = {
   name: '',
+  campaignCode: '',
   type: 'FACEBOOK_ADS',
   status: 'DRAFT',
   budget: '',
@@ -574,12 +576,14 @@ function Pagination({
 function ActionsMenu({
   campaign,
   onEdit,
+  onOfferStudio,
   onDuplicate,
   onToggleStatus,
   onDelete,
 }: {
   campaign: Campaign;
   onEdit: () => void;
+  onOfferStudio: () => void;
   onDuplicate: () => void;
   onToggleStatus: () => void;
   onDelete: () => void;
@@ -620,6 +624,13 @@ function ActionsMenu({
             Duplicate
           </button>
           <button
+            onClick={() => { onOfferStudio(); setOpen(false); }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-text-primary hover:bg-gray-50 transition-colors"
+          >
+            <Target className="w-4 h-4 text-brand-600" />
+            Offer Studio
+          </button>
+          <button
             onClick={() => { onToggleStatus(); setOpen(false); }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-text-primary hover:bg-gray-50 transition-colors"
           >
@@ -653,6 +664,7 @@ function ActionsMenu({
 function CampaignCard({
   campaign,
   onEdit,
+  onOfferStudio,
   onDuplicate,
   onToggleStatus,
   onDelete,
@@ -661,6 +673,7 @@ function CampaignCard({
 }: {
   campaign: Campaign;
   onEdit: () => void;
+  onOfferStudio: () => void;
   onDuplicate: () => void;
   onToggleStatus: () => void;
   onDelete: () => void;
@@ -700,6 +713,7 @@ function CampaignCard({
             <ActionsMenu
               campaign={campaign}
               onEdit={onEdit}
+              onOfferStudio={onOfferStudio}
               onDuplicate={onDuplicate}
               onToggleStatus={onToggleStatus}
               onDelete={onDelete}
@@ -925,6 +939,20 @@ function CampaignFormModal({
               autoFocus
             />
             {errors.name && <p className={errorClass}>{errors.name}</p>}
+          </div>
+
+          <div>
+            <label className={labelClass}>Campaign Code (for import mapping)</label>
+            <input
+              type="text"
+              value={form.campaignCode}
+              onChange={(e) => updateField('campaignCode', e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+              placeholder="e.g., WINBACK_Q2_2026"
+              className={inputClass}
+            />
+            <p className="text-2xs text-text-tertiary mt-1">
+              Optional unique code used to attach offers during lead import.
+            </p>
           </div>
 
           {/* Type & Status row */}
@@ -1233,6 +1261,313 @@ function SaveFilterModal({
   );
 }
 
+/* ---- Offer Studio Modal ---- */
+function OfferStudioModal({
+  campaign,
+  onClose,
+  onApplied,
+  addToast,
+}: {
+  campaign: Campaign;
+  onClose: () => void;
+  onApplied: () => void;
+  addToast: (type: 'success' | 'error', message: string) => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [previewRows, setPreviewRows] = useState<any[]>([]);
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [templateName, setTemplateName] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [filters, setFilters] = useState({
+    search: '',
+    minScore: '',
+    maxScore: '',
+    noCallsInDays: '',
+    minCallCount: '',
+    tagsAny: '',
+  });
+  const [applyConfig, setApplyConfig] = useState({
+    source: 'RULE',
+    expiresAt: '',
+    notes: '',
+    overwriteExisting: false,
+  });
+
+  const loadAssignments = useCallback(async () => {
+    try {
+      const res = await api.getCampaignAssignments(campaign.id, { page: 1, limit: 50, sortBy: 'assignedAt', sortOrder: 'desc' });
+      const rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setAssignments(rows);
+    } catch {
+      setAssignments([]);
+    }
+  }, [campaign.id]);
+
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const data = await api.getCampaignOfferAnalytics(campaign.id);
+      setAnalytics(data);
+    } catch {
+      setAnalytics(null);
+    }
+  }, [campaign.id]);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      loadAssignments(),
+      loadAnalytics(),
+      api.getCampaignTemplates().then((rows) => setTemplates(Array.isArray(rows) ? rows : [])).catch(() => setTemplates([])),
+    ]).finally(() => setLoading(false));
+  }, [loadAssignments, loadAnalytics]);
+
+  async function handlePreview() {
+    setPreviewLoading(true);
+    try {
+      const payload: Record<string, any> = {};
+      if (filters.search.trim()) payload.search = filters.search.trim();
+      if (filters.minScore) payload.minScore = Number(filters.minScore);
+      if (filters.maxScore) payload.maxScore = Number(filters.maxScore);
+      if (filters.noCallsInDays) payload.noCallsInDays = Number(filters.noCallsInDays);
+      if (filters.minCallCount) payload.minCallCount = Number(filters.minCallCount);
+      if (filters.tagsAny.trim()) payload.tagsAny = filters.tagsAny.split(',').map((t) => t.trim()).filter(Boolean);
+      payload.excludeAssignedToCampaign = true;
+      const result = await api.previewCampaignAudience(campaign.id, payload);
+      const rows = Array.isArray(result?.leads) ? result.leads : [];
+      setPreviewRows(rows);
+      addToast('success', `${rows.length} leads matched audience filters`);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to preview audience');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function handleApply() {
+    try {
+      const payload: Record<string, any> = {
+        source: applyConfig.source,
+        overwriteExisting: applyConfig.overwriteExisting,
+      };
+      if (applyConfig.notes.trim()) payload.notes = applyConfig.notes.trim();
+      if (applyConfig.expiresAt) payload.expiresAt = new Date(applyConfig.expiresAt).toISOString();
+      if (previewRows.length > 0) payload.leadIds = previewRows.map((l) => l.id);
+      else {
+        payload.filters = {
+          ...(filters.search.trim() ? { search: filters.search.trim() } : {}),
+          ...(filters.minScore ? { minScore: Number(filters.minScore) } : {}),
+          ...(filters.maxScore ? { maxScore: Number(filters.maxScore) } : {}),
+          ...(filters.noCallsInDays ? { noCallsInDays: Number(filters.noCallsInDays) } : {}),
+          ...(filters.minCallCount ? { minCallCount: Number(filters.minCallCount) } : {}),
+          ...(filters.tagsAny.trim() ? { tagsAny: filters.tagsAny.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
+          excludeAssignedToCampaign: true,
+        };
+      }
+      const res = await api.applyCampaignAudience(campaign.id, payload);
+      addToast('success', `Offer assignments created: ${res.created || 0}, updated: ${res.updated || 0}`);
+      await Promise.all([loadAssignments(), loadAnalytics()]);
+      onApplied();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to apply audience');
+    }
+  }
+
+  async function updateAssignmentStatus(assignmentId: string, status: string) {
+    try {
+      await api.updateCampaignAssignment(assignmentId, {
+        status,
+        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
+        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
+      });
+      await Promise.all([loadAssignments(), loadAnalytics()]);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to update assignment');
+    }
+  }
+
+  function applyTemplate(templateId: string) {
+    setSelectedTemplateId(templateId);
+    const tpl = templates.find((t) => t.id === templateId);
+    const cfg = tpl?.config || {};
+    if (cfg.filters && typeof cfg.filters === 'object') {
+      setFilters((prev) => ({ ...prev, ...cfg.filters }));
+    }
+    if (cfg.applyConfig && typeof cfg.applyConfig === 'object') {
+      setApplyConfig((prev) => ({ ...prev, ...cfg.applyConfig }));
+    }
+  }
+
+  async function saveTemplate() {
+    const name = templateName.trim();
+    if (!name) {
+      addToast('error', 'Template name is required');
+      return;
+    }
+    try {
+      await api.createCampaignTemplate({
+        name,
+        description: `Offer studio template for ${campaign.name}`,
+        config: {
+          filters,
+          applyConfig,
+        },
+      });
+      const rows = await api.getCampaignTemplates();
+      setTemplates(Array.isArray(rows) ? rows : []);
+      setTemplateName('');
+      addToast('success', 'Template saved');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to save template');
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-text-primary">Offer Studio — {campaign.name}</h3>
+            <p className="text-sm text-text-secondary">Build audience conditions, preview, apply and track offer lifecycle.</p>
+          </div>
+          <button className="p-2 rounded-lg hover:bg-gray-100" onClick={onClose}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Assigned</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.assigned ?? '—'}</p>
+            </div>
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Contacted</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.contacted ?? '—'}</p>
+            </div>
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Accepted</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.accepted ?? '—'}</p>
+            </div>
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Redeemed</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.redeemed ?? '—'}</p>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Templates</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <select className="input" value={selectedTemplateId} onChange={(e) => applyTemplate(e.target.value)}>
+                <option value="">Select a template</option>
+                {templates.map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                ))}
+              </select>
+              <input
+                className="input md:col-span-1"
+                placeholder="Save current setup as template"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+              />
+              <button className="btn-secondary px-4 py-2 text-sm" onClick={saveTemplate}>Save Template</button>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Audience Rules</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              <input className="input" placeholder="Search name / email / phone / company" value={filters.search} onChange={(e) => setFilters((p) => ({ ...p, search: e.target.value }))} />
+              <input className="input" type="number" placeholder="Min score" value={filters.minScore} onChange={(e) => setFilters((p) => ({ ...p, minScore: e.target.value }))} />
+              <input className="input" type="number" placeholder="Max score" value={filters.maxScore} onChange={(e) => setFilters((p) => ({ ...p, maxScore: e.target.value }))} />
+              <input className="input" type="number" placeholder="No calls in N days" value={filters.noCallsInDays} onChange={(e) => setFilters((p) => ({ ...p, noCallsInDays: e.target.value }))} />
+              <input className="input" type="number" placeholder="Min call count" value={filters.minCallCount} onChange={(e) => setFilters((p) => ({ ...p, minCallCount: e.target.value }))} />
+              <input className="input" placeholder="Tags (comma separated)" value={filters.tagsAny} onChange={(e) => setFilters((p) => ({ ...p, tagsAny: e.target.value }))} />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button className="btn-secondary px-4 py-2 text-sm" onClick={handlePreview} disabled={previewLoading}>
+                {previewLoading ? 'Previewing...' : 'Preview Audience'}
+              </button>
+              <span className="text-sm text-text-secondary">{previewRows.length} leads ready for assignment</span>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Apply Offer</h4>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <select className="input" value={applyConfig.source} onChange={(e) => setApplyConfig((p) => ({ ...p, source: e.target.value }))}>
+                <option value="RULE">Rule</option>
+                <option value="MANUAL">Manual</option>
+                <option value="IMPORT">Import</option>
+                <option value="API">API</option>
+              </select>
+              <input className="input" type="datetime-local" value={applyConfig.expiresAt} onChange={(e) => setApplyConfig((p) => ({ ...p, expiresAt: e.target.value }))} />
+              <input className="input md:col-span-2" placeholder="Internal notes (optional)" value={applyConfig.notes} onChange={(e) => setApplyConfig((p) => ({ ...p, notes: e.target.value }))} />
+            </div>
+            <label className="mt-3 inline-flex items-center gap-2 text-sm text-text-secondary">
+              <input type="checkbox" checked={applyConfig.overwriteExisting} onChange={(e) => setApplyConfig((p) => ({ ...p, overwriteExisting: e.target.checked }))} />
+              Overwrite existing assignments for this campaign
+            </label>
+            <div className="mt-3">
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleApply}>Apply to Audience</button>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Assigned Leads</h4>
+            {loading ? (
+              <p className="text-sm text-text-secondary">Loading assignments...</p>
+            ) : assignments.length === 0 ? (
+              <p className="text-sm text-text-secondary">No assignments yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px]">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary border-b border-gray-100">
+                      <th className="py-2 pr-3">Lead</th>
+                      <th className="py-2 pr-3">Company</th>
+                      <th className="py-2 pr-3">Score</th>
+                      <th className="py-2 pr-3">Assigned At</th>
+                      <th className="py-2 pr-3">Assigned By</th>
+                      <th className="py-2 pr-0">Lifecycle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignments.map((row) => (
+                      <tr key={row.id} className="border-b border-gray-50">
+                        <td className="py-2 pr-3">
+                          <div className="font-medium text-text-primary">{row.leadName || `${row.lead?.firstName || ''} ${row.lead?.lastName || ''}`.trim() || '—'}</div>
+                          <div className="text-xs text-text-tertiary">{row.lead?.email || row.lead?.phone || '—'}</div>
+                        </td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.lead?.company || '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.lead?.score ?? '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{new Date(row.assignedAt).toLocaleDateString()}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.assignedBy ? `${row.assignedBy.firstName} ${row.assignedBy.lastName}` : 'System'}</td>
+                        <td className="py-2 pr-0">
+                          <select className="input h-9 text-sm" value={row.status} onChange={(e) => updateAssignmentStatus(row.id, e.target.value)}>
+                            <option value="ELIGIBLE">Eligible</option>
+                            <option value="CONTACTED">Contacted</option>
+                            <option value="ACCEPTED">Accepted</option>
+                            <option value="REDEEMED">Redeemed</option>
+                            <option value="EXPIRED">Expired</option>
+                            <option value="REJECTED">Rejected</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main Campaigns Page Component
 // ---------------------------------------------------------------------------
@@ -1276,8 +1611,10 @@ export default function CampaignsPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [offerStudioOpen, setOfferStudioOpen] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [deletingCampaign, setDeletingCampaign] = useState<Campaign | null>(null);
+  const [offerStudioCampaign, setOfferStudioCampaign] = useState<Campaign | null>(null);
 
   // Bulk
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1334,7 +1671,7 @@ export default function CampaignsPage() {
       if (filters.search) params.search = filters.search;
       if (filters.types.length > 0) params.type = filters.types.join(',');
       if (filters.statuses.length > 0) params.status = filters.statuses.join(',');
-      if (filters.divisions.length > 0) params.organizationId = filters.divisions.join(',');
+      if (filters.divisions.length > 0) params.divisionId = filters.divisions[0];
       if (filters.sort) params.sort = filters.sort;
 
       // Date range
@@ -1527,6 +1864,7 @@ export default function CampaignsPage() {
       if (formData.targetLeads) metadata.targetLeads = Number(formData.targetLeads);
       if (formData.targetConversions) metadata.targetConversions = Number(formData.targetConversions);
       if (formData.targetRevenue) metadata.targetRevenue = Number(formData.targetRevenue);
+      if (formData.campaignCode) payload.campaignCode = formData.campaignCode.trim();
       if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
       await (api as unknown as Record<string, Function>).createCampaign(payload);
@@ -1566,6 +1904,7 @@ export default function CampaignsPage() {
       if (formData.targetLeads) metadata.targetLeads = Number(formData.targetLeads);
       if (formData.targetConversions) metadata.targetConversions = Number(formData.targetConversions);
       if (formData.targetRevenue) metadata.targetRevenue = Number(formData.targetRevenue);
+      payload.campaignCode = formData.campaignCode ? formData.campaignCode.trim() : null;
       if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
       await (api as unknown as Record<string, Function>).updateCampaign(editingCampaign.id, payload);
@@ -1635,6 +1974,11 @@ export default function CampaignsPage() {
     } finally {
       setActionLoading(false);
     }
+  }
+
+  function handleOpenOfferStudio(campaign: Campaign) {
+    setOfferStudioCampaign(campaign);
+    setOfferStudioOpen(true);
   }
 
   // ------ Bulk Actions ------
@@ -1739,6 +2083,7 @@ export default function CampaignsPage() {
     const metadata = (extra.metadata || {}) as Record<string, unknown>;
     return {
       name: campaign.name || '',
+      campaignCode: (metadata.campaignCode as string) || '',
       type: campaign.type || 'OTHER',
       status: campaign.status || 'DRAFT',
       budget: campaign.budget ? String(campaign.budget) : '',
@@ -2348,6 +2693,7 @@ export default function CampaignsPage() {
                     setEditingCampaign(campaign);
                     setEditModalOpen(true);
                   }}
+                  onOfferStudio={() => handleOpenOfferStudio(campaign)}
                   onDuplicate={() => handleDuplicate(campaign)}
                   onToggleStatus={() => handleToggleStatus(campaign)}
                   onDelete={() => {
@@ -2466,6 +2812,7 @@ export default function CampaignsPage() {
                               setEditingCampaign(campaign);
                               setEditModalOpen(true);
                             }}
+                            onOfferStudio={() => handleOpenOfferStudio(campaign)}
                             onDuplicate={() => handleDuplicate(campaign)}
                             onToggleStatus={() => handleToggleStatus(campaign)}
                             onDelete={() => {
@@ -2538,6 +2885,21 @@ export default function CampaignsPage() {
             setDeletingCampaign(null);
           }}
           loading={actionLoading}
+        />
+      )}
+
+      {offerStudioOpen && offerStudioCampaign && (
+        <OfferStudioModal
+          campaign={offerStudioCampaign}
+          onClose={() => {
+            setOfferStudioOpen(false);
+            setOfferStudioCampaign(null);
+          }}
+          onApplied={() => {
+            fetchCampaigns();
+            fetchStats();
+          }}
+          addToast={addToast}
         />
       )}
 

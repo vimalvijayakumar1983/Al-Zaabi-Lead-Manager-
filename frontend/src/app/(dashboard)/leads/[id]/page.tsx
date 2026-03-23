@@ -47,6 +47,15 @@ const priorityColors: Record<string, string> = {
   URGENT: 'bg-red-100 text-red-700',
 };
 
+const offerLifecycleLabel: Record<string, string> = {
+  ELIGIBLE: 'Eligible',
+  CONTACTED: 'Contacted',
+  ACCEPTED: 'Accepted',
+  REDEEMED: 'Redeemed',
+  EXPIRED: 'Expired',
+  REJECTED: 'Rejected',
+};
+
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
   const fn = (obj.firstName || '').trim();
@@ -82,6 +91,7 @@ export default function LeadDetailPage() {
   const [showCallLogModal, setShowCallLogModal] = useState(false);
   const [callLogs, setCallLogs] = useState<any[]>([]);
   const [callLogsLoading, setCallLogsLoading] = useState(false);
+  const [updatingOfferAssignmentId, setUpdatingOfferAssignmentId] = useState<string | null>(null);
   const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
@@ -253,6 +263,23 @@ export default function LeadDetailPage() {
     setLead(data);
     setUnreadCommsCount(data.unreadCommunications || 0);
   }, [id]);
+
+  const handleOfferLifecycleUpdate = useCallback(async (assignmentId: string, status: string) => {
+    setUpdatingOfferAssignmentId(assignmentId);
+    try {
+      await api.updateCampaignAssignment(assignmentId, {
+        status,
+        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
+        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
+      });
+      await refreshLead();
+      addToast({ type: 'success', title: 'Offer Updated', message: `Lifecycle changed to ${offerLifecycleLabel[status] || status}.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Offer Update Failed', message: err?.message || 'Unable to update offer lifecycle.' });
+    } finally {
+      setUpdatingOfferAssignmentId(null);
+    }
+  }, [addToast, refreshLead]);
 
   const loadLeadAISummary = useCallback(async (force = false) => {
     setAiSummaryLoading(true);
@@ -1181,6 +1208,61 @@ export default function LeadDetailPage() {
                   })}
                 </>
               )
+            )}
+          </div>
+
+          {/* Offer Campaigns */}
+          <div className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">Offer Campaigns</h3>
+              <span className="text-xs text-gray-500">
+                {(lead.campaignAssignments || []).length} attached
+              </span>
+            </div>
+            {(lead.campaignAssignments || []).length === 0 ? (
+              <p className="text-sm text-gray-500">No active offers are attached to this lead yet.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {(lead.campaignAssignments || []).map((assignment) => {
+                  const status = assignment.status || 'ELIGIBLE';
+                  return (
+                    <div key={assignment.id} className="rounded-lg border border-gray-200 p-3 bg-white">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{assignment.campaign?.name || 'Campaign'}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            Assigned {new Date(assignment.assignedAt).toLocaleDateString()}
+                            {assignment.expiresAt ? ` · Expires ${new Date(assignment.expiresAt).toLocaleDateString()}` : ''}
+                          </p>
+                        </div>
+                        <span className="inline-flex items-center rounded-full bg-brand-50 text-brand-700 border border-brand-100 px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap">
+                          {offerLifecycleLabel[status] || status}
+                        </span>
+                      </div>
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        <select
+                          className="input text-xs h-8 min-w-[150px]"
+                          value={status}
+                          disabled={updatingOfferAssignmentId === assignment.id}
+                          onChange={(e) => handleOfferLifecycleUpdate(assignment.id, e.target.value)}
+                        >
+                          <option value="ELIGIBLE">Eligible</option>
+                          <option value="CONTACTED">Contacted</option>
+                          <option value="ACCEPTED">Accepted</option>
+                          <option value="REDEEMED">Redeemed</option>
+                          <option value="EXPIRED">Expired</option>
+                          <option value="REJECTED">Rejected</option>
+                        </select>
+                        {assignment.notes && (
+                          <span className="text-xs text-gray-500 truncate max-w-full">
+                            Note: {assignment.notes}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
