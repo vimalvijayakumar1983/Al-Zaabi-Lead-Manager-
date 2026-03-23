@@ -28,7 +28,7 @@ import {
   MessageCircle,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'whatsapp' | 'divisionBranding' | 'customFields' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'whatsapp' | 'divisionBranding' | 'customFields' | 'leadSources' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
