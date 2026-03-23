@@ -281,6 +281,12 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function hasTextSelection(): boolean {
+  if (typeof window === 'undefined') return false;
+  const selectedText = window.getSelection?.()?.toString?.() || '';
+  return selectedText.trim().length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -796,10 +802,22 @@ function DeleteConfirmModal({
   onCancel: () => void;
   loading: boolean;
 }) {
+  const backdropPressStarted = useRef(false);
   if (!campaign) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onCancel}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onCancel();
+      }}
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 text-center">
           <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
@@ -851,6 +869,7 @@ function CampaignFormModal({
   onClose: () => void;
   loading: boolean;
 }) {
+  const backdropPressStarted = useRef(false);
   const [form, setForm] = useState<CampaignFormData>(initialData);
   const [errors, setErrors] = useState<FormErrors>({});
   const [showUtm, setShowUtm] = useState(
@@ -903,7 +922,18 @@ function CampaignFormModal({
   const errorClass = 'text-xs text-red-600 mt-1';
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onClose();
+      }}
+    >
       <div
         className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -1221,6 +1251,7 @@ function SaveFilterModal({
   onSave: (name: string) => void;
   onClose: () => void;
 }) {
+  const backdropPressStarted = useRef(false);
   const [name, setName] = useState('');
 
   function handleSave() {
@@ -1231,7 +1262,18 @@ function SaveFilterModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onClose();
+      }}
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 border-b">
           <h3 className="text-lg font-bold text-text-primary">Save Filter View</h3>
@@ -1279,6 +1321,7 @@ function OfferStudioModal({
   onApplied: () => void;
   addToast: (type: 'success' | 'error', message: string) => void;
 }) {
+  const backdropPressStarted = useRef(false);
   type OfferAudienceFilters = {
     search: string;
     scorePreset: string;
@@ -1509,7 +1552,18 @@ function OfferStudioModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3 sm:p-6"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onClose();
+      }}
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-4 border-b flex items-center justify-between">
           <div>
