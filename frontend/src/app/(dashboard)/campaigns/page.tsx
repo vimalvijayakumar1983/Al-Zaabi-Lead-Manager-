@@ -1335,6 +1335,7 @@ function OfferStudioModal({
   };
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewTouched, setPreviewTouched] = useState(false);
   const [analytics, setAnalytics] = useState<any>(null);
   const [previewRows, setPreviewRows] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
@@ -1423,6 +1424,7 @@ function OfferStudioModal({
 
   async function handlePreview() {
     setPreviewLoading(true);
+    setPreviewTouched(true);
     try {
       const payload: Record<string, any> = buildAudiencePayloadFromFilters();
       payload.excludeAssignedToCampaign = true;
@@ -1746,6 +1748,56 @@ function OfferStudioModal({
               </button>
               <span className="text-sm text-text-secondary">{previewRows.length} leads ready for assignment</span>
             </div>
+          </div>
+
+          <div className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="font-semibold text-text-primary">Preview Leads</h4>
+              <span className="text-xs text-text-tertiary">
+                {previewRows.length} matched
+              </span>
+            </div>
+            {!previewTouched ? (
+              <p className="text-sm text-text-secondary">
+                Click <span className="font-medium">Preview Audience</span> to see the lead list before applying.
+              </p>
+            ) : previewLoading ? (
+              <p className="text-sm text-text-secondary">Loading preview leads...</p>
+            ) : previewRows.length === 0 ? (
+              <p className="text-sm text-text-secondary">No leads matched the current audience rules.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px]">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary border-b border-gray-100">
+                      <th className="py-2 pr-3">Lead</th>
+                      <th className="py-2 pr-3">Company</th>
+                      <th className="py-2 pr-3">Score</th>
+                      <th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3">Calls</th>
+                      <th className="py-2 pr-3">Current Offers</th>
+                      <th className="py-2 pr-0">Last Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((row) => (
+                      <tr key={row.id} className="border-b border-gray-50">
+                        <td className="py-2 pr-3">
+                          <div className="font-medium text-text-primary">{row.fullName || `${row.firstName || ''} ${row.lastName || ''}`.trim() || '—'}</div>
+                          <div className="text-xs text-text-tertiary">{row.email || row.phone || '—'}</div>
+                        </td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.company || '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.score ?? '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.status || '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row?._count?.callLogs ?? 0}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row?._count?.campaignAssignments ?? 0}</td>
+                        <td className="py-2 pr-0 text-sm text-text-secondary">{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString() : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="card p-4">
