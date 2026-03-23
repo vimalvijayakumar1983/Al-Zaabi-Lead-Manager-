@@ -617,14 +617,6 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         };
       }
 
-      // Build first message map (channel lead came from + first message text)
-      for (const msg of firstMessages) {
-        firstMessageMap[msg.leadId] = {
-          channel: msg.channel,
-          body: msg.body?.substring(0, 200) || '',
-          createdAt: msg.createdAt,
-        };
-      }
     }
 
     // Get org settings for SLA info
