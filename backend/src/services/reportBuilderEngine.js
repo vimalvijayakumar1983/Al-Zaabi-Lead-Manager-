@@ -130,6 +130,59 @@ const DATASET_DEFINITIONS = {
       { key: 'updatedAt', label: 'Updated At', kind: 'dimension', dataType: 'date' },
     ],
   },
+  campaigns: {
+    key: 'campaigns',
+    label: 'Campaigns',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Campaign ID', kind: 'dimension', dataType: 'string' },
+      { key: 'name', label: 'Campaign Name', kind: 'dimension', dataType: 'string' },
+      { key: 'type', label: 'Campaign Type', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'budget', label: 'Budget', kind: 'measure', dataType: 'number' },
+      { key: 'description', label: 'Description', kind: 'dimension', dataType: 'string' },
+      { key: 'startDate', label: 'Start Date', kind: 'dimension', dataType: 'date' },
+      { key: 'endDate', label: 'End Date', kind: 'dimension', dataType: 'date' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+      { key: 'updatedAt', label: 'Updated At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  lead_activities: {
+    key: 'lead_activities',
+    label: 'Lead Activities',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Activity ID', kind: 'dimension', dataType: 'string' },
+      { key: 'type', label: 'Activity Type', kind: 'dimension', dataType: 'string' },
+      { key: 'description', label: 'Description', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.id', label: 'Lead ID', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.fullName', label: 'Lead Name', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.status', label: 'Lead Status', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.source', label: 'Lead Source', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.assignedTo.fullName', label: 'Lead Assignee', kind: 'dimension', dataType: 'string' },
+      { key: 'user.fullName', label: 'Actor', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  pipelines: {
+    key: 'pipelines',
+    label: 'Pipelines',
+    defaultSortField: 'order',
+    fields: [
+      { key: 'id', label: 'Stage ID', kind: 'dimension', dataType: 'string' },
+      { key: 'name', label: 'Stage Name', kind: 'dimension', dataType: 'string' },
+      { key: 'order', label: 'Stage Order', kind: 'measure', dataType: 'number' },
+      { key: 'color', label: 'Color', kind: 'dimension', dataType: 'string' },
+      { key: 'isWonStage', label: 'Is Won Stage', kind: 'dimension', dataType: 'boolean' },
+      { key: 'isLostStage', label: 'Is Lost Stage', kind: 'dimension', dataType: 'boolean' },
+      { key: 'leadCount', label: 'Lead Count', kind: 'measure', dataType: 'number' },
+      { key: 'activeLeadCount', label: 'Active Lead Count', kind: 'measure', dataType: 'number' },
+      { key: 'wonLeadCount', label: 'Won Lead Count', kind: 'measure', dataType: 'number' },
+      { key: 'lostLeadCount', label: 'Lost Lead Count', kind: 'measure', dataType: 'number' },
+      { key: 'pipelineValue', label: 'Pipeline Value', kind: 'measure', dataType: 'number' },
+      { key: 'createdAt', label: 'Stage Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
 };
 
 const SUPPORTED_OPERATORS = new Set([
@@ -267,6 +320,15 @@ function getFieldValue(row, fieldKey, dataset) {
   }
   if (dataset === 'deals' && fieldKey === 'contact.lifecycle') {
     return row?.contact?.lifecycle || null;
+  }
+  if (dataset === 'lead_activities' && fieldKey === 'lead.status') {
+    return row?.lead?.status || null;
+  }
+  if (dataset === 'lead_activities' && fieldKey === 'lead.source') {
+    return row?.lead?.source || null;
+  }
+  if (dataset === 'lead_activities' && fieldKey === 'lead.assignedTo.fullName') {
+    return getPersonFullName(row?.lead?.assignedTo);
   }
 
   if (fieldKey.includes('.')) return readNestedValue(row, fieldKey);
@@ -639,6 +701,25 @@ function buildWhereForDataset(dataset, req, divisionId) {
       organizationId: scopedOrg,
     };
   }
+  if (dataset === 'campaigns') {
+    return {
+      organizationId: scopedOrg,
+    };
+  }
+  if (dataset === 'lead_activities') {
+    return {
+      lead: {
+        organizationId: scopedOrg,
+        isArchived: false,
+        ...(req.isRestrictedRole ? { assignedToId: req.user.id } : {}),
+      },
+    };
+  }
+  if (dataset === 'pipelines') {
+    return {
+      organizationId: scopedOrg,
+    };
+  }
   return {
     organizationId: scopedOrg,
     isArchived: false,
@@ -655,6 +736,8 @@ function applyDateWhere(baseWhere, config, dataset) {
       || f.field === 'dueAt'
       || f.field === 'closeDate'
       || f.field === 'lastContactedAt'
+      || f.field === 'startDate'
+      || f.field === 'endDate'
     ));
   if (dateFilters.length === 0) return where;
 
@@ -664,6 +747,8 @@ function applyDateWhere(baseWhere, config, dataset) {
     if (filter.field === 'dueAt') targetField = 'dueAt';
     if (filter.field === 'closeDate') targetField = 'closeDate';
     if (filter.field === 'lastContactedAt') targetField = 'lastContactedAt';
+    if (filter.field === 'startDate') targetField = 'startDate';
+    if (filter.field === 'endDate') targetField = 'endDate';
   }
 
   const dateWhere = {};
@@ -699,7 +784,7 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
   const limit = Math.min(Math.max(Number(config.rawLimit || 2000), 100), 5000);
   const baseWhere = buildWhereForDataset(dataset, req, divisionId);
   const where = applyDateWhere(baseWhere, config, dataset);
-  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt'].includes(config?.rawSort?.field)
+  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt', 'startDate', 'endDate', 'order'].includes(config?.rawSort?.field)
     ? config.rawSort.field
     : getDatasetDefinition(dataset).defaultSortField;
   const orderByDirection = String(config?.rawSort?.direction || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
@@ -831,6 +916,100 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
           },
         },
       },
+    });
+  }
+
+  if (dataset === 'campaigns') {
+    return prisma.campaign.findMany({
+      where,
+      orderBy,
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        status: true,
+        budget: true,
+        description: true,
+        startDate: true,
+        endDate: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  if (dataset === 'lead_activities') {
+    return prisma.leadActivity.findMany({
+      where,
+      orderBy,
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        description: true,
+        metadata: true,
+        createdAt: true,
+        lead: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            status: true,
+            source: true,
+            assignedTo: { select: { id: true, firstName: true, lastName: true } },
+          },
+        },
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+  }
+
+  if (dataset === 'pipelines') {
+    const stages = await prisma.pipelineStage.findMany({
+      where,
+      orderBy,
+      take: limit,
+      include: {
+        leads: {
+          where: {
+            isArchived: false,
+            ...(req.isRestrictedRole ? { assignedToId: req.user.id } : {}),
+          },
+          select: {
+            status: true,
+            budget: true,
+          },
+        },
+      },
+    });
+
+    return stages.map((stage) => {
+      const leadCount = stage.leads.length;
+      let activeLeadCount = 0;
+      let wonLeadCount = 0;
+      let lostLeadCount = 0;
+      let pipelineValue = 0;
+      for (const lead of stage.leads) {
+        if (lead.status === 'WON') wonLeadCount += 1;
+        else if (lead.status === 'LOST') lostLeadCount += 1;
+        else activeLeadCount += 1;
+        pipelineValue += Number(lead.budget || 0);
+      }
+      return {
+        id: stage.id,
+        name: stage.name,
+        order: stage.order,
+        color: stage.color,
+        isWonStage: stage.isWonStage,
+        isLostStage: stage.isLostStage,
+        leadCount,
+        activeLeadCount,
+        wonLeadCount,
+        lostLeadCount,
+        pipelineValue,
+        createdAt: stage.createdAt,
+      };
     });
   }
 

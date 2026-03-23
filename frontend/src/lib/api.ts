@@ -1475,12 +1475,12 @@ class ApiClient {
   }
 
   // ─── Report Builder ───────────────────────────────────────────────
-  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals', divisionId?: string) {
+  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines', divisionId?: string) {
     const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/report-builder/catalog?${q.toString()}`);
   }
 
-  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' }) {
+  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines' }) {
     const q = new URLSearchParams();
     if (params?.divisionId) q.set('divisionId', params.divisionId);
     if (params?.dataset) q.set('dataset', params.dataset);
@@ -1508,7 +1508,7 @@ class ApiClient {
     });
   }
 
-  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals'; divisionId?: string; config: any }) {
+  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
     return this.request<any>('/report-builder/preview', {
       method: 'POST',
       body: JSON.stringify(payload),
