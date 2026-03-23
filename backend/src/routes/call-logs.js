@@ -16,6 +16,7 @@ const {
   actionMatchesConditions,
   labelForFieldOption,
 } = require('../services/dispositionStudio');
+const { findStageForStatus } = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -33,43 +34,25 @@ function getDisplayName(obj) {
   return `${fn} ${ln}`;
 }
 
-// ─── Sync pipeline stage when status changes (mirrors leads.js logic) ──
-const STATUS_TO_KEYWORDS = {
-  NEW:           ['new', 'untouched', 'fresh', 'incoming', 'inquiry'],
-  CONTACTED:     ['contact', 'touched', 'follow', 'reach', 'called', 'engaged', 'assessment'],
-  QUALIFIED:     ['qualif', 'interested', 'hot', 'warm', 'ready'],
-  PROPOSAL_SENT: ['proposal', 'quote', 'offer', 'sent'],
-  WON:           ['won', 'converted', 'signed', 'closed won', 'completed', 'confirmed'],
-  LOST:          ['lost', 'dead', 'rejected', 'disqualif', 'closed lost', 'cancelled'],
-};
-
 async function syncPipelineStage(leadId, orgId, newStatus, currentStageId, userId) {
   try {
-    const keywords = STATUS_TO_KEYWORDS[newStatus] || [];
-    if (keywords.length === 0) return null;
+    const [orgStages, org] = await Promise.all([
+      prisma.pipelineStage.findMany({
+        where: { organizationId: orgId },
+        orderBy: { order: 'asc' },
+      }),
+      prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { settings: true },
+      }),
+    ]);
 
-    const orgStages = await prisma.pipelineStage.findMany({
-      where: { organizationId: orgId },
-      orderBy: { order: 'asc' },
+    const matchedStage = findStageForStatus({
+      targetStatus: newStatus,
+      stages: orgStages,
+      settings: org?.settings || {},
+      divisionId: orgId,
     });
-
-    // Find best matching stage by keyword
-    let matchedStage = null;
-    for (const stage of orgStages) {
-      const sName = stage.name.toLowerCase();
-      if (keywords.some(kw => sName.includes(kw))) {
-        matchedStage = stage;
-        break;
-      }
-    }
-
-    // Also check isWonStage / isLostStage flags
-    if (!matchedStage && newStatus === 'WON') {
-      matchedStage = orgStages.find(s => s.isWonStage);
-    }
-    if (!matchedStage && newStatus === 'LOST') {
-      matchedStage = orgStages.find(s => s.isLostStage);
-    }
 
     if (matchedStage && matchedStage.id !== currentStageId) {
       await prisma.lead.update({
@@ -515,13 +498,14 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
 
     // Keep strict built-in validations for backward compatibility.
     if (storedDisposition === 'CALL_LATER') {
-      if (!callbackDateParsed) {
+      if (!callbackDateValue) {
         return res.status(400).json({
           error: 'A specific date and time is required for "Call Later". The client requested a scheduled callback — please enter exactly when to call.',
           field: 'callbackDate',
         });
       }
-      if (callbackDateParsed <= new Date()) {
+      const scheduledTime = new Date(callbackDateValue);
+      if (scheduledTime <= new Date()) {
         return res.status(400).json({
           error: 'The scheduled callback date/time must be in the future.',
           field: 'callbackDate',
@@ -573,9 +557,7 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
 
     // Create follow-up task if applicable
     if (data.createFollowUp && autoAction?.taskType) {
-      const dueAt = callbackDateParsed?.toISOString()
-        || meetingDateParsed?.toISOString()
-        || appointmentDateParsed?.toISOString()
+      const dueAt = callbackDateValue || meetingDateValue || appointmentDateValue
         || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // default: tomorrow
 
       const task = await prisma.task.create({
@@ -701,9 +683,9 @@ router.post('/', validate(callLogSchema), async (req, res, next) => {
         disposition: storedDisposition,
         notes: data.notes || null,
         duration: data.duration || null,
-        callbackDate: callbackDateParsed,
-        meetingDate: meetingDateParsed,
-        appointmentDate: appointmentDateParsed,
+        callbackDate: callbackDateValue ? new Date(callbackDateValue) : null,
+        meetingDate: meetingDateValue ? new Date(meetingDateValue) : null,
+        appointmentDate: appointmentDateValue ? new Date(appointmentDateValue) : null,
         followUpTaskId,
         metadata: callMetadata,
       },

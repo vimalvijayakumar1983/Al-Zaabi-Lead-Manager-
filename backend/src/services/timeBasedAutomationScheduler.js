@@ -180,7 +180,11 @@ async function runTimeBasedCheck() {
 /**
  * Start the time-based automation scheduler.
  */
-function startTimeBasedScheduler(intervalMs = TIME_CHECK_INTERVAL) {
+function startTimeBasedScheduler(intervalMs = TIME_CHECK_INTERVAL, options = {}) {
+  const {
+    runOnStart = true,
+    initialDelayMs = 10000,
+  } = options;
   if (schedulerInterval) {
     logger.warn('[TimeBased] Scheduler already running');
     return;
@@ -188,10 +192,11 @@ function startTimeBasedScheduler(intervalMs = TIME_CHECK_INTERVAL) {
 
   logger.info(`[TimeBased] Starting time-based automation scheduler (interval: ${intervalMs / 1000}s)`);
 
-  // Run after a short delay on startup (stagger with SLA monitor)
-  setTimeout(() => {
-    runTimeBasedCheck().catch((err) => logger.error('[TimeBased] Initial check failed:', err.message));
-  }, 10000);
+  if (runOnStart) {
+    setTimeout(() => {
+      runTimeBasedCheck().catch((err) => logger.error('[TimeBased] Initial check failed:', err.message));
+    }, Math.max(0, Number(initialDelayMs) || 0));
+  }
 
   // Then run on interval
   schedulerInterval = setInterval(() => {

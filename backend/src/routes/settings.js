@@ -10,9 +10,20 @@ const {
   SNOOZE_MIN_MINUTES,
   SNOOZE_MAX_MINUTES,
 } = require('../services/notificationPreferences');
+const {
+  LEAD_STATUS_VALUES,
+  normalizeLeadStatus,
+  buildStageStatusRows,
+} = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
+const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
+
+function resolveGroupOrgId(req) {
+  if (req?.user?.organization?.type === 'GROUP') return req.user.organizationId;
+  return req?.user?.organization?.parentId || req.user.organizationId;
+}
 
 const notificationPreferencesSchema = z.object({
   soundEnabled: z.boolean().optional(),
@@ -37,6 +48,97 @@ const notificationPreferencesSchema = z.object({
   defaultTaskSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
   defaultCallbackSnoozeMinutes: z.coerce.number().int().min(SNOOZE_MIN_MINUTES).max(SNOOZE_MAX_MINUTES).optional(),
 });
+
+const LEAD_SOURCE_VALUES = [
+  'WEBSITE_FORM', 'LIVE_CHAT', 'LANDING_PAGE', 'WHATSAPP', 'FACEBOOK_ADS',
+  'GOOGLE_ADS', 'TIKTOK_ADS', 'MANUAL', 'CSV_IMPORT', 'API', 'REFERRAL', 'EMAIL', 'PHONE', 'OTHER',
+];
+
+const DEFAULT_LEAD_SOURCES = [
+  { key: 'WEBSITE_FORM', label: 'Website Form', source: 'WEBSITE_FORM', isSystem: true, isActive: true },
+  { key: 'LIVE_CHAT', label: 'Live Chat Widget', source: 'LIVE_CHAT', isSystem: true, isActive: true },
+  { key: 'LANDING_PAGE', label: 'Landing Page', source: 'LANDING_PAGE', isSystem: true, isActive: true },
+  { key: 'WHATSAPP', label: 'WhatsApp', source: 'WHATSAPP', isSystem: true, isActive: true },
+  { key: 'FACEBOOK_ADS', label: 'Facebook Ads', source: 'FACEBOOK_ADS', isSystem: true, isActive: true },
+  { key: 'GOOGLE_ADS', label: 'Google Ads', source: 'GOOGLE_ADS', isSystem: true, isActive: true },
+  { key: 'TIKTOK_ADS', label: 'TikTok Ads', source: 'TIKTOK_ADS', isSystem: true, isActive: true },
+  { key: 'MANUAL', label: 'Manual', source: 'MANUAL', isSystem: true, isActive: true },
+  { key: 'CSV_IMPORT', label: 'CSV Import', source: 'CSV_IMPORT', isSystem: true, isActive: true },
+  { key: 'API', label: 'API', source: 'API', isSystem: true, isActive: true },
+  { key: 'REFERRAL', label: 'Referral', source: 'REFERRAL', isSystem: true, isActive: true },
+  { key: 'EMAIL', label: 'Email', source: 'EMAIL', isSystem: true, isActive: true },
+  { key: 'PHONE', label: 'Phone', source: 'PHONE', isSystem: true, isActive: true },
+  { key: 'OTHER', label: 'Other', source: 'OTHER', isSystem: true, isActive: true },
+];
+
+const leadSourcesUpdateSchema = z.object({
+  divisionId: z.string().uuid().optional().nullable(),
+  sources: z.array(z.object({
+    key: z.string().max(64).optional(),
+    label: z.string().min(1).max(120),
+    source: z.string().max(64).optional(),
+    isActive: z.boolean().optional(),
+    isSystem: z.boolean().optional(),
+  })).min(1),
+});
+
+function sanitizeLeadSourceKey(value) {
+  const upper = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+  return upper.slice(0, 64);
+}
+
+function normalizeLeadSources(raw) {
+  const systemMap = new Map(DEFAULT_LEAD_SOURCES.map((s) => [s.key, { ...s }]));
+  const customMap = new Map();
+
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const fallbackKey = sanitizeLeadSourceKey(entry.label || '');
+      const key = sanitizeLeadSourceKey(entry.key || fallbackKey);
+      const label = String(entry.label || '').trim();
+      if (!key || !label) continue;
+
+      const normalizedSource = LEAD_SOURCE_VALUES.includes(String(entry.source || '').toUpperCase())
+        ? String(entry.source).toUpperCase()
+        : 'OTHER';
+      const isActive = entry.isActive !== false;
+
+      if (systemMap.has(key)) {
+        const system = systemMap.get(key);
+        system.label = label;
+        system.isActive = isActive;
+        system.source = system.key; // Keep system key/source aligned
+      } else {
+        customMap.set(key, {
+          key,
+          label,
+          source: normalizedSource,
+          isSystem: false,
+          isActive,
+        });
+      }
+    }
+  }
+
+  const system = DEFAULT_LEAD_SOURCES.map((s) => systemMap.get(s.key) || { ...s });
+  const custom = Array.from(customMap.values()).sort((a, b) => a.label.localeCompare(b.label));
+  return [...system, ...custom];
+}
+
+function resolveLeadSourceOrgId(req, divisionId) {
+  if (divisionId) {
+    if (!req.orgIds.includes(divisionId)) return null;
+    if (!req.isSuperAdmin && divisionId !== req.orgId) return null;
+    return divisionId;
+  }
+  return req.orgId;
+}
 
 // ─── Get Profile ────────────────────────────────────────────────
 router.get('/profile', async (req, res, next) => {
@@ -177,6 +279,54 @@ router.put('/organization', authorize('ADMIN'), validate(z.object({
   }
 });
 
+// ─── Lead Sources (managed source list for Leads module) ──────────
+router.get('/lead-sources', async (req, res, next) => {
+  try {
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
+    const targetOrgId = resolveLeadSourceOrgId(req, divisionId);
+    if (!targetOrgId) return res.status(403).json({ error: 'Access denied to specified division' });
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = (org?.settings && typeof org.settings === 'object') ? org.settings : {};
+    const sources = normalizeLeadSources(settings.leadSources);
+    res.json({ sources });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/lead-sources', authorize('ADMIN'), validate(leadSourcesUpdateSchema), async (req, res, next) => {
+  try {
+    const { divisionId, sources } = req.validated;
+    const targetOrgId = resolveLeadSourceOrgId(req, divisionId || undefined);
+    if (!targetOrgId) return res.status(403).json({ error: 'Access denied to specified division' });
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = (org?.settings && typeof org.settings === 'object') ? org.settings : {};
+    const normalized = normalizeLeadSources(sources);
+
+    await prisma.organization.update({
+      where: { id: targetOrgId },
+      data: {
+        settings: {
+          ...settings,
+          leadSources: normalized,
+        },
+      },
+    });
+
+    res.json({ success: true, sources: normalized });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Get Notification Preferences ───────────────────────────────
 router.get('/notifications', async (req, res, next) => {
   try {
@@ -283,7 +433,7 @@ const BUILT_IN_FIELDS = [
 // GET /field-config — Get field configuration for a division
 router.get('/field-config', async (req, res, next) => {
   try {
-    const { divisionId } = req.query;
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
     const orgId = req.orgId;
 
     // Get org settings for field config
@@ -312,25 +462,44 @@ router.get('/field-config', async (req, res, next) => {
       isBuiltIn: true,
     }));
 
-    // Get custom fields for this org (optionally filtered by division)
-    if (divisionId) {
-      const customFields = await prisma.customField.findMany({
-        where: {
-          organizationId: orgId,
-          OR: [
-            { divisionId: null },
-            { divisionId },
-          ],
-        },
+    let customFields = [];
+    if (req.isSuperAdmin) {
+      const groupOrgId = resolveGroupOrgId(req);
+
+      if (divisionId && !req.orgIds.includes(divisionId)) {
+        return res.status(403).json({ error: 'Division not found or access denied' });
+      }
+
+      if (!divisionId) {
+        // Field Manager "All Divisions" should show everything with division badges.
+        customFields = await prisma.customField.findMany({
+          where: { organizationId: { in: req.orgIds } },
+          orderBy: { order: 'asc' },
+        });
+      } else {
+        const [globalFields, divisionFields] = await Promise.all([
+          prisma.customField.findMany({
+            where: { organizationId: { in: req.orgIds }, divisionId: null },
+            orderBy: { order: 'asc' },
+          }),
+          prisma.customField.findMany({
+            where: { organizationId: divisionId },
+            orderBy: { order: 'asc' },
+          }),
+        ]);
+
+        customFields = [...globalFields, ...divisionFields].sort((a, b) => {
+          const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+          if (orderDiff !== 0) return orderDiff;
+          return String(a.label || a.name).localeCompare(String(b.label || b.name));
+        });
+      }
+    } else {
+      customFields = await prisma.customField.findMany({
+        where: { organizationId: orgId },
         orderBy: { order: 'asc' },
       });
-      return res.json({ builtInFields, customFields, statusLabels });
     }
-
-    const customFields = await prisma.customField.findMany({
-      where: { organizationId: orgId },
-      orderBy: { order: 'asc' },
-    });
 
     res.json({ builtInFields, customFields, statusLabels });
   } catch (err) { next(err); }
@@ -386,33 +555,334 @@ router.put('/status-labels', authorize('ADMIN'), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /status-stage-mapping — View stage-to-status mapping for a division
+router.get('/status-stage-mapping', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
+    const targetDivisionId = req.isSuperAdmin ? divisionId : req.orgId;
+    const settingsOrgId = req.isSuperAdmin ? resolveGroupOrgId(req) : req.orgId;
+
+    if (!targetDivisionId) {
+      return res.status(400).json({ error: 'Please select a division to view mapping' });
+    }
+    if (!req.orgIds.includes(targetDivisionId)) {
+      return res.status(403).json({ error: 'Division not found or access denied' });
+    }
+
+    const [divisionOrg, settingsOrg, stages] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: targetDivisionId },
+        select: { id: true, name: true },
+      }),
+      prisma.organization.findUnique({
+        where: { id: settingsOrgId },
+        select: { settings: true },
+      }),
+      prisma.pipelineStage.findMany({
+        where: { organizationId: targetDivisionId },
+        orderBy: { order: 'asc' },
+      }),
+    ]);
+
+    const rows = buildStageStatusRows(stages, settingsOrg?.settings || {}, targetDivisionId);
+    res.json({
+      divisionId: targetDivisionId,
+      divisionName: divisionOrg?.name || 'Division',
+      statuses: LEAD_STATUS_VALUES,
+      rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /status-stage-mapping — Save manual stage-to-status mapping for a division
+router.put('/status-stage-mapping', authorize('ADMIN'), validate(z.object({
+  divisionId: z.string().uuid().optional().nullable(),
+  mappings: z.record(z.string(), z.string()).default({}),
+})), async (req, res, next) => {
+  try {
+    const { divisionId, mappings } = req.validated;
+    const targetDivisionId = req.isSuperAdmin ? divisionId : req.orgId;
+
+    if (!targetDivisionId) {
+      return res.status(400).json({ error: 'Please select a division to save mapping' });
+    }
+    if (!req.orgIds.includes(targetDivisionId)) {
+      return res.status(403).json({ error: 'Division not found or access denied' });
+    }
+
+    const stageIds = Object.keys(mappings || {});
+    const validStages = await prisma.pipelineStage.findMany({
+      where: { organizationId: targetDivisionId, ...(stageIds.length > 0 ? { id: { in: stageIds } } : {}) },
+      select: { id: true },
+    });
+    const validStageIdSet = new Set(validStages.map((s) => s.id));
+
+    const normalizedMapping = {};
+    for (const [stageId, status] of Object.entries(mappings || {})) {
+      if (!validStageIdSet.has(stageId)) continue;
+      const normalized = normalizeLeadStatus(status);
+      if (!normalized) continue;
+      normalizedMapping[stageId] = normalized;
+    }
+
+    const targetOrgForSettings = req.isSuperAdmin ? resolveGroupOrgId(req) : req.orgId;
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgForSettings },
+      select: { settings: true },
+    });
+    const settings = (org?.settings || {});
+    if (!settings.statusStageMapping) settings.statusStageMapping = {};
+    settings.statusStageMapping[`division_${targetDivisionId}`] = normalizedMapping;
+
+    await prisma.organization.update({
+      where: { id: targetOrgForSettings },
+      data: { settings },
+    });
+
+    res.json({ success: true, divisionId: targetDivisionId, mappings: normalizedMapping });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /status-stage-mapping/clone-to-all — Clone one division mapping to others
+router.post('/status-stage-mapping/clone-to-all', authorize('ADMIN'), validate(z.object({
+  sourceDivisionId: z.string().uuid(),
+  targetDivisionIds: z.array(z.string().uuid()).optional(),
+})), async (req, res, next) => {
+  try {
+    if (!req.isSuperAdmin) {
+      return res.status(403).json({ error: 'Only super admin can clone mapping to all divisions' });
+    }
+
+    const { sourceDivisionId, targetDivisionIds } = req.validated;
+    if (!req.orgIds.includes(sourceDivisionId)) {
+      return res.status(403).json({ error: 'Source division not found or access denied' });
+    }
+
+    const groupOrgId = resolveGroupOrgId(req);
+    const [settingsOrg, sourceStages, allDivisions] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: groupOrgId },
+        select: { settings: true },
+      }),
+      prisma.pipelineStage.findMany({
+        where: { organizationId: sourceDivisionId },
+        orderBy: { order: 'asc' },
+      }),
+      prisma.organization.findMany({
+        where: { id: { in: req.orgIds }, type: 'DIVISION' },
+        select: { id: true, name: true },
+      }),
+    ]);
+
+    const sourceRows = buildStageStatusRows(sourceStages, settingsOrg?.settings || {}, sourceDivisionId);
+    const normalizedNameToStatus = new Map();
+    for (const row of sourceRows) {
+      const normalized = String(row.stageName || '').trim().toLowerCase();
+      if (normalized && !normalizedNameToStatus.has(normalized)) {
+        normalizedNameToStatus.set(normalized, row.mappedStatus);
+      }
+    }
+
+    let targetIds = [];
+    if (Array.isArray(targetDivisionIds) && targetDivisionIds.length > 0) {
+      for (const id of targetDivisionIds) {
+        if (!req.orgIds.includes(id)) {
+          return res.status(403).json({ error: `Division ${id} not found or access denied` });
+        }
+        if (id !== sourceDivisionId) targetIds.push(id);
+      }
+    } else {
+      targetIds = allDivisions.map((d) => d.id).filter((id) => id !== sourceDivisionId);
+    }
+
+    if (targetIds.length === 0) {
+      return res.json({ success: true, clonedTo: 0, divisions: [] });
+    }
+
+    const targetStages = await prisma.pipelineStage.findMany({
+      where: { organizationId: { in: targetIds } },
+      select: { id: true, name: true, organizationId: true, isDefault: true, isWonStage: true, isLostStage: true },
+      orderBy: [{ organizationId: 'asc' }, { order: 'asc' }],
+    });
+
+    const byDivision = new Map();
+    for (const stage of targetStages) {
+      if (!byDivision.has(stage.organizationId)) byDivision.set(stage.organizationId, []);
+      byDivision.get(stage.organizationId).push(stage);
+    }
+
+    const settings = (settingsOrg?.settings || {});
+    if (!settings.statusStageMapping) settings.statusStageMapping = {};
+
+    const clonedDivisions = [];
+    for (const division of allDivisions) {
+      if (!targetIds.includes(division.id)) continue;
+      const stages = byDivision.get(division.id) || [];
+      const mapping = {};
+      for (const stage of stages) {
+        const normalized = String(stage.name || '').trim().toLowerCase();
+        const mapped = normalizedNameToStatus.get(normalized);
+        if (mapped) {
+          mapping[stage.id] = mapped;
+        } else if (stage.isWonStage) {
+          mapping[stage.id] = 'WON';
+        } else if (stage.isLostStage) {
+          mapping[stage.id] = 'LOST';
+        } else if (stage.isDefault) {
+          mapping[stage.id] = 'NEW';
+        }
+      }
+      settings.statusStageMapping[`division_${division.id}`] = mapping;
+      clonedDivisions.push({ id: division.id, name: division.name, mappedStages: Object.keys(mapping).length });
+    }
+
+    await prisma.organization.update({
+      where: { id: groupOrgId },
+      data: { settings },
+    });
+
+    res.json({
+      success: true,
+      sourceDivisionId,
+      clonedTo: clonedDivisions.length,
+      divisions: clonedDivisions,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Custom Fields ─────────────────────────────────────────────
+
+function isAutoSerialField(field) {
+  return field?.type === 'NUMBER' && String(field?.defaultValue || '').trim() === AUTO_SERIAL_DEFAULT_VALUE;
+}
+
+function readNumericCustomValue(customData, key) {
+  if (!customData || typeof customData !== 'object') return null;
+  const value = customData[key];
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num);
+}
+
+async function backfillAutoSerialForField(field) {
+  if (!isAutoSerialField(field)) return;
+
+  await prisma.$transaction(async (tx) => {
+    let targetOrgIds = [field.organizationId];
+
+    // Global fields are stored on group org; apply serials to all child divisions.
+    if (!field.divisionId) {
+      const parent = await tx.organization.findUnique({
+        where: { id: field.organizationId },
+        select: { type: true },
+      });
+      if (parent?.type === 'GROUP') {
+        const divisions = await tx.organization.findMany({
+          where: { parentId: field.organizationId, type: 'DIVISION' },
+          select: { id: true },
+          orderBy: { name: 'asc' },
+        });
+        if (divisions.length > 0) {
+          targetOrgIds = divisions.map((d) => d.id);
+        }
+      }
+    }
+
+    for (const orgId of targetOrgIds) {
+      const leads = await tx.lead.findMany({
+        where: { organizationId: orgId },
+        select: { id: true, customData: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+
+      let maxSerial = 0;
+      for (const lead of leads) {
+        const value = readNumericCustomValue(lead.customData, field.name);
+        if (value !== null && value > maxSerial) maxSerial = value;
+      }
+
+      let nextSerial = maxSerial + 1;
+      for (const lead of leads) {
+        const existingValue = readNumericCustomValue(lead.customData, field.name);
+        if (existingValue !== null) continue;
+        const currentData =
+          lead.customData && typeof lead.customData === 'object'
+            ? { ...lead.customData }
+            : {};
+        currentData[field.name] = nextSerial++;
+        await tx.lead.update({
+          where: { id: lead.id },
+          data: { customData: currentData },
+        });
+      }
+    }
+  });
+}
 
 // List custom fields
 router.get('/custom-fields', async (req, res, next) => {
   try {
-    const { divisionId } = req.query;
+    const divisionId = typeof req.query.divisionId === 'string' ? req.query.divisionId : undefined;
 
-    // For super admin viewing all divisions (no specific divisionId):
-    // return empty array since custom fields are division-specific and
-    // showing all fields from all division templates is confusing
-    if (!divisionId && req.isSuperAdmin) {
-      return res.json([]);
-    }
+    // SUPER_ADMIN model:
+    // - no divisionId ("All Divisions"): return only group-level global fields
+    // - with divisionId: return global + selected division fields (division wins on same name)
+    if (req.isSuperAdmin) {
+      const groupOrgId = resolveGroupOrgId(req);
 
-    // If super admin requests fields for a specific division, scope to that division only
-    let orgFilter;
-    if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
-      orgFilter = { organizationId: divisionId };
-    } else {
-      orgFilter = { organizationId: { in: req.orgIds } };
+      if (divisionId && !req.orgIds.includes(divisionId)) {
+        return res.status(403).json({ error: 'Division not found or access denied' });
+      }
+
+      if (!divisionId) {
+        const globalFields = await prisma.customField.findMany({
+          where: {
+            organizationId: groupOrgId,
+            divisionId: null,
+          },
+          orderBy: { order: 'asc' },
+        });
+        return res.json(globalFields);
+      }
+
+      const [globalFields, divisionFields] = await Promise.all([
+        prisma.customField.findMany({
+          where: {
+            organizationId: { in: req.orgIds },
+            divisionId: null,
+          },
+          orderBy: { order: 'asc' },
+        }),
+        prisma.customField.findMany({
+          where: { organizationId: divisionId },
+          orderBy: { order: 'asc' },
+        }),
+      ]);
+
+      const byName = new Map();
+      for (const field of globalFields) byName.set(field.name, field);
+      for (const field of divisionFields) byName.set(field.name, field);
+
+      return res.json(
+        Array.from(byName.values()).sort((a, b) => {
+          const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+          if (orderDiff !== 0) return orderDiff;
+          return String(a.label || a.name).localeCompare(String(b.label || b.name));
+        })
+      );
     }
 
     const fields = await prisma.customField.findMany({
-      where: orgFilter,
+      where: { organizationId: req.orgId },
       orderBy: { order: 'asc' },
     });
-
     res.json(fields);
   } catch (err) {
     next(err);
@@ -434,7 +904,10 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
 })), async (req, res, next) => {
   try {
     const { label, type, options, isRequired, divisionId, showInList, showInDetail, description, placeholder, defaultValue } = req.validated;
-    const targetOrgId = (req.isSuperAdmin && divisionId) ? divisionId : req.orgId;
+    const groupOrgId = resolveGroupOrgId(req);
+    const targetOrgId = req.isSuperAdmin
+      ? (divisionId || groupOrgId)
+      : req.orgId;
 
     // Generate name from label (e.g. "Company Size" -> "companySize")
     const name = label
@@ -467,6 +940,8 @@ router.post('/custom-fields', authorize('ADMIN'), validate(z.object({
       },
     });
 
+    await backfillAutoSerialForField(field);
+
     res.status(201).json(field);
   } catch (err) {
     if (err.code === 'P2002') {
@@ -498,6 +973,23 @@ router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
     }
 
     const data = { ...req.validated };
+
+    if (req.isSuperAdmin && Object.prototype.hasOwnProperty.call(data, 'divisionId')) {
+      const groupOrgId = resolveGroupOrgId(req);
+      if (data.divisionId && !req.orgIds.includes(data.divisionId)) {
+        return res.status(403).json({ error: 'Division not found or access denied' });
+      }
+      if (data.divisionId) {
+        data.organizationId = data.divisionId;
+      } else {
+        data.organizationId = groupOrgId;
+        data.divisionId = null;
+      }
+    }
+
+    if (!req.isSuperAdmin && data.divisionId && data.divisionId !== req.orgId) {
+      return res.status(403).json({ error: 'Division not found or access denied' });
+    }
     // If label changes, update name too
     if (data.label) {
       data.name = data.label
@@ -511,6 +1003,8 @@ router.put('/custom-fields/:id', authorize('ADMIN'), validate(z.object({
       where: { id: req.params.id },
       data,
     });
+
+    await backfillAutoSerialForField(field);
 
     res.json(field);
   } catch (err) {
@@ -725,17 +1219,16 @@ router.get('/sla/dashboard', async (req, res, next) => {
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
 
-// Helper: resolve the target division ID for email settings
-// SUPER_ADMIN must specify ?divisionId=<id>; ADMIN uses their own org
-async function resolveEmailOrgId(req, res) {
+// Helper: resolve target organization for division-scoped settings (email, WhatsApp, etc.)
+// SUPER_ADMIN must pass ?divisionId=<uuid>; ADMIN uses their own org (division)
+async function resolveDivisionScopedOrgId(req, res, featureLabel) {
   const { divisionId } = req.query;
 
   if (req.isSuperAdmin) {
     if (!divisionId) {
-      res.status(400).json({ error: 'Please select a division to configure email settings' });
+      res.status(400).json({ error: `Please select a division to configure ${featureLabel}` });
       return null;
     }
-    // Verify divisionId is a valid child division
     if (!req.orgIds.includes(divisionId)) {
       res.status(403).json({ error: 'Division not found or access denied' });
       return null;
@@ -743,14 +1236,191 @@ async function resolveEmailOrgId(req, res) {
     return divisionId;
   }
 
-  // ADMIN uses their own orgId (which is already a division)
   return req.orgId;
 }
+
+// ─── WhatsApp (per division; same scoping as email) ────────────
+
+const WHATSAPP_SECRET_MASK = '••••••••';
+
+function trimSettingStr(v) {
+  return String(v ?? '').trim();
+}
+
+function buildWhatsAppNumberLookup(settings) {
+  const byPhoneId = {};
+  const numbers = Array.isArray(settings?.whatsappNumbers) ? settings.whatsappNumbers : [];
+  for (const n of numbers) {
+    const id = trimSettingStr(n?.phoneNumberId);
+    if (id) byPhoneId[id] = n; // skip empty id (displayPhone-only rows)
+  }
+  const legId = trimSettingStr(settings?.whatsappPhoneNumberId);
+  if (legId && !byPhoneId[legId]) {
+    byPhoneId[legId] = {
+      phoneNumberId: legId,
+      token: settings.whatsappToken,
+      label: '',
+    };
+  }
+  return byPhoneId;
+}
+
+function sanitizeWhatsAppSettingsForClient(settings) {
+  const s = typeof settings === 'object' && settings ? settings : {};
+  const raw = s.whatsappNumbers;
+  let numbers = [];
+  if (Array.isArray(raw) && raw.length > 0) {
+    numbers = raw.map((n) => {
+      const phoneNumberId = trimSettingStr(n?.phoneNumberId);
+      const hasToken = !!trimSettingStr(n?.token);
+      return {
+        label: trimSettingStr(n?.label) || '',
+        phoneNumberId,
+        displayPhone: trimSettingStr(n?.displayPhone) || '',
+        token: hasToken ? WHATSAPP_SECRET_MASK : '',
+        hasToken,
+      };
+    });
+  } else {
+    const singleId = trimSettingStr(s.whatsappPhoneNumberId);
+    const singleTok = trimSettingStr(s.whatsappToken);
+    if (singleId || singleTok) {
+      numbers = [{
+        label: '',
+        phoneNumberId: singleId,
+        displayPhone: '',
+        token: singleTok ? WHATSAPP_SECRET_MASK : '',
+        hasToken: !!singleTok,
+      }];
+    }
+  }
+
+  const hasVerify = !!trimSettingStr(s.whatsappWebhookVerifyToken);
+  return {
+    whatsappNumbers: numbers,
+    whatsappWebhookVerifyToken: hasVerify ? WHATSAPP_SECRET_MASK : '',
+    hasWebhookVerifyToken: hasVerify,
+    whatsappApiUrl: trimSettingStr(s.whatsappApiUrl) || '',
+  };
+}
+
+function mergeWhatsAppSettingsFromBody(existingSettings, body) {
+  const existing = typeof existingSettings === 'object' && existingSettings ? existingSettings : {};
+  const byPhoneId = buildWhatsAppNumberLookup(existing);
+
+  const incoming = Array.isArray(body.whatsappNumbers) ? body.whatsappNumbers : [];
+  const mergedNumbers = incoming
+    .map((n) => {
+      const phoneNumberId = trimSettingStr(n?.phoneNumberId);
+      const prev = byPhoneId[phoneNumberId];
+      let token = trimSettingStr(n?.token);
+      if (!token || token === WHATSAPP_SECRET_MASK) {
+        token = prev ? trimSettingStr(prev.token) : '';
+      }
+      const displayPhone = n?.displayPhone != null && String(n.displayPhone).trim()
+        ? String(n.displayPhone).trim()
+        : (prev?.displayPhone != null ? String(prev.displayPhone).trim() : undefined);
+      return {
+        label: n?.label != null && String(n.label).trim() ? String(n.label).trim() : undefined,
+        phoneNumberId,
+        displayPhone: displayPhone || undefined,
+        token: token || undefined,
+      };
+    })
+    .filter((n) => trimSettingStr(n.phoneNumberId) || trimSettingStr(n.displayPhone));
+
+  let whatsappWebhookVerifyToken;
+  if (body.whatsappWebhookVerifyToken === undefined || body.whatsappWebhookVerifyToken === null) {
+    whatsappWebhookVerifyToken = trimSettingStr(existing.whatsappWebhookVerifyToken) || '';
+  } else {
+    const t = trimSettingStr(body.whatsappWebhookVerifyToken);
+    if (t === WHATSAPP_SECRET_MASK) {
+      whatsappWebhookVerifyToken = trimSettingStr(existing.whatsappWebhookVerifyToken) || '';
+    } else {
+      whatsappWebhookVerifyToken = t; // allow '' to clear
+    }
+  }
+
+  let whatsappApiUrl;
+  if (body.whatsappApiUrl === undefined || body.whatsappApiUrl === null) {
+    whatsappApiUrl = trimSettingStr(existing.whatsappApiUrl);
+  } else {
+    whatsappApiUrl = trimSettingStr(body.whatsappApiUrl);
+  }
+
+  const nextSettings = { ...existing };
+  nextSettings.whatsappNumbers = mergedNumbers;
+  if (whatsappWebhookVerifyToken) {
+    nextSettings.whatsappWebhookVerifyToken = whatsappWebhookVerifyToken;
+  } else {
+    delete nextSettings.whatsappWebhookVerifyToken;
+  }
+  if (whatsappApiUrl) {
+    nextSettings.whatsappApiUrl = whatsappApiUrl;
+  } else {
+    delete nextSettings.whatsappApiUrl;
+  }
+  delete nextSettings.whatsappPhoneNumberId;
+  delete nextSettings.whatsappToken;
+
+  return nextSettings;
+}
+
+const whatsAppSaveSchema = z.object({
+  whatsappNumbers: z.array(z.object({
+    label: z.string().optional().nullable(),
+    phoneNumberId: z.string(),
+    /** Digits or E.164; matched to webhook metadata.display_phone_number for routing */
+    displayPhone: z.string().optional().nullable(),
+    token: z.string().optional().nullable(),
+  })).optional(),
+  whatsappWebhookVerifyToken: z.string().optional().nullable(),
+  whatsappApiUrl: z.string().optional().nullable(),
+});
+
+router.get('/whatsapp', authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp');
+    if (!targetOrgId) return;
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = typeof org?.settings === 'object' ? org.settings : {};
+    res.json(sanitizeWhatsAppSettingsForClient(settings));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/whatsapp', authorize('ADMIN'), validate(whatsAppSaveSchema), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp');
+    if (!targetOrgId) return;
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const current = typeof org?.settings === 'object' ? org.settings : {};
+    const mergedSettings = mergeWhatsAppSettingsFromBody(current, req.validated);
+
+    await prisma.organization.update({
+      where: { id: targetOrgId },
+      data: { settings: mergedSettings },
+    });
+
+    res.json(sanitizeWhatsAppSettingsForClient(mergedSettings));
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Get email config
 router.get('/email', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const org = await prisma.organization.findUnique({
@@ -784,7 +1454,7 @@ router.put('/email', authorize('ADMIN'), validate(z.object({
   replyTo: z.string().email().optional().nullable(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -830,7 +1500,7 @@ router.post('/email/test-connection', authorize('ADMIN'), validate(z.object({
   smtpPass: z.string().optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -857,7 +1527,7 @@ router.post('/email/send-test', authorize('ADMIN'), validate(z.object({
   toEmail: z.string().email(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { toEmail } = req.validated;
@@ -886,7 +1556,7 @@ const { testImapConnection, testPop3Connection, fetchEmails } = require('../serv
 // Get incoming email config
 router.get('/email/incoming', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const org = await prisma.organization.findUnique({
@@ -935,7 +1605,7 @@ router.put('/email/incoming', authorize('ADMIN'), validate(z.object({
   autoFetch: z.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -1000,7 +1670,7 @@ router.post('/email/incoming/test-imap', authorize('ADMIN'), validate(z.object({
   imapSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -1031,7 +1701,7 @@ router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
   popSecurity: z.enum(['ssl', 'starttls', 'none']).optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const data = req.validated;
@@ -1056,7 +1726,7 @@ router.post('/email/incoming/test-pop3', authorize('ADMIN'), validate(z.object({
 // Fetch emails from configured incoming server
 router.post('/email/incoming/fetch', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const result = await fetchEmails(targetOrgId, {
@@ -1255,7 +1925,7 @@ Warm regards,
 // Get email templates
 router.get('/email/templates', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const org = await prisma.organization.findUnique({
@@ -1281,7 +1951,7 @@ router.put('/email/templates/:name', authorize('ADMIN'), validate(z.object({
   description: z.string().max(500).optional(),
 }).refine((d) => d.body || d.htmlBody, { message: 'Either body or htmlBody is required' })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { name } = req.params;
@@ -1340,7 +2010,7 @@ router.post('/email/templates/preview', authorize('ADMIN'), validate(z.object({
   htmlBody: z.string().optional(),
 })), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { renderTemplate, wrapInHtmlLayout, textToHtml } = require('../services/emailService');
@@ -1386,7 +2056,7 @@ router.post('/email/templates/preview', authorize('ADMIN'), validate(z.object({
 // Delete an email template
 router.delete('/email/templates/:name', authorize('ADMIN'), async (req, res, next) => {
   try {
-    const targetOrgId = await resolveEmailOrgId(req, res);
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'email settings');
     if (!targetOrgId) return;
 
     const { name } = req.params;

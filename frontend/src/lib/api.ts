@@ -365,14 +365,19 @@ class ApiClient {
     return this.request<any>(`/analytics/task-sla-report?${q}`);
   }
 
-  async getCallDispositionReport(period = '30d', divisionId?: string) {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+  async getCallDispositionReport(period = '30d', divisionId?: string, mode?: 'latest' | 'any') {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}), ...(mode ? { mode } : {}) });
     return this.request<any>(`/analytics/call-disposition-report?${q}`);
   }
 
   async getPipelineForecastReport(period = '30d', divisionId?: string) {
     const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/analytics/pipeline-forecast-report?${q}`);
+  }
+
+  async getPhase1Report(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/analytics/phase1-report?${q}`);
   }
 
   async getDivisionComparison() {
@@ -791,8 +796,31 @@ class ApiClient {
   }
 
   // Communications
+  async getCommunications(leadId: string) {
+    return this.request<any[]>('/communications/lead/' + leadId);
+  }
+
+  /** Leads that have at least one WhatsApp message, with last message preview (for Communication → WhatsApp tab). */
+  async getWhatsAppConversations() {
+    return this.request<Array<{ lead: { id: string; firstName: string; lastName: string; phone: string | null }; lastMessage: { body: string; createdAt: string; direction: string } }>>('/communications/whatsapp-conversations');
+  }
+
   async sendEmail(data: { leadId: string; to: string; subject: string; body: string }) {
     return this.request<any>('/communications/send-email', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsApp(data: { leadId: string; body: string }) {
+    return this.request<any>('/communications/send-whatsapp', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsAppTemplate(data: { leadId: string; templateName?: string; languageCode?: string }) {
+    return this.request<any>('/communications/send-whatsapp-template', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -861,6 +889,34 @@ class ApiClient {
 
   async updateOrganization(data: { name?: string; domain?: string | null; settings?: Record<string, any> }) {
     return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  /** WhatsApp Cloud API credentials — stored per division (SUPER_ADMIN: pass divisionId). */
+  async getWhatsAppSettings(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+    }>(`/settings/whatsapp${qs}`);
+  }
+
+  async saveWhatsAppSettings(
+    data: {
+      whatsappNumbers: Array<{ label?: string; phoneNumberId: string; displayPhone?: string; token?: string }>;
+      whatsappWebhookVerifyToken?: string;
+      whatsappApiUrl?: string;
+    },
+    divisionId?: string,
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+    }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async getNotificationPreferences() {
@@ -942,10 +998,63 @@ class ApiClient {
     return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[]; statusLabels?: Record<string, string> }>(`/settings/field-config${q}`);
   }
 
+  async getLeadSources(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{ sources: Array<{ key: string; label: string; source: string; isSystem: boolean; isActive: boolean }> }>(`/settings/lead-sources${q}`);
+  }
+
+  async saveLeadSources(payload: {
+    sources: Array<{ key?: string; label: string; source?: string; isSystem?: boolean; isActive?: boolean }>;
+    divisionId?: string | null;
+  }) {
+    return this.request<{ success: boolean; sources: Array<{ key: string; label: string; source: string; isSystem: boolean; isActive: boolean }> }>('/settings/lead-sources', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async saveStatusLabels(divisionId: string | null, labels: Record<string, string>) {
     return this.request<{ success: boolean }>('/settings/status-labels', {
       method: 'PUT',
       body: JSON.stringify({ divisionId, labels }),
+    });
+  }
+
+  async getStatusStageMapping(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    return this.request<{
+      divisionId: string;
+      divisionName: string;
+      statuses: string[];
+      rows: Array<{
+        stageId: string;
+        stageName: string;
+        isDefault: boolean;
+        isWonStage: boolean;
+        isLostStage: boolean;
+        mappedStatus: string;
+        source: 'manual' | 'fallback';
+        fallbackStatus: string;
+      }>;
+    }>(`/settings/status-stage-mapping${q}`);
+  }
+
+  async saveStatusStageMapping(divisionId: string | null, mappings: Record<string, string>) {
+    return this.request<{ success: boolean }>('/settings/status-stage-mapping', {
+      method: 'PUT',
+      body: JSON.stringify({ divisionId, mappings }),
+    });
+  }
+
+  async cloneStatusStageMappingToAll(sourceDivisionId: string, targetDivisionIds?: string[]) {
+    return this.request<{
+      success: boolean;
+      sourceDivisionId: string;
+      clonedTo: number;
+      divisions: Array<{ id: string; name: string; mappedStages: number }>;
+    }>('/settings/status-stage-mapping/clone-to-all', {
+      method: 'POST',
+      body: JSON.stringify({ sourceDivisionId, ...(targetDivisionIds ? { targetDivisionIds } : {}) }),
     });
   }
 
@@ -1308,21 +1417,34 @@ class ApiClient {
   }
   // ─── Inbox / Omnichannel ──────────────────────────────────────────
 
-  async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {
+  async getInboxConversations(params?: {
+    channel?: string;
+    search?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+    /** Align with GET /leads — SUPER_ADMIN division switcher scopes inbox to one division */
+    divisionId?: string;
+  }) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.search) q.set('search', params.search);
     if (params?.status) q.set('status', params.status);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations?${q.toString()}`);
   }
 
-  async getInboxMessages(leadId: string, params?: { channel?: string; page?: number; limit?: number }) {
+  async getInboxMessages(
+    leadId: string,
+    params?: { channel?: string; page?: number; limit?: number; divisionId?: string }
+  ) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations/${leadId}/messages?${q.toString()}`);
   }
 
@@ -1333,8 +1455,9 @@ class ApiClient {
     });
   }
 
-  async getInboxStats() {
-    return this.request<any>('/inbox/stats');
+  async getInboxStats(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {
@@ -1428,6 +1551,53 @@ class ApiClient {
     return this.request<any>('/saved-views/migrate', {
       method: 'POST',
       body: JSON.stringify({ views, divisionId }),
+    });
+  }
+
+  // ─── Report Builder ───────────────────────────────────────────────
+  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines', divisionId?: string) {
+    const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
+    return this.request<any>(`/report-builder/catalog?${q.toString()}`);
+  }
+
+  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines' }) {
+    const q = new URLSearchParams();
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
+    if (params?.dataset) q.set('dataset', params.dataset);
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    return this.request<any[]>(`/report-builder/definitions${suffix}`);
+  }
+
+  async createReportDefinition(data: any) {
+    return this.request<any>('/report-builder/definitions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateReportDefinition(id: string, data: any) {
+    return this.request<any>(`/report-builder/definitions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteReportDefinition(id: string) {
+    return this.request<any>(`/report-builder/definitions/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
+    return this.request<any>('/report-builder/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async runReport(id: string) {
+    return this.request<any>(`/report-builder/run/${id}`, {
+      method: 'POST',
     });
   }
 }

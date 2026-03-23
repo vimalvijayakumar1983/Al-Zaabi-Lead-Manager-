@@ -62,6 +62,12 @@ const getLeadInitials = (obj: { firstName?: string; lastName?: string }) => {
   return (parts[0]?.[0] || '?').toUpperCase();
 };
 
+function sortCommunicationsByDate(comms: { createdAt?: string | Date }[]) {
+  return [...comms].sort(
+    (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+  );
+}
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -545,26 +551,26 @@ export default function LeadDetailPage() {
 
   // Load chat messages when Communications tab is active
   // The backend auto-marks unread messages as read when fetched
-  const loadChatMessages = useCallback(async () => {
+  const loadChatMessages = useCallback(async (backgroundPoll?: boolean) => {
+    const background = backgroundPoll === true;
     if (!id) return;
-    setChatLoading(true);
+    if (!background) setChatLoading(true);
     try {
-      const data = await api.getInboxMessages(id, { limit: 100 });
+      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const divisionId = lead?.organizationId || activeDivisionId || undefined;
+      const data = await api.getInboxMessages(id, { limit: 100, ...(divisionId ? { divisionId } : {}) });
       setChatMessages(data.messages || []);
       // Backend marks messages as read on fetch; reset local unread count
       setUnreadCommsCount(0);
     } catch {
       // Fallback to lead's communications if inbox API fails
       if (lead?.communications) {
-        setChatMessages([...lead.communications].sort((a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        ));
+        setChatMessages(sortCommunicationsByDate(lead.communications));
       }
     } finally {
-      setChatLoading(false);
+      if (!background) setChatLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, lead?.organizationId, lead?.communications]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
@@ -582,6 +588,13 @@ export default function LeadDetailPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
 
+  // Poll for new messages when Communications tab is active (background refresh, no loading overlay)
+  useEffect(() => {
+    if (activeTab !== 'communications' || !lead?.id) return;
+    const interval = setInterval(() => loadChatMessages(true), 10000);
+    return () => clearInterval(interval);
+  }, [activeTab, lead?.id, loadChatMessages]);
+
   // Real-time sync: refresh lead data when lead or note changes
   useRealtimeSync(['lead', 'note'], useCallback((event) => {
     // For lead events, only refresh if it's this lead (or no entityId specified)
@@ -590,7 +603,7 @@ export default function LeadDetailPage() {
     loadLeadAISummary(true).catch(() => {});
   }, [id, refreshLead, loadLeadAISummary]));
 
-  // Real-time sync: refresh chat messages when communications change (from other users)
+  // Real-time sync: refresh chat messages when communications change (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
     if (event.entityId && event.entityId !== id) return;
     loadChatMessages();
@@ -1684,9 +1697,9 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
 
-                {/* Messages Area — WhatsApp-like */}
+                {/* Messages Area — WhatsApp-like (full loading only when no messages yet; refresh in place for real-time feel) */}
                 <div ref={chatContainerRef} className="flex-1 overflow-y-auto pr-1 min-h-0 bg-[#f0f2f5] rounded-lg p-3" onClick={() => setMenuOpenMsgId(null)}>
-                  {chatLoading ? (
+                  {chatLoading && chatMessages.length === 0 ? (
                     <div className="flex items-center justify-center h-full">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-600" />
                     </div>
@@ -1808,38 +1821,51 @@ export default function LeadDetailPage() {
                                   {msg.subject && (
                                     <p className="text-xs font-semibold text-gray-500 mb-0.5">{msg.subject}</p>
                                   )}
-                                  {msg.body && <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.body}</p>}
-
-                                  {/* Attachments */}
+                                  {/* Media attachments */}
                                   {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
-                                    <div className="mt-2 space-y-1.5">
-                                      {msg.metadata.attachments.map((att: any, ai: number) => (
-                                        <a
-                                          key={ai}
-                                          href={`/api${att.url}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
-                                        >
-                                          {att.mimeType?.startsWith('image/') ? (
-                                            <img
-                                              src={`/api${att.url}`}
-                                              alt={att.filename}
-                                              className="h-16 w-16 rounded object-cover flex-shrink-0"
-                                            />
-                                          ) : (
-                                            <span className="text-lg flex-shrink-0">
-                                              {att.mimeType === 'application/pdf' ? '📄' : att.mimeType?.startsWith('video/') ? '🎬' : att.mimeType?.startsWith('audio/') ? '🎵' : '📎'}
-                                            </span>
-                                          )}
-                                          <div className="min-w-0 flex-1">
-                                            <p className="text-xs font-medium truncate text-gray-800">{att.filename}</p>
-                                            {att.size && <p className="text-xs text-gray-500">{att.size < 1024 ? att.size + ' B' : att.size < 1048576 ? (att.size / 1024).toFixed(1) + ' KB' : (att.size / 1048576).toFixed(1) + ' MB'}</p>}
-                                          </div>
-                                          <svg className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                                        </a>
-                                      ))}
+                                    <div className="space-y-1.5">
+                                      {msg.metadata.attachments.map((att: any, ai: number) => {
+                                        const url = att.url ? `/api${att.url}` : null;
+                                        if (!url) return null;
+
+                                        if (att.mimeType?.startsWith('image/')) {
+                                          return (
+                                            <a key={ai} href={url} target="_blank" rel="noopener noreferrer" className="block">
+                                              <img src={url} alt={att.filename || 'Image'} className="max-w-[280px] max-h-[300px] rounded-lg object-contain cursor-pointer" loading="lazy" />
+                                            </a>
+                                          );
+                                        }
+                                        if (att.mimeType?.startsWith('audio/')) {
+                                          return (
+                                            <div key={ai} className="flex items-center gap-2 min-w-[200px] max-w-[300px]">
+                                              <audio controls preload="none" className="w-full h-8"><source src={url} type={att.mimeType} /></audio>
+                                            </div>
+                                          );
+                                        }
+                                        if (att.mimeType?.startsWith('video/')) {
+                                          return (
+                                            <div key={ai} className="max-w-[300px]">
+                                              <video controls preload="metadata" className="rounded-lg max-w-full max-h-[240px]"><source src={url} type={att.mimeType} /></video>
+                                            </div>
+                                          );
+                                        }
+                                        return (
+                                          <a key={ai} href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10">
+                                            <span className="text-lg flex-shrink-0">{att.mimeType === 'application/pdf' ? '📄' : '📎'}</span>
+                                            <div className="min-w-0 flex-1">
+                                              <p className="text-xs font-medium truncate text-gray-800">{att.filename}</p>
+                                              {att.size && <p className="text-xs text-gray-500">{att.size < 1024 ? att.size + ' B' : att.size < 1048576 ? (att.size / 1024).toFixed(1) + ' KB' : (att.size / 1048576).toFixed(1) + ' MB'}</p>}
+                                            </div>
+                                            <svg className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                          </a>
+                                        );
+                                      })}
                                     </div>
+                                  )}
+
+                                  {/* Text body — hide placeholder labels when media is present */}
+                                  {msg.body && !(msg.metadata?.attachments?.length > 0 && /^\[(Photo|Video|Voice message|Document|Sticker|Audio)\]$/.test(msg.body.trim())) && msg.body !== '(no text)' && (
+                                    <p className={`text-sm leading-relaxed whitespace-pre-wrap ${msg.metadata?.attachments?.length > 0 ? 'mt-1' : ''}`}>{msg.body}</p>
                                   )}
                                 </>
                               )}

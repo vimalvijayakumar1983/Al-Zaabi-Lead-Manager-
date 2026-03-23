@@ -270,7 +270,8 @@ async function runSLACheck() {
 /**
  * Start the SLA automation scheduler.
  */
-function startSLAMonitor(intervalMs = SLA_CHECK_INTERVAL) {
+function startSLAMonitor(intervalMs = SLA_CHECK_INTERVAL, options = {}) {
+  const { runOnStart = true, initialDelayMs = 0 } = options;
   if (slaInterval) {
     logger.warn('[SLA] Scheduler already running');
     return;
@@ -278,8 +279,11 @@ function startSLAMonitor(intervalMs = SLA_CHECK_INTERVAL) {
 
   logger.info(`[SLA] Starting SLA automation scheduler (interval: ${intervalMs / 1000}s)`);
 
-  // Run immediately on startup
-  runSLACheck().catch((err) => logger.error('[SLA] Initial check failed:', err.message));
+  if (runOnStart) {
+    setTimeout(() => {
+      runSLACheck().catch((err) => logger.error('[SLA] Initial check failed:', err.message));
+    }, Math.max(0, Number(initialDelayMs) || 0));
+  }
 
   // Then run on interval
   slaInterval = setInterval(() => {

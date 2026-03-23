@@ -93,16 +93,21 @@ router.get('/', validateQuery(paginationSchema.extend({
   priority: z.string().optional(),
   priorities: z.string().optional(),
   divisionId: z.string().optional(),
+  type: z.string().optional(),
   assigneeId: z.string().optional(),
   leadId: z.string().optional(),
   overdue: z.coerce.boolean().optional(),
 })), async (req, res, next) => {
   try {
-    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, divisionId, assigneeId, leadId, overdue } = req.validatedQuery;
+    const { page, limit, sortBy, sortOrder, search, status, statuses, priority, priorities, type, divisionId, assigneeId, leadId, overdue } = req.validatedQuery;
 
     const where = {};
     const allowedStatuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
     const allowedPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+    const allowedTypes = ['FOLLOW_UP_CALL', 'MEETING', 'EMAIL', 'WHATSAPP', 'DEMO', 'PROPOSAL', 'OTHER'];
+    const scopedOrgIds = (req.isSuperAdmin && divisionId && req.orgIds.includes(divisionId))
+      ? [divisionId]
+      : req.orgIds;
 
     const parsedStatuses = (statuses || '')
       .split(',')
@@ -120,16 +125,10 @@ router.get('/', validateQuery(paginationSchema.extend({
     if (req.isRestrictedRole) {
       // SALES_REP / VIEWER only sees their own tasks
       where.assigneeId = req.user.id;
-    } else if (assigneeId) {
-      where.assigneeId = assigneeId;
-      if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
-        where.assignee = { organizationId: divisionId };
-      }
-    } else if (divisionId && req.isSuperAdmin && req.orgIds.includes(divisionId)) {
-      where.assignee = { organizationId: divisionId };
     } else {
-      // Default: show tasks for users in the accessible orgs
-      where.assignee = { organizationId: { in: req.orgIds } };
+      // Always scope tasks to accessible orgs; optionally narrow by assignee.
+      where.assignee = { organizationId: { in: scopedOrgIds } };
+      if (assigneeId) where.assigneeId = assigneeId;
     }
 
     if (parsedStatuses.length > 1) {
@@ -146,6 +145,10 @@ router.get('/', validateQuery(paginationSchema.extend({
       where.priority = parsedPriorities[0];
     } else if (priority && allowedPriorities.includes(String(priority).toUpperCase())) {
       where.priority = String(priority).toUpperCase();
+    }
+
+    if (type && allowedTypes.includes(String(type).toUpperCase())) {
+      where.type = String(type).toUpperCase();
     }
 
     if (search?.trim()) {

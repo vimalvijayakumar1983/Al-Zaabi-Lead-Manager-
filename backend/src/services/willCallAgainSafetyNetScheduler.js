@@ -203,14 +203,19 @@ async function checkWillCallAgainSafetyNet() {
   }
 }
 
-function startWillCallAgainSafetyNetScheduler(intervalMs = CHECK_INTERVAL_MS) {
+function startWillCallAgainSafetyNetScheduler(intervalMs = CHECK_INTERVAL_MS, options = {}) {
+  const { runOnStart = true, initialDelayMs = 0 } = options;
   if (intervalHandle) {
     logger.warn('[WillCallAgainSafetyNet] Scheduler already running');
     return;
   }
 
   logger.info(`[WillCallAgainSafetyNet] Starting scheduler (interval: ${intervalMs / 1000}s)`);
-  checkWillCallAgainSafetyNet().catch((err) => logger.error('[WillCallAgainSafetyNet] Initial check failed:', err.message));
+  if (runOnStart) {
+    setTimeout(() => {
+      checkWillCallAgainSafetyNet().catch((err) => logger.error('[WillCallAgainSafetyNet] Initial check failed:', err.message));
+    }, Math.max(0, Number(initialDelayMs) || 0));
+  }
   intervalHandle = setInterval(() => {
     checkWillCallAgainSafetyNet().catch((runErr) => logger.error('[WillCallAgainSafetyNet] Periodic check failed:', runErr.message));
   }, intervalMs);

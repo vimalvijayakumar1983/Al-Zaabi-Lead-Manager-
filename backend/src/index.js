@@ -1,3 +1,6 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), override: true });
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -37,6 +40,7 @@ const automationRoutes = require('./routes/automations');
 const analyticsRoutes = require('./routes/analytics');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
+const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
 const integrationsRoutes = require('./routes/integrations');
@@ -49,6 +53,7 @@ const callLogRoutes = require('./routes/call-logs');
 const roleRoutes = require('./routes/roles');
 const savedViewRoutes = require('./routes/saved-views');
 const recycleBinRoutes = require('./routes/recycle-bin');
+const reportBuilderRoutes = require('./routes/report-builder');
 
 const app = express();
 const server = createServer(app);
@@ -56,25 +61,31 @@ const server = createServer(app);
 // ─── Global Middleware ───────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use(helmet());
-app.use(cors({
+// CORS: allow all origins in development; in production use FRONTEND_URL whitelist
+const corsOptions = {
+  credentials: true,
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
-    const allowed = config.frontendUrl.split(',').map(u => u.trim().replace(/\/$/, ''));
+    // In development, allow any origin
+    if (config.nodeEnv === 'development') return callback(null, true);
+    const allowed = (config.frontendUrl || '')
+      .split(',')
+      .map(u => u.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+    if (allowed.length === 0) return callback(null, true);
     const normalized = origin.replace(/\/$/, '');
-    // Check exact match or Vercel preview deployments
     if (allowed.includes(normalized) || /\.vercel\.app$/.test(normalized)) {
       return callback(null, true);
     }
     callback(new Error('Not allowed by CORS'));
   },
-  credentials: true,
-}));
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Static File Serving (uploads) ─────────────────────────────────
-const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Also serve under /api/uploads so the Next.js proxy can reach files
 app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -124,6 +135,7 @@ const routeMounts = [
   ['/analytics', analyticsRoutes],
   ['/users', userRoutes],
   ['/webhooks', webhookRoutes],
+  ['/whatsapp/webhook', whatsappWebhookRoutes],
   ['/import', importRoutes],
   ['/settings', settingsRoutes],
   ['/integrations', integrationsRoutes],
@@ -136,6 +148,7 @@ const routeMounts = [
   ['/roles', roleRoutes],
   ['/saved-views', savedViewRoutes],
   ['/recycle-bin', recycleBinRoutes],
+  ['/report-builder', reportBuilderRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {
@@ -152,19 +165,42 @@ setupWebSocket(server);
 
 // ─── Start Server ────────────────────────────────────────────────
 const PORT = config.port || 4000;
+const ENABLE_BACKGROUND_JOBS = process.env.ENABLE_BACKGROUND_JOBS !== 'false';
 
 server.listen(PORT, () => {
   logger.info(`LeadFlow API server running on port ${PORT}`);
   logger.info(`Environment: ${config.nodeEnv}`);
 
-  // Start the SLA monitoring service
-  startSLAMonitor();
+  if (!ENABLE_BACKGROUND_JOBS) {
+    logger.warn('Background schedulers are disabled (ENABLE_BACKGROUND_JOBS=false)');
+    return;
+  }
 
-  // Start the time-based automation scheduler
-  startTimeBasedScheduler();
+  const schedulerStarts = [
+    { name: 'SLA', fn: () => startSLAMonitor(undefined, { runOnStart: true, initialDelayMs: 5000 }) },
+    { name: 'TimeBased', fn: () => startTimeBasedScheduler(undefined, { runOnStart: true, initialDelayMs: 20000 }) },
+    { name: 'CallbackReminder', fn: () => startCallbackReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 35000 }) },
+    { name: 'TaskReminder', fn: () => startTaskReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 50000 }) },
+    { name: 'WillCallAgainSafetyNet', fn: () => startWillCallAgainSafetyNetScheduler(undefined, { runOnStart: true, initialDelayMs: 65000 }) },
+  ];
+  for (const scheduler of schedulerStarts) {
+    try {
+      scheduler.fn();
+      logger.info(`[Startup] ${scheduler.name} scheduler initialized`);
+    } catch (err) {
+      logger.error(`[Startup] Failed to initialize ${scheduler.name} scheduler:`, err.message);
+    }
+  }
 
-  // Start the callback reminder scheduler (Call Later pop-ups)
-  startCallbackReminderScheduler();
+  // Start unread reminder escalation monitor after core schedulers
+  setTimeout(() => {
+    try {
+      startNotificationEscalationScheduler();
+      logger.info('[Startup] NotificationEscalation scheduler initialized');
+    } catch (err) {
+      logger.error('[Startup] Failed to initialize NotificationEscalation scheduler:', err.message);
+    }
+  }, 80000);
 
   // Start the task reminder scheduler (due-soon & overdue pop-ups)
   startTaskReminderScheduler();
