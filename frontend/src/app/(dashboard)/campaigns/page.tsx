@@ -1338,6 +1338,9 @@ function OfferStudioModal({
   const [previewTouched, setPreviewTouched] = useState(false);
   const [analytics, setAnalytics] = useState<any>(null);
   const [previewRows, setPreviewRows] = useState<any[]>([]);
+  const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
+  const [searchSuggestionsLoading, setSearchSuggestionsLoading] = useState(false);
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
   const [assignments, setAssignments] = useState<any[]>([]);
   const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color?: string }>>([]);
   const [customTagInput, setCustomTagInput] = useState('');
@@ -1361,6 +1364,7 @@ function OfferStudioModal({
     notes: '',
     overwriteExisting: false,
   });
+  const searchInputWrapRef = useRef<HTMLDivElement | null>(null);
 
   const scorePresetOptions: Array<{ value: string; label: string; min?: number; max?: number }> = [
     { value: 'all', label: 'All scores' },
@@ -1390,6 +1394,14 @@ function OfferStudioModal({
     return payload;
   }
 
+  function getDivisionScopeId() {
+    const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
+    const activeDivisionId = typeof window !== 'undefined'
+      ? (localStorage.getItem('activeDivisionId') || undefined)
+      : undefined;
+    return campaignOrgId || activeDivisionId;
+  }
+
   const loadAssignments = useCallback(async () => {
     try {
       const res = await api.getCampaignAssignments(campaign.id, { page: 1, limit: 50, sortBy: 'assignedAt', sortOrder: 'desc' });
@@ -1410,9 +1422,7 @@ function OfferStudioModal({
   }, [campaign.id]);
 
   useEffect(() => {
-    const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
-    const activeDivisionId = typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId') || undefined) : undefined;
-    const divisionScopeId = campaignOrgId || activeDivisionId;
+    const divisionScopeId = getDivisionScopeId();
     setLoading(true);
     Promise.all([
       loadAssignments(),
@@ -1421,6 +1431,51 @@ function OfferStudioModal({
       api.getTags(divisionScopeId).then((rows) => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([])),
     ]).finally(() => setLoading(false));
   }, [campaign, loadAssignments, loadAnalytics]);
+
+  useEffect(() => {
+    function onDocMouseDown(e: MouseEvent) {
+      if (searchInputWrapRef.current && !searchInputWrapRef.current.contains(e.target as Node)) {
+        setSearchDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, []);
+
+  useEffect(() => {
+    const term = filters.search.trim();
+    if (term.length < 2) {
+      setSearchSuggestions([]);
+      setSearchSuggestionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        setSearchSuggestionsLoading(true);
+        const divisionScopeId = getDivisionScopeId();
+        const res = await api.getLeads({
+          page: 1,
+          limit: 8,
+          search: term,
+          ...(divisionScopeId ? { divisionId: divisionScopeId } : {}),
+        });
+        if (cancelled) return;
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        setSearchSuggestions(rows);
+        setSearchDropdownOpen(true);
+      } catch {
+        if (cancelled) return;
+        setSearchSuggestions([]);
+      } finally {
+        if (!cancelled) setSearchSuggestionsLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [filters.search, campaign.id]);
 
   async function handlePreview() {
     setPreviewLoading(true);
@@ -1525,6 +1580,18 @@ function OfferStudioModal({
     setCustomTagInput('');
   }
 
+  function getSuggestionName(lead: any) {
+    const full = [lead?.firstName, lead?.lastName].filter(Boolean).join(' ').trim();
+    return full || lead?.company || 'Unknown Lead';
+  }
+
+  function selectSearchSuggestion(lead: any) {
+    const value = getSuggestionName(lead);
+    setFilters((prev) => ({ ...prev, search: value }));
+    setSearchSuggestions([]);
+    setSearchDropdownOpen(false);
+  }
+
   async function saveTemplate() {
     const name = templateName.trim();
     if (!name) {
@@ -1532,9 +1599,7 @@ function OfferStudioModal({
       return;
     }
     try {
-      const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
-      const activeDivisionId = typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId') || undefined) : undefined;
-      const divisionScopeId = campaignOrgId || activeDivisionId;
+      const divisionScopeId = getDivisionScopeId();
       await api.createCampaignTemplate({
         name,
         description: `Offer studio template for ${campaign.name}`,
@@ -1622,7 +1687,50 @@ function OfferStudioModal({
           <div className="card p-4">
             <h4 className="font-semibold text-text-primary mb-3">Audience Rules</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              <input className="input" placeholder="Search name / email / phone / company" value={filters.search} onChange={(e) => setFilters((p) => ({ ...p, search: e.target.value }))} />
+              <div className="relative" ref={searchInputWrapRef}>
+                <input
+                  className="input"
+                  placeholder="Search name / email / phone / company"
+                  value={filters.search}
+                  onFocus={() => {
+                    if (filters.search.trim().length >= 2) setSearchDropdownOpen(true);
+                  }}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setFilters((p) => ({ ...p, search: next }));
+                    if (next.trim().length < 2) {
+                      setSearchSuggestions([]);
+                      setSearchDropdownOpen(false);
+                    } else {
+                      setSearchDropdownOpen(true);
+                    }
+                  }}
+                />
+                {searchDropdownOpen && filters.search.trim().length >= 2 && (
+                  <div className="absolute z-40 mt-1 w-full rounded-xl border border-gray-200 bg-white shadow-xl max-h-64 overflow-y-auto">
+                    {searchSuggestionsLoading ? (
+                      <p className="px-3 py-2 text-sm text-text-secondary">Searching...</p>
+                    ) : searchSuggestions.length === 0 ? (
+                      <p className="px-3 py-2 text-sm text-text-secondary">No matching leads found</p>
+                    ) : (
+                      searchSuggestions.map((lead) => (
+                        <button
+                          key={lead.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectSearchSuggestion(lead)}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0 border-gray-100"
+                        >
+                          <div className="text-sm font-medium text-text-primary">{getSuggestionName(lead)}</div>
+                          <div className="text-xs text-text-tertiary truncate">
+                            {lead.email || lead.phone || lead.company || '—'}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
               <select
                 className="input"
                 value={filters.scorePreset}
