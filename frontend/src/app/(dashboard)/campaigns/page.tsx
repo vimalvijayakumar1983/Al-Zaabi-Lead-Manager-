@@ -1322,8 +1322,14 @@ function OfferStudioModal({
   addToast: (type: 'success' | 'error', message: string) => void;
 }) {
   const backdropPressStarted = useRef(false);
+  type SelectedLeadOption = {
+    id: string;
+    name: string;
+    subtitle?: string;
+  };
   type OfferAudienceFilters = {
     search: string;
+    selectedLeads: SelectedLeadOption[];
     scorePreset: string;
     minScore: string;
     maxScore: string;
@@ -1349,6 +1355,7 @@ function OfferStudioModal({
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [filters, setFilters] = useState<OfferAudienceFilters>({
     search: '',
+    selectedLeads: [],
     scorePreset: 'all',
     minScore: '',
     maxScore: '',
@@ -1377,7 +1384,11 @@ function OfferStudioModal({
 
   function buildAudiencePayloadFromFilters() {
     const payload: Record<string, any> = {};
-    if (filters.search.trim()) payload.search = filters.search.trim();
+    if (filters.selectedLeads.length > 0) {
+      payload.leadIds = filters.selectedLeads.map((lead) => lead.id);
+    } else if (filters.search.trim()) {
+      payload.search = filters.search.trim();
+    }
 
     const selectedScorePreset = scorePresetOptions.find((opt) => opt.value === filters.scorePreset);
     if (filters.scorePreset === 'custom') {
@@ -1444,7 +1455,7 @@ function OfferStudioModal({
 
   useEffect(() => {
     const term = filters.search.trim();
-    if (term.length < 2) {
+    if (filters.selectedLeads.length > 0 || term.length < 2) {
       setSearchSuggestions([]);
       setSearchSuggestionsLoading(false);
       return;
@@ -1475,7 +1486,7 @@ function OfferStudioModal({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [filters.search, campaign.id]);
+  }, [filters.search, filters.selectedLeads, campaign.id]);
 
   async function handlePreview() {
     setPreviewLoading(true);
@@ -1538,14 +1549,25 @@ function OfferStudioModal({
     if (cfg.filters && typeof cfg.filters === 'object') {
       const incomingFilters = cfg.filters as Record<string, unknown>;
       const rawTagsAny = incomingFilters.tagsAny;
+      const rawSelectedLeads = incomingFilters.selectedLeads;
       const normalizedTagsAny = Array.isArray(rawTagsAny)
         ? rawTagsAny.map((x) => String(x).trim()).filter(Boolean)
         : (typeof rawTagsAny === 'string'
           ? rawTagsAny.split(',').map((t) => t.trim()).filter(Boolean)
           : filters.tagsAny);
+      const normalizedSelectedLeads: SelectedLeadOption[] = Array.isArray(rawSelectedLeads)
+        ? rawSelectedLeads
+            .map((item: any) => ({
+              id: String(item?.id || ''),
+              name: String(item?.name || ''),
+              subtitle: item?.subtitle ? String(item.subtitle) : '',
+            }))
+            .filter((item) => item.id && item.name)
+        : filters.selectedLeads;
       const merged = {
         ...filters,
         ...incomingFilters,
+        selectedLeads: normalizedSelectedLeads,
         tagsAny: normalizedTagsAny,
       } as OfferAudienceFilters;
       if (!merged.scorePreset) {
@@ -1586,10 +1608,26 @@ function OfferStudioModal({
   }
 
   function selectSearchSuggestion(lead: any) {
-    const value = getSuggestionName(lead);
-    setFilters((prev) => ({ ...prev, search: value }));
+    const selected: SelectedLeadOption = {
+      id: lead.id,
+      name: getSuggestionName(lead),
+      subtitle: lead.email || lead.phone || lead.company || '',
+    };
+    setFilters((prev) => {
+      if (prev.selectedLeads.some((x) => x.id === selected.id)) {
+        return { ...prev, search: '', selectedLeads: prev.selectedLeads };
+      }
+      return { ...prev, search: '', selectedLeads: [...prev.selectedLeads, selected] };
+    });
     setSearchSuggestions([]);
     setSearchDropdownOpen(false);
+  }
+
+  function removeSelectedLead(id: string) {
+    setFilters((prev) => ({
+      ...prev,
+      selectedLeads: prev.selectedLeads.filter((lead) => lead.id !== id),
+    }));
   }
 
   async function saveTemplate() {
@@ -1687,10 +1725,29 @@ function OfferStudioModal({
           <div className="card p-4">
             <h4 className="font-semibold text-text-primary mb-3">Audience Rules</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              <div className="relative" ref={searchInputWrapRef}>
+              <div className="relative md:col-span-2 xl:col-span-3" ref={searchInputWrapRef}>
+                {filters.selectedLeads.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {filters.selectedLeads.map((lead) => (
+                      <span
+                        key={lead.id}
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-50 text-brand-700 px-2 py-0.5 text-xs border border-brand-200"
+                      >
+                        {lead.name}
+                        <button
+                          type="button"
+                          onClick={() => removeSelectedLead(lead.id)}
+                          className="text-brand-500 hover:text-brand-800"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <input
                   className="input"
-                  placeholder="Search name / email / phone / company"
+                  placeholder="Search and select multiple leads"
                   value={filters.search}
                   onFocus={() => {
                     if (filters.search.trim().length >= 2) setSearchDropdownOpen(true);

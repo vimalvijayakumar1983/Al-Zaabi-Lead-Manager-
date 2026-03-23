@@ -144,6 +144,7 @@ const campaignTemplateSchema = z.object({
 const updateCampaignTemplateSchema = campaignTemplateSchema.partial();
 
 const audienceFiltersSchema = z.object({
+  leadIds: z.array(z.string().uuid()).optional(),
   divisionIds: z.array(z.string().uuid()).optional(),
   statuses: z.array(z.string()).optional(),
   sources: z.array(z.string()).optional(),
@@ -237,6 +238,20 @@ async function buildAudienceLeadWhere(req, campaign, filters = {}) {
   if (filters.createdBeforeDays) {
     where.createdAt = { lte: addDays(filters.createdBeforeDays) };
   }
+  if (Array.isArray(filters.leadIds) && filters.leadIds.length > 0) {
+    const allowedLeadIds = req.isRestrictedRole
+      ? await prisma.lead.findMany({
+          where: {
+            id: { in: filters.leadIds },
+            organizationId: where.organizationId,
+            assignedToId: req.user.id,
+            isArchived: false,
+          },
+          select: { id: true },
+        }).then((rows) => rows.map((r) => r.id))
+      : filters.leadIds;
+    where.id = { in: allowedLeadIds.length > 0 ? allowedLeadIds : ['__none__'] };
+  }
   if (filters.search) {
     const searchTerm = String(filters.search).trim();
     const tokens = searchTerm.split(/\s+/).filter(Boolean);
@@ -259,6 +274,18 @@ async function buildAudienceLeadWhere(req, campaign, filters = {}) {
       { phone: { contains: searchTerm } },
       { company: { contains: searchTerm, mode: 'insensitive' } },
       ...(tokenizedMatch ? [tokenizedMatch] : []),
+    ];
+  }
+  if (filters.leadIds && Array.isArray(filters.leadIds) && filters.leadIds.length > 0) {
+    where.AND = [
+      ...(where.AND || []),
+      { id: { in: filters.leadIds } },
+    ];
+  }
+  if (filters.leadIds && filters.leadIds.length > 0) {
+    where.AND = [
+      ...(where.AND || []),
+      { id: { in: filters.leadIds } },
     ];
   }
 
