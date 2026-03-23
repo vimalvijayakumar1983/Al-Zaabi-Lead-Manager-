@@ -96,6 +96,10 @@ export default function LeadDetailPage() {
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
   const [convertingToContact, setConvertingToContact] = useState(false);
+  const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color: string }>>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagBusy, setTagBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
@@ -204,6 +208,17 @@ export default function LeadDetailPage() {
       .catch(() => {
         setFieldConfig(null);
       });
+  }, [lead?.organizationId]);
+
+  useEffect(() => {
+    const divisionId = lead?.organizationId;
+    if (!divisionId) {
+      setAvailableTags([]);
+      return;
+    }
+    api.getTags(divisionId)
+      .then((rows: any) => setAvailableTags(Array.isArray(rows) ? rows : []))
+      .catch(() => setAvailableTags([]));
   }, [lead?.organizationId]);
 
 
@@ -569,6 +584,70 @@ export default function LeadDetailPage() {
       setConvertingToContact(false);
     }
   };
+
+  const handleAddExistingTag = useCallback(async (tagId: string) => {
+    if (!lead?.id) return;
+    setTagBusy(true);
+    try {
+      await api.addLeadTags(lead.id, { tagIds: [tagId] });
+      await refreshLead();
+      setTagInput('');
+      setTagPickerOpen(false);
+      addToast({ type: 'success', title: 'Tag Added', message: 'Tag has been added to this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Add Tag', message: err?.message || 'Unable to add tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, refreshLead]);
+
+  const handleCreateAndAddTag = useCallback(async () => {
+    const name = tagInput.trim();
+    if (!lead?.id || !lead.organizationId || !name) return;
+    setTagBusy(true);
+    try {
+      let createdTag: any = null;
+      try {
+        createdTag = await api.createTag({ name, organizationId: lead.organizationId });
+      } catch (createErr: any) {
+        const msg = String(createErr?.message || '').toLowerCase();
+        if (!msg.includes('already exists')) throw createErr;
+      }
+
+      if (createdTag?.id) {
+        await api.addLeadTags(lead.id, { tagIds: [createdTag.id] });
+      } else {
+        // Fallback path for duplicate tag names: backend will upsert by name.
+        await api.addLeadTags(lead.id, { tagNames: [name] });
+      }
+
+      await Promise.all([
+        refreshLead(),
+        api.getTags(lead.organizationId).then((rows: any) => setAvailableTags(Array.isArray(rows) ? rows : [])),
+      ]);
+      setTagInput('');
+      setTagPickerOpen(false);
+      addToast({ type: 'success', title: 'Tag Added', message: `"${name}" has been added.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Add Tag', message: err?.message || 'Unable to create/add tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, lead?.organizationId, refreshLead, tagInput]);
+
+  const handleRemoveTag = useCallback(async (tagId: string) => {
+    if (!lead?.id || !tagId) return;
+    setTagBusy(true);
+    try {
+      await api.removeLeadTag(lead.id, tagId);
+      await refreshLead();
+      addToast({ type: 'success', title: 'Tag Removed', message: 'Tag has been removed from this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Remove Tag', message: err?.message || 'Unable to remove tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, refreshLead]);
 
   // Load chat messages when Communications tab is active
   // The backend auto-marks unread messages as read when fetched
@@ -1439,21 +1518,115 @@ export default function LeadDetailPage() {
           </div>
 
           {/* Tags */}
-          {lead.tags && lead.tags.length > 0 && (
-            <div className="card p-4">
-              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
-                Tags
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {lead.tags.map((t) => (
-                  <span key={t.tag.id} className="badge px-3 py-1" style={{ backgroundColor: t.tag.color + '20', color: t.tag.color, border: `1px solid ${t.tag.color}40` }}>
-                    {t.tag.name}
+          <div className="card p-4">
+            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
+              Tags
+            </h3>
+
+            <div className="flex flex-wrap gap-2 mb-3">
+              {(lead.tags || []).length > 0 ? (
+                (lead.tags || []).map((t: any) => (
+                  <span
+                    key={t?.tag?.id || t?.id}
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+                    style={{
+                      backgroundColor: `${t?.tag?.color || '#6366f1'}20`,
+                      color: t?.tag?.color || '#6366f1',
+                      border: `1px solid ${(t?.tag?.color || '#6366f1')}40`,
+                    }}
+                  >
+                    {t?.tag?.name || t?.name || 'Tag'}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(t?.tag?.id || t?.id)}
+                      disabled={tagBusy}
+                      className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
+                      title="Remove tag"
+                    >
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </span>
-                ))}
-              </div>
+                ))
+              ) : (
+                <span className="text-sm text-gray-500">No tags assigned yet.</span>
+              )}
             </div>
-          )}
+
+            <div className="relative">
+              <div className="flex gap-2">
+                <input
+                  value={tagInput}
+                  onChange={(e) => {
+                    setTagInput(e.target.value);
+                    setTagPickerOpen(true);
+                  }}
+                  onFocus={() => setTagPickerOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const normalized = tagInput.trim().toLowerCase();
+                      const existing = availableTags.find((tag) => tag.name.toLowerCase() === normalized);
+                      if (existing) {
+                        handleAddExistingTag(existing.id);
+                      } else if (normalized) {
+                        handleCreateAndAddTag();
+                      }
+                    }
+                    if (e.key === 'Escape') setTagPickerOpen(false);
+                  }}
+                  placeholder="Add tag: search existing or type new name"
+                  className="input text-sm"
+                  disabled={tagBusy}
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateAndAddTag}
+                  disabled={tagBusy || !tagInput.trim()}
+                  className="btn btn-secondary text-sm whitespace-nowrap disabled:opacity-50"
+                >
+                  {tagBusy ? 'Saving…' : 'Add Tag'}
+                </button>
+              </div>
+
+              {tagPickerOpen && (
+                <div className="absolute z-20 mt-1 max-h-52 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                  {availableTags
+                    .filter((tag) => !(lead.tags || []).some((t: any) => (t?.tag?.id || t?.id) === tag.id))
+                    .filter((tag) => !tagInput.trim() || tag.name.toLowerCase().includes(tagInput.trim().toLowerCase()))
+                    .slice(0, 12)
+                    .map((tag) => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleAddExistingTag(tag.id);
+                        }}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        disabled={tagBusy}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                          <span>{tag.name}</span>
+                        </span>
+                        <span className="text-xs text-gray-400">Add</span>
+                      </button>
+                    ))}
+                  {availableTags
+                    .filter((tag) => !(lead.tags || []).some((t: any) => (t?.tag?.id || t?.id) === tag.id))
+                    .filter((tag) => !tagInput.trim() || tag.name.toLowerCase().includes(tagInput.trim().toLowerCase()))
+                    .length === 0 && (
+                    <div className="px-3 py-2 text-sm text-gray-500">
+                      {tagInput.trim() ? 'No matching tags. Click "Add Tag" to create this tag.' : 'No more tags available.'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Assignment Panel */}
           <ReassignmentPanel
