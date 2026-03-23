@@ -7,8 +7,8 @@ import { useAuthStore } from '@/store/authStore';
 import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
 
 const features = [
-  { icon: Zap, title: 'Smart Automation', description: 'Automate follow-ups, assignments, and scoring' },
-  { icon: BarChart3, title: 'Advanced Analytics', description: 'Real-time insights and conversion funnels' },
+  { icon: Zap, title: 'AI Smart Automation', description: 'AI-driven follow-ups, assignments, and lead prioritization' },
+  { icon: BarChart3, title: 'AI Insights & Analytics', description: 'Predictive insights and real-time conversion intelligence' },
   { icon: Shield, title: 'Enterprise Security', description: 'Role-based access and audit logging' },
 ];
 
@@ -85,13 +85,13 @@ export default function LoginPage() {
           {/* Main content */}
           <div className="max-w-lg">
             <h1 className="text-4xl font-bold tracking-tight leading-tight mb-4 animate-fade-in-up">
-              The modern platform for
+              The AI-powered platform for
               <span className="block mt-1 bg-gradient-to-r from-white to-brand-200 bg-clip-text text-transparent">
                 lead management
               </span>
             </h1>
             <p className="text-lg text-brand-200 leading-relaxed mb-10 animate-fade-in-up stagger-1">
-              Track, nurture, and convert leads with intelligent automation.
+              Track, nurture, and convert leads with AI-assisted workflows.
               Built for teams that move fast.
             </p>
 
@@ -157,7 +157,7 @@ export default function LoginPage() {
             <p className="text-sm text-text-secondary mt-1.5 mb-8">
               {isRegister
                 ? 'Start managing your leads in minutes'
-                : 'Sign in to your Al-Zaabi Lead Manager account'}
+                : 'Sign in to your AI-powered Al-Zaabi Lead Manager account'}
             </p>
           </div>
 
