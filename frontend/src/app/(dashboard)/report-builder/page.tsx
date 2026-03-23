@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type Dataset = 'leads' | 'tasks' | 'call_logs';
+type Dataset = 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals';
 type Visualization = 'table' | 'bar' | 'line' | 'pie' | 'kpi' | 'pivot' | 'funnel' | 'cohort';
 type FilterOperator =
   | 'eq' | 'neq' | 'contains' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'is_null' | 'is_not_null';
@@ -115,6 +115,8 @@ const EMPTY_CONFIG: ReportConfig = {
 
 const DATASET_OPTIONS: Array<{ value: Dataset; label: string }> = [
   { value: 'leads', label: 'Leads' },
+  { value: 'contacts', label: 'Contacts' },
+  { value: 'deals', label: 'Deals' },
   { value: 'tasks', label: 'Tasks' },
   { value: 'call_logs', label: 'Call Logs' },
 ];
@@ -123,6 +125,8 @@ const AGG_OPTIONS: MeasureAgg[] = ['count', 'count_distinct', 'sum', 'avg', 'min
 const FILTER_OPS: FilterOperator[] = ['eq', 'neq', 'contains', 'in', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null'];
 
 function titleFromDataset(dataset: Dataset): string {
+  if (dataset === 'contacts') return 'Contacts';
+  if (dataset === 'deals') return 'Deals';
   if (dataset === 'tasks') return 'Tasks';
   if (dataset === 'call_logs') return 'Call Logs';
   return 'Leads';

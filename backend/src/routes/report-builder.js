@@ -8,7 +8,7 @@ const { getFieldCatalog, runReportPreview } = require('../services/reportBuilder
 const router = Router();
 router.use(authenticate, orgScope);
 
-const datasetEnum = z.enum(['leads', 'tasks', 'call_logs']);
+const datasetEnum = z.enum(['leads', 'tasks', 'call_logs', 'contacts', 'deals']);
 const visibilityEnum = z.enum(['everyone', 'private', 'specific_users', 'specific_roles']);
 
 const reportFilterSchema = z.object({
@@ -45,7 +45,7 @@ const reportConfigSchema = z.object({
     direction: z.enum(['asc', 'desc']).optional(),
   }).optional(),
   rawSort: z.object({
-    field: z.enum(['createdAt', 'updatedAt', 'dueAt']).optional(),
+    field: z.enum(['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt']).optional(),
     direction: z.enum(['asc', 'desc']).optional(),
   }).optional(),
   options: z.record(z.any()).optional(),

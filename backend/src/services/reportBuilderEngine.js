@@ -77,6 +77,59 @@ const DATASET_DEFINITIONS = {
       { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
     ],
   },
+  contacts: {
+    key: 'contacts',
+    label: 'Contacts',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Contact ID', kind: 'dimension', dataType: 'string' },
+      { key: 'firstName', label: 'First Name', kind: 'dimension', dataType: 'string' },
+      { key: 'lastName', label: 'Last Name', kind: 'dimension', dataType: 'string' },
+      { key: 'fullName', label: 'Full Name', kind: 'dimension', dataType: 'string' },
+      { key: 'email', label: 'Email', kind: 'dimension', dataType: 'string' },
+      { key: 'phone', label: 'Phone', kind: 'dimension', dataType: 'string' },
+      { key: 'mobile', label: 'Mobile', kind: 'dimension', dataType: 'string' },
+      { key: 'company', label: 'Company', kind: 'dimension', dataType: 'string' },
+      { key: 'jobTitle', label: 'Job Title', kind: 'dimension', dataType: 'string' },
+      { key: 'department', label: 'Department', kind: 'dimension', dataType: 'string' },
+      { key: 'source', label: 'Source', kind: 'dimension', dataType: 'string' },
+      { key: 'lifecycle', label: 'Lifecycle', kind: 'dimension', dataType: 'string' },
+      { key: 'type', label: 'Type', kind: 'dimension', dataType: 'string' },
+      { key: 'city', label: 'City', kind: 'dimension', dataType: 'string' },
+      { key: 'country', label: 'Country', kind: 'dimension', dataType: 'string' },
+      { key: 'score', label: 'Score', kind: 'measure', dataType: 'number' },
+      { key: 'owner.fullName', label: 'Owner', kind: 'dimension', dataType: 'string' },
+      { key: 'createdBy.fullName', label: 'Created By', kind: 'dimension', dataType: 'string' },
+      { key: 'lastContactedAt', label: 'Last Contacted At', kind: 'dimension', dataType: 'date' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+      { key: 'updatedAt', label: 'Updated At', kind: 'dimension', dataType: 'date' },
+      { key: 'doNotEmail', label: 'Do Not Email', kind: 'dimension', dataType: 'boolean' },
+      { key: 'doNotCall', label: 'Do Not Call', kind: 'dimension', dataType: 'boolean' },
+      { key: 'hasOptedOutEmail', label: 'Has Opted Out Email', kind: 'dimension', dataType: 'boolean' },
+    ],
+  },
+  deals: {
+    key: 'deals',
+    label: 'Deals',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Deal ID', kind: 'dimension', dataType: 'string' },
+      { key: 'name', label: 'Deal Name', kind: 'dimension', dataType: 'string' },
+      { key: 'amount', label: 'Amount', kind: 'measure', dataType: 'number' },
+      { key: 'stage', label: 'Stage', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'probability', label: 'Probability', kind: 'measure', dataType: 'number' },
+      { key: 'description', label: 'Description', kind: 'dimension', dataType: 'string' },
+      { key: 'closeDate', label: 'Close Date', kind: 'dimension', dataType: 'date' },
+      { key: 'owner.fullName', label: 'Owner', kind: 'dimension', dataType: 'string' },
+      { key: 'contact.id', label: 'Contact ID', kind: 'dimension', dataType: 'string' },
+      { key: 'contact.fullName', label: 'Contact Name', kind: 'dimension', dataType: 'string' },
+      { key: 'contact.company', label: 'Contact Company', kind: 'dimension', dataType: 'string' },
+      { key: 'contact.lifecycle', label: 'Contact Lifecycle', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+      { key: 'updatedAt', label: 'Updated At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
 };
 
 const SUPPORTED_OPERATORS = new Set([
@@ -191,6 +244,8 @@ function getFieldValue(row, fieldKey, dataset) {
   if (fieldKey === 'assignee.fullName') return getPersonFullName(row.assignee);
   if (fieldKey === 'lead.fullName') return getPersonFullName(row.lead);
   if (fieldKey === 'user.fullName') return getPersonFullName(row.user);
+  if (fieldKey === 'owner.fullName') return getPersonFullName(row.owner);
+  if (fieldKey === 'contact.fullName') return getPersonFullName(row.contact);
   if (fieldKey === 'callOutcomeReason') return getCallReason(row.metadata);
   if (fieldKey === 'callOutcomeKey') return row?.metadata?.dispositionKey || null;
   if (fieldKey === 'insideOutsideCenter') return getInsideOutsideCenter(row.metadata);
@@ -206,6 +261,12 @@ function getFieldValue(row, fieldKey, dataset) {
   }
   if (dataset === 'call_logs' && fieldKey === 'lead.source') {
     return row?.lead?.source || null;
+  }
+  if (dataset === 'deals' && fieldKey === 'contact.company') {
+    return row?.contact?.company || null;
+  }
+  if (dataset === 'deals' && fieldKey === 'contact.lifecycle') {
+    return row?.contact?.lifecycle || null;
   }
 
   if (fieldKey.includes('.')) return readNestedValue(row, fieldKey);
@@ -557,6 +618,27 @@ function buildWhereForDataset(dataset, req, divisionId) {
       },
     };
   }
+  if (dataset === 'contacts') {
+    return {
+      organizationId: scopedOrg,
+      isArchived: false,
+      ...(req.isRestrictedRole ? { ownerId: req.user.id } : {}),
+    };
+  }
+  if (dataset === 'deals') {
+    if (req.isRestrictedRole) {
+      return {
+        organizationId: scopedOrg,
+        OR: [
+          { ownerId: req.user.id },
+          { contact: { ownerId: req.user.id } },
+        ],
+      };
+    }
+    return {
+      organizationId: scopedOrg,
+    };
+  }
   return {
     organizationId: scopedOrg,
     isArchived: false,
@@ -567,13 +649,21 @@ function buildWhereForDataset(dataset, req, divisionId) {
 function applyDateWhere(baseWhere, config, dataset) {
   const where = { ...baseWhere };
   const dateFilters = (Array.isArray(config?.filters) ? config.filters : [])
-    .filter((f) => f && (f.field === 'createdAt' || f.field === 'updatedAt' || f.field === 'dueAt'));
+    .filter((f) => f && (
+      f.field === 'createdAt'
+      || f.field === 'updatedAt'
+      || f.field === 'dueAt'
+      || f.field === 'closeDate'
+      || f.field === 'lastContactedAt'
+    ));
   if (dateFilters.length === 0) return where;
 
   let targetField = dataset === 'tasks' ? 'dueAt' : 'createdAt';
   for (const filter of dateFilters) {
     if (filter.field === 'updatedAt') targetField = 'updatedAt';
     if (filter.field === 'dueAt') targetField = 'dueAt';
+    if (filter.field === 'closeDate') targetField = 'closeDate';
+    if (filter.field === 'lastContactedAt') targetField = 'lastContactedAt';
   }
 
   const dateWhere = {};
@@ -609,7 +699,7 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
   const limit = Math.min(Math.max(Number(config.rawLimit || 2000), 100), 5000);
   const baseWhere = buildWhereForDataset(dataset, req, divisionId);
   const where = applyDateWhere(baseWhere, config, dataset);
-  const orderByField = ['createdAt', 'updatedAt', 'dueAt'].includes(config?.rawSort?.field)
+  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt'].includes(config?.rawSort?.field)
     ? config.rawSort.field
     : getDatasetDefinition(dataset).defaultSortField;
   const orderByDirection = String(config?.rawSort?.direction || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
@@ -676,6 +766,70 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
         createdAt: true,
         lead: { select: { id: true, firstName: true, lastName: true, status: true, source: true } },
         user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+  }
+
+  if (dataset === 'contacts') {
+    return prisma.contact.findMany({
+      where,
+      orderBy,
+      take: limit,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        mobile: true,
+        company: true,
+        jobTitle: true,
+        department: true,
+        source: true,
+        lifecycle: true,
+        type: true,
+        city: true,
+        country: true,
+        score: true,
+        customData: true,
+        doNotEmail: true,
+        doNotCall: true,
+        hasOptedOutEmail: true,
+        lastContactedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: { select: { id: true, firstName: true, lastName: true } },
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+  }
+
+  if (dataset === 'deals') {
+    return prisma.deal.findMany({
+      where,
+      orderBy,
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        amount: true,
+        stage: true,
+        probability: true,
+        closeDate: true,
+        description: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: { select: { id: true, firstName: true, lastName: true } },
+        contact: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            company: true,
+            lifecycle: true,
+          },
+        },
       },
     });
   }
