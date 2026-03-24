@@ -1384,11 +1384,19 @@ function OfferStudioModal({
 
   function buildAudiencePayloadFromFilters() {
     const payload: Record<string, any> = {};
+    const hasAdditionalAudienceRules = Boolean(
+      filters.tagsAny.length > 0 ||
+      filters.noCallsInDays ||
+      filters.minCallCount ||
+      (filters.scorePreset === 'custom'
+        ? filters.minScore || filters.maxScore
+        : filters.scorePreset !== 'all')
+    );
     if (filters.selectedLeads.length > 0) {
       payload.leadIds = filters.selectedLeads.map((lead) => lead.id);
-      // Explicit lead selection should take priority over other audience
-      // constraints so selected leads are always previewed/applied.
-      return payload;
+      // If no extra rules are active, selected lead chips define the full audience.
+      // If extra rules are active, keep those too so users can refine selected leads.
+      if (!hasAdditionalAudienceRules) return payload;
     } else if (filters.search.trim()) {
       payload.search = filters.search.trim();
     }
@@ -1616,25 +1624,17 @@ function OfferStudioModal({
     if (cfg.filters && typeof cfg.filters === 'object') {
       const incomingFilters = cfg.filters as Record<string, unknown>;
       const rawTagsAny = incomingFilters.tagsAny;
-      const rawSelectedLeads = incomingFilters.selectedLeads;
       const normalizedTagsAny = Array.isArray(rawTagsAny)
         ? rawTagsAny.map((x) => String(x).trim()).filter(Boolean)
         : (typeof rawTagsAny === 'string'
           ? rawTagsAny.split(',').map((t) => t.trim()).filter(Boolean)
           : filters.tagsAny);
-      const normalizedSelectedLeads: SelectedLeadOption[] = Array.isArray(rawSelectedLeads)
-        ? rawSelectedLeads
-            .map((item: any) => ({
-              id: String(item?.id || ''),
-              name: String(item?.name || ''),
-              subtitle: item?.subtitle ? String(item.subtitle) : '',
-            }))
-            .filter((item) => item.id && item.name)
-        : filters.selectedLeads;
       const merged = {
         ...filters,
         ...incomingFilters,
-        selectedLeads: normalizedSelectedLeads,
+        // Templates are audience presets; they should not carry one-off lead picks.
+        search: '',
+        selectedLeads: [],
         tagsAny: normalizedTagsAny,
       } as OfferAudienceFilters;
       if (!merged.scorePreset) {
@@ -1712,7 +1712,12 @@ function OfferStudioModal({
         config: {
           campaignId: campaign.id,
           campaignName: campaign.name,
-          filters,
+          filters: {
+            ...filters,
+            // Avoid saving transient lead picks in reusable templates.
+            search: '',
+            selectedLeads: [],
+          },
           applyConfig,
         },
       });
@@ -1793,6 +1798,9 @@ function OfferStudioModal({
             <p className="mt-2 text-xs text-text-tertiary">
               Templates only prefill audience/apply settings. Offer assignment always targets the current campaign:&nbsp;
               <span className="font-semibold text-text-primary">{campaign.name}</span>.
+            </p>
+            <p className="mt-1 text-xs text-text-tertiary">
+              Selected lead chips are one-time picks and are not saved in templates.
             </p>
           </div>
 
