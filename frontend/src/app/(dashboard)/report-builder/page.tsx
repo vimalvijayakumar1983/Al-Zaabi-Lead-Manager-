@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type Dataset = 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines';
+type Dataset = 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines';
 type Visualization = 'table' | 'bar' | 'line' | 'pie' | 'kpi' | 'pivot' | 'funnel' | 'cohort';
 type FilterOperator =
   | 'eq' | 'neq' | 'contains' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'is_null' | 'is_not_null';
@@ -118,6 +118,7 @@ const DATASET_OPTIONS: Array<{ value: Dataset; label: string }> = [
   { value: 'contacts', label: 'Contacts' },
   { value: 'deals', label: 'Deals' },
   { value: 'campaigns', label: 'Campaigns' },
+  { value: 'campaign_assignments', label: 'Campaign Offer Assignments' },
   { value: 'lead_activities', label: 'Lead Activities' },
   { value: 'pipelines', label: 'Pipelines' },
   { value: 'tasks', label: 'Tasks' },
@@ -131,6 +132,7 @@ function titleFromDataset(dataset: Dataset): string {
   if (dataset === 'contacts') return 'Contacts';
   if (dataset === 'deals') return 'Deals';
   if (dataset === 'campaigns') return 'Campaigns';
+  if (dataset === 'campaign_assignments') return 'Campaign Offer Assignments';
   if (dataset === 'lead_activities') return 'Lead Activities';
   if (dataset === 'pipelines') return 'Pipelines';
   if (dataset === 'tasks') return 'Tasks';

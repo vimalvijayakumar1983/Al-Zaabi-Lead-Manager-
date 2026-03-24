@@ -47,6 +47,15 @@ const priorityColors: Record<string, string> = {
   URGENT: 'bg-red-100 text-red-700',
 };
 
+const offerLifecycleLabel: Record<string, string> = {
+  ELIGIBLE: 'Eligible',
+  CONTACTED: 'Contacted',
+  ACCEPTED: 'Accepted',
+  REDEEMED: 'Redeemed',
+  EXPIRED: 'Expired',
+  REJECTED: 'Rejected',
+};
+
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
   const fn = (obj.firstName || '').trim();
@@ -88,10 +97,15 @@ export default function LeadDetailPage() {
   const [showCallLogModal, setShowCallLogModal] = useState(false);
   const [callLogs, setCallLogs] = useState<any[]>([]);
   const [callLogsLoading, setCallLogsLoading] = useState(false);
+  const [updatingOfferAssignmentId, setUpdatingOfferAssignmentId] = useState<string | null>(null);
   const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
   const [convertingToContact, setConvertingToContact] = useState(false);
+  const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color: string }>>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagBusy, setTagBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
@@ -202,6 +216,17 @@ export default function LeadDetailPage() {
       });
   }, [lead?.organizationId]);
 
+  useEffect(() => {
+    const divisionId = lead?.organizationId;
+    if (!divisionId) {
+      setAvailableTags([]);
+      return;
+    }
+    api.getTags(divisionId)
+      .then((rows: any) => setAvailableTags(Array.isArray(rows) ? rows : []))
+      .catch(() => setAvailableTags([]));
+  }, [lead?.organizationId]);
+
 
   // Pipeline stages are now fetched alongside the lead in the initial load
   // effect below to avoid a visible delay (waterfall). This effect only
@@ -259,6 +284,23 @@ export default function LeadDetailPage() {
     setLead(data);
     setUnreadCommsCount(data.unreadCommunications || 0);
   }, [id]);
+
+  const handleOfferLifecycleUpdate = useCallback(async (assignmentId: string, status: string) => {
+    setUpdatingOfferAssignmentId(assignmentId);
+    try {
+      await api.updateCampaignAssignment(assignmentId, {
+        status,
+        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
+        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
+      });
+      await refreshLead();
+      addToast({ type: 'success', title: 'Offer Updated', message: `Lifecycle changed to ${offerLifecycleLabel[status] || status}.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Offer Update Failed', message: err?.message || 'Unable to update offer lifecycle.' });
+    } finally {
+      setUpdatingOfferAssignmentId(null);
+    }
+  }, [addToast, refreshLead]);
 
   const loadLeadAISummary = useCallback(async (force = false) => {
     setAiSummaryLoading(true);
@@ -548,6 +590,70 @@ export default function LeadDetailPage() {
       setConvertingToContact(false);
     }
   };
+
+  const handleAddExistingTag = useCallback(async (tagId: string) => {
+    if (!lead?.id) return;
+    setTagBusy(true);
+    try {
+      await api.addLeadTags(lead.id, { tagIds: [tagId] });
+      await refreshLead();
+      setTagInput('');
+      setTagPickerOpen(false);
+      addToast({ type: 'success', title: 'Tag Added', message: 'Tag has been added to this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Add Tag', message: err?.message || 'Unable to add tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, refreshLead]);
+
+  const handleCreateAndAddTag = useCallback(async () => {
+    const name = tagInput.trim();
+    if (!lead?.id || !lead.organizationId || !name) return;
+    setTagBusy(true);
+    try {
+      let createdTag: any = null;
+      try {
+        createdTag = await api.createTag({ name, organizationId: lead.organizationId });
+      } catch (createErr: any) {
+        const msg = String(createErr?.message || '').toLowerCase();
+        if (!msg.includes('already exists')) throw createErr;
+      }
+
+      if (createdTag?.id) {
+        await api.addLeadTags(lead.id, { tagIds: [createdTag.id] });
+      } else {
+        // Fallback path for duplicate tag names: backend will upsert by name.
+        await api.addLeadTags(lead.id, { tagNames: [name] });
+      }
+
+      await Promise.all([
+        refreshLead(),
+        api.getTags(lead.organizationId).then((rows: any) => setAvailableTags(Array.isArray(rows) ? rows : [])),
+      ]);
+      setTagInput('');
+      setTagPickerOpen(false);
+      addToast({ type: 'success', title: 'Tag Added', message: `"${name}" has been added.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Add Tag', message: err?.message || 'Unable to create/add tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, lead?.organizationId, refreshLead, tagInput]);
+
+  const handleRemoveTag = useCallback(async (tagId: string) => {
+    if (!lead?.id || !tagId) return;
+    setTagBusy(true);
+    try {
+      await api.removeLeadTag(lead.id, tagId);
+      await refreshLead();
+      addToast({ type: 'success', title: 'Tag Removed', message: 'Tag has been removed from this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Remove Tag', message: err?.message || 'Unable to remove tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, refreshLead]);
 
   // Load chat messages when Communications tab is active
   // The backend auto-marks unread messages as read when fetched
@@ -1197,6 +1303,71 @@ export default function LeadDetailPage() {
             )}
           </div>
 
+          {/* Offer Campaigns */}
+          <div className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">Offer Campaigns</h3>
+              <span className="text-xs text-gray-500">
+                {(lead.campaignAssignments || []).length} attached
+              </span>
+            </div>
+            {(lead.campaignAssignments || []).length === 0 ? (
+              <p className="text-sm text-gray-500">No active offers are attached to this lead yet.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {(lead.campaignAssignments || []).map((assignment) => {
+                  const status = assignment.status || 'ELIGIBLE';
+                  return (
+                    <div key={assignment.id} className="rounded-lg border border-gray-200 p-3 bg-white">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{assignment.campaign?.name || 'Campaign'}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            Assigned {new Date(assignment.assignedAt).toLocaleDateString()}
+                            {assignment.expiresAt ? ` · Expires ${new Date(assignment.expiresAt).toLocaleDateString()}` : ''}
+                          </p>
+                        </div>
+                        <span className="inline-flex items-center rounded-full bg-brand-50 text-brand-700 border border-brand-100 px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap">
+                          {offerLifecycleLabel[status] || status}
+                        </span>
+                      </div>
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        <div className="relative w-full sm:w-auto sm:min-w-[170px]">
+                          <select
+                            className="w-full appearance-none rounded-md border border-gray-300 bg-white py-1.5 pl-2.5 pr-8 text-xs leading-5 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 disabled:opacity-60"
+                            value={status}
+                            disabled={updatingOfferAssignmentId === assignment.id}
+                            onChange={(e) => handleOfferLifecycleUpdate(assignment.id, e.target.value)}
+                          >
+                            <option value="ELIGIBLE">Eligible</option>
+                            <option value="CONTACTED">Contacted</option>
+                            <option value="ACCEPTED">Accepted</option>
+                            <option value="REDEEMED">Redeemed</option>
+                            <option value="EXPIRED">Expired</option>
+                            <option value="REJECTED">Rejected</option>
+                          </select>
+                          <svg
+                            className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
+                        {assignment.notes && (
+                          <span className="text-xs text-gray-500 truncate max-w-full">
+                            Note: {assignment.notes}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* AI Lead Summary */}
           <div className="card p-4">
             <div className="mb-3 flex items-start justify-between gap-2">
@@ -1370,21 +1541,115 @@ export default function LeadDetailPage() {
           </div>
 
           {/* Tags */}
-          {lead.tags && lead.tags.length > 0 && (
-            <div className="card p-4">
-              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
-                Tags
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {lead.tags.map((t) => (
-                  <span key={t.tag.id} className="badge px-3 py-1" style={{ backgroundColor: t.tag.color + '20', color: t.tag.color, border: `1px solid ${t.tag.color}40` }}>
-                    {t.tag.name}
+          <div className="card p-4">
+            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
+              Tags
+            </h3>
+
+            <div className="flex flex-wrap gap-2 mb-3">
+              {(lead.tags || []).length > 0 ? (
+                (lead.tags || []).map((t: any) => (
+                  <span
+                    key={t?.tag?.id || t?.id}
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+                    style={{
+                      backgroundColor: `${t?.tag?.color || '#6366f1'}20`,
+                      color: t?.tag?.color || '#6366f1',
+                      border: `1px solid ${(t?.tag?.color || '#6366f1')}40`,
+                    }}
+                  >
+                    {t?.tag?.name || t?.name || 'Tag'}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(t?.tag?.id || t?.id)}
+                      disabled={tagBusy}
+                      className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
+                      title="Remove tag"
+                    >
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </span>
-                ))}
-              </div>
+                ))
+              ) : (
+                <span className="text-sm text-gray-500">No tags assigned yet.</span>
+              )}
             </div>
-          )}
+
+            <div className="relative">
+              <div className="flex gap-2">
+                <input
+                  value={tagInput}
+                  onChange={(e) => {
+                    setTagInput(e.target.value);
+                    setTagPickerOpen(true);
+                  }}
+                  onFocus={() => setTagPickerOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const normalized = tagInput.trim().toLowerCase();
+                      const existing = availableTags.find((tag) => tag.name.toLowerCase() === normalized);
+                      if (existing) {
+                        handleAddExistingTag(existing.id);
+                      } else if (normalized) {
+                        handleCreateAndAddTag();
+                      }
+                    }
+                    if (e.key === 'Escape') setTagPickerOpen(false);
+                  }}
+                  placeholder="Add tag: search existing or type new name"
+                  className="input text-sm"
+                  disabled={tagBusy}
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateAndAddTag}
+                  disabled={tagBusy || !tagInput.trim()}
+                  className="btn btn-secondary text-sm whitespace-nowrap disabled:opacity-50"
+                >
+                  {tagBusy ? 'Saving…' : 'Add Tag'}
+                </button>
+              </div>
+
+              {tagPickerOpen && (
+                <div className="absolute z-20 mt-1 max-h-52 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                  {availableTags
+                    .filter((tag) => !(lead.tags || []).some((t: any) => (t?.tag?.id || t?.id) === tag.id))
+                    .filter((tag) => !tagInput.trim() || tag.name.toLowerCase().includes(tagInput.trim().toLowerCase()))
+                    .slice(0, 12)
+                    .map((tag) => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleAddExistingTag(tag.id);
+                        }}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        disabled={tagBusy}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                          <span>{tag.name}</span>
+                        </span>
+                        <span className="text-xs text-gray-400">Add</span>
+                      </button>
+                    ))}
+                  {availableTags
+                    .filter((tag) => !(lead.tags || []).some((t: any) => (t?.tag?.id || t?.id) === tag.id))
+                    .filter((tag) => !tagInput.trim() || tag.name.toLowerCase().includes(tagInput.trim().toLowerCase()))
+                    .length === 0 && (
+                    <div className="px-3 py-2 text-sm text-gray-500">
+                      {tagInput.trim() ? 'No matching tags. Click "Add Tag" to create this tag.' : 'No more tags available.'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Assignment Panel */}
           <ReassignmentPanel

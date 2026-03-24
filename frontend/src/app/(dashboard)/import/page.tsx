@@ -177,17 +177,31 @@ function ImportWizard() {
   const [defaultSource, setDefaultSource] = useState('');
   const [ownerDropdownOpen, setOwnerDropdownOpen] = useState(false);
   const ownerDropdownRef = useRef<HTMLDivElement>(null);
+  const campaignDropdownRef = useRef<HTMLDivElement>(null);
+  const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ImportResult | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [defaultCampaignIds, setDefaultCampaignIds] = useState<string[]>([]);
   const [leadSourceOptions, setLeadSourceOptions] = useState<ManagedLeadSourceOption[]>(FALLBACK_IMPORT_SOURCES);
   const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     api.getUsers().then(setUsers).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getCampaigns({ page: 1, limit: 300, ...(activeDivisionId ? { divisionId: activeDivisionId } : {}) })
+      .then((res: any) => {
+        const rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+        setCampaigns(rows);
+      })
+      .catch(() => setCampaigns([]));
   }, []);
 
   useEffect(() => {
@@ -205,6 +219,9 @@ function ImportWizard() {
       if (ownerDropdownRef.current && !ownerDropdownRef.current.contains(e.target as Node)) {
         setOwnerDropdownOpen(false);
       }
+      if (campaignDropdownRef.current && !campaignDropdownRef.current.contains(e.target as Node)) {
+        setCampaignDropdownOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -213,6 +230,14 @@ function ImportWizard() {
   const toggleOwner = (userId: string) => {
     setAssignToIds((prev) =>
       prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const toggleDefaultCampaign = (campaignId: string) => {
+    setDefaultCampaignIds((prev) =>
+      prev.includes(campaignId)
+        ? prev.filter((id) => id !== campaignId)
+        : [...prev, campaignId]
     );
   };
 
@@ -270,6 +295,7 @@ function ImportWizard() {
         assignToIds: assignToIds.length > 0 ? assignToIds : undefined,
         defaultStatus: defaultStatus || undefined,
         defaultSource: defaultSource || undefined,
+        defaultCampaignIds: selectedModule === 'leads' && defaultCampaignIds.length > 0 ? defaultCampaignIds : undefined,
       });
       setResult(data);
       setStep('result');
@@ -292,6 +318,7 @@ function ImportWizard() {
     setDuplicateAction('skip');
     setDuplicateField('email');
     setAssignToIds([]);
+    setDefaultCampaignIds([]);
     setDefaultStatus('');
     setDefaultSource('');
   };
@@ -639,7 +666,7 @@ function ImportWizard() {
               <h3 className="text-sm font-semibold text-text-primary mb-1">Default Values</h3>
               <p className="text-2xs text-text-tertiary mb-4">Set defaults for fields not present in your file</p>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
                   <label className="label">Assign To <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
                   <div ref={ownerDropdownRef} className="relative">
@@ -715,6 +742,60 @@ function ImportWizard() {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="md:col-span-1">
+                  <label className="label">Attach Offer Campaigns <span className="text-2xs text-gray-400 font-normal">(multi-select)</span></label>
+                  <div ref={campaignDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setCampaignDropdownOpen(!campaignDropdownOpen)}
+                      className="input w-full text-left flex items-center justify-between"
+                    >
+                      <span className={defaultCampaignIds.length === 0 ? 'text-text-tertiary' : 'text-text-primary'}>
+                        {defaultCampaignIds.length === 0
+                          ? 'No campaigns selected'
+                          : defaultCampaignIds.length === 1
+                            ? (campaigns.find((c: any) => c.id === defaultCampaignIds[0])?.name || '1 selected')
+                            : `${defaultCampaignIds.length} campaigns selected`}
+                      </span>
+                      <ChevronDown className={`h-3.5 w-3.5 text-text-tertiary transition-transform ${campaignDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {campaignDropdownOpen && (
+                      <div className="absolute z-50 bottom-full mb-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                        {defaultCampaignIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setDefaultCampaignIds([])}
+                            className="w-full px-3 py-1.5 text-left text-2xs text-red-500 hover:bg-red-50 border-b border-gray-100"
+                          >
+                            Clear all
+                          </button>
+                        )}
+                        {campaigns.map((c: any) => {
+                          const isSelected = defaultCampaignIds.includes(c.id);
+                          return (
+                            <label key={c.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleDefaultCampaign(c.id)}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              <span className="text-sm text-text-primary truncate">
+                                {c.name}
+                              </span>
+                            </label>
+                          );
+                        })}
+                        {campaigns.length === 0 && (
+                          <p className="px-3 py-2 text-2xs text-text-tertiary">No campaigns found</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-2xs text-text-tertiary mt-1">
+                    Selected campaigns will be attached as offers to imported leads.
+                  </p>
                 </div>
               </div>
             </div>
