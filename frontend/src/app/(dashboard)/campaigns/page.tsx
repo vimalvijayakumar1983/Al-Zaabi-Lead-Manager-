@@ -2195,7 +2195,7 @@ export default function CampaignsPage() {
       if (filters.types.length > 0) params.type = filters.types.join(',');
       if (filters.statuses.length > 0) params.status = filters.statuses.join(',');
       if (filters.divisions.length > 0) params.divisionId = filters.divisions[0];
-      else if (isSuperAdmin && activeDivisionId) params.divisionId = activeDivisionId;
+      else if (activeDivisionId) params.divisionId = activeDivisionId;
       if (filters.sort) params.sort = filters.sort;
 
       // Date range
@@ -2245,7 +2245,7 @@ export default function CampaignsPage() {
     try {
       const divisionId = filters.divisions.length > 0
         ? filters.divisions[0]
-        : (isSuperAdmin ? activeDivisionId : undefined);
+        : activeDivisionId || undefined;
       const data = await (api as unknown as Record<string, Function>).getCampaignStats(divisionId);
       setStats(data as CampaignDashboardStats);
     } catch {
@@ -2254,7 +2254,7 @@ export default function CampaignsPage() {
     } finally {
       setStatsLoading(false);
     }
-  }, [filters.divisions, isSuperAdmin, activeDivisionId]);
+  }, [filters.divisions, activeDivisionId]);
 
   useEffect(() => {
     fetchCampaigns();
