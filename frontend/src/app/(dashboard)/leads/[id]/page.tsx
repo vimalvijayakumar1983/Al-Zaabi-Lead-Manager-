@@ -1319,19 +1319,29 @@ export default function LeadDetailPage() {
                         </span>
                       </div>
                       <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                        <select
-                          className="input text-xs h-8 min-w-[150px]"
-                          value={status}
-                          disabled={updatingOfferAssignmentId === assignment.id}
-                          onChange={(e) => handleOfferLifecycleUpdate(assignment.id, e.target.value)}
-                        >
-                          <option value="ELIGIBLE">Eligible</option>
-                          <option value="CONTACTED">Contacted</option>
-                          <option value="ACCEPTED">Accepted</option>
-                          <option value="REDEEMED">Redeemed</option>
-                          <option value="EXPIRED">Expired</option>
-                          <option value="REJECTED">Rejected</option>
-                        </select>
+                        <div className="relative w-full sm:w-auto sm:min-w-[170px]">
+                          <select
+                            className="w-full appearance-none rounded-md border border-gray-300 bg-white py-1.5 pl-2.5 pr-8 text-xs leading-5 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 disabled:opacity-60"
+                            value={status}
+                            disabled={updatingOfferAssignmentId === assignment.id}
+                            onChange={(e) => handleOfferLifecycleUpdate(assignment.id, e.target.value)}
+                          >
+                            <option value="ELIGIBLE">Eligible</option>
+                            <option value="CONTACTED">Contacted</option>
+                            <option value="ACCEPTED">Accepted</option>
+                            <option value="REDEEMED">Redeemed</option>
+                            <option value="EXPIRED">Expired</option>
+                            <option value="REJECTED">Rejected</option>
+                          </select>
+                          <svg
+                            className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
                         {assignment.notes && (
                           <span className="text-xs text-gray-500 truncate max-w-full">
                             Note: {assignment.notes}
