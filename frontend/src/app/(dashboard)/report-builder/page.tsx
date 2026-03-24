@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
   Plus,
@@ -159,6 +160,8 @@ function nextMeasureKey(existing: ReportMeasure[]): string {
 }
 
 export default function ReportBuilderPage() {
+  const searchParams = useSearchParams();
+  const prefillAppliedRef = useRef<string | null>(null);
   const [dataset, setDataset] = useState<Dataset>('leads');
   const [catalog, setCatalog] = useState<CatalogField[]>([]);
   const [definitions, setDefinitions] = useState<ReportDefinition[]>([]);
@@ -170,12 +173,22 @@ export default function ReportBuilderPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [divisionId, setDivisionId] = useState<string | undefined>(undefined);
+  const prefillDataset = searchParams.get('dataset');
+  const prefillCampaignId = searchParams.get('campaignId') || '';
+  const prefillCampaignName = searchParams.get('campaignName') || '';
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const activeDivisionId = window.localStorage.getItem('activeDivisionId') || undefined;
     setDivisionId(activeDivisionId);
   }, []);
+
+  useEffect(() => {
+    if (prefillDataset !== 'campaign_assignments') return;
+    if (dataset !== 'campaign_assignments') {
+      setDataset('campaign_assignments');
+    }
+  }, [prefillDataset, dataset]);
 
   const loadCatalog = useCallback(async (targetDataset: Dataset, targetDivisionId?: string) => {
     const result = await api.getReportCatalog(targetDataset, targetDivisionId);
@@ -237,6 +250,35 @@ export default function ReportBuilderPage() {
   useEffect(() => {
     openNew();
   }, [dataset, openNew]);
+
+  useEffect(() => {
+    if (prefillDataset !== 'campaign_assignments') return;
+    if (dataset !== 'campaign_assignments') return;
+    if (!prefillCampaignId) return;
+
+    const prefillKey = `${prefillDataset}:${prefillCampaignId}`;
+    if (prefillAppliedRef.current === prefillKey) return;
+
+    setConfig((prev) => {
+      const existingFilters = Array.isArray(prev.filters) ? prev.filters : [];
+      const hasCampaignFilter = existingFilters.some(
+        (f) => f.field === 'campaign.id' && f.operator === 'eq' && String(f.value || '') === prefillCampaignId
+      );
+      const nextFilters = hasCampaignFilter
+        ? existingFilters
+        : [...existingFilters, { field: 'campaign.id', operator: 'eq' as const, value: prefillCampaignId }];
+      return {
+        ...prev,
+        visualization: prev.visualization || 'table',
+        filters: nextFilters,
+      };
+    });
+
+    if (prefillCampaignName) {
+      setName(`Offer Insights — ${prefillCampaignName}`);
+    }
+    prefillAppliedRef.current = prefillKey;
+  }, [prefillDataset, dataset, prefillCampaignId, prefillCampaignName]);
 
   const onSelectReport = useCallback((report: ReportDefinition) => {
     setSelectedReportId(report.id);
