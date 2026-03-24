@@ -1386,6 +1386,9 @@ function OfferStudioModal({
     const payload: Record<string, any> = {};
     if (filters.selectedLeads.length > 0) {
       payload.leadIds = filters.selectedLeads.map((lead) => lead.id);
+      // Explicit lead selection should take priority over other audience
+      // constraints so selected leads are always previewed/applied.
+      return payload;
     } else if (filters.search.trim()) {
       payload.search = filters.search.trim();
     }
