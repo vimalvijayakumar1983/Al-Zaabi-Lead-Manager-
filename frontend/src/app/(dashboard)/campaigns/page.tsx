@@ -1537,7 +1537,31 @@ function OfferStudioModal({
         };
       }
       const res = await api.applyCampaignAudience(campaign.id, payload);
-      addToast('success', `Offer assignments created: ${res.created || 0}, updated: ${res.updated || 0}`);
+      const created = Number(res?.created || 0);
+      const updated = Number(res?.updated || 0);
+      const skipped = Number(res?.skipped || 0);
+      if (created === 0 && updated === 0) {
+        const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
+        const selectedTemplateName = String(selectedTemplate?.name || '').trim();
+        const currentCampaignName = String(campaign?.name || '').trim();
+        const templateLooksLikeDifferentOffer =
+          selectedTemplateName &&
+          currentCampaignName &&
+          selectedTemplateName.toLowerCase() !== currentCampaignName.toLowerCase();
+        let message = `No assignments changed for "${campaign.name}".`;
+        if (filters.selectedLeads.length > 0) {
+          message += ' Selected lead(s) are likely already attached to this same offer campaign.';
+        }
+        if (templateLooksLikeDifferentOffer) {
+          message += ` Template "${selectedTemplateName}" only loads audience rules; it does not switch the target campaign. To assign "${selectedTemplateName}", open that campaign's Offer Studio.`;
+        }
+        if (!applyConfig.overwriteExisting) {
+          message += ' Enable "Overwrite existing assignments for this campaign" to update existing rows.';
+        }
+        addToast('error', message);
+      } else {
+        addToast('success', `Offer assignments created: ${created}, updated: ${updated}, skipped: ${skipped}`);
+      }
       await Promise.all([loadAssignments(), loadAnalytics()]);
       onApplied();
     } catch (err: any) {
@@ -1736,6 +1760,10 @@ function OfferStudioModal({
               />
               <button className="btn-secondary px-4 py-2 text-sm" onClick={saveTemplate}>Save Template</button>
             </div>
+            <p className="mt-2 text-xs text-text-tertiary">
+              Templates only prefill audience/apply settings. Offer assignment always targets the current campaign:&nbsp;
+              <span className="font-semibold text-text-primary">{campaign.name}</span>.
+            </p>
           </div>
 
           <div className="card p-4">
