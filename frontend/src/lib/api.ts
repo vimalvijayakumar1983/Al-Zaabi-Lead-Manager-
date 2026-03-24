@@ -169,10 +169,6 @@ class ApiClient {
     return this.request<any>(`/leads/${id}`);
   }
 
-  async getLeadCampaignOffers(leadId: string) {
-    return this.request<any[]>(`/leads/${leadId}/campaign-offers`);
-  }
-
   async generateLeadAISummary(id: string, force = false) {
     return this.request<{
       success: boolean;
@@ -369,8 +365,8 @@ class ApiClient {
     return this.request<any>(`/analytics/task-sla-report?${q}`);
   }
 
-  async getCallDispositionReport(period = '30d', divisionId?: string, mode?: 'latest' | 'any') {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}), ...(mode ? { mode } : {}) });
+  async getCallDispositionReport(period = '30d', divisionId?: string) {
+    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/analytics/call-disposition-report?${q}`);
   }
 
@@ -461,7 +457,6 @@ class ApiClient {
     assignToIds?: string[];
     defaultStatus?: string;
     defaultSource?: string;
-    defaultCampaignIds?: string[];
   }) {
     const formData = new FormData();
     formData.append('file', file);
@@ -472,9 +467,6 @@ class ApiClient {
     if (options.assignToIds && options.assignToIds.length > 0) formData.append('assignToIds', JSON.stringify(options.assignToIds));
     if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
     if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
-    if (options.defaultCampaignIds && options.defaultCampaignIds.length > 0) {
-      formData.append('defaultCampaignIds', JSON.stringify(options.defaultCampaignIds));
-    }
     const token = this.getToken();
     const res = await fetch(`${API_URL}/import/execute`, {
       method: 'POST',
@@ -578,9 +570,8 @@ class ApiClient {
     return this.request<Campaign>(`/campaigns/${id}/duplicate`, { method: 'POST' });
   }
 
-  async getCampaignStats(divisionId?: string) {
-    const query = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<CampaignDashboardStats>(`/campaigns/stats${query}`);
+  async getCampaignStats() {
+    return this.request<CampaignDashboardStats>('/campaigns/stats');
   }
 
   async bulkUpdateCampaigns(ids: string[], data: { status?: string }) {
@@ -595,59 +586,6 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ ids }),
     });
-  }
-
-  async getCampaignTemplates(divisionId?: string) {
-    const query = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<any[]>(`/campaigns/templates${query}`);
-  }
-
-  async createCampaignTemplate(data: { name: string; description?: string | null; config?: Record<string, any>; isActive?: boolean; divisionId?: string }) {
-    return this.request<any>('/campaigns/templates', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateCampaignTemplate(id: string, data: Partial<{ name: string; description: string | null; config: Record<string, any>; isActive: boolean }>) {
-    return this.request<any>(`/campaigns/templates/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deleteCampaignTemplate(id: string) {
-    return this.request<{ success: boolean }>(`/campaigns/templates/${id}`, { method: 'DELETE' });
-  }
-
-  async previewCampaignAudience(campaignId: string, filters: Record<string, any>) {
-    return this.request<any>(`/campaigns/${campaignId}/assignments/preview`, {
-      method: 'POST',
-      body: JSON.stringify(filters || {}),
-    });
-  }
-
-  async applyCampaignAudience(campaignId: string, payload: Record<string, any>) {
-    return this.request<any>(`/campaigns/${campaignId}/assignments/apply`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async getCampaignAssignments(campaignId: string, params?: Record<string, string | number>) {
-    const query = params ? `?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}` : '';
-    return this.request<any>(`/campaigns/${campaignId}/assignments${query}`);
-  }
-
-  async updateCampaignAssignment(assignmentId: string, payload: Record<string, any>) {
-    return this.request<any>(`/campaigns/assignments/${assignmentId}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async getCampaignOfferAnalytics(campaignId: string) {
-    return this.request<any>(`/campaigns/${campaignId}/offer-analytics`);
   }
 
   // ─── Integrations ──────────────────────────────────────────────
@@ -878,12 +816,8 @@ class ApiClient {
     return this.request<any[]>(`/call-logs/lead/${leadId}`);
   }
 
-  async getDispositions(params?: { leadId?: string; divisionId?: string }) {
-    const q = new URLSearchParams();
-    if (params?.leadId) q.set('leadId', params.leadId);
-    if (params?.divisionId) q.set('divisionId', params.divisionId);
-    const query = q.toString();
-    return this.request<any[]>(`/call-logs/dispositions${query ? `?${query}` : ''}`);
+  async getDispositions() {
+    return this.request<any[]>('/call-logs/dispositions');
   }
 
   async getDispositionSettings() {
@@ -895,18 +829,6 @@ class ApiClient {
       '/call-logs/dispositions/settings',
       { method: 'PUT', body: JSON.stringify({ settings }) }
     );
-  }
-
-  async getDispositionStudio(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<{ divisionId: string; dispositions: any[] }>(`/call-logs/dispositions/studio${q}`);
-  }
-
-  async updateDispositionStudio(dispositions: any[], divisionId?: string) {
-    return this.request<{ divisionId: string; dispositions: any[] }>('/call-logs/dispositions/studio', {
-      method: 'PUT',
-      body: JSON.stringify({ dispositions, ...(divisionId ? { divisionId } : {}) }),
-    });
   }
 
   // Settings
@@ -934,7 +856,7 @@ class ApiClient {
     return this.request<any>('/settings/notifications');
   }
 
-  async updateNotificationPreferences(data: Partial<NotificationPreferences>) {
+  async updateNotificationPreferences(data: Record<string, boolean>) {
     return this.request<any>('/settings/notifications', { method: 'PUT', body: JSON.stringify(data) });
   }
 
@@ -1009,63 +931,10 @@ class ApiClient {
     return this.request<{ builtInFields: BuiltInField[]; customFields: CustomField[]; statusLabels?: Record<string, string> }>(`/settings/field-config${q}`);
   }
 
-  async getLeadSources(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
-    return this.request<{ sources: Array<{ key: string; label: string; source: string; isSystem: boolean; isActive: boolean }> }>(`/settings/lead-sources${q}`);
-  }
-
-  async saveLeadSources(payload: {
-    sources: Array<{ key?: string; label: string; source?: string; isSystem?: boolean; isActive?: boolean }>;
-    divisionId?: string | null;
-  }) {
-    return this.request<{ success: boolean; sources: Array<{ key: string; label: string; source: string; isSystem: boolean; isActive: boolean }> }>('/settings/lead-sources', {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-  }
-
   async saveStatusLabels(divisionId: string | null, labels: Record<string, string>) {
     return this.request<{ success: boolean }>('/settings/status-labels', {
       method: 'PUT',
       body: JSON.stringify({ divisionId, labels }),
-    });
-  }
-
-  async getStatusStageMapping(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
-    return this.request<{
-      divisionId: string;
-      divisionName: string;
-      statuses: string[];
-      rows: Array<{
-        stageId: string;
-        stageName: string;
-        isDefault: boolean;
-        isWonStage: boolean;
-        isLostStage: boolean;
-        mappedStatus: string;
-        source: 'manual' | 'fallback';
-        fallbackStatus: string;
-      }>;
-    }>(`/settings/status-stage-mapping${q}`);
-  }
-
-  async saveStatusStageMapping(divisionId: string | null, mappings: Record<string, string>) {
-    return this.request<{ success: boolean }>('/settings/status-stage-mapping', {
-      method: 'PUT',
-      body: JSON.stringify({ divisionId, mappings }),
-    });
-  }
-
-  async cloneStatusStageMappingToAll(sourceDivisionId: string, targetDivisionIds?: string[]) {
-    return this.request<{
-      success: boolean;
-      sourceDivisionId: string;
-      clonedTo: number;
-      divisions: Array<{ id: string; name: string; mappedStages: number }>;
-    }>('/settings/status-stage-mapping/clone-to-all', {
-      method: 'POST',
-      body: JSON.stringify({ sourceDivisionId, ...(targetDivisionIds ? { targetDivisionIds } : {}) }),
     });
   }
 
@@ -1223,52 +1092,6 @@ class ApiClient {
     return this.request<any>(`/users/${userId}/divisions/${divisionId}`, { method: 'DELETE' });
   }
 
-  // ─── Recycle Bin ────────────────────────────────────────────────
-  async getRecycleBinItems(params?: Record<string, string | number>) {
-    const q = new URLSearchParams();
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (value === undefined || value === null || value === '') continue;
-        q.set(key, String(value));
-      }
-    }
-    const query = q.toString();
-    return this.request<any>(`/recycle-bin${query ? `?${query}` : ''}`);
-  }
-
-  async restoreRecycleBinItem(id: string) {
-    return this.request<any>(`/recycle-bin/${id}/restore`, { method: 'POST' });
-  }
-
-  async permanentlyDeleteRecycleBinItem(id: string) {
-    return this.request<any>(`/recycle-bin/${id}/permanent`, { method: 'DELETE' });
-  }
-
-  async bulkRestoreRecycleBinItems(ids: string[]) {
-    return this.request<any>('/recycle-bin/bulk/restore', {
-      method: 'POST',
-      body: JSON.stringify({ ids }),
-    });
-  }
-
-  async bulkPermanentlyDeleteRecycleBinItems(ids: string[], confirmText = 'DELETE') {
-    return this.request<any>('/recycle-bin/bulk/permanent-delete', {
-      method: 'POST',
-      body: JSON.stringify({ ids, confirmText }),
-    });
-  }
-
-  async getRecycleBinAccessSettings() {
-    return this.request<any>('/recycle-bin/access-settings');
-  }
-
-  async updateRecycleBinAccessSettings(data: { roleScopes?: Record<string, any>; userOverrides?: Record<string, any> }) {
-    return this.request<any>('/recycle-bin/access-settings', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
   // ─── Notifications ───────────────────────────────────────────────
 
   async getNotifications(params?: Record<string, string | number>) {
@@ -1277,22 +1100,12 @@ class ApiClient {
       : '';
     return this.request<{
       data: AppNotification[];
-      pagination: {
-        page: number;
-        limit: number;
-        total: number;
-        totalPages: number;
-        hasNext: boolean;
-        hasPrev: boolean;
-      };
+      pagination: { page: number; limit: number; total: number; totalPages: number };
     }>(`/notifications${query}`);
   }
 
-  async getUnreadCount(params?: { divisionId?: string }) {
-    const q = new URLSearchParams();
-    if (params?.divisionId) q.set('divisionId', params.divisionId);
-    const query = q.toString();
-    return this.request<{ count: number }>(`/notifications/unread-count${query ? `?${query}` : ''}`);
+  async getUnreadCount() {
+    return this.request<{ count: number }>('/notifications/unread-count');
   }
 
   async markNotificationRead(id: string) {
@@ -1307,12 +1120,6 @@ class ApiClient {
     });
   }
 
-  async clearAllNotifications() {
-    return this.request<{ success: boolean; changed?: number; unreadCount?: number }>('/notifications/clear-all', {
-      method: 'POST',
-    });
-  }
-
   async archiveNotification(id: string) {
     return this.request<{ success: boolean }>(`/notifications/${id}/archive`, {
       method: 'POST',
@@ -1323,53 +1130,6 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/notifications/${id}`, {
       method: 'DELETE',
     });
-  }
-
-  async notificationAction(
-    id: string,
-    action: 'MARK_DONE' | 'SNOOZE' | 'ESCALATE',
-    minutes?: number
-  ) {
-    return this.request<any>(`/notifications/${id}/action`, {
-      method: 'POST',
-      body: JSON.stringify(
-        typeof minutes === 'number' ? { action, minutes } : { action }
-      ),
-    });
-  }
-
-  async snoozeNotification(id: string, minutes = 15) {
-    return this.request<any>(`/notifications/${id}/snooze`, {
-      method: 'POST',
-      body: JSON.stringify({ minutes }),
-    });
-  }
-
-  async escalateNotification(id: string) {
-    return this.request<any>(`/notifications/${id}/escalate`, {
-      method: 'POST',
-    });
-  }
-
-  async getNotificationDigest(params?: { range?: string; from?: string; to?: string; limit?: number; divisionId?: string }) {
-    const q = new URLSearchParams();
-    if (params?.range) q.set('range', params.range);
-    if (params?.from) q.set('from', params.from);
-    if (params?.to) q.set('to', params.to);
-    if (typeof params?.limit === 'number') q.set('limit', String(params.limit));
-    if (params?.divisionId) q.set('divisionId', params.divisionId);
-    const query = q.toString();
-    return this.request<any>(`/notifications/digest${query ? `?${query}` : ''}`);
-  }
-
-  async getNotificationAnalytics(params?: { range?: string; from?: string; to?: string; divisionId?: string }) {
-    const q = new URLSearchParams();
-    if (params?.range) q.set('range', params.range);
-    if (params?.from) q.set('from', params.from);
-    if (params?.to) q.set('to', params.to);
-    if (params?.divisionId) q.set('divisionId', params.divisionId);
-    const query = q.toString();
-    return this.request<any>(`/notifications/analytics${query ? `?${query}` : ''}`);
   }
 
   async getNotificationPrefs() {
@@ -1552,12 +1312,20 @@ class ApiClient {
   }
 
   // ─── Report Builder ───────────────────────────────────────────────
-  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines', divisionId?: string) {
+  async getReportCatalog(
+    dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines',
+    divisionId?: string
+  ) {
     const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/report-builder/catalog?${q.toString()}`);
   }
 
-  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines' }) {
+  async getReportDefinitions(
+    params?: {
+      divisionId?: string;
+      dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines';
+    }
+  ) {
     const q = new URLSearchParams();
     if (params?.divisionId) q.set('divisionId', params.divisionId);
     if (params?.dataset) q.set('dataset', params.dataset);
@@ -1585,7 +1353,11 @@ class ApiClient {
     });
   }
 
-  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
+  async previewReport(payload: {
+    dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines';
+    divisionId?: string;
+    config: any;
+  }) {
     return this.request<any>('/report-builder/preview', {
       method: 'POST',
       body: JSON.stringify(payload),
