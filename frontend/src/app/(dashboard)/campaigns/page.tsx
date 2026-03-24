@@ -1495,7 +1495,9 @@ function OfferStudioModal({
     setPreviewTouched(true);
     try {
       const payload: Record<string, any> = buildAudiencePayloadFromFilters();
-      payload.excludeAssignedToCampaign = true;
+      // When overwrite is enabled, include already-assigned leads in preview
+      // so users can re-target/update lifecycle for existing assignments.
+      payload.excludeAssignedToCampaign = !applyConfig.overwriteExisting;
       const result = await api.previewCampaignAudience(campaign.id, payload);
       const rows = Array.isArray(result?.leads) ? result.leads : [];
       setPreviewRows(rows);
@@ -1519,7 +1521,7 @@ function OfferStudioModal({
       else {
         payload.filters = {
           ...buildAudiencePayloadFromFilters(),
-          excludeAssignedToCampaign: true,
+          excludeAssignedToCampaign: !applyConfig.overwriteExisting,
         };
       }
       const res = await api.applyCampaignAudience(campaign.id, payload);
