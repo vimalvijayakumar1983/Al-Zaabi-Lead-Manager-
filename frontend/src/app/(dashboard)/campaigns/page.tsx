@@ -1416,6 +1416,21 @@ function OfferStudioModal({
     return campaignOrgId || activeDivisionId;
   }
 
+  function isTemplateForCurrentCampaign(template: any) {
+    const cfg = template?.config && typeof template.config === 'object'
+      ? (template.config as Record<string, unknown>)
+      : {};
+    const scopedCampaignId = typeof cfg.campaignId === 'string' ? cfg.campaignId.trim() : '';
+    if (scopedCampaignId) return scopedCampaignId === campaign.id;
+    // Legacy fallback for older templates saved before campaign scoping:
+    // only keep templates that clearly map to the current campaign by name.
+    const scopedCampaignName = typeof cfg.campaignName === 'string' ? cfg.campaignName.trim().toLowerCase() : '';
+    const templateName = String(template?.name || '').trim().toLowerCase();
+    const currentCampaignName = String(campaign?.name || '').trim().toLowerCase();
+    if (scopedCampaignName) return scopedCampaignName === currentCampaignName;
+    return templateName === currentCampaignName;
+  }
+
   const loadAssignments = useCallback(async () => {
     try {
       const res = await api.getCampaignAssignments(campaign.id, { page: 1, limit: 50, sortBy: 'assignedAt', sortOrder: 'desc' });
@@ -1441,10 +1456,17 @@ function OfferStudioModal({
     Promise.all([
       loadAssignments(),
       loadAnalytics(),
-      api.getCampaignTemplates(divisionScopeId).then((rows) => setTemplates(Array.isArray(rows) ? rows : [])).catch(() => setTemplates([])),
+      api.getCampaignTemplates(divisionScopeId).then((rows) => {
+        const allRows = Array.isArray(rows) ? rows : [];
+        const scopedRows = allRows.filter(isTemplateForCurrentCampaign);
+        setTemplates(scopedRows);
+        if (selectedTemplateId && !scopedRows.some((t: any) => t.id === selectedTemplateId)) {
+          setSelectedTemplateId('');
+        }
+      }).catch(() => setTemplates([])),
       api.getTags(divisionScopeId).then((rows) => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([])),
     ]).finally(() => setLoading(false));
-  }, [campaign, loadAssignments, loadAnalytics]);
+  }, [campaign, loadAssignments, loadAnalytics, selectedTemplateId]);
 
   useEffect(() => {
     function onDocMouseDown(e: MouseEvent) {
@@ -1585,6 +1607,11 @@ function OfferStudioModal({
   function applyTemplate(templateId: string) {
     setSelectedTemplateId(templateId);
     const tpl = templates.find((t) => t.id === templateId);
+    if (tpl && !isTemplateForCurrentCampaign(tpl)) {
+      addToast('error', 'This template belongs to a different campaign and cannot be applied here.');
+      setSelectedTemplateId('');
+      return;
+    }
     const cfg = tpl?.config || {};
     if (cfg.filters && typeof cfg.filters === 'object') {
       const incomingFilters = cfg.filters as Record<string, unknown>;
@@ -1683,12 +1710,15 @@ function OfferStudioModal({
         description: `Offer studio template for ${campaign.name}`,
         divisionId: divisionScopeId,
         config: {
+          campaignId: campaign.id,
+          campaignName: campaign.name,
           filters,
           applyConfig,
         },
       });
       const rows = await api.getCampaignTemplates(divisionScopeId);
-      setTemplates(Array.isArray(rows) ? rows : []);
+      const allRows = Array.isArray(rows) ? rows : [];
+      setTemplates(allRows.filter(isTemplateForCurrentCampaign));
       setTemplateName('');
       addToast('success', 'Template saved');
     } catch (err: any) {
