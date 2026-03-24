@@ -55,6 +55,7 @@ const offerLifecycleLabel: Record<string, string> = {
   EXPIRED: 'Expired',
   REJECTED: 'Rejected',
 };
+const activeOfferStatuses = new Set(['ELIGIBLE', 'CONTACTED', 'ACCEPTED']);
 
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
@@ -96,6 +97,7 @@ export default function LeadDetailPage() {
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
   const [convertingToContact, setConvertingToContact] = useState(false);
+  const [showOfferHistoryModal, setShowOfferHistoryModal] = useState(false);
   const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color: string }>>([]);
   const [tagInput, setTagInput] = useState('');
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -896,6 +898,15 @@ export default function LeadDetailPage() {
   const displayConversionProb = typeof aiSignals?.conversionProb === 'number'
     ? aiSignals.conversionProb
     : lead.conversionProb;
+  const allOfferAssignments = (lead.campaignAssignments || [])
+    .slice()
+    .sort((a, b) => new Date(b.assignedAt).getTime() - new Date(a.assignedAt).getTime());
+  const activeOfferAssignments = allOfferAssignments.filter((assignment) =>
+    activeOfferStatuses.has(String(assignment?.status || ''))
+  );
+  const historicalOfferAssignments = allOfferAssignments.filter(
+    (assignment) => !activeOfferStatuses.has(String(assignment?.status || ''))
+  );
 
   return (
     <div className="flex flex-col -m-3 sm:-m-4 md:-m-6 overflow-hidden" style={{ height: 'calc(100dvh - 3.5rem)' }}>
@@ -1294,15 +1305,26 @@ export default function LeadDetailPage() {
           <div className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Offer Campaigns</h3>
-              <span className="text-xs text-gray-500">
-                {(lead.campaignAssignments || []).length} attached
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">
+                  {activeOfferAssignments.length} active
+                </span>
+                {historicalOfferAssignments.length > 0 && (
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-brand-600 hover:text-brand-700"
+                    onClick={() => setShowOfferHistoryModal(true)}
+                  >
+                    History ({historicalOfferAssignments.length})
+                  </button>
+                )}
+              </div>
             </div>
-            {(lead.campaignAssignments || []).length === 0 ? (
-              <p className="text-sm text-gray-500">No active offers are attached to this lead yet.</p>
+            {activeOfferAssignments.length === 0 ? (
+              <p className="text-sm text-gray-500">No active offers are attached to this lead right now.</p>
             ) : (
               <div className="space-y-2.5">
-                {(lead.campaignAssignments || []).map((assignment) => {
+                {activeOfferAssignments.map((assignment) => {
                   const status = assignment.status || 'ELIGIBLE';
                   return (
                     <div key={assignment.id} className="rounded-lg border border-gray-200 p-3 bg-white">
@@ -2304,6 +2326,69 @@ export default function LeadDetailPage() {
             <div className="flex gap-2">
               <button onClick={() => setShowConvertModal(false)} className="btn-secondary flex-1">Cancel</button>
               <button onClick={handleConvertToWon} className="btn-primary flex-1 bg-green-600 hover:bg-green-700">Convert</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOfferHistoryModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowOfferHistoryModal(false)}
+        >
+          <div className="card w-full max-w-4xl max-h-[84vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Offer History</h2>
+                <p className="text-sm text-gray-500">Historical offers for this lead (read-only)</p>
+              </div>
+              <button
+                type="button"
+                className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+                onClick={() => setShowOfferHistoryModal(false)}
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              {historicalOfferAssignments.length === 0 ? (
+                <p className="text-sm text-gray-500">No historical offers found.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px]">
+                    <thead>
+                      <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3">Campaign</th>
+                        <th className="py-2 pr-3">Status</th>
+                        <th className="py-2 pr-3">Assigned</th>
+                        <th className="py-2 pr-3">Expires</th>
+                        <th className="py-2 pr-3">Lifecycle Dates</th>
+                        <th className="py-2 pr-0">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicalOfferAssignments.map((assignment) => (
+                        <tr key={assignment.id} className="border-b border-gray-50">
+                          <td className="py-2 pr-3">
+                            <div className="font-medium text-gray-900">{assignment.campaign?.name || 'Campaign'}</div>
+                            <div className="text-xs text-gray-500">{assignment.campaign?.type || '—'}</div>
+                          </td>
+                          <td className="py-2 pr-3 text-sm text-gray-600">{offerLifecycleLabel[assignment.status] || assignment.status}</td>
+                          <td className="py-2 pr-3 text-sm text-gray-600">{assignment.assignedAt ? new Date(assignment.assignedAt).toLocaleDateString() : '—'}</td>
+                          <td className="py-2 pr-3 text-sm text-gray-600">{assignment.expiresAt ? new Date(assignment.expiresAt).toLocaleDateString() : '—'}</td>
+                          <td className="py-2 pr-3 text-xs text-gray-500">
+                            {assignment.discussedAt ? `Discussed ${new Date(assignment.discussedAt).toLocaleDateString()}` : '—'}
+                            {assignment.redeemedAt ? ` · Redeemed ${new Date(assignment.redeemedAt).toLocaleDateString()}` : ''}
+                          </td>
+                          <td className="py-2 pr-0 text-sm text-gray-600 max-w-[260px] truncate">{assignment.notes || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>
