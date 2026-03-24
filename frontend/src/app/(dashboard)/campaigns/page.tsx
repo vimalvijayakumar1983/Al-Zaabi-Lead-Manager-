@@ -1498,9 +1498,13 @@ function OfferStudioModal({
     setPreviewTouched(true);
     try {
       const payload: Record<string, any> = buildAudiencePayloadFromFilters();
-      // When overwrite is enabled, include already-assigned leads in preview
-      // so users can re-target/update lifecycle for existing assignments.
-      payload.excludeAssignedToCampaign = !applyConfig.overwriteExisting;
+      const hasExplicitSelectedLeads = filters.selectedLeads.length > 0;
+      // Explicit lead selection should always preview the chosen leads.
+      // Do not exclude already-assigned records in this mode.
+      if (!hasExplicitSelectedLeads) {
+        // For rule-based audiences, keep the "ready to assign" behavior.
+        payload.excludeAssignedToCampaign = !applyConfig.overwriteExisting;
+      }
       const result = await api.previewCampaignAudience(campaign.id, payload);
       const rows = Array.isArray(result?.leads) ? result.leads : [];
       setPreviewRows(rows);
@@ -1521,6 +1525,11 @@ function OfferStudioModal({
       if (applyConfig.notes.trim()) payload.notes = applyConfig.notes.trim();
       if (applyConfig.expiresAt) payload.expiresAt = new Date(applyConfig.expiresAt).toISOString();
       if (previewRows.length > 0) payload.leadIds = previewRows.map((l) => l.id);
+      else if (filters.selectedLeads.length > 0) {
+        // Apply directly to explicitly selected leads. Backend will safely
+        // skip duplicates when overwriteExisting is false.
+        payload.leadIds = filters.selectedLeads.map((lead) => lead.id);
+      }
       else {
         payload.filters = {
           ...buildAudiencePayloadFromFilters(),
@@ -1952,7 +1961,7 @@ function OfferStudioModal({
               <button className="btn-secondary px-4 py-2 text-sm" onClick={handlePreview} disabled={previewLoading}>
                 {previewLoading ? 'Previewing...' : 'Preview Audience'}
               </button>
-              <span className="text-sm text-text-secondary">{previewRows.length} leads ready for assignment</span>
+              <span className="text-sm text-text-secondary">{previewRows.length} leads matched audience filters</span>
             </div>
           </div>
 
