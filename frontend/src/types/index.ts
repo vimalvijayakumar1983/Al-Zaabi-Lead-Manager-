@@ -133,6 +133,26 @@ export interface Lead {
   tasks?: Task[];
   communications?: Communication[];
   attachments?: Attachment[];
+  campaignAssignments?: Array<{
+    id: string;
+    status: 'ELIGIBLE' | 'CONTACTED' | 'ACCEPTED' | 'REDEEMED' | 'EXPIRED' | 'REJECTED';
+    source?: 'IMPORT' | 'RULE' | 'MANUAL' | 'API';
+    notes?: string;
+    assignedAt: string;
+    expiresAt?: string | null;
+    discussedAt?: string | null;
+    redeemedAt?: string | null;
+    campaign: {
+      id: string;
+      name: string;
+      type?: string;
+      status?: string;
+      metadata?: Record<string, unknown>;
+      startDate?: string | null;
+      endDate?: string | null;
+    };
+    assignedBy?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+  }>;
   _count?: { activities: number; tasks: number; communications: number; callLogs: number };
   channelCounts?: Record<string, number>;
   firstMessage?: { channel: string; body: string; createdAt: string } | null;

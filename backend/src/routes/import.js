@@ -149,6 +149,47 @@ function resolveImportSource(rawValue, lookup) {
   return null;
 }
 
+function normalizeToken(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function extractCampaignCode(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null;
+  return (
+    metadata.campaignCode ||
+    metadata.code ||
+    metadata.offerCode ||
+    metadata.offer_code ||
+    null
+  );
+}
+
+function buildCampaignLookup(campaigns) {
+  const map = new Map();
+  for (const campaign of campaigns || []) {
+    if (!campaign?.id) continue;
+    map.set(normalizeToken(campaign.id), campaign.id);
+    if (campaign.name) map.set(normalizeToken(campaign.name), campaign.id);
+    const code = extractCampaignCode(campaign.metadata);
+    if (code) map.set(normalizeToken(code), campaign.id);
+  }
+  return map;
+}
+
+function resolveCampaignIdsFromText(rawText, lookup) {
+  if (!rawText) return [];
+  const tokens = String(rawText)
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const ids = [];
+  for (const token of tokens) {
+    const id = lookup.get(normalizeToken(token));
+    if (id) ids.push(id);
+  }
+  return [...new Set(ids)];
+}
+
 // ─── Lead field definitions for mapping ─────────────────────────
 const LEAD_FIELDS = [
   { key: 'name', label: 'Name', required: true, type: 'string' },
@@ -396,7 +437,18 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       return res.status(400).json({ error: 'File is required' });
     }
 
-    const { module = 'leads', fieldMapping: mappingStr, duplicateAction = 'skip', duplicateField, assignToId, assignToIds: assignToIdsStr, defaultStatus, defaultSource, divisionId } = req.body;
+    const {
+      module = 'leads',
+      fieldMapping: mappingStr,
+      duplicateAction = 'skip',
+      duplicateField,
+      assignToId,
+      assignToIds: assignToIdsStr,
+      defaultStatus,
+      defaultSource,
+      defaultCampaignIds: defaultCampaignIdsStr,
+      divisionId,
+    } = req.body;
     // Support multi-owner assignment: parse assignToIds JSON array, fall back to single assignToId
     let assignToIdsList = [];
     if (assignToIdsStr) {
@@ -407,6 +459,15 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       assignToIdsList = [assignToId];
     }
     let roundRobinIndex = 0;
+    let defaultCampaignIds = [];
+    if (defaultCampaignIdsStr) {
+      try {
+        const parsed = typeof defaultCampaignIdsStr === 'string' ? JSON.parse(defaultCampaignIdsStr) : defaultCampaignIdsStr;
+        defaultCampaignIds = Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+      } catch {
+        defaultCampaignIds = [];
+      }
+    }
     const fieldMapping = typeof mappingStr === 'string' ? JSON.parse(mappingStr) : (mappingStr || {});
     const fields = MODULE_FIELDS[module];
 
@@ -419,6 +480,12 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
     const sourceCatalog = await getLeadSourceCatalogForOrg(targetOrgId);
     const sourceLookup = buildLeadSourceLookup(sourceCatalog);
     const defaultSourceResolved = resolveImportSource(defaultSource, sourceLookup) || { source: 'CSV_IMPORT', sourceDetail: null };
+    const campaignCatalog = await prisma.campaign.findMany({
+      where: { organizationId: targetOrgId },
+      select: { id: true, name: true, metadata: true },
+    });
+    const campaignLookup = buildCampaignLookup(campaignCatalog);
+    defaultCampaignIds = defaultCampaignIds.filter((id) => campaignLookup.get(normalizeToken(id)) === id || campaignCatalog.some((c) => c.id === id));
 
     const rows = await parseFileToRows(req.file);
     if (rows.length === 0) {
@@ -532,6 +599,12 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
             tagNames = mapped.tags.split(',').map(t => t.trim()).filter(Boolean);
             delete mapped.tags;
           }
+          const resolvedCampaignIds = [
+            ...new Set([
+              ...defaultCampaignIds,
+              ...resolveCampaignIdsFromText(mapped.campaign, campaignLookup),
+            ]),
+          ];
 
           // Duplicate detection — check specified field AND auto-detect by email/phone
           let existingLead = null;
@@ -562,6 +635,20 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
                 where: { id: existingLead.id },
                 data: { ...mapped, customData: mergedCustom, updatedAt: new Date() },
               });
+              if (resolvedCampaignIds.length > 0) {
+                await prisma.leadCampaignAssignment.createMany({
+                  data: resolvedCampaignIds.map((campaignId) => ({
+                    organizationId: targetOrgId,
+                    leadId: existingLead.id,
+                    campaignId,
+                    source: 'IMPORT',
+                    status: 'ELIGIBLE',
+                    assignedById: req.user.id,
+                    metadata: { importId: importRecord?.id || null },
+                  })),
+                  skipDuplicates: true,
+                }).catch(() => {});
+              }
               importedIds.push(existingLead.id);
               updated++;
               continue;
@@ -623,6 +710,21 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
 
           const lead = await prisma.lead.create({ data: leadData });
           importedIds.push(lead.id);
+
+          if (resolvedCampaignIds.length > 0) {
+            await prisma.leadCampaignAssignment.createMany({
+              data: resolvedCampaignIds.map((campaignId) => ({
+                organizationId: targetOrgId,
+                leadId: lead.id,
+                campaignId,
+                source: 'IMPORT',
+                status: 'ELIGIBLE',
+                assignedById: req.user.id,
+                metadata: { importId: importRecord?.id || null },
+              })),
+              skipDuplicates: true,
+            }).catch(() => {});
+          }
 
           // Handle tags
           if (tagNames.length > 0) {

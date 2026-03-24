@@ -72,6 +72,7 @@ interface CampaignDashboardStats {
 
 interface CampaignFormData {
   name: string;
+  campaignCode: string;
   type: string;
   status: string;
   budget: string;
@@ -181,6 +182,7 @@ const DEFAULT_FILTER_STATE: FilterState = {
 
 const EMPTY_FORM_DATA: CampaignFormData = {
   name: '',
+  campaignCode: '',
   type: 'FACEBOOK_ADS',
   status: 'DRAFT',
   budget: '',
@@ -277,6 +279,12 @@ function getDateRange(preset: string): { from: string; to: string } {
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function hasTextSelection(): boolean {
+  if (typeof window === 'undefined') return false;
+  const selectedText = window.getSelection?.()?.toString?.() || '';
+  return selectedText.trim().length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -574,12 +582,14 @@ function Pagination({
 function ActionsMenu({
   campaign,
   onEdit,
+  onOfferStudio,
   onDuplicate,
   onToggleStatus,
   onDelete,
 }: {
   campaign: Campaign;
   onEdit: () => void;
+  onOfferStudio: () => void;
   onDuplicate: () => void;
   onToggleStatus: () => void;
   onDelete: () => void;
@@ -620,6 +630,13 @@ function ActionsMenu({
             Duplicate
           </button>
           <button
+            onClick={() => { onOfferStudio(); setOpen(false); }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-text-primary hover:bg-gray-50 transition-colors"
+          >
+            <Target className="w-4 h-4 text-brand-600" />
+            Offer Studio
+          </button>
+          <button
             onClick={() => { onToggleStatus(); setOpen(false); }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-text-primary hover:bg-gray-50 transition-colors"
           >
@@ -653,6 +670,7 @@ function ActionsMenu({
 function CampaignCard({
   campaign,
   onEdit,
+  onOfferStudio,
   onDuplicate,
   onToggleStatus,
   onDelete,
@@ -661,6 +679,7 @@ function CampaignCard({
 }: {
   campaign: Campaign;
   onEdit: () => void;
+  onOfferStudio: () => void;
   onDuplicate: () => void;
   onToggleStatus: () => void;
   onDelete: () => void;
@@ -700,6 +719,7 @@ function CampaignCard({
             <ActionsMenu
               campaign={campaign}
               onEdit={onEdit}
+              onOfferStudio={onOfferStudio}
               onDuplicate={onDuplicate}
               onToggleStatus={onToggleStatus}
               onDelete={onDelete}
@@ -782,10 +802,22 @@ function DeleteConfirmModal({
   onCancel: () => void;
   loading: boolean;
 }) {
+  const backdropPressStarted = useRef(false);
   if (!campaign) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onCancel}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onCancel();
+      }}
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 text-center">
           <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
@@ -837,6 +869,7 @@ function CampaignFormModal({
   onClose: () => void;
   loading: boolean;
 }) {
+  const backdropPressStarted = useRef(false);
   const [form, setForm] = useState<CampaignFormData>(initialData);
   const [errors, setErrors] = useState<FormErrors>({});
   const [showUtm, setShowUtm] = useState(
@@ -871,6 +904,9 @@ function CampaignFormModal({
       newErrors.targetConversions = 'Must be a positive number';
     if (form.targetRevenue && (isNaN(Number(form.targetRevenue)) || Number(form.targetRevenue) < 0))
       newErrors.targetRevenue = 'Must be a positive number';
+    if (isSuperAdmin && !form.organizationId) {
+      newErrors.organizationId = 'Division is required';
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }
@@ -886,7 +922,18 @@ function CampaignFormModal({
   const errorClass = 'text-xs text-red-600 mt-1';
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onClose();
+      }}
+    >
       <div
         className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -925,6 +972,20 @@ function CampaignFormModal({
               autoFocus
             />
             {errors.name && <p className={errorClass}>{errors.name}</p>}
+          </div>
+
+          <div>
+            <label className={labelClass}>Campaign Code (for import mapping)</label>
+            <input
+              type="text"
+              value={form.campaignCode}
+              onChange={(e) => updateField('campaignCode', e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+              placeholder="e.g., WINBACK_Q2_2026"
+              className={inputClass}
+            />
+            <p className="text-2xs text-text-tertiary mt-1">
+              Optional unique code used to attach offers during lead import.
+            </p>
           </div>
 
           {/* Type & Status row */}
@@ -1030,6 +1091,7 @@ function CampaignFormModal({
                   </option>
                 ))}
               </select>
+              {errors.organizationId && <p className={errorClass}>{errors.organizationId}</p>}
             </div>
           )}
 
@@ -1189,6 +1251,7 @@ function SaveFilterModal({
   onSave: (name: string) => void;
   onClose: () => void;
 }) {
+  const backdropPressStarted = useRef(false);
   const [name, setName] = useState('');
 
   function handleSave() {
@@ -1199,7 +1262,18 @@ function SaveFilterModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onClose();
+      }}
+    >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 border-b">
           <h3 className="text-lg font-bold text-text-primary">Save Filter View</h3>
@@ -1233,6 +1307,861 @@ function SaveFilterModal({
   );
 }
 
+/* ---- Offer Studio Modal ---- */
+function OfferStudioModal({
+  campaign,
+  divisionLabel,
+  onClose,
+  onApplied,
+  addToast,
+}: {
+  campaign: Campaign;
+  divisionLabel?: string;
+  onClose: () => void;
+  onApplied: () => void;
+  addToast: (type: 'success' | 'error', message: string) => void;
+}) {
+  const backdropPressStarted = useRef(false);
+  type SelectedLeadOption = {
+    id: string;
+    name: string;
+    subtitle?: string;
+  };
+  type OfferAudienceFilters = {
+    search: string;
+    selectedLeads: SelectedLeadOption[];
+    scorePreset: string;
+    minScore: string;
+    maxScore: string;
+    noCallsPreset: string;
+    noCallsInDays: string;
+    minCallPreset: string;
+    minCallCount: string;
+    tagsAny: string[];
+  };
+  const [loading, setLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewTouched, setPreviewTouched] = useState(false);
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [previewRows, setPreviewRows] = useState<any[]>([]);
+  const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
+  const [searchSuggestionsLoading, setSearchSuggestionsLoading] = useState(false);
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color?: string }>>([]);
+  const [customTagInput, setCustomTagInput] = useState('');
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [templateName, setTemplateName] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [filters, setFilters] = useState<OfferAudienceFilters>({
+    search: '',
+    selectedLeads: [],
+    scorePreset: 'all',
+    minScore: '',
+    maxScore: '',
+    noCallsPreset: '',
+    noCallsInDays: '',
+    minCallPreset: '',
+    minCallCount: '',
+    tagsAny: [],
+  });
+  const [applyConfig, setApplyConfig] = useState({
+    source: 'RULE',
+    expiresAt: '',
+    notes: '',
+    overwriteExisting: false,
+  });
+  const searchInputWrapRef = useRef<HTMLDivElement | null>(null);
+
+  const scorePresetOptions: Array<{ value: string; label: string; min?: number; max?: number }> = [
+    { value: 'all', label: 'All scores' },
+    { value: 'cold', label: 'Cold (0-24)', min: 0, max: 24 },
+    { value: 'warm', label: 'Warm (25-49)', min: 25, max: 49 },
+    { value: 'hot', label: 'Hot (50-74)', min: 50, max: 74 },
+    { value: 'priority', label: 'Priority (75-100)', min: 75, max: 100 },
+    { value: 'custom', label: 'Custom range' },
+  ];
+
+  function buildAudiencePayloadFromFilters() {
+    const payload: Record<string, any> = {};
+    const hasAdditionalAudienceRules = Boolean(
+      filters.tagsAny.length > 0 ||
+      filters.noCallsInDays ||
+      filters.minCallCount ||
+      (filters.scorePreset === 'custom'
+        ? filters.minScore || filters.maxScore
+        : filters.scorePreset !== 'all')
+    );
+    if (filters.selectedLeads.length > 0) {
+      payload.leadIds = filters.selectedLeads.map((lead) => lead.id);
+      // If no extra rules are active, selected lead chips define the full audience.
+      // If extra rules are active, keep those too so users can refine selected leads.
+      if (!hasAdditionalAudienceRules) return payload;
+    } else if (filters.search.trim()) {
+      payload.search = filters.search.trim();
+    }
+
+    const selectedScorePreset = scorePresetOptions.find((opt) => opt.value === filters.scorePreset);
+    if (filters.scorePreset === 'custom') {
+      if (filters.minScore) payload.minScore = Number(filters.minScore);
+      if (filters.maxScore) payload.maxScore = Number(filters.maxScore);
+    } else if (selectedScorePreset && selectedScorePreset.value !== 'all') {
+      if (selectedScorePreset.min !== undefined) payload.minScore = selectedScorePreset.min;
+      if (selectedScorePreset.max !== undefined) payload.maxScore = selectedScorePreset.max;
+    }
+
+    if (filters.noCallsInDays) payload.noCallsInDays = Number(filters.noCallsInDays);
+    if (filters.minCallCount) payload.minCallCount = Number(filters.minCallCount);
+    if (filters.tagsAny.length > 0) payload.tagsAny = filters.tagsAny;
+    return payload;
+  }
+
+  function getDivisionScopeId() {
+    const campaignOrgId = (campaign as unknown as Record<string, unknown>).organizationId as string | undefined;
+    const activeDivisionId = typeof window !== 'undefined'
+      ? (localStorage.getItem('activeDivisionId') || undefined)
+      : undefined;
+    return campaignOrgId || activeDivisionId;
+  }
+
+  function isTemplateForCurrentCampaign(template: any) {
+    const cfg = template?.config && typeof template.config === 'object'
+      ? (template.config as Record<string, unknown>)
+      : {};
+    const scopedCampaignId = typeof cfg.campaignId === 'string' ? cfg.campaignId.trim() : '';
+    if (scopedCampaignId) return scopedCampaignId === campaign.id;
+    // Legacy fallback for older templates saved before campaign scoping:
+    // only keep templates that clearly map to the current campaign by name.
+    const scopedCampaignName = typeof cfg.campaignName === 'string' ? cfg.campaignName.trim().toLowerCase() : '';
+    const templateName = String(template?.name || '').trim().toLowerCase();
+    const currentCampaignName = String(campaign?.name || '').trim().toLowerCase();
+    if (scopedCampaignName) return scopedCampaignName === currentCampaignName;
+    return templateName === currentCampaignName;
+  }
+
+  const loadAssignments = useCallback(async () => {
+    try {
+      const res = await api.getCampaignAssignments(campaign.id, { page: 1, limit: 50, sortBy: 'assignedAt', sortOrder: 'desc' });
+      const rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setAssignments(rows);
+    } catch {
+      setAssignments([]);
+    }
+  }, [campaign.id]);
+
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const data = await api.getCampaignOfferAnalytics(campaign.id);
+      setAnalytics(data);
+    } catch {
+      setAnalytics(null);
+    }
+  }, [campaign.id]);
+
+  useEffect(() => {
+    const divisionScopeId = getDivisionScopeId();
+    setLoading(true);
+    Promise.all([
+      loadAssignments(),
+      loadAnalytics(),
+      api.getCampaignTemplates(divisionScopeId).then((rows) => {
+        const allRows = Array.isArray(rows) ? rows : [];
+        const scopedRows = allRows.filter(isTemplateForCurrentCampaign);
+        setTemplates(scopedRows);
+        if (selectedTemplateId && !scopedRows.some((t: any) => t.id === selectedTemplateId)) {
+          setSelectedTemplateId('');
+        }
+      }).catch(() => setTemplates([])),
+      api.getTags(divisionScopeId).then((rows) => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([])),
+    ]).finally(() => setLoading(false));
+  }, [campaign, loadAssignments, loadAnalytics, selectedTemplateId]);
+
+  useEffect(() => {
+    function onDocMouseDown(e: MouseEvent) {
+      if (searchInputWrapRef.current && !searchInputWrapRef.current.contains(e.target as Node)) {
+        setSearchDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => document.removeEventListener('mousedown', onDocMouseDown);
+  }, []);
+
+  useEffect(() => {
+    const term = filters.search.trim();
+    if (term.length < 2) {
+      setSearchSuggestions([]);
+      setSearchSuggestionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        setSearchSuggestionsLoading(true);
+        const divisionScopeId = getDivisionScopeId();
+        const res = await api.getLeads({
+          page: 1,
+          limit: 20,
+          search: term,
+          ...(divisionScopeId ? { divisionId: divisionScopeId } : {}),
+        });
+        if (cancelled) return;
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        const selectedIds = new Set(filters.selectedLeads.map((lead) => lead.id));
+        const filteredRows = rows.filter((lead: any) => !selectedIds.has(lead.id));
+        setSearchSuggestions(filteredRows);
+        setSearchDropdownOpen(true);
+      } catch {
+        if (cancelled) return;
+        setSearchSuggestions([]);
+      } finally {
+        if (!cancelled) setSearchSuggestionsLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [filters.search, filters.selectedLeads, campaign.id]);
+
+  async function handlePreview() {
+    setPreviewLoading(true);
+    setPreviewTouched(true);
+    try {
+      const payload: Record<string, any> = buildAudiencePayloadFromFilters();
+      const hasExplicitSelectedLeads = filters.selectedLeads.length > 0;
+      // Explicit lead selection should always preview the chosen leads.
+      // Do not exclude already-assigned records in this mode.
+      if (!hasExplicitSelectedLeads) {
+        // For rule-based audiences, keep the "ready to assign" behavior.
+        payload.excludeAssignedToCampaign = !applyConfig.overwriteExisting;
+      }
+      const result = await api.previewCampaignAudience(campaign.id, payload);
+      const rows = Array.isArray(result?.leads) ? result.leads : [];
+      setPreviewRows(rows);
+      addToast('success', `${rows.length} leads matched audience filters`);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to preview audience');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function handleApply() {
+    try {
+      const payload: Record<string, any> = {
+        source: applyConfig.source,
+        overwriteExisting: applyConfig.overwriteExisting,
+      };
+      if (applyConfig.notes.trim()) payload.notes = applyConfig.notes.trim();
+      if (applyConfig.expiresAt) payload.expiresAt = new Date(applyConfig.expiresAt).toISOString();
+      if (previewRows.length > 0) payload.leadIds = previewRows.map((l) => l.id);
+      else if (filters.selectedLeads.length > 0) {
+        // Apply directly to explicitly selected leads. Backend will safely
+        // skip duplicates when overwriteExisting is false.
+        payload.leadIds = filters.selectedLeads.map((lead) => lead.id);
+      }
+      else {
+        payload.filters = {
+          ...buildAudiencePayloadFromFilters(),
+          excludeAssignedToCampaign: !applyConfig.overwriteExisting,
+        };
+      }
+      const res = await api.applyCampaignAudience(campaign.id, payload);
+      const created = Number(res?.created || 0);
+      const updated = Number(res?.updated || 0);
+      const skipped = Number(res?.skipped || 0);
+      if (created === 0 && updated === 0) {
+        const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
+        const selectedTemplateName = String(selectedTemplate?.name || '').trim();
+        const currentCampaignName = String(campaign?.name || '').trim();
+        const templateLooksLikeDifferentOffer =
+          selectedTemplateName &&
+          currentCampaignName &&
+          selectedTemplateName.toLowerCase() !== currentCampaignName.toLowerCase();
+        let message = `No assignments changed for "${campaign.name}".`;
+        if (filters.selectedLeads.length > 0) {
+          message += ' Selected lead(s) are likely already attached to this same offer campaign.';
+        }
+        if (templateLooksLikeDifferentOffer) {
+          message += ` Template "${selectedTemplateName}" only loads audience rules; it does not switch the target campaign. To assign "${selectedTemplateName}", open that campaign's Offer Studio.`;
+        }
+        if (!applyConfig.overwriteExisting) {
+          message += ' Enable "Overwrite existing assignments for this campaign" to update existing rows.';
+        }
+        addToast('error', message);
+      } else {
+        addToast('success', `Offer assignments created: ${created}, updated: ${updated}, skipped: ${skipped}`);
+      }
+      await Promise.all([loadAssignments(), loadAnalytics()]);
+      onApplied();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to apply audience');
+    }
+  }
+
+  async function updateAssignmentStatus(assignmentId: string, status: string) {
+    try {
+      await api.updateCampaignAssignment(assignmentId, {
+        status,
+        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
+        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
+      });
+      await Promise.all([loadAssignments(), loadAnalytics()]);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to update assignment');
+    }
+  }
+
+  function applyTemplate(templateId: string) {
+    setSelectedTemplateId(templateId);
+    const tpl = templates.find((t) => t.id === templateId);
+    if (tpl && !isTemplateForCurrentCampaign(tpl)) {
+      addToast('error', 'This template belongs to a different campaign and cannot be applied here.');
+      setSelectedTemplateId('');
+      return;
+    }
+    const cfg = tpl?.config || {};
+    if (cfg.filters && typeof cfg.filters === 'object') {
+      const incomingFilters = cfg.filters as Record<string, unknown>;
+      const rawTagsAny = incomingFilters.tagsAny;
+      const normalizedTagsAny = Array.isArray(rawTagsAny)
+        ? rawTagsAny.map((x) => String(x).trim()).filter(Boolean)
+        : (typeof rawTagsAny === 'string'
+          ? rawTagsAny.split(',').map((t) => t.trim()).filter(Boolean)
+          : filters.tagsAny);
+      const merged = {
+        ...filters,
+        ...incomingFilters,
+        // Templates are audience presets; they should not carry one-off lead picks.
+        search: '',
+        selectedLeads: [],
+        tagsAny: normalizedTagsAny,
+      } as OfferAudienceFilters;
+      if (!merged.scorePreset) {
+        merged.scorePreset = merged.minScore || merged.maxScore ? 'custom' : 'all';
+      }
+      setFilters(merged);
+    }
+    if (cfg.applyConfig && typeof cfg.applyConfig === 'object') {
+      setApplyConfig((prev) => ({ ...prev, ...cfg.applyConfig }));
+    }
+  }
+
+  function toggleTag(tagName: string) {
+    setFilters((prev) => ({
+      ...prev,
+      tagsAny: prev.tagsAny.includes(tagName)
+        ? prev.tagsAny.filter((name) => name !== tagName)
+        : [...prev.tagsAny, tagName],
+    }));
+  }
+
+  function addCustomTags() {
+    const names = customTagInput
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (names.length === 0) return;
+    setFilters((prev) => ({
+      ...prev,
+      tagsAny: Array.from(new Set(prev.tagsAny.concat(names))),
+    }));
+    setCustomTagInput('');
+  }
+
+  function getSuggestionName(lead: any) {
+    const full = [lead?.firstName, lead?.lastName].filter(Boolean).join(' ').trim();
+    return full || lead?.company || 'Unknown Lead';
+  }
+
+  function selectSearchSuggestion(lead: any) {
+    const selected: SelectedLeadOption = {
+      id: lead.id,
+      name: getSuggestionName(lead),
+      subtitle: lead.email || lead.phone || lead.company || '',
+    };
+    setFilters((prev) => {
+      if (prev.selectedLeads.some((x) => x.id === selected.id)) {
+        return { ...prev, search: '', selectedLeads: prev.selectedLeads };
+      }
+      return { ...prev, search: '', selectedLeads: [...prev.selectedLeads, selected] };
+    });
+    setSearchSuggestions([]);
+    setSearchDropdownOpen(false);
+  }
+
+  function removeSelectedLead(id: string) {
+    setFilters((prev) => ({
+      ...prev,
+      selectedLeads: prev.selectedLeads.filter((lead) => lead.id !== id),
+    }));
+  }
+
+  async function saveTemplate() {
+    const name = templateName.trim();
+    if (!name) {
+      addToast('error', 'Template name is required');
+      return;
+    }
+    try {
+      const divisionScopeId = getDivisionScopeId();
+      await api.createCampaignTemplate({
+        name,
+        description: `Offer studio template for ${campaign.name}`,
+        divisionId: divisionScopeId,
+        config: {
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          filters: {
+            ...filters,
+            // Avoid saving transient lead picks in reusable templates.
+            search: '',
+            selectedLeads: [],
+          },
+          applyConfig,
+        },
+      });
+      const rows = await api.getCampaignTemplates(divisionScopeId);
+      const allRows = Array.isArray(rows) ? rows : [];
+      setTemplates(allRows.filter(isTemplateForCurrentCampaign));
+      setTemplateName('');
+      addToast('success', 'Template saved');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to save template');
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3 sm:p-6"
+      onMouseDown={(e) => {
+        backdropPressStarted.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (!backdropPressStarted.current) return;
+        if (e.target !== e.currentTarget) return;
+        if (hasTextSelection()) return;
+        onClose();
+      }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-text-primary">Offer Studio — {campaign.name}</h3>
+            <p className="text-sm text-text-secondary">Build audience conditions, preview, apply and track offer lifecycle.</p>
+            <p className="mt-1 text-xs inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 text-indigo-700 px-2 py-0.5">
+              Division: {divisionLabel || 'Current Division'}
+            </p>
+          </div>
+          <button className="p-2 rounded-lg hover:bg-gray-100" onClick={onClose}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Assigned</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.assigned ?? '—'}</p>
+            </div>
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Contacted</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.contacted ?? '—'}</p>
+            </div>
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Accepted</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.accepted ?? '—'}</p>
+            </div>
+            <div className="card p-4">
+              <p className="text-xs text-text-tertiary">Redeemed</p>
+              <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.redeemed ?? '—'}</p>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Templates</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <select className="input" value={selectedTemplateId} onChange={(e) => applyTemplate(e.target.value)}>
+                <option value="">Select a template</option>
+                {templates.map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                ))}
+              </select>
+              <input
+                className="input md:col-span-1"
+                placeholder="Save current setup as template"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+              />
+              <button className="btn-secondary px-4 py-2 text-sm" onClick={saveTemplate}>Save Template</button>
+            </div>
+            <p className="mt-2 text-xs text-text-tertiary">
+              Templates only prefill audience/apply settings. Offer assignment always targets the current campaign:&nbsp;
+              <span className="font-semibold text-text-primary">{campaign.name}</span>.
+            </p>
+            <p className="mt-1 text-xs text-text-tertiary">
+              Selected lead chips are one-time picks and are not saved in templates.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Audience Rules</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              <div className="relative md:col-span-2 xl:col-span-3" ref={searchInputWrapRef}>
+                {filters.selectedLeads.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {filters.selectedLeads.map((lead) => (
+                      <span
+                        key={lead.id}
+                        className="inline-flex items-center gap-1 rounded-full bg-brand-50 text-brand-700 px-2 py-0.5 text-xs border border-brand-200"
+                      >
+                        {lead.name}
+                        <button
+                          type="button"
+                          onClick={() => removeSelectedLead(lead.id)}
+                          className="text-brand-500 hover:text-brand-800"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <input
+                  className="input"
+                  placeholder="Search and select multiple leads"
+                  value={filters.search}
+                  onFocus={() => {
+                    if (filters.search.trim().length >= 2) setSearchDropdownOpen(true);
+                  }}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setFilters((p) => ({ ...p, search: next }));
+                    if (next.trim().length < 2) {
+                      setSearchSuggestions([]);
+                      setSearchDropdownOpen(false);
+                    } else {
+                      setSearchDropdownOpen(true);
+                    }
+                  }}
+                />
+                {searchDropdownOpen && filters.search.trim().length >= 2 && (
+                  <div className="absolute z-40 mt-1 w-full rounded-xl border border-gray-200 bg-white shadow-xl max-h-64 overflow-y-auto">
+                    {searchSuggestionsLoading ? (
+                      <p className="px-3 py-2 text-sm text-text-secondary">Searching...</p>
+                    ) : searchSuggestions.length === 0 ? (
+                      <p className="px-3 py-2 text-sm text-text-secondary">No matching leads found</p>
+                    ) : (
+                      searchSuggestions
+                        .filter((lead) => !filters.selectedLeads.some((sel) => sel.id === lead.id))
+                        .map((lead) => (
+                        <button
+                          key={lead.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectSearchSuggestion(lead)}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0 border-gray-100"
+                        >
+                          <div className="text-sm font-medium text-text-primary">{getSuggestionName(lead)}</div>
+                          <div className="text-xs text-text-tertiary truncate">
+                            {lead.email || lead.phone || lead.company || '—'}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <select
+                className="input"
+                value={filters.scorePreset}
+                onChange={(e) =>
+                  setFilters((p) => ({
+                    ...p,
+                    scorePreset: e.target.value,
+                    ...(e.target.value !== 'custom' ? { minScore: '', maxScore: '' } : {}),
+                  }))
+                }
+              >
+                {scorePresetOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {filters.scorePreset === 'custom' && (
+                <>
+                  <input className="input" type="number" placeholder="Custom min score" value={filters.minScore} onChange={(e) => setFilters((p) => ({ ...p, minScore: e.target.value }))} />
+                  <input className="input" type="number" placeholder="Custom max score" value={filters.maxScore} onChange={(e) => setFilters((p) => ({ ...p, maxScore: e.target.value }))} />
+                </>
+              )}
+              <select
+                className="input"
+                value={filters.noCallsPreset}
+                onChange={(e) =>
+                  setFilters((p) => ({
+                    ...p,
+                    noCallsPreset: e.target.value,
+                    noCallsInDays: e.target.value === 'custom' ? p.noCallsInDays : e.target.value,
+                  }))
+                }
+              >
+                <option value="">Any call recency</option>
+                <option value="7">No calls in 7 days</option>
+                <option value="14">No calls in 14 days</option>
+                <option value="30">No calls in 30 days</option>
+                <option value="60">No calls in 60 days</option>
+                <option value="90">No calls in 90 days</option>
+                <option value="custom">Custom days...</option>
+              </select>
+              {filters.noCallsPreset === 'custom' && (
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  placeholder="Custom no-call days"
+                  value={filters.noCallsInDays}
+                  onChange={(e) =>
+                    setFilters((p) => ({
+                      ...p,
+                      noCallsInDays: e.target.value,
+                    }))
+                  }
+                />
+              )}
+              <select
+                className="input"
+                value={filters.minCallPreset}
+                onChange={(e) =>
+                  setFilters((p) => ({
+                    ...p,
+                    minCallPreset: e.target.value,
+                    minCallCount: e.target.value === 'custom' ? p.minCallCount : e.target.value,
+                  }))
+                }
+              >
+                <option value="">Any call count</option>
+                <option value="1">At least 1 call</option>
+                <option value="2">At least 2 calls</option>
+                <option value="3">At least 3 calls</option>
+                <option value="5">At least 5 calls</option>
+                <option value="10">At least 10 calls</option>
+                <option value="custom">Custom count...</option>
+              </select>
+              {filters.minCallPreset === 'custom' && (
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  placeholder="Custom minimum call count"
+                  value={filters.minCallCount}
+                  onChange={(e) =>
+                    setFilters((p) => ({
+                      ...p,
+                      minCallCount: e.target.value,
+                    }))
+                  }
+                />
+              )}
+              <div className="md:col-span-2 xl:col-span-3 rounded-xl border border-gray-200 p-3">
+                <p className="text-xs font-semibold text-text-secondary mb-2">Tags (available + custom)</p>
+                {availableTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {availableTags.map((tag) => {
+                      const isSelected = filters.tagsAny.includes(tag.name);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onClick={() => toggleTag(tag.name)}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs border transition-colors ${
+                            isSelected
+                              ? 'bg-brand-50 text-brand-700 border-brand-200'
+                              : 'bg-white text-text-secondary border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                          {tag.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-text-tertiary mb-3">No saved tags found for this division. You can still add custom tags below.</p>
+                )}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    className="input flex-1"
+                    placeholder="Add custom tag(s), comma separated"
+                    value={customTagInput}
+                    onChange={(e) => setCustomTagInput(e.target.value)}
+                  />
+                  <button type="button" className="btn-secondary px-3 py-2 text-sm" onClick={addCustomTags}>
+                    Add Tag
+                  </button>
+                  {filters.tagsAny.length > 0 && (
+                    <button
+                      type="button"
+                      className="px-3 py-2 text-sm rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                      onClick={() => setFilters((p) => ({ ...p, tagsAny: [] }))}
+                    >
+                      Clear Tags
+                    </button>
+                  )}
+                </div>
+                {filters.tagsAny.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {filters.tagsAny.map((name) => (
+                      <span key={name} className="inline-flex items-center gap-1 rounded-full bg-gray-100 text-gray-700 px-2 py-0.5 text-xs">
+                        {name}
+                        <button type="button" onClick={() => toggleTag(name)} className="text-gray-400 hover:text-gray-700">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button className="btn-secondary px-4 py-2 text-sm" onClick={handlePreview} disabled={previewLoading}>
+                {previewLoading ? 'Previewing...' : 'Preview Audience'}
+              </button>
+              <span className="text-sm text-text-secondary">{previewRows.length} leads matched audience filters</span>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="font-semibold text-text-primary">Preview Leads</h4>
+              <span className="text-xs text-text-tertiary">
+                {previewRows.length} matched
+              </span>
+            </div>
+            {!previewTouched ? (
+              <p className="text-sm text-text-secondary">
+                Click <span className="font-medium">Preview Audience</span> to see the lead list before applying.
+              </p>
+            ) : previewLoading ? (
+              <p className="text-sm text-text-secondary">Loading preview leads...</p>
+            ) : previewRows.length === 0 ? (
+              <p className="text-sm text-text-secondary">No leads matched the current audience rules.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[900px]">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary border-b border-gray-100">
+                      <th className="py-2 pr-3">Lead</th>
+                      <th className="py-2 pr-3">Company</th>
+                      <th className="py-2 pr-3">Score</th>
+                      <th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3">Calls</th>
+                      <th className="py-2 pr-3">Current Offers</th>
+                      <th className="py-2 pr-0">Last Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((row) => (
+                      <tr key={row.id} className="border-b border-gray-50">
+                        <td className="py-2 pr-3">
+                          <div className="font-medium text-text-primary">{row.fullName || `${row.firstName || ''} ${row.lastName || ''}`.trim() || '—'}</div>
+                          <div className="text-xs text-text-tertiary">{row.email || row.phone || '—'}</div>
+                        </td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.company || '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.score ?? '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.status || '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row?._count?.callLogs ?? 0}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row?._count?.campaignAssignments ?? 0}</td>
+                        <td className="py-2 pr-0 text-sm text-text-secondary">{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString() : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Apply Offer</h4>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <select className="input" value={applyConfig.source} onChange={(e) => setApplyConfig((p) => ({ ...p, source: e.target.value }))}>
+                <option value="RULE">Rule</option>
+                <option value="MANUAL">Manual</option>
+                <option value="IMPORT">Import</option>
+                <option value="API">API</option>
+              </select>
+              <input className="input" type="datetime-local" value={applyConfig.expiresAt} onChange={(e) => setApplyConfig((p) => ({ ...p, expiresAt: e.target.value }))} />
+              <input className="input md:col-span-2" placeholder="Internal notes (optional)" value={applyConfig.notes} onChange={(e) => setApplyConfig((p) => ({ ...p, notes: e.target.value }))} />
+            </div>
+            <label className="mt-3 inline-flex items-center gap-2 text-sm text-text-secondary">
+              <input type="checkbox" checked={applyConfig.overwriteExisting} onChange={(e) => setApplyConfig((p) => ({ ...p, overwriteExisting: e.target.checked }))} />
+              Overwrite existing assignments for this campaign
+            </label>
+            <div className="mt-3">
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleApply}>Apply to Audience</button>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-text-primary mb-3">Assigned Leads</h4>
+            {loading ? (
+              <p className="text-sm text-text-secondary">Loading assignments...</p>
+            ) : assignments.length === 0 ? (
+              <p className="text-sm text-text-secondary">No assignments yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px]">
+                  <thead>
+                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary border-b border-gray-100">
+                      <th className="py-2 pr-3">Lead</th>
+                      <th className="py-2 pr-3">Company</th>
+                      <th className="py-2 pr-3">Score</th>
+                      <th className="py-2 pr-3">Assigned At</th>
+                      <th className="py-2 pr-3">Assigned By</th>
+                      <th className="py-2 pr-0 w-[170px]">Lifecycle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignments.map((row) => (
+                      <tr key={row.id} className="border-b border-gray-50">
+                        <td className="py-2 pr-3">
+                          <div className="font-medium text-text-primary">{row.leadName || `${row.lead?.firstName || ''} ${row.lead?.lastName || ''}`.trim() || '—'}</div>
+                          <div className="text-xs text-text-tertiary">{row.lead?.email || row.lead?.phone || '—'}</div>
+                        </td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.lead?.company || '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.lead?.score ?? '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{new Date(row.assignedAt).toLocaleDateString()}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.assignedBy ? `${row.assignedBy.firstName} ${row.assignedBy.lastName}` : 'System'}</td>
+                        <td className="py-2 pr-0 align-middle">
+                          <div className="relative w-full max-w-[170px]">
+                            <select
+                              className="h-9 w-full appearance-none rounded-lg border border-gray-200 bg-white pl-3 pr-8 text-sm font-medium text-text-primary shadow-xs focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                              value={row.status}
+                              onChange={(e) => updateAssignmentStatus(row.id, e.target.value)}
+                            >
+                              <option value="ELIGIBLE">Eligible</option>
+                              <option value="CONTACTED">Contacted</option>
+                              <option value="ACCEPTED">Accepted</option>
+                              <option value="REDEEMED">Redeemed</option>
+                              <option value="EXPIRED">Expired</option>
+                              <option value="REJECTED">Rejected</option>
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main Campaigns Page Component
 // ---------------------------------------------------------------------------
@@ -1245,6 +2174,12 @@ export default function CampaignsPage() {
     if (!user?.organization?.children) return [];
     return user.organization.children;
   }, [user]);
+  const [activeDivisionId, setActiveDivisionId] = useState('');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const id = localStorage.getItem('activeDivisionId') || '';
+    setActiveDivisionId(id);
+  }, []);
 
   // Data state
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -1276,8 +2211,10 @@ export default function CampaignsPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [offerStudioOpen, setOfferStudioOpen] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [deletingCampaign, setDeletingCampaign] = useState<Campaign | null>(null);
+  const [offerStudioCampaign, setOfferStudioCampaign] = useState<Campaign | null>(null);
 
   // Bulk
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1329,12 +2266,14 @@ export default function CampaignsPage() {
       const params: Record<string, string | number> = {
         page: currentPage,
         limit: pageSize,
+        includeOrganization: 'true',
       };
 
       if (filters.search) params.search = filters.search;
       if (filters.types.length > 0) params.type = filters.types.join(',');
       if (filters.statuses.length > 0) params.status = filters.statuses.join(',');
-      if (filters.divisions.length > 0) params.organizationId = filters.divisions.join(',');
+      if (filters.divisions.length > 0) params.divisionId = filters.divisions[0];
+      else if (activeDivisionId) params.divisionId = activeDivisionId;
       if (filters.sort) params.sort = filters.sort;
 
       // Date range
@@ -1359,13 +2298,33 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize, filters]);
+  }, [currentPage, pageSize, filters, isSuperAdmin, activeDivisionId]);
+
+  const resolveCampaignDivisionLabel = useCallback((campaign: Campaign | null) => {
+    if (!campaign) return 'Current Division';
+    const extra = campaign as unknown as Record<string, unknown>;
+    const org = extra.organization as { name?: string } | undefined;
+    if (org?.name) return org.name;
+    const orgId = extra.organizationId as string | undefined;
+    if (orgId) {
+      const match = divisions.find((d) => d.id === orgId);
+      if (match?.name) return match.name;
+    }
+    if (isSuperAdmin && activeDivisionId) {
+      const active = divisions.find((d) => d.id === activeDivisionId);
+      if (active?.name) return active.name;
+    }
+    return user?.organization?.name || 'Current Division';
+  }, [divisions, isSuperAdmin, activeDivisionId, user?.organization?.name]);
 
   // ------ Fetch stats ------
   const fetchStats = useCallback(async () => {
     setStatsLoading(true);
     try {
-      const data = await (api as unknown as Record<string, Function>).getCampaignStats();
+      const divisionId = filters.divisions.length > 0
+        ? filters.divisions[0]
+        : activeDivisionId || undefined;
+      const data = await (api as unknown as Record<string, Function>).getCampaignStats(divisionId);
       setStats(data as CampaignDashboardStats);
     } catch {
       // Compute from local data as fallback
@@ -1373,7 +2332,7 @@ export default function CampaignsPage() {
     } finally {
       setStatsLoading(false);
     }
-  }, []);
+  }, [filters.divisions, activeDivisionId]);
 
   useEffect(() => {
     fetchCampaigns();
@@ -1527,6 +2486,7 @@ export default function CampaignsPage() {
       if (formData.targetLeads) metadata.targetLeads = Number(formData.targetLeads);
       if (formData.targetConversions) metadata.targetConversions = Number(formData.targetConversions);
       if (formData.targetRevenue) metadata.targetRevenue = Number(formData.targetRevenue);
+      if (formData.campaignCode) payload.campaignCode = formData.campaignCode.trim();
       if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
       await (api as unknown as Record<string, Function>).createCampaign(payload);
@@ -1566,6 +2526,7 @@ export default function CampaignsPage() {
       if (formData.targetLeads) metadata.targetLeads = Number(formData.targetLeads);
       if (formData.targetConversions) metadata.targetConversions = Number(formData.targetConversions);
       if (formData.targetRevenue) metadata.targetRevenue = Number(formData.targetRevenue);
+      payload.campaignCode = formData.campaignCode ? formData.campaignCode.trim() : null;
       if (Object.keys(metadata).length > 0) payload.metadata = metadata;
 
       await (api as unknown as Record<string, Function>).updateCampaign(editingCampaign.id, payload);
@@ -1635,6 +2596,11 @@ export default function CampaignsPage() {
     } finally {
       setActionLoading(false);
     }
+  }
+
+  function handleOpenOfferStudio(campaign: Campaign) {
+    setOfferStudioCampaign(campaign);
+    setOfferStudioOpen(true);
   }
 
   // ------ Bulk Actions ------
@@ -1739,6 +2705,7 @@ export default function CampaignsPage() {
     const metadata = (extra.metadata || {}) as Record<string, unknown>;
     return {
       name: campaign.name || '',
+      campaignCode: (metadata.campaignCode as string) || '',
       type: campaign.type || 'OTHER',
       status: campaign.status || 'DRAFT',
       budget: campaign.budget ? String(campaign.budget) : '',
@@ -2348,6 +3315,7 @@ export default function CampaignsPage() {
                     setEditingCampaign(campaign);
                     setEditModalOpen(true);
                   }}
+                  onOfferStudio={() => handleOpenOfferStudio(campaign)}
                   onDuplicate={() => handleDuplicate(campaign)}
                   onToggleStatus={() => handleToggleStatus(campaign)}
                   onDelete={() => {
@@ -2466,6 +3434,7 @@ export default function CampaignsPage() {
                               setEditingCampaign(campaign);
                               setEditModalOpen(true);
                             }}
+                            onOfferStudio={() => handleOpenOfferStudio(campaign)}
                             onDuplicate={() => handleDuplicate(campaign)}
                             onToggleStatus={() => handleToggleStatus(campaign)}
                             onDelete={() => {
@@ -2503,7 +3472,10 @@ export default function CampaignsPage() {
       {createModalOpen && (
         <CampaignFormModal
           mode="create"
-          initialData={EMPTY_FORM_DATA}
+          initialData={{
+            ...EMPTY_FORM_DATA,
+            organizationId: isSuperAdmin ? activeDivisionId : '',
+          }}
           divisions={divisions}
           isSuperAdmin={isSuperAdmin}
           onSubmit={handleCreateCampaign}
@@ -2538,6 +3510,22 @@ export default function CampaignsPage() {
             setDeletingCampaign(null);
           }}
           loading={actionLoading}
+        />
+      )}
+
+      {offerStudioOpen && offerStudioCampaign && (
+        <OfferStudioModal
+          campaign={offerStudioCampaign}
+          divisionLabel={resolveCampaignDivisionLabel(offerStudioCampaign)}
+          onClose={() => {
+            setOfferStudioOpen(false);
+            setOfferStudioCampaign(null);
+          }}
+          onApplied={() => {
+            fetchCampaigns();
+            fetchStats();
+          }}
+          addToast={addToast}
         />
       )}
 
