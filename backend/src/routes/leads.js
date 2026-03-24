@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
+const { logger } = require('../config/logger');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
@@ -1114,7 +1115,7 @@ router.get('/:id', async (req, res, next) => {
       }
     } catch { /* non-critical — breakdown is optional */ }
 
-    res.json({
+    const payload = {
       ...lead,
       score: freshScore,
       conversionProb: freshConversionProb,
@@ -1122,8 +1123,23 @@ router.get('/:id', async (req, res, next) => {
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
       doNotCallByUser,
       scoreBreakdown,
-    });
+    };
+    try {
+      res.json(payload);
+    } catch (serializeErr) {
+      logger.error('GET /leads/:id response serialization failed', {
+        leadId: lead.id,
+        message: serializeErr.message,
+      });
+      next(serializeErr);
+    }
   } catch (err) {
+    logger.error('GET /leads/:id failed', {
+      leadId: req.params?.id,
+      code: err.code,
+      meta: err.meta,
+      message: err.message,
+    });
     next(err);
   }
 });

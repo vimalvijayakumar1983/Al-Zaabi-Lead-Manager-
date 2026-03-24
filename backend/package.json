@@ -4,6 +4,7 @@
   "description": "Enterprise Lead Management System - Backend API",
   "main": "src/index.js",
   "scripts": {
+    "postinstall": "prisma generate",
     "start": "node src/index.js",
     "build": "npx prisma generate && npx prisma migrate deploy",
     "dev": "nodemon src/index.js",
