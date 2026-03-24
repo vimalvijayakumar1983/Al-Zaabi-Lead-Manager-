@@ -1,7 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { queryKeys } from '@/lib/query-keys';
+import { useReportCatalogQuery, useReportDefinitionsQuery } from '@/features/reports/hooks/useReportBuilderQueries';
 import {
   Plus,
   Save,
@@ -159,15 +162,14 @@ function nextMeasureKey(existing: ReportMeasure[]): string {
 }
 
 export default function ReportBuilderPage() {
+  const queryClient = useQueryClient();
   const [dataset, setDataset] = useState<Dataset>('leads');
-  const [catalog, setCatalog] = useState<CatalogField[]>([]);
-  const [definitions, setDefinitions] = useState<ReportDefinition[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const [name, setName] = useState<string>('New Report');
   const [description, setDescription] = useState<string>('');
   const [config, setConfig] = useState<ReportConfig>(EMPTY_CONFIG);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [previewRunning, setPreviewRunning] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [divisionId, setDivisionId] = useState<string | undefined>(undefined);
 
@@ -177,28 +179,11 @@ export default function ReportBuilderPage() {
     setDivisionId(activeDivisionId);
   }, []);
 
-  const loadCatalog = useCallback(async (targetDataset: Dataset, targetDivisionId?: string) => {
-    const result = await api.getReportCatalog(targetDataset, targetDivisionId);
-    setCatalog((result?.fields || []) as CatalogField[]);
-  }, []);
-
-  const loadDefinitions = useCallback(async (targetDataset: Dataset, targetDivisionId?: string) => {
-    const rows = await api.getReportDefinitions({ dataset: targetDataset, divisionId: targetDivisionId });
-    setDefinitions(rows as ReportDefinition[]);
-  }, []);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        setLoading(true);
-        await Promise.all([loadCatalog(dataset, divisionId), loadDefinitions(dataset, divisionId)]);
-      } catch (err: unknown) {
-        toast.error((err as Error)?.message || 'Failed to load report builder');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [dataset, divisionId, loadCatalog, loadDefinitions]);
+  const catalogQuery = useReportCatalogQuery(dataset, divisionId);
+  const definitionsQuery = useReportDefinitionsQuery(dataset, divisionId);
+  const catalog = (catalogQuery.data?.fields || []) as CatalogField[];
+  const definitions = (definitionsQuery.data || []) as ReportDefinition[];
+  const bootstrapLoading = catalogQuery.isPending || definitionsQuery.isPending;
 
   const dimensionFields = useMemo(
     () => catalog.filter((f) => f.kind === 'dimension' || f.dataType !== 'number'),
@@ -257,7 +242,7 @@ export default function ReportBuilderPage() {
 
   const runPreview = useCallback(async () => {
     try {
-      setLoading(true);
+      setPreviewRunning(true);
       const result = await api.previewReport({
         dataset,
         divisionId,
@@ -268,7 +253,7 @@ export default function ReportBuilderPage() {
     } catch (err: unknown) {
       toast.error((err as Error)?.message || 'Preview failed');
     } finally {
-      setLoading(false);
+      setPreviewRunning(false);
     }
   }, [config, dataset, divisionId]);
 
@@ -290,13 +275,13 @@ export default function ReportBuilderPage() {
         setSelectedReportId((created as ReportDefinition).id);
         toast.success('Report saved');
       }
-      await loadDefinitions(dataset, divisionId);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.reports.definitions(dataset, divisionId) });
     } catch (err: unknown) {
       toast.error((err as Error)?.message || 'Save failed');
     } finally {
       setSaving(false);
     }
-  }, [config, dataset, description, divisionId, loadDefinitions, name, selectedReportId]);
+  }, [config, dataset, description, divisionId, name, queryClient, selectedReportId]);
 
   const deleteDefinition = useCallback(async () => {
     if (!selectedReportId) return;
@@ -304,12 +289,12 @@ export default function ReportBuilderPage() {
     try {
       await api.deleteReportDefinition(selectedReportId);
       toast.success('Report deleted');
-      await loadDefinitions(dataset, divisionId);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.reports.definitions(dataset, divisionId) });
       openNew();
     } catch (err: unknown) {
       toast.error((err as Error)?.message || 'Delete failed');
     }
-  }, [dataset, divisionId, loadDefinitions, openNew, selectedReportId]);
+  }, [dataset, divisionId, openNew, queryClient, selectedReportId]);
 
   const toggleDimension = useCallback((fieldKey: string) => {
     setConfig((prev) => {
@@ -555,7 +540,7 @@ export default function ReportBuilderPage() {
               <Plus className="h-4 w-4 mr-1" />
               New
             </button>
-            <button className="btn-secondary" onClick={runPreview} disabled={loading}>
+            <button className="btn-secondary" onClick={runPreview} disabled={bootstrapLoading || previewRunning}>
               <Play className="h-4 w-4 mr-1" />
               Run Preview
             </button>
@@ -586,7 +571,14 @@ export default function ReportBuilderPage() {
             </select>
             <div className="mt-3 flex items-center justify-between">
               <p className="text-xs font-semibold text-text-primary">Saved Reports</p>
-              <button className="btn-icon h-7 w-7" onClick={() => void loadDefinitions(dataset, divisionId)}>
+              <button
+                type="button"
+                className="btn-icon h-7 w-7"
+                onClick={() => {
+                  void catalogQuery.refetch();
+                  void definitionsQuery.refetch();
+                }}
+              >
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -959,7 +951,7 @@ export default function ReportBuilderPage() {
                 </p>
               )}
             </div>
-            {loading ? <p className="text-sm text-text-tertiary">Loading preview…</p> : renderPreview}
+            {previewRunning ? <p className="text-sm text-text-tertiary">Loading preview…</p> : renderPreview}
           </div>
         </div>
       </div>

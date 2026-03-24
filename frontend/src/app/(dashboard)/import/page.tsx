@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
+import { useImportHistoryQuery } from '@/features/import/hooks/useImportQueries';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -1316,29 +1319,16 @@ function ExportTab() {
 /* ─── Import History Tab ─────────────────────────────────────────── */
 function ImportHistoryTab() {
   const { user } = useAuthStore();
-  const [history, setHistory] = useState<ImportHistoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
+  const importHistoryQuery = useImportHistoryQuery(page);
+  const history = (importHistoryQuery.data?.data ?? []) as ImportHistoryItem[];
+  const total = importHistoryQuery.data?.pagination?.total ?? 0;
+  const loading = importHistoryQuery.isLoading;
   const [selectedImport, setSelectedImport] = useState<ImportHistoryItem | null>(null);
   const [undoing, setUndoing] = useState<string | null>(null);
 
   const isAdmin = user?.role === 'ADMIN';
-
-  const fetchHistory = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await api.getImportHistory(page);
-      setHistory(data.data);
-      setTotal(data.pagination.total);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [page]);
-
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
   const addToast = useNotificationStore((s) => s.addToast);
 
@@ -1355,7 +1345,7 @@ function ImportHistoryTab() {
     try {
       await api.undoImport(id);
       addToast({ type: 'success', title: 'Import undone', message: 'The import has been successfully reversed' });
-      fetchHistory();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.import.root });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Undo failed', message: err.message });
     } finally {

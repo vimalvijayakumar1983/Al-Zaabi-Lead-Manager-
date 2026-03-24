@@ -1,6 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
+import { useModuleVisibilityMatrixQuery, useRolesListQuery } from '@/features/roles/hooks/useRolesQueries';
 import {
   Shield,
   Crown,
@@ -81,12 +84,6 @@ interface PermissionModule {
   label: string;
   icon: string;
   permissions: Record<string, string>;
-}
-
-interface RolesApiResponse {
-  roles: CustomRole[];
-  permissionModules: Record<string, PermissionModule>;
-  systemDefaults: Record<string, Record<string, Record<string, boolean>>>;
 }
 
 type ModalTab = 'basic' | 'permissions' | 'preview';
@@ -2028,22 +2025,32 @@ function ErrorState({
 
 export default function RolesPage() {
   const { user } = useAuthStore();
+  const queryClient = useQueryClient();
   const refreshPermissions = usePermissionsStore((state) => state.loadPermissions);
   const canManageRoles =
     user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
   const canManageModuleVisibility = user?.role === 'SUPER_ADMIN';
 
+  const rolesQuery = useRolesListQuery();
+  const roles = (rolesQuery.data?.roles ?? []) as CustomRole[];
+  const loading = rolesQuery.isLoading && !rolesQuery.data;
+  const error = rolesQuery.isError
+    ? rolesQuery.error instanceof Error
+      ? rolesQuery.error.message
+      : 'Failed to load roles'
+    : null;
+
   // ── Data State ──
-  const [roles, setRoles] = useState<CustomRole[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [moduleVisibility, setModuleVisibility] = useState<
     Record<string, Record<string, boolean>>
   >({});
-  const [moduleVisibilityLoading, setModuleVisibilityLoading] = useState(true);
-  const [moduleVisibilityError, setModuleVisibilityError] = useState<string | null>(
-    null
-  );
+  const moduleVisibilityQuery = useModuleVisibilityMatrixQuery();
+  const moduleVisibilityLoading = moduleVisibilityQuery.isLoading;
+  const moduleVisibilityError = moduleVisibilityQuery.isError
+    ? moduleVisibilityQuery.error instanceof Error
+      ? moduleVisibilityQuery.error.message
+      : 'Failed to load module visibility'
+    : null;
   const [moduleVisibilityDirty, setModuleVisibilityDirty] = useState(false);
   const [moduleVisibilitySaving, setModuleVisibilitySaving] = useState(false);
   const moduleVisibilityInitialRef = useRef<string>('');
@@ -2120,63 +2127,17 @@ export default function RolesPage() {
     return counts;
   }, [moduleVisibility]);
 
-  // ── Fetch roles ──
-  const fetchRoles = useCallback(async () => {
-    // token handled by authHeaders
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(apiUrl('/api/roles'), {
-        headers: authHeaders(),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to fetch roles (${res.status})`);
-      }
-      const data: RolesApiResponse = await res.json();
-      setRoles(data.roles ?? []);
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'An unexpected error occurred';
-      setError(msg);
-    } finally {
-      setLoading(false);
+  useLayoutEffect(() => {
+    const data = moduleVisibilityQuery.data;
+    if (!data) return;
+    if (moduleVisibilityDirty) return;
+    const next: Record<string, Record<string, boolean>> = {};
+    for (const [role, perms] of Object.entries(data)) {
+      next[role] = { ...perms };
     }
-  }, []);
-
-  const fetchModuleVisibility = useCallback(async () => {
-    setModuleVisibilityLoading(true);
-    setModuleVisibilityError(null);
-    try {
-      const res = await fetch(apiUrl('/api/users/permissions'), {
-        headers: authHeaders(),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to fetch visibility matrix (${res.status})`);
-      }
-      const data = (await res.json()) as {
-        rolePermissions?: Record<string, Record<string, boolean>>;
-      };
-
-      const cloned: Record<string, Record<string, boolean>> = {};
-      for (const [role, perms] of Object.entries(data.rolePermissions || {})) {
-        cloned[role] = { ...perms };
-      }
-      setModuleVisibility(cloned);
-      moduleVisibilityInitialRef.current = JSON.stringify(cloned);
-      setModuleVisibilityDirty(false);
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Failed to load module visibility';
-      setModuleVisibilityError(msg);
-    } finally {
-      setModuleVisibilityLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchRoles();
-    fetchModuleVisibility();
-  }, [fetchRoles, fetchModuleVisibility]);
+    setModuleVisibility(next);
+    moduleVisibilityInitialRef.current = JSON.stringify(next);
+  }, [moduleVisibilityQuery.data, moduleVisibilityDirty]);
 
   const toggleModuleVisibility = useCallback(
     (roleKey: string, featureKey: string) => {
@@ -2233,6 +2194,7 @@ export default function RolesPage() {
       moduleVisibilityInitialRef.current = JSON.stringify(saved);
       setModuleVisibilityDirty(false);
       await refreshPermissions();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.roles.moduleVisibility });
       addToast('success', 'Module visibility updated successfully');
     } catch (err) {
       const msg =
@@ -2245,6 +2207,7 @@ export default function RolesPage() {
     addToast,
     canManageModuleVisibility,
     moduleVisibility,
+    queryClient,
     refreshPermissions,
   ]);
 
@@ -2276,7 +2239,7 @@ export default function RolesPage() {
         }
         setShowCreateModal(false);
         addToast('success', `Role "${formData.name}" created successfully`);
-        await fetchRoles();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.roles.list });
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : 'Failed to create role';
@@ -2285,7 +2248,7 @@ export default function RolesPage() {
         setIsSaving(false);
       }
     },
-    [fetchRoles, addToast]
+    [queryClient, addToast]
   );
 
   // ── Update role ──
@@ -2316,7 +2279,7 @@ export default function RolesPage() {
         }
         setEditingRole(null);
         addToast('success', `Role "${formData.name}" updated successfully`);
-        await fetchRoles();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.roles.list });
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : 'Failed to update role';
@@ -2325,7 +2288,7 @@ export default function RolesPage() {
         setIsSaving(false);
       }
     },
-    [editingRole, fetchRoles, addToast]
+    [editingRole, queryClient, addToast]
   );
 
   // ── Delete role ──
@@ -2347,7 +2310,7 @@ export default function RolesPage() {
       const roleName = deletingRole!.name;
       setDeletingRole(null);
       addToast('success', `Role "${roleName}" deleted successfully`);
-      await fetchRoles();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.roles.list });
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Failed to delete role';
@@ -2355,7 +2318,7 @@ export default function RolesPage() {
     } finally {
       setIsDeleting(false);
     }
-  }, [deletingRole, fetchRoles, addToast]);
+  }, [deletingRole, queryClient, addToast]);
 
   // ── Clone role ──
   const handleCloneRole = useCallback(
@@ -2377,7 +2340,7 @@ export default function RolesPage() {
         }
         setCloningRole(null);
         addToast('success', `Role "${newName}" cloned successfully`);
-        await fetchRoles();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.roles.list });
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : 'Failed to clone role';
@@ -2386,7 +2349,7 @@ export default function RolesPage() {
         setIsCloning(false);
       }
     },
-    [cloningRole, fetchRoles, addToast]
+    [cloningRole, queryClient, addToast]
   );
 
   // ── Stats data ──
@@ -2463,7 +2426,7 @@ export default function RolesPage() {
 
         {/* ── Error State ── */}
         {error && !loading && (
-          <ErrorState message={error} onRetry={fetchRoles} />
+          <ErrorState message={error} onRetry={() => rolesQuery.refetch()} />
         )}
 
         {/* ── Loading State ── */}
@@ -2593,7 +2556,7 @@ export default function RolesPage() {
                   <p className="text-sm text-red-700">{moduleVisibilityError}</p>
                   <button
                     type="button"
-                    onClick={fetchModuleVisibility}
+                    onClick={() => moduleVisibilityQuery.refetch()}
                     className="mt-2 bg-white border border-red-200 text-red-700 hover:bg-red-50 px-3 py-1.5 rounded-lg text-sm font-medium"
                   >
                     Retry

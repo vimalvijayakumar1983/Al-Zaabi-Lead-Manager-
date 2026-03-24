@@ -444,7 +444,15 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
         return res.status(400).json({ error: 'Lead has no phone number' });
       }
       try {
-        await sendWhatsAppText(phone, body, lead.organizationId);
+        const sendResult = await sendWhatsAppText(phone, body, lead.organizationId);
+        const waMessageId = sendResult?.messageId || null;
+        if (waMessageId) {
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: { ...(communication.metadata || {}), waMessageId } },
+          }).catch(() => {});
+          communication.metadata = { ...(communication.metadata || {}), waMessageId };
+        }
         const rawDigits = lead.phone?.replace(/\D/g, '') || '';
         if (rawDigits && rawDigits !== phone) {
           await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
@@ -584,6 +592,7 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
     if (channel === 'WHATSAPP' && lead.phone) {
       const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
       if (phone) {
+        const waMessageIds = [];
         // Send each attachment as a separate WhatsApp media message
         for (const att of savedAttachments) {
           try {
@@ -594,7 +603,10 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
             const buf = Buffer.from(att.data.replace(/^data:[^;]+;base64,/, ''), 'base64');
             const { mediaId } = await uploadWhatsAppMedia(buf, att.mimeType, att.filename, lead.organizationId);
             const caption = (savedAttachments.length === 1 && body) ? body : undefined;
-            await sendWhatsAppMedia(phone, waMediaType, mediaId, caption, att.filename, lead.organizationId);
+            const mediaSendResult = await sendWhatsAppMedia(phone, waMediaType, mediaId, caption, att.filename, lead.organizationId);
+            if (mediaSendResult?.messageId) {
+              waMessageIds.push(mediaSendResult.messageId);
+            }
           } catch (waErr) {
             logger.error('WhatsApp media send failed for attachment', { err: waErr.message, filename: att.filename });
           }
@@ -602,10 +614,21 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
         // If there's a text body and either no attachments or multiple attachments (caption only sent with single), send text separately
         if (body && (savedAttachments.length !== 1)) {
           try {
-            await sendWhatsAppText(phone, body, lead.organizationId);
+            const textSendResult = await sendWhatsAppText(phone, body, lead.organizationId);
+            if (textSendResult?.messageId) {
+              waMessageIds.push(textSendResult.messageId);
+            }
           } catch (waErr) {
             logger.error('WhatsApp text send failed', { err: waErr.message });
           }
+        }
+        if (waMessageIds.length > 0) {
+          const nextMeta = { ...(communication.metadata || {}), waMessageIds };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
         }
         // Normalize lead phone if needed
         const rawDigits = lead.phone?.replace(/\D/g, '') || '';

@@ -977,6 +977,21 @@ class ApiClient {
     }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
+  async testWhatsAppSettings(data?: { phoneNumberId?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      success: boolean;
+      message: string;
+      phoneNumberId?: string;
+      displayPhoneNumber?: string | null;
+      verifiedName?: string | null;
+      details?: any;
+    }>(`/settings/whatsapp/test${qs}`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    });
+  }
+
   async getNotificationPreferences() {
     return this.request<any>('/settings/notifications');
   }

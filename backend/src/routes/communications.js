@@ -231,7 +231,14 @@ router.post('/send-whatsapp', validate(z.object({
     });
 
     try {
-      await sendText(phone, body, req.orgId);
+      const sendResult = await sendText(phone, body, req.orgId);
+      const waMessageId = sendResult?.messageId || null;
+      if (waMessageId) {
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: { ...(communication.metadata || {}), waMessageId } },
+        }).catch(() => {});
+      }
       const rawDigits = lead.phone?.replace(/\D/g, '') || '';
       if (rawDigits && rawDigits !== phone) {
         await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
@@ -269,7 +276,8 @@ router.post('/send-whatsapp-template', validate(z.object({
       return res.status(400).json({ error: 'Lead has no phone number' });
     }
 
-    await sendTemplate(phone, templateName, languageCode, req.orgId);
+    const sendResult = await sendTemplate(phone, templateName, languageCode, req.orgId);
+    const waMessageId = sendResult?.messageId || null;
     const rawDigits = lead.phone?.replace(/\D/g, '') || '';
     if (rawDigits && rawDigits !== phone) {
       await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
@@ -282,7 +290,7 @@ router.post('/send-whatsapp-template', validate(z.object({
         channel: 'WHATSAPP',
         direction: 'OUTBOUND',
         body: `[Template: ${templateName}]`,
-        metadata: { to: lead.phone, template: templateName },
+        metadata: { to: lead.phone, template: templateName, ...(waMessageId ? { waMessageId } : {}) },
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },

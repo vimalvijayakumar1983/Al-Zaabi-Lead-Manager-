@@ -208,7 +208,6 @@ export function WorkloadDashboard({ isOpen, onToggle }: WorkloadDashboardProps) 
     }
   }, []);
 
-  // Fetch on open (and refresh each time it's toggled open)
   useEffect(() => {
     if (isOpen) {
       fetchStats();
