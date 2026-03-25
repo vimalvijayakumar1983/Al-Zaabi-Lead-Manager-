@@ -272,6 +272,24 @@ function InboxContent() {
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
   const [inboxSortBy, setInboxSortBy] = useState<'latest' | 'oldest' | 'unread' | 'name'>('latest');
 
+  // Division scope (SUPER_ADMIN switcher writes to localStorage). In production builds,
+  // client-side navigation won't remount this page, so read localStorage into state
+  // and refresh on focus to avoid stale division-scoped inbox data.
+  const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => {
+      try {
+        const v = localStorage.getItem('activeDivisionId');
+        setActiveDivisionId(v && v.trim() ? v : null);
+      } catch {
+        setActiveDivisionId(null);
+      }
+    };
+    read();
+    window.addEventListener('focus', read);
+    return () => window.removeEventListener('focus', read);
+  }, []);
+
   // Attachments (pending uploads — server attachments come from TanStack Query)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -310,25 +328,20 @@ function InboxContent() {
     if (channelFilter !== 'ALL') params.channel = channelFilter;
     if (debouncedSearch) params.search = debouncedSearch;
     if (statusFilter) params.status = statusFilter;
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     if (activeDivisionId) params.divisionId = activeDivisionId;
     return params;
-  }, [channelFilter, debouncedSearch, statusFilter]);
+  }, [channelFilter, debouncedSearch, statusFilter, activeDivisionId]);
 
   const messageQueryParams = useMemo(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
     return activeDivisionId ? { divisionId: activeDivisionId } : {};
-  }, []);
+  }, [activeDivisionId]);
 
   const threadCacheParams = useMemo(
     () => ({ ...messageQueryParams, limit: INBOX_THREAD_LIMIT }),
     [messageQueryParams]
   );
 
-  const divisionScope = useMemo(
-    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
-    []
-  );
+  const divisionScope = activeDivisionId;
 
   const fieldConfigQuery = useLeadsFieldConfigQuery(divisionScope);
   const statusLabels = (fieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
