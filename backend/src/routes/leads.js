@@ -1050,23 +1050,6 @@ router.get('/:id', async (req, res, next) => {
         },
         communications: { orderBy: { createdAt: 'desc' }, take: 20 },
         attachments: { orderBy: { createdAt: 'desc' } },
-        campaignAssignments: {
-          orderBy: [{ status: 'asc' }, { assignedAt: 'desc' }],
-          include: {
-            campaign: {
-              select: {
-                id: true,
-                name: true,
-                type: true,
-                status: true,
-                startDate: true,
-                endDate: true,
-                metadata: true,
-              },
-            },
-            assignedBy: { select: { id: true, firstName: true, lastName: true } },
-          },
-        },
         _count: { select: { activities: true, tasks: true, communications: true } },
       },
     });
@@ -1140,42 +1123,6 @@ router.get('/:id', async (req, res, next) => {
       meta: err.meta,
       message: err.message,
     });
-    next(err);
-  }
-});
-
-// ─── Get Lead Offer Campaign Assignments ─────────────────────────
-router.get('/:id/campaign-offers', async (req, res, next) => {
-  try {
-    const leadWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
-    if (req.isRestrictedRole) leadWhere.assignedToId = req.user.id;
-    const lead = await prisma.lead.findFirst({
-      where: leadWhere,
-      select: { id: true, organizationId: true },
-    });
-    if (!lead) return res.status(404).json({ error: 'Lead not found' });
-
-    const assignments = await prisma.leadCampaignAssignment.findMany({
-      where: { leadId: lead.id, organizationId: lead.organizationId },
-      orderBy: [{ status: 'asc' }, { assignedAt: 'desc' }],
-      include: {
-        campaign: {
-          select: {
-            id: true,
-            name: true,
-            type: true,
-            status: true,
-            startDate: true,
-            endDate: true,
-            metadata: true,
-          },
-        },
-        assignedBy: { select: { id: true, firstName: true, lastName: true } },
-      },
-    });
-
-    res.json(assignments);
-  } catch (err) {
     next(err);
   }
 });
