@@ -257,6 +257,13 @@ function InboxContent() {
   const [messageText, setMessageText] = useState('');
   const [sendChannel, setSendChannel] = useState('WHATSAPP');
   const [showChannelPicker, setShowChannelPicker] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateSending, setTemplateSending] = useState(false);
+  const [templateError, setTemplateError] = useState('');
+  const [templateOptions, setTemplateOptions] = useState<any[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
 
   const [sendingCount, setSendingCount] = useState(0);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
@@ -387,6 +394,20 @@ function InboxContent() {
     color: string;
   }[];
   const leadAttachments = (attachmentsQuery.data || []) as any[];
+  const selectedTemplate = useMemo(
+    () => templateOptions.find((t) => t.id === selectedTemplateId) || null,
+    [templateOptions, selectedTemplateId]
+  );
+  const selectedTemplateVarKeys = useMemo(() => {
+    if (!selectedTemplate?.components || !Array.isArray(selectedTemplate.components)) return [] as string[];
+    const indexes = new Set<number>();
+    for (const c of selectedTemplate.components) {
+      const text = typeof c?.text === 'string' ? c.text : '';
+      const matches = [...text.matchAll(/\{\{(\d+)\}\}/g)];
+      for (const m of matches) indexes.add(Number(m[1]));
+    }
+    return [...indexes].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).map((n) => String(n));
+  }, [selectedTemplate]);
 
   const loadingConversations = conversationsQuery.isLoading;
   const loadingMessages = !!selectedLeadId && threadQuery.isPending;
@@ -649,6 +670,51 @@ function InboxContent() {
       await inboxMutations.retryWhatsAppMessage.mutateAsync(messageId);
     } catch (err: any) {
       console.error('Failed to retry WhatsApp message:', err);
+    }
+  };
+
+  const openTemplateModal = async () => {
+    if (!selectedLeadId) return;
+    setShowTemplateModal(true);
+    setTemplateError('');
+    setTemplateSending(false);
+    setTemplateVars({});
+    setTemplateLoading(true);
+    try {
+      const list = await api.listWhatsAppTemplates(activeDivisionId || undefined);
+      const approved = (list?.templates || []).filter((t: any) => String(t.status || '').toUpperCase() === 'APPROVED');
+      setTemplateOptions(approved);
+      setSelectedTemplateId(approved[0]?.id || '');
+    } catch (err: any) {
+      setTemplateError(err?.message || 'Failed to load templates');
+      setTemplateOptions([]);
+      setSelectedTemplateId('');
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
+
+  const sendSelectedTemplate = async () => {
+    if (!selectedLeadId || !selectedTemplateId) return;
+    setTemplateSending(true);
+    setTemplateError('');
+    try {
+      for (const key of selectedTemplateVarKeys) {
+        if (!templateVars[key] || !templateVars[key].trim()) {
+          throw new Error(`Variable ${key} is required`);
+        }
+      }
+      const sent = await api.sendInboxWhatsAppTemplateMessage(selectedLeadId, {
+        templateId: selectedTemplateId,
+        variables: templateVars,
+      });
+      patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadCacheParams as Record<string, unknown>, { message: sent });
+      setShowTemplateModal(false);
+      setTemplateVars({});
+    } catch (err: any) {
+      setTemplateError(err?.message || 'Failed to send template');
+    } finally {
+      setTemplateSending(false);
     }
   };
 
@@ -1755,6 +1821,15 @@ function InboxContent() {
                     </>
                   )}
                 </div>
+                {sendChannel === 'WHATSAPP' && (
+                  <button
+                    type="button"
+                    onClick={openTemplateModal}
+                    className="px-2.5 py-1 rounded-lg text-2xs font-semibold bg-surface-tertiary hover:bg-surface-secondary transition-colors text-text-secondary"
+                  >
+                    Template
+                  </button>
+                )}
 
                 <div className="flex-1" />
 
@@ -1871,6 +1946,80 @@ function InboxContent() {
                 )}
               </div>
             </div>
+            {showTemplateModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-border">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <h3 className="text-sm font-semibold text-text-primary">Send WhatsApp template</h3>
+                    <button type="button" onClick={() => setShowTemplateModal(false)} className="btn-icon">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {templateLoading ? (
+                      <p className="text-sm text-text-tertiary">Loading templates...</p>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="label">Template</label>
+                          <select
+                            className="input"
+                            value={selectedTemplateId}
+                            onChange={(e) => {
+                              setSelectedTemplateId(e.target.value);
+                              setTemplateVars({});
+                            }}
+                          >
+                            <option value="">Select template</option>
+                            {templateOptions.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.language})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {selectedTemplateVarKeys.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-text-tertiary">
+                              Fill template variables:
+                            </p>
+                            {selectedTemplateVarKeys.map((key) => (
+                              <div key={key}>
+                                <label className="label">Variable {key}</label>
+                                <input
+                                  className="input"
+                                  value={templateVars[key] || ''}
+                                  onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
+                                  placeholder={`Value for {{${key}}}`}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {templateError && (
+                          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            {templateError}
+                          </div>
+                        )}
+                        <div className="flex justify-end gap-2 pt-2">
+                          <button type="button" onClick={() => setShowTemplateModal(false)} className="btn-secondary">
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={sendSelectedTemplate}
+                            className="btn-primary"
+                            disabled={!selectedTemplateId || templateSending}
+                          >
+                            {templateSending ? 'Sending...' : 'Send template'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

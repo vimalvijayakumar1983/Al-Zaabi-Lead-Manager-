@@ -1305,6 +1305,7 @@ function sanitizeWhatsAppSettingsForClient(settings, revealSecrets = false) {
     hasWebhookVerifyToken: hasVerify,
     whatsappApiUrl: trimSettingStr(s.whatsappApiUrl) || '',
     whatsappBusinessAccountId: trimSettingStr(s.whatsappBusinessAccountId) || '',
+    whatsappMetaAppId: trimSettingStr(s.whatsappMetaAppId) || '',
   };
 }
 
@@ -1371,6 +1372,12 @@ function mergeWhatsAppSettingsFromBody(existingSettings, body) {
     else delete nextSettings.whatsappBusinessAccountId;
   }
 
+  if (body.whatsappMetaAppId !== undefined && body.whatsappMetaAppId !== null) {
+    const mid = trimSettingStr(body.whatsappMetaAppId);
+    if (mid) nextSettings.whatsappMetaAppId = mid;
+    else delete nextSettings.whatsappMetaAppId;
+  }
+
   delete nextSettings.whatsappPhoneNumberId;
   delete nextSettings.whatsappToken;
 
@@ -1388,6 +1395,8 @@ const whatsAppSaveSchema = z.object({
   whatsappWebhookVerifyToken: z.string().optional().nullable(),
   whatsappApiUrl: z.string().optional().nullable(),
   whatsappBusinessAccountId: z.string().optional().nullable(),
+  /** Meta App ID (digits) for Graph resumable upload when creating templates with media headers */
+  whatsappMetaAppId: z.string().optional().nullable(),
 });
 
 const whatsAppTestSchema = z.object({

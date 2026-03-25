@@ -1020,6 +1020,7 @@ class ApiClient {
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
       whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     }>(`/settings/whatsapp${qs}`);
   }
 
@@ -1029,6 +1030,7 @@ class ApiClient {
       whatsappWebhookVerifyToken?: string;
       whatsappApiUrl?: string;
       whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     },
     divisionId?: string,
   ) {
@@ -1039,6 +1041,7 @@ class ApiClient {
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
       whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
@@ -1053,6 +1056,7 @@ class ApiClient {
         status: string | null;
         category: string | null;
         rejectedReason: string | null;
+        components?: any;
         lastSyncedAt: string;
       }>;
       lastSyncedAt: string | null;
@@ -1072,10 +1076,33 @@ class ApiClient {
         status: string | null;
         category: string | null;
         rejectedReason: string | null;
+        components?: any;
         lastSyncedAt: string;
       }>;
       lastSyncedAt: string;
     }>(`/whatsapp/templates/sync${qs}`, { method: 'POST' });
+  }
+
+  async createWhatsAppTemplate(
+    data: { name: string; language: string; category: string; components: Record<string, unknown>[] },
+    divisionId?: string
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates${qs}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateWhatsAppTemplate(
+    id: string,
+    data: { category?: string; components?: Record<string, unknown>[] },
+    divisionId?: string
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates/${id}${qs}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteWhatsAppTemplate(id: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates/${id}${qs}`, { method: 'DELETE' });
   }
 
   async testWhatsAppSettings(data?: { phoneNumberId?: string }, divisionId?: string) {
@@ -1680,6 +1707,16 @@ class ApiClient {
   async retryInboxWhatsAppMessage(messageId: string) {
     return this.request<any>(`/inbox/messages/${messageId}/retry-whatsapp`, {
       method: 'POST',
+    });
+  }
+
+  async sendInboxWhatsAppTemplateMessage(
+    leadId: string,
+    data: { templateId?: string; templateName?: string; language?: string; variables?: string[] | Record<string, string> }
+  ) {
+    return this.request<any>(`/inbox/conversations/${leadId}/send-template`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   }
 

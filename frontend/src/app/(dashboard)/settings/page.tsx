@@ -635,6 +635,7 @@ function WhatsAppSection() {
   const [testResult, setTestResult] = useState<WhatsAppTestResult | null>(null);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
   const [whatsappBusinessAccountId, setWhatsappBusinessAccountId] = useState('');
+  const [whatsappMetaAppId, setWhatsappMetaAppId] = useState('');
   const [showWebhookVerifyToken, setShowWebhookVerifyToken] = useState(false);
   /** Per number row: reveal access token (password → text). */
   const [showAccessTokenByRowId, setShowAccessTokenByRowId] = useState<Record<string, boolean>>({});
@@ -649,6 +650,7 @@ function WhatsAppSection() {
       try {
         const data = await api.getWhatsAppSettings(effectiveDivisionId, opts?.revealSecrets);
         setWhatsappBusinessAccountId(data.whatsappBusinessAccountId || '');
+        setWhatsappMetaAppId(data.whatsappMetaAppId || '');
         setWhatsappApiUrl(data.whatsappApiUrl || '');
         setWebhookVerifyToken(data.whatsappWebhookVerifyToken || '');
         const raw = data.whatsappNumbers || [];
@@ -768,6 +770,7 @@ function WhatsAppSection() {
           whatsappWebhookVerifyToken: webhookVerifyToken.trim(),
           whatsappApiUrl: whatsappApiUrl.trim(),
           whatsappBusinessAccountId: whatsappBusinessAccountId.trim(),
+          whatsappMetaAppId: whatsappMetaAppId.trim(),
         },
         effectiveDivisionId,
       );
@@ -883,6 +886,19 @@ function WhatsAppSection() {
             <p className="text-xs text-text-tertiary mt-1">
               From Meta Business Suite → WhatsApp accounts → API setup, or Graph API. Required to sync message templates in{' '}
               <Link href="/whatsapp-templates" className="text-brand-600 hover:underline">WhatsApp → Templates</Link>.
+            </p>
+          </div>
+          <div>
+            <label className="label">Meta App ID</label>
+            <input
+              type="text"
+              className="input font-mono text-sm"
+              value={whatsappMetaAppId}
+              onChange={(e) => setWhatsappMetaAppId(e.target.value)}
+              placeholder="e.g. 123456789012345"
+            />
+            <p className="text-xs text-text-tertiary mt-1">
+              Same app as your WhatsApp product (Meta App → App settings → Basic → App ID). Required when creating templates with image, video, or document headers — sample files use Graph resumable upload. Optional server default: <code className="text-xs font-mono">META_APP_ID</code> in env.
             </p>
           </div>
           <div>

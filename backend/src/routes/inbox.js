@@ -11,7 +11,12 @@ const { broadcastDataChange } = require('../websocket/server');
 const { PLATFORM_MAP, resolvePlatform, enrichCommunicationForClient } = require('../utils/inboxCommunication');
 const { emitCommunicationChange } = require('../utils/inboxRealtimeEmit');
 const { regenerateLeadSummaryById } = require('../services/aiService');
-const { sendText: sendWhatsAppText, sendMedia: sendWhatsAppMedia, uploadMedia: uploadWhatsAppMedia } = require('../services/whatsappService');
+const {
+  sendText: sendWhatsAppText,
+  sendTemplate: sendWhatsAppTemplate,
+  sendMedia: sendWhatsAppMedia,
+  uploadMedia: uploadWhatsAppMedia,
+} = require('../services/whatsappService');
 const {
   isAttachmentObjectStorageEnabled,
   uploadInboxAttachmentBuffer,
@@ -184,6 +189,37 @@ async function findInboxLead(req, leadId) {
     lead = await prisma.lead.findFirst({ where: { id: leadId } });
   }
   return lead;
+}
+
+function buildTemplateComponentsFromVariables(templateComponents, variablesInput) {
+  if (!Array.isArray(templateComponents)) return [];
+  const arrVars = Array.isArray(variablesInput) ? variablesInput : null;
+  const objVars = !arrVars && variablesInput && typeof variablesInput === 'object' ? variablesInput : {};
+  const getVar = (idx) => {
+    if (arrVars) return arrVars[idx - 1];
+    return objVars[String(idx)] ?? objVars[`var${idx}`];
+  };
+  const dynamic = [];
+  for (const c of templateComponents) {
+    if (!c || typeof c !== 'object') continue;
+    const type = String(c.type || '').toUpperCase();
+    if (!['BODY', 'HEADER'].includes(type)) continue;
+    const text = String(c.text || '');
+    const matches = [...text.matchAll(/\{\{(\d+)\}\}/g)];
+    if (matches.length === 0) continue;
+    const uniq = [...new Set(matches.map((m) => Number(m[1])).filter((n) => Number.isFinite(n) && n > 0))];
+    const parameters = uniq.map((n) => {
+      const value = getVar(n);
+      if (value == null || String(value).trim() === '') {
+        const err = new Error(`Missing template variable ${n}`);
+        err.statusCode = 400;
+        throw err;
+      }
+      return { type: 'text', text: String(value) };
+    });
+    dynamic.push({ type, parameters });
+  }
+  return dynamic;
 }
 
 // ─── List Conversations (grouped by lead) ─────────────────────────
@@ -899,6 +935,82 @@ router.post('/messages/:messageId/retry-whatsapp', async (req, res, next) => {
     emitCommunicationChange(communication.lead.organizationId, 'updated', req.user.id, communication.leadId, enriched);
     res.json(enriched);
   } catch (err) {
+    next(err);
+  }
+});
+
+const sendTemplateSchema = z.object({
+  templateId: z.string().uuid().optional(),
+  templateName: z.string().min(1).optional(),
+  language: z.string().min(1).optional(),
+  variables: z.union([z.array(z.string()), z.record(z.string())]).optional(),
+});
+
+router.post('/conversations/:leadId/send-template', validate(sendTemplateSchema), async (req, res, next) => {
+  try {
+    const { leadId } = req.params;
+    const { templateId, templateName, language, variables } = req.validated;
+    const lead = await findInboxLead(req, leadId);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
+    if (!phone) return res.status(400).json({ error: 'Lead has no phone number' });
+
+    const template = templateId
+      ? await prisma.whatsAppMessageTemplate.findFirst({
+          where: { id: templateId, organizationId: lead.organizationId },
+        })
+      : await prisma.whatsAppMessageTemplate.findFirst({
+          where: {
+            organizationId: lead.organizationId,
+            name: templateName,
+            ...(language ? { language } : {}),
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+    if (String(template.status || '').toUpperCase() !== 'APPROVED') {
+      return res.status(400).json({ error: 'Template is not approved' });
+    }
+    if (language && language !== template.language) {
+      return res.status(400).json({ error: 'Template language mismatch' });
+    }
+
+    const templateComponents = buildTemplateComponentsFromVariables(template.components, variables || {});
+    const sendResult = await sendWhatsAppTemplate(
+      phone,
+      template.name,
+      template.language,
+      lead.organizationId,
+      templateComponents
+    );
+    const now = new Date();
+    const communication = await prisma.communication.create({
+      data: {
+        leadId,
+        channel: 'WHATSAPP',
+        direction: 'OUTBOUND',
+        body: `[Template: ${template.name}]`,
+        metadata: {
+          templateId: template.id,
+          templateName: template.name,
+          templateLanguage: template.language,
+          templateVariables: variables || {},
+          waMessageId: sendResult?.messageId || null,
+          waStatus: sendResult?.messageId ? 'SENT' : 'FAILED',
+          waStatusUpdatedAt: now.toISOString(),
+        },
+        userId: req.user.id,
+        isRead: true,
+      },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+    const enriched = await enrichCommunicationForClient(communication, leadId);
+    emitCommunicationChange(lead.organizationId, 'created', req.user.id, leadId, enriched);
+    res.status(201).json(enriched);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message, details: err.details || null });
     next(err);
   }
 });
