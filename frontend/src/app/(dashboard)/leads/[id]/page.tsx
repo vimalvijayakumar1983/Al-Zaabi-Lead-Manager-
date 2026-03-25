@@ -356,23 +356,6 @@ export default function LeadDetailPage() {
     }
   }, [addToast, refreshLeadAndSyncLists]);
 
-  const handleOfferLifecycleUpdate = useCallback(async (assignmentId: string, status: string) => {
-    setUpdatingOfferAssignmentId(assignmentId);
-    try {
-      await api.updateCampaignAssignment(assignmentId, {
-        status,
-        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
-        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
-      });
-      await refreshLead();
-      addToast({ type: 'success', title: 'Offer Updated', message: `Lifecycle changed to ${offerLifecycleLabel[status] || status}.` });
-    } catch (err: any) {
-      addToast({ type: 'error', title: 'Offer Update Failed', message: err?.message || 'Unable to update offer lifecycle.' });
-    } finally {
-      setUpdatingOfferAssignmentId(null);
-    }
-  }, [addToast, refreshLead]);
-
   const loadLeadAISummary = useCallback(async (force = false) => {
     setAiSummaryLoading(true);
     setAiSummaryError(null);
