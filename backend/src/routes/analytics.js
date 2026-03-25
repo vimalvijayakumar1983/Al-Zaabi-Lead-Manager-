@@ -25,6 +25,33 @@ function getOrgFilter(req, divisionId) {
   return { in: req.orgIds };
 }
 
+function normalizeId(value) {
+  const raw = String(value || '').trim();
+  return raw ? raw : null;
+}
+
+async function resolveTeamMemberForScope(req, divisionId, requestedTeamMemberId) {
+  const scopedId = normalizeId(requestedTeamMemberId);
+  if (!scopedId) return null;
+  if (req.isRestrictedRole) return req.user.id;
+
+  const where = {
+    id: scopedId,
+    isActive: true,
+  };
+  if (divisionId && req.isSuperAdmin) {
+    where.organizationId = divisionId;
+  } else {
+    where.organizationId = { in: req.orgIds };
+  }
+
+  const user = await prisma.user.findFirst({
+    where,
+    select: { id: true },
+  });
+  return user?.id || null;
+}
+
 /**
  * Build base where clause for leads, scoped by role.
  * SALES_REP/VIEWER only see leads assigned to them.
@@ -1594,6 +1621,7 @@ router.get('/dashboard-full', async (req, res, next) => {
     const orgFilter = getOrgFilter(req, divisionId);
     const { start, prevStart, prevEnd, days } = getPeriodDates(period);
     const now = new Date();
+    const scopedTeamMemberId = await resolveTeamMemberForScope(req, divisionId, teamMemberId);
 
     const customDate = buildPeriodFilter(period, {
       from: typeof from === 'string' ? from : undefined,
@@ -1601,17 +1629,17 @@ router.get('/dashboard-full', async (req, res, next) => {
     });
 
     const lw = getLeadWhere(req, divisionId);
-    if (teamMemberId && !req.isRestrictedRole) {
-      lw.assignedToId = teamMemberId;
+    if (scopedTeamMemberId && !req.isRestrictedRole) {
+      lw.assignedToId = scopedTeamMemberId;
     }
     const actWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
-    if (teamMemberId && !req.isRestrictedRole) {
-      actWhere.lead = { ...(actWhere.lead || {}), assignedToId: teamMemberId };
+    if (scopedTeamMemberId && !req.isRestrictedRole) {
+      actWhere.lead = { ...(actWhere.lead || {}), assignedToId: scopedTeamMemberId };
     }
 
     const taskScopeWithTeam = getTaskWhere(req, divisionId);
-    if (teamMemberId && !req.isRestrictedRole) {
-      taskScopeWithTeam.assigneeId = teamMemberId;
+    if (scopedTeamMemberId && !req.isRestrictedRole) {
+      taskScopeWithTeam.assigneeId = scopedTeamMemberId;
       delete taskScopeWithTeam.OR;
     }
 
@@ -1678,8 +1706,8 @@ router.get('/dashboard-full', async (req, res, next) => {
         where: { organizationId: orgFilter },
         orderBy: { order: 'asc' },
         include: {
-          _count: { select: { leads: { where: { isArchived: false, ...(teamMemberId && !req.isRestrictedRole ? { assignedToId: teamMemberId } : {}) } } } },
-          leads: { select: { budget: true }, where: { isArchived: false, budget: { not: null }, ...(teamMemberId && !req.isRestrictedRole ? { assignedToId: teamMemberId } : {}) } },
+          _count: { select: { leads: { where: { isArchived: false, ...(scopedTeamMemberId && !req.isRestrictedRole ? { assignedToId: scopedTeamMemberId } : {}) } } } },
+          leads: { select: { budget: true }, where: { isArchived: false, budget: { not: null }, ...(scopedTeamMemberId && !req.isRestrictedRole ? { assignedToId: scopedTeamMemberId } : {}) } },
         },
       }),
 
@@ -1696,8 +1724,8 @@ router.get('/dashboard-full', async (req, res, next) => {
     const callLogOrgWhere = req.isRestrictedRole
       ? { userId: req.user.id }
       : { lead: { organizationId: orgFilter, isArchived: false } };
-    if (teamMemberId && !req.isRestrictedRole) {
-      callLogOrgWhere.userId = teamMemberId;
+    if (scopedTeamMemberId && !req.isRestrictedRole) {
+      callLogOrgWhere.userId = scopedTeamMemberId;
       delete callLogOrgWhere.lead;
     }
     const periodCallWhere = { ...callLogOrgWhere, createdAt: customDate.dateFilter };
@@ -1719,7 +1747,7 @@ router.get('/dashboard-full', async (req, res, next) => {
         where: {
           organizationId: orgFilter,
           isActive: true,
-          ...(teamMemberId ? { id: teamMemberId } : {}),
+          ...(scopedTeamMemberId ? { id: scopedTeamMemberId } : {}),
         },
         select: { id: true, firstName: true, lastName: true, avatar: true, role: true, _count: { select: { assignedLeads: true } } },
       });

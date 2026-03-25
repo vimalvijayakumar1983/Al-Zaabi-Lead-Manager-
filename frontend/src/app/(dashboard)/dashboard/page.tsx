@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import type { Organization } from '@/types';
 import Link from 'next/link';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -110,12 +109,6 @@ const SOURCE_CHART_COLORS = [
   '#6366f1', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b',
   '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316',
   '#64748b', '#84cc16', '#a855f7', '#e11d48',
-];
-
-const divisionColors = [
-  'bg-blue-100 text-blue-700', 'bg-purple-100 text-purple-700',
-  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
-  'bg-pink-100 text-pink-700', 'bg-cyan-100 text-cyan-700',
 ];
 
 const activityIcons: Record<string, typeof Activity> = {
@@ -278,8 +271,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>('30d');
-  const [divisions, setDivisions] = useState<Organization[]>([]);
-  const [divisionFilter, setDivisionFilter] = useState<string>('all');
+  const [activeDivisionId, setActiveDivisionId] = useState<string | undefined>(undefined);
   const [teamMembers, setTeamMembers] = useState<TeamFilterUser[]>([]);
   const [teamMemberFilter, setTeamMemberFilter] = useState<string>('all');
   const [customFrom, setCustomFrom] = useState<string>('');
@@ -289,27 +281,35 @@ export default function DashboardPage() {
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
-  // Load divisions for SUPER_ADMIN
+  // Single source of truth: follow active division from sidebar selection
   useEffect(() => {
-    if (isSuperAdmin) {
-      api.getDivisions().then((divs) => setDivisions(divs || [])).catch(() => {});
-    }
-  }, [isSuperAdmin]);
+    if (typeof window === 'undefined') return;
+    const stored = localStorage.getItem('activeDivisionId') || undefined;
+    setActiveDivisionId(stored);
+  }, []);
 
-  // Load team members scoped by current division selection
+  // Load team members scoped by active division
   useEffect(() => {
-    const selectedDivisionId = divisionFilter !== 'all' ? divisionFilter : undefined;
-    api.getUsers(selectedDivisionId)
+    api.getUsers(activeDivisionId)
       .then((rows: any[]) => setTeamMembers(Array.isArray(rows) ? rows : []))
       .catch(() => setTeamMembers([]));
-  }, [divisionFilter]);
+  }, [activeDivisionId]);
+
+  // Reset invalid team filter when division changes (or member no longer in scope)
+  useEffect(() => {
+    if (teamMemberFilter === 'all') return;
+    const stillExists = teamMembers.some((member) => member.id === teamMemberFilter);
+    if (!stillExists) {
+      setTeamMemberFilter('all');
+    }
+  }, [teamMembers, teamMemberFilter]);
 
   // Fetch consolidated dashboard data
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
+      const divId = activeDivisionId;
       const d = await api.getDashboardFull(period, divId, {
         teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
         dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
@@ -326,7 +326,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [period, divisionFilter, teamMemberFilter, customApplied, customFrom, customTo]);
+  }, [period, activeDivisionId, teamMemberFilter, customApplied, customFrom, customTo]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -341,7 +341,7 @@ export default function DashboardPage() {
 
   // Real-time refresh
   useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
-    const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
+    const divId = activeDivisionId;
     api.getDashboardFull(period, divId, {
       teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
       dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
@@ -391,14 +391,6 @@ export default function DashboardPage() {
   const scoreDistribution = data.scoreDistribution || [];
   const teamLeaderboard = data.teamLeaderboard || [];
   const recentActivities = data.recentActivities || [];
-  const divisionBreakdown = data.divisionBreakdown || [];
-
-  // Group overview stats
-  const groupTotalLeads = divisionBreakdown.reduce((s, d) => s + (d.totalLeads || 0), 0);
-  const groupTotalPipeline = divisionBreakdown.reduce((s, d) => s + (d.pipelineValue || 0), 0);
-  const groupTotalWon = divisionBreakdown.reduce((s, d) => s + (d.wonLeads || 0), 0);
-  const groupConvRate = groupTotalLeads > 0 ? Number(((groupTotalWon / groupTotalLeads) * 100).toFixed(1)) : 0;
-
   const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
 
   const kpiCards = [
@@ -433,7 +425,7 @@ export default function DashboardPage() {
           </h1>
           <p className="text-sm text-text-secondary mt-0.5">
             {isSuperAdmin
-              ? 'Group-wide overview across all divisions.'
+              ? 'Division-scoped overview based on sidebar division selection.'
               : "Here's what's happening with your leads today."}
             {teamMemberFilter !== 'all' && (
               <span className="ml-1 text-brand-700">
@@ -448,36 +440,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {isSuperAdmin && divisions.length > 0 && (
-            <div className="relative">
-              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-              <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-                value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)}>
-                <option value="all">All Divisions</option>
-                {divisions.map((div) => <option key={div.id} value={div.id}>{div.name}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
-            </div>
-          )}
-          {!isSuperAdmin && teamMembers.length > 0 && (
-            <div className="relative">
-              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-              <select
-                className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-                value={teamMemberFilter}
-                onChange={(e) => setTeamMemberFilter(e.target.value)}
-              >
-                <option value="all">All Team Members</option>
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {getDisplayName(member.firstName, member.lastName)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
-            </div>
-          )}
-          {isSuperAdmin && teamMembers.length > 0 && (
+          {teamMembers.length > 0 && (
             <div className="relative">
               <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
               <select
@@ -569,117 +532,6 @@ export default function DashboardPage() {
               <ChevronRight className="h-3.5 w-3.5 text-orange-400 group-hover:text-orange-600 transition-colors" />
             </Link>
           )}
-        </div>
-      )}
-
-      {/* ─── SUPER_ADMIN: Group Overview ────────────────────────────── */}
-      {isSuperAdmin && divisionFilter === 'all' && divisionBreakdown.length > 0 && (
-        <>
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="h-7 w-7 rounded-lg bg-purple-100 flex items-center justify-center">
-                <Building2 className="h-4 w-4 text-purple-600" />
-              </div>
-              <h2 className="text-sm font-semibold text-text-primary">Group Overview</h2>
-              <span className="badge bg-purple-50 text-purple-700 ring-1 ring-purple-200 text-2xs">
-                {divisionBreakdown.length} Divisions
-              </span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {[
-                { label: 'Total Leads (All)', value: groupTotalLeads.toLocaleString(), icon: Users, iconBg: 'bg-brand-100', iconText: 'text-brand-600' },
-                { label: 'Total Pipeline', value: fmt(groupTotalPipeline, 'currency'), icon: Banknote, iconBg: 'bg-amber-100', iconText: 'text-amber-600' },
-                { label: 'Total Won', value: groupTotalWon.toLocaleString(), icon: Trophy, iconBg: 'bg-emerald-100', iconText: 'text-emerald-600' },
-                { label: 'Conversion Rate', value: `${groupConvRate}%`, icon: TrendingUp, iconBg: 'bg-cyan-100', iconText: 'text-cyan-600' },
-              ].map((card, i) => {
-                const Icon = card.icon;
-                return (
-                  <div key={card.label}
-                    className={`card p-5 animate-fade-in-up stagger-${i + 1} hover:shadow-card-hover transition-all duration-200 border-l-4 border-l-purple-400`}>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className={`h-9 w-9 rounded-lg ${card.iconBg} flex items-center justify-center`}>
-                        <Icon className={`h-[18px] w-[18px] ${card.iconText}`} />
-                      </div>
-                    </div>
-                    <p className="text-2xl font-bold text-text-primary tracking-tight">{card.value}</p>
-                    <p className="text-xs text-text-tertiary mt-0.5">{card.label}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Division Performance Table */}
-          <div className="card overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface-secondary">
-              <div className="flex items-center gap-2">
-                <BarChart3 className="h-4 w-4 text-text-tertiary" />
-                <h2 className="text-sm font-semibold text-text-primary">Division Performance</h2>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="table-header">
-                    <th className="table-cell text-left">Division</th>
-                    <th className="table-cell text-right">Total Leads</th>
-                    <th className="table-cell text-right hidden md:table-cell">New Leads</th>
-                    <th className="table-cell text-right hidden md:table-cell">Won Leads</th>
-                    <th className="table-cell text-right">Conversion</th>
-                    <th className="table-cell text-right">Pipeline (AED)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border-subtle">
-                  {divisionBreakdown.map((div, idx) => (
-                    <tr key={div.divisionId} className="table-row hover:bg-surface-secondary transition-colors">
-                      <td className="table-cell">
-                        <button onClick={() => setDivisionFilter(div.divisionId)}
-                          className="flex items-center gap-2.5 text-sm font-medium text-text-primary hover:text-brand-600 transition-colors">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-semibold ${divisionColors[idx % divisionColors.length]}`}>
-                            {(div.divisionName || '?').charAt(0)}
-                          </span>
-                          {div.divisionName || 'Unknown'}
-                        </button>
-                      </td>
-                      <td className="table-cell text-right font-semibold">{(div.totalLeads || 0).toLocaleString()}</td>
-                      <td className="table-cell text-right hidden md:table-cell text-text-secondary">{(div.newLeads || 0).toLocaleString()}</td>
-                      <td className="table-cell text-right hidden md:table-cell text-emerald-600 font-medium">{(div.wonLeads || 0).toLocaleString()}</td>
-                      <td className="table-cell text-right">
-                        <span className={`font-medium ${(div.conversionRate || 0) >= 20 ? 'text-emerald-600' : (div.conversionRate || 0) >= 10 ? 'text-amber-600' : 'text-red-600'}`}>
-                          {div.conversionRate || 0}%
-                        </span>
-                      </td>
-                      <td className="table-cell text-right font-semibold">AED {Number(div.pipelineValue || 0).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-surface-secondary border-t-2 border-border">
-                    <td className="table-cell font-bold">Total (Group)</td>
-                    <td className="table-cell text-right font-bold">{groupTotalLeads.toLocaleString()}</td>
-                    <td className="table-cell text-right hidden md:table-cell font-bold">{divisionBreakdown.reduce((s, d) => s + (d.newLeads || 0), 0).toLocaleString()}</td>
-                    <td className="table-cell text-right hidden md:table-cell font-bold text-emerald-600">{groupTotalWon.toLocaleString()}</td>
-                    <td className="table-cell text-right font-bold">{groupConvRate}%</td>
-                    <td className="table-cell text-right font-bold">AED {groupTotalPipeline.toLocaleString()}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Division-filtered indicator */}
-      {isSuperAdmin && divisionFilter !== 'all' && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-brand-50 ring-1 ring-brand-200">
-          <Building2 className="h-4 w-4 text-brand-600" />
-          <span className="text-sm text-brand-700 font-medium">
-            Viewing: {divisions.find(d => d.id === divisionFilter)?.name || 'Selected Division'}
-          </span>
-          <button onClick={() => setDivisionFilter('all')}
-            className="ml-auto text-xs font-medium text-brand-600 hover:text-brand-800 transition-colors">
-            &larr; Back to Group Overview
-          </button>
         </div>
       )}
 
