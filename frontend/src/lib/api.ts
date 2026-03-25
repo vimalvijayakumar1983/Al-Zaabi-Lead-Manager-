@@ -705,6 +705,38 @@ class ApiClient {
     return this.request<IntegrationPlatformInfo[]>('/integrations/platforms');
   }
 
+  async getErpData(params?: { integrationId?: string; divisionId?: string; entityType?: string; page?: number; limit?: number }) {
+    const query = params
+      ? '?' + new URLSearchParams(
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
+            .map(([k, v]) => [k, String(v)])
+        ).toString()
+      : '';
+    return this.request<{
+      data: Array<{
+        id: string;
+        integrationId: string;
+        provider: string | null;
+        divisionId: string | null;
+        entityType: string;
+        externalId: string;
+        crmEntityId: string;
+        payload: Record<string, unknown>;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      total: number;
+      countsByEntity: Record<string, number>;
+      pagination?: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+      };
+    }>(`/integrations/erp-data${query}`);
+  }
+
   // ─── Widget & API Keys ─────────────────────────────────────────
 
   async generateWidget(config: string | WidgetConfig) {

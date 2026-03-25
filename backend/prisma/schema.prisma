@@ -47,6 +47,11 @@ model Organization {
   importHistory     ImportHistory[]
   notifications     Notification[]
   integrations      Integration[]
+  erpSyncStates     ErpSyncState[]
+  erpExternalRefs   ErpExternalRef[]
+  erpJobRuns        ErpJobRun[]
+  erpRequestAudits  ErpRequestAudit[]
+  erpDataAccessLogs ErpDataAccessLog[]
   apiKeys           ApiKey[]
   contacts          Contact[]
   deals             Deal[]
@@ -54,8 +59,6 @@ model Organization {
   customRoles         CustomRole[]
   savedViews          SavedView[]
   reportDefinitions   ReportDefinition[]
-  campaignTemplates   CampaignTemplate[]
-  campaignAssignments LeadCampaignAssignment[]
   whatsAppMessageTemplates WhatsAppMessageTemplate[]
 
   @@index([parentId])
@@ -137,8 +140,7 @@ model User {
   createdCustomRoles   CustomRole[]   @relation("CustomRoleCreator")
   createdViews         SavedView[]    @relation("ViewCreator")
   createdReports       ReportDefinition[] @relation("ReportCreator")
-  createdCampaignTemplates CampaignTemplate[] @relation("CampaignTemplateCreator")
-  assignedCampaignOffers   LeadCampaignAssignment[] @relation("CampaignOfferAssigner")
+  erpDataAccessLogs    ErpDataAccessLog[] @relation("ErpDataAccessLogAccessor")
 
   @@index([organizationId])
   @@map("users")
@@ -214,7 +216,6 @@ model Lead {
   tags            LeadTag[]
   attachments     Attachment[]
   convertedContact Contact? @relation("ConvertedContact")
-  campaignAssignments LeadCampaignAssignment[]
 
   @@index([organizationId, status])
   @@index([organizationId, source])
@@ -667,86 +668,11 @@ model Campaign {
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  templateId     String?
-  template       CampaignTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   integrations   Integration[]
-  leadAssignments LeadCampaignAssignment[]
 
   @@index([organizationId])
-  @@index([templateId])
   @@map("campaigns")
-}
-
-model CampaignTemplate {
-  id             String   @id @default(uuid())
-  name           String
-  description    String?
-  config         Json     @default("{}")
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  createdById    String?
-  createdBy      User? @relation("CampaignTemplateCreator", fields: [createdById], references: [id], onDelete: SetNull)
-
-  campaigns      Campaign[]
-
-  @@index([organizationId, isActive])
-  @@index([createdById])
-  @@map("campaign_templates")
-}
-
-enum OfferAssignmentStatus {
-  ELIGIBLE
-  CONTACTED
-  ACCEPTED
-  REDEEMED
-  EXPIRED
-  REJECTED
-}
-
-enum OfferAssignmentSource {
-  IMPORT
-  RULE
-  MANUAL
-  API
-}
-
-model LeadCampaignAssignment {
-  id             String   @id @default(uuid())
-  status         OfferAssignmentStatus @default(ELIGIBLE)
-  source         OfferAssignmentSource @default(MANUAL)
-  notes          String?
-  assignedAt     DateTime @default(now())
-  expiresAt      DateTime?
-  discussedAt    DateTime?
-  redeemedAt     DateTime?
-  metadata       Json     @default("{}")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  leadId         String
-  lead           Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
-
-  campaignId     String
-  campaign       Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-
-  assignedById   String?
-  assignedBy     User? @relation("CampaignOfferAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
-
-  @@unique([leadId, campaignId], map: "lead_campaign_assignment_unique")
-  @@index([organizationId, status])
-  @@index([organizationId, campaignId])
-  @@index([organizationId, leadId])
-  @@index([expiresAt])
-  @@map("lead_campaign_assignments")
 }
 
 enum CampaignType {
@@ -1074,6 +1000,14 @@ model Integration {
   id             String   @id @default(uuid())
   platform       String
   status         String   @default("disconnected")
+  providerKey    String?  @map("provider_key")
+  protocol       String?
+  syncMode       String?  @map("sync_mode")
+  deploymentType String?  @map("deployment_type")
+  apiVersion     String?  @map("api_version")
+  capabilities   Json     @default("{}")
+  complianceProfile String? @map("compliance_profile")
+  requiresComplianceLog Boolean @default(false) @map("requires_compliance_log")
   credentials    Json     @default("{}")
   config         Json     @default("{}")
   lastSyncAt     DateTime? @map("last_sync_at")
@@ -1090,8 +1024,14 @@ model Integration {
   createdBy      User?    @relation("IntegrationCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   logs           IntegrationLog[]
+  erpSyncStates  ErpSyncState[]
+  erpExternalRefs ErpExternalRef[]
+  erpJobRuns     ErpJobRun[]
+  erpRequestAudits ErpRequestAudit[]
+  erpDataAccessLogs ErpDataAccessLog[]
 
   @@index([organizationId, platform])
+  @@index([organizationId, providerKey])
   @@map("integrations")
 }
 
@@ -1110,6 +1050,116 @@ model IntegrationLog {
 
   @@index([integrationId, createdAt])
   @@map("integration_logs")
+}
+
+model ErpSyncState {
+  id             String   @id @default(uuid())
+  entityType     String   @map("entity_type")
+  cursor         String?
+  watermark      DateTime? @map("watermark")
+  lastSyncedAt   DateTime? @map("last_synced_at")
+  status         String   @default("idle")
+  lastError      String?  @map("last_error")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrationId  String   @map("integration_id")
+  integration    Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, integrationId, entityType])
+  @@index([organizationId, integrationId])
+  @@map("erp_sync_states")
+}
+
+model ErpExternalRef {
+  id             String   @id @default(uuid())
+  entityType     String   @map("entity_type")
+  crmEntityId    String   @map("crm_entity_id")
+  externalId     String   @map("external_id")
+  externalPayload Json?   @map("external_payload")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrationId  String   @map("integration_id")
+  integration    Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, entityType, externalId])
+  @@index([organizationId, entityType, crmEntityId])
+  @@map("erp_external_refs")
+}
+
+model ErpJobRun {
+  id             String   @id @default(uuid())
+  jobType        String   @map("job_type")
+  status         String   @default("pending")
+  requestPayload Json?    @map("request_payload")
+  responsePayload Json?   @map("response_payload")
+  retryCount     Int      @default(0) @map("retry_count")
+  startedAt      DateTime? @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrationId  String?  @map("integration_id")
+  integration    Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, jobType, status])
+  @@map("erp_job_runs")
+}
+
+model ErpRequestAudit {
+  id             String   @id @default(uuid())
+  action         String
+  requestPayload Json?    @map("request_payload")
+  responsePayload Json?   @map("response_payload")
+  statusCode     Int?     @map("status_code")
+  latencyMs      Int?     @map("latency_ms")
+  retryable      Boolean  @default(false)
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrationId  String?  @map("integration_id")
+  integration    Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([integrationId, createdAt])
+  @@map("erp_request_audits")
+}
+
+model ErpDataAccessLog {
+  id             String   @id @default(uuid())
+  entityType     String   @map("entity_type")
+  externalId     String?  @map("external_id")
+  accessReason   String?  @map("access_reason")
+  accessContext  Json?    @map("access_context")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrationId  String?  @map("integration_id")
+  integration    Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  accessedById   String?  @map("accessed_by_id")
+  accessedBy     User?    @relation("ErpDataAccessLogAccessor", fields: [accessedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, entityType, createdAt])
+  @@index([integrationId, createdAt])
+  @@map("erp_data_access_logs")
 }
 
 // ─── API Keys ───────────────────────────────────────────────────
