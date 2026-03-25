@@ -399,6 +399,16 @@ export function useInboxMessageMutations(selectedLeadId: string | null) {
     },
   });
 
+  const retryWhatsAppMessage = useMutation({
+    mutationFn: (messageId: string) => api.retryInboxWhatsAppMessage(messageId),
+    onSuccess: async (data) => {
+      await refreshInboxLists();
+      if (selectedLeadId && data && typeof data === 'object' && (data as Record<string, unknown>).id != null) {
+        upsertCommunicationInThreadCaches(queryClient, selectedLeadId, data as Record<string, unknown>);
+      }
+    },
+  });
+
   const addNote = useMutation({
     mutationFn: ({ leadId, body }: { leadId: string; body: string }) => api.addInternalNote(leadId, body),
     onSuccess: async () => {
@@ -414,6 +424,6 @@ export function useInboxMessageMutations(selectedLeadId: string | null) {
     onSuccess: refreshAllInbox,
   });
 
-  return { sendMessage, sendMessageWithAttachments, editMessage, deleteMessage, addNote, markRead };
+  return { sendMessage, sendMessageWithAttachments, editMessage, deleteMessage, retryWhatsAppMessage, addNote, markRead };
 }
 

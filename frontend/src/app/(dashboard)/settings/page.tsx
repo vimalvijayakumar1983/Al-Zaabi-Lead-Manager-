@@ -609,6 +609,16 @@ function OrganizationSection() {
 const WHATSAPP_TOKEN_MASK = '••••••••';
 
 type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; displayPhone: string; token: string };
+type WhatsAppTestResult = {
+  ok: boolean;
+  message: string;
+  reasonCode?: string;
+  diagnostics?: {
+    token?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+    phoneNumberId?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+    waba?: { checked: boolean; ok: boolean | null; reasonCode?: string | null; message?: string | null };
+  };
+};
 
 function WhatsAppSection() {
   const { user } = useAuthStore();
@@ -622,7 +632,7 @@ function WhatsAppSection() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
   const [testLoading, setTestLoading] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<WhatsAppTestResult | null>(null);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
   const [whatsappBusinessAccountId, setWhatsappBusinessAccountId] = useState('');
   const [showWebhookVerifyToken, setShowWebhookVerifyToken] = useState(false);
@@ -707,11 +717,17 @@ function WhatsAppSection() {
       setTestResult({
         ok: true,
         message: details ? `${result.message} (${details})` : result.message,
+        reasonCode: result.reasonCode,
+        diagnostics: result.diagnostics,
       });
     } catch (err: unknown) {
+      const errWithMeta = err as Error & { details?: any; reasonCode?: string; diagnostics?: WhatsAppTestResult['diagnostics'] };
+      const details = errWithMeta?.details && typeof errWithMeta.details === 'object' ? errWithMeta.details : {};
       setTestResult({
         ok: false,
         message: err instanceof Error ? err.message : 'Connection test failed',
+        reasonCode: typeof errWithMeta?.reasonCode === 'string' ? errWithMeta.reasonCode : undefined,
+        diagnostics: details?.diagnostics || errWithMeta?.diagnostics,
       });
     } finally {
       setTestLoading(false);
@@ -1003,14 +1019,34 @@ function WhatsAppSection() {
 
         {testResult && (
           <div
-            className={`flex items-center gap-2 p-3 rounded-lg text-sm ring-1 ${
+            className={`p-3 rounded-lg text-sm ring-1 ${
               testResult.ok
                 ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                 : 'bg-red-50 text-red-700 ring-red-200'
             }`}
           >
-            {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <XCircle className="h-4 w-4 flex-shrink-0" />}
-            {testResult.message}
+            <div className="flex items-center gap-2">
+              {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <XCircle className="h-4 w-4 flex-shrink-0" />}
+              <span>{testResult.message}</span>
+            </div>
+            {testResult.diagnostics && (
+              <div className="mt-2 grid gap-1 text-xs">
+                <div>
+                  Token: <strong>{testResult.diagnostics.token?.ok ? 'OK' : 'Failed'}</strong>
+                  {testResult.diagnostics.token?.message ? ` - ${testResult.diagnostics.token.message}` : ''}
+                </div>
+                <div>
+                  Phone number ID: <strong>{testResult.diagnostics.phoneNumberId?.ok ? 'OK' : 'Failed'}</strong>
+                  {testResult.diagnostics.phoneNumberId?.message ? ` - ${testResult.diagnostics.phoneNumberId.message}` : ''}
+                </div>
+                {testResult.diagnostics.waba?.checked && (
+                  <div>
+                    WABA reachability: <strong>{testResult.diagnostics.waba?.ok ? 'OK' : 'Failed'}</strong>
+                    {testResult.diagnostics.waba?.message ? ` - ${testResult.diagnostics.waba.message}` : ''}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

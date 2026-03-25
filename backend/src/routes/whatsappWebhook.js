@@ -1,8 +1,10 @@
 const { Router } = require('express');
+const crypto = require('crypto');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
 const { broadcastDataChange } = require('../websocket/server');
+const { enrichCommunicationForClient } = require('../utils/inboxCommunication');
 const { processInboundWhatsAppMessage, normalizePhone, resolveOrganizationId } = require('../services/whatsappInbound');
 
 /** Prefer contact row whose wa_id matches the message sender (newer payloads include multiple contacts). */
@@ -21,6 +23,23 @@ function resolveContactProfileName(value, fromWaId) {
 }
 
 const router = Router();
+
+function isValidWebhookSignature(req) {
+  const appSecret = config.whatsapp?.appSecret;
+  if (!appSecret) return true; // keep local/dev flow working when secret is not configured
+  const signatureHeader = req.get('x-hub-signature-256');
+  if (!signatureHeader || typeof signatureHeader !== 'string') return false;
+  if (!signatureHeader.startsWith('sha256=')) return false;
+  const receivedSig = signatureHeader.slice('sha256='.length).trim();
+  if (!receivedSig) return false;
+  const raw = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+  const expectedSig = crypto.createHmac('sha256', appSecret).update(raw).digest('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(receivedSig), Buffer.from(expectedSig));
+  } catch {
+    return false;
+  }
+}
 
 function normalizeWaStatus(rawStatus) {
   const s = String(rawStatus ?? '').toUpperCase();
@@ -81,25 +100,32 @@ async function processStatusUpdates({ phoneNumberId, displayPhoneNumber, statuse
         waStatus: mappedStatus,
         waStatusRaw: s?.status,
         waStatusUpdatedAt: statusAt.toISOString(),
+        ...(mappedStatus === 'READ' ? { waRecipientReadAt: statusAt.toISOString() } : {}),
       };
 
-      const data = {
-        metadata: nextMeta,
-      };
-
-      if (mappedStatus === 'READ') {
-        data.isRead = true;
-        data.readAt = statusAt;
-      }
-
-      await prisma.communication
+      const updated = await prisma.communication
         .update({
           where: { id: comm.id },
-          data,
+          data: { metadata: nextMeta },
+          include: {
+            user: { select: { id: true, firstName: true, lastName: true } },
+          },
         })
-        .catch(() => {});
+        .catch(() => null);
 
-      broadcastDataChange(comm.lead.organizationId, 'communication', 'updated', null, { entityId: comm.leadId }).catch(() => {});
+      if (!updated) return;
+
+      let payload;
+      try {
+        payload = await enrichCommunicationForClient(updated, comm.leadId);
+      } catch {
+        payload = updated;
+      }
+
+      broadcastDataChange(comm.lead.organizationId, 'communication', 'updated', null, {
+        entityId: comm.leadId,
+        message: payload,
+      }).catch(() => {});
     })
   );
 }
@@ -156,6 +182,16 @@ router.get('/', async (req, res) => {
 // ─── POST: Incoming events from Meta ──────────────────────────────
 router.post('/', (req, res) => {
   const body = req.body;
+  const hasSecret = !!config.whatsapp?.appSecret;
+
+  if (!isValidWebhookSignature(req)) {
+    logger.warn('[WhatsApp Webhook] Invalid signature', {
+      hasSecret,
+      hasSignatureHeader: !!req.get('x-hub-signature-256'),
+    });
+    res.status(403).send('Forbidden');
+    return;
+  }
 
   // Full payload to stdout — use this to map fields → inbox / division routing
   try {

@@ -66,6 +66,48 @@ function refreshLeadAISummaryAsync(leadId) {
   regenerateLeadSummaryById(leadId).catch(() => {});
 }
 
+function resolveWhatsAppMediaType(mimeType = '') {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+async function resolveAttachmentBinary(attachment) {
+  if (!attachment) return null;
+  if (attachment.data) {
+    const base64Match = String(attachment.data).match(/^data:([^;]+);base64,(.+)$/);
+    if (base64Match) {
+      return {
+        buffer: Buffer.from(base64Match[2], 'base64'),
+        mimeType: base64Match[1] || attachment.mimeType || 'application/octet-stream',
+        filename: attachment.filename,
+      };
+    }
+  }
+  if (attachment.storageKey) {
+    const signed = await getInboxAttachmentReadUrl(attachment.storageKey);
+    if (!signed) return null;
+    const resp = await fetch(signed);
+    if (!resp.ok) return null;
+    const buf = Buffer.from(await resp.arrayBuffer());
+    return {
+      buffer: buf,
+      mimeType: attachment.mimeType || resp.headers.get('content-type') || 'application/octet-stream',
+      filename: attachment.filename,
+    };
+  }
+  const filePath = path.join(__dirname, '../../uploads/inbox', path.basename(attachment.filename || ''));
+  if (fs.existsSync(filePath)) {
+    return {
+      buffer: fs.readFileSync(filePath),
+      mimeType: attachment.mimeType || 'application/octet-stream',
+      filename: attachment.filename,
+    };
+  }
+  return null;
+}
+
 // ─── Serve Attachment File from DB (public — UUID acts as access token) ──
 
 router.get('/attachments/file/:id', async (req, res, next) => {
@@ -717,6 +759,148 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
 
     emitCommunicationChange(lead.organizationId, 'created', req.user.id, leadId, enriched);
   } catch (err) { next(err); }
+});
+
+// ─── Retry failed WhatsApp outbound message ─────────────────────────
+router.post('/messages/:messageId/retry-whatsapp', async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const communication = await prisma.communication.findUnique({
+      where: { id: messageId },
+      include: {
+        lead: { select: { id: true, phone: true, organizationId: true } },
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    if (!communication || !communication.lead || communication.isDeleted) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    if (communication.lead.organizationId !== req.user.organizationId) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    if (communication.channel !== 'WHATSAPP' || communication.direction !== 'OUTBOUND') {
+      return res.status(400).json({ error: 'Only outbound WhatsApp messages can be retried' });
+    }
+
+    const phone = canonicalPhoneDigitsForWhatsApp(communication.lead.phone?.replace(/\D/g, '') || '');
+    if (!phone) {
+      const now = new Date();
+      const nextMeta = {
+        ...(communication.metadata || {}),
+        waStatus: 'FAILED',
+        sendError: 'Lead has no phone number',
+        waStatusUpdatedAt: now.toISOString(),
+      };
+      await prisma.communication.update({
+        where: { id: communication.id },
+        data: { metadata: nextMeta },
+      }).catch(() => {});
+      return res.status(400).json({ error: 'Lead has no phone number' });
+    }
+
+    const now = new Date();
+    let nextMeta = { ...(communication.metadata || {}) };
+    const attachmentRows = Array.isArray(nextMeta?.attachments) ? nextMeta.attachments : [];
+    try {
+      const waMessageIds = [];
+      let lastSendErr = null;
+
+      if (attachmentRows.length > 0) {
+        for (const att of attachmentRows) {
+          const attId = att?.id;
+          if (!attId) continue;
+          const attachment = await prisma.attachment.findFirst({
+            where: { id: attId, leadId: communication.leadId },
+            select: { id: true, filename: true, mimeType: true, data: true, storageKey: true },
+          });
+          if (!attachment) continue;
+          try {
+            const resolvedFile = await resolveAttachmentBinary(attachment);
+            if (!resolvedFile?.buffer) continue;
+            const waMediaType = resolveWhatsAppMediaType(resolvedFile.mimeType);
+            const { mediaId } = await uploadWhatsAppMedia(
+              resolvedFile.buffer,
+              resolvedFile.mimeType,
+              resolvedFile.filename,
+              communication.lead.organizationId
+            );
+            const caption =
+              attachmentRows.length === 1 && communication.body ? communication.body : undefined;
+            const mediaSendResult = await sendWhatsAppMedia(
+              phone,
+              waMediaType,
+              mediaId,
+              caption,
+              resolvedFile.filename,
+              communication.lead.organizationId
+            );
+            if (mediaSendResult?.messageId) {
+              waMessageIds.push(mediaSendResult.messageId);
+            }
+          } catch (attErr) {
+            lastSendErr = attErr;
+            logger.error('WhatsApp retry failed for attachment', {
+              communicationId: communication.id,
+              attachmentId: attId,
+              error: attErr?.message || String(attErr),
+            });
+          }
+        }
+      }
+
+      if (communication.body && attachmentRows.length !== 1) {
+        try {
+          const sendResult = await sendWhatsAppText(phone, communication.body || '', communication.lead.organizationId);
+          if (sendResult?.messageId) {
+            waMessageIds.push(sendResult.messageId);
+          }
+        } catch (textErr) {
+          lastSendErr = textErr;
+          logger.error('WhatsApp retry failed for text', {
+            communicationId: communication.id,
+            error: textErr?.message || String(textErr),
+          });
+        }
+      }
+
+      const waMessageId = waMessageIds.length > 0 ? waMessageIds[waMessageIds.length - 1] : null;
+      nextMeta = {
+        ...nextMeta,
+        ...(waMessageIds.length > 0 ? { waMessageIds } : {}),
+        ...(waMessageId ? { waMessageId } : {}),
+        waStatus: waMessageIds.length > 0 ? 'SENT' : 'FAILED',
+        waStatusUpdatedAt: now.toISOString(),
+        sendError: waMessageIds.length > 0 ? null : (lastSendErr?.message || 'WhatsApp retry failed'),
+      };
+    } catch (sendErr) {
+      nextMeta = {
+        ...nextMeta,
+        waStatus: 'FAILED',
+        waStatusUpdatedAt: now.toISOString(),
+        sendError: sendErr?.message || String(sendErr),
+      };
+      logger.error('WhatsApp retry failed', {
+        communicationId: communication.id,
+        leadId: communication.leadId,
+        error: sendErr?.message || String(sendErr),
+      });
+    }
+
+    const updated = await prisma.communication.update({
+      where: { id: communication.id },
+      data: { metadata: nextMeta },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    const enriched = await enrichCommunicationForClient(updated, communication.leadId);
+    emitCommunicationChange(communication.lead.organizationId, 'updated', req.user.id, communication.leadId, enriched);
+    res.json(enriched);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ─── Get Attachments for a Lead ─────────────────────────────────────

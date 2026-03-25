@@ -258,7 +258,7 @@ function InboxContent() {
   const [sendChannel, setSendChannel] = useState('WHATSAPP');
   const [showChannelPicker, setShowChannelPicker] = useState(false);
 
-  const [sending, setSending] = useState(false);
+  const [sendingCount, setSendingCount] = useState(0);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
   // Right panel tabs: info | notes | canned | attachments
@@ -375,6 +375,7 @@ function InboxContent() {
       .reverse()
       .flatMap((p) => (p.messages || []) as Message[]);
   }, [threadQuery.data?.pages]);
+  const groupedMessages = useMemo(() => groupMessagesByDate(messages), [messages]);
   const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
   const notes = (notesQuery.data || []) as any[];
   const stats = statsQuery.data ?? null;
@@ -475,10 +476,12 @@ function InboxContent() {
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el || threadScrollRestore.current) return;
+    const nearBottom = el.scrollHeight - (el.scrollTop + el.clientHeight) < 64;
     const lastId = messages.length ? messages[messages.length - 1]?.id : null;
     const prevLast = lastThreadMsgIdRef.current;
     lastThreadMsgIdRef.current = lastId;
     if (prevLast !== null && lastId === prevLast) return;
+    if (!nearBottom && prevLast !== null) return;
     el.scrollTop = el.scrollHeight;
   }, [messages]);
 
@@ -520,7 +523,7 @@ function InboxContent() {
 
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
-    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
+    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId) return;
     const body = messageText.trim();
     const tempId = `temp-${Date.now()}`;
     const msgKey = queryKeys.inbox.messagesThread(selectedLeadId, threadCacheParams as Record<string, unknown>);
@@ -564,7 +567,7 @@ function InboxContent() {
     }
 
     setMessageText('');
-    setSending(true);
+    setSendingCount((v) => v + 1);
 
     try {
       const threadParams = threadCacheParams as Record<string, unknown>;
@@ -604,7 +607,7 @@ function InboxContent() {
       });
       console.error('Failed to send:', err);
     } finally {
-      setSending(false);
+      setSendingCount((v) => Math.max(0, v - 1));
     }
   };
 
@@ -638,6 +641,14 @@ function InboxContent() {
       setMenuOpenMsgId(null);
     } catch (err: any) {
       console.error('Failed to delete:', err);
+    }
+  };
+
+  const handleRetryWhatsAppMessage = async (messageId: string) => {
+    try {
+      await inboxMutations.retryWhatsAppMessage.mutateAsync(messageId);
+    } catch (err: any) {
+      console.error('Failed to retry WhatsApp message:', err);
     }
   };
 
@@ -1080,6 +1091,9 @@ function InboxContent() {
             <Virtuoso
               style={{ height: '100%' }}
               data={sortedConversations}
+              computeItemKey={(_, convo) => convo.leadId}
+              overscan={320}
+              increaseViewportBy={{ top: 240, bottom: 480 }}
               itemContent={(_, convo) => {
                 const isPinned = pinnedConvos.has(convo.leadId);
                 const isSelected = selectedLeadId === convo.leadId;
@@ -1349,7 +1363,7 @@ function InboxContent() {
             </div>
 
             {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
-            <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
+            <div className="flex-1 overflow-hidden bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
               {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
@@ -1377,8 +1391,22 @@ function InboxContent() {
                       </button>
                     </div>
                   ) : null}
-                {groupMessagesByDate(messages).map((group, gi) => (
-                  <div key={gi}>
+                <Virtuoso
+                  style={{ height: '100%' }}
+                  data={groupedMessages}
+                  computeItemKey={(idx, group) => `${group.date}-${group.messages?.[0]?.id || idx}`}
+                  overscan={360}
+                  increaseViewportBy={{ top: 280, bottom: 520 }}
+                  startReached={() => {
+                    if (threadQuery.hasNextPage && !threadQuery.isFetchingNextPage) {
+                      handleLoadOlderMessages();
+                    }
+                  }}
+                  scrollerRef={(el) => {
+                    messagesContainerRef.current = (el as HTMLDivElement | null);
+                  }}
+                  itemContent={(gi, group) => (
+                  <div className="px-3 sm:px-5">
                     {/* Date separator */}
                     <div className="flex justify-center my-4">
                       <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
@@ -1600,6 +1628,22 @@ function InboxContent() {
                                         )}
                                       </>
                                     )}
+                                    {isOutbound && msg.channel === 'WHATSAPP' && (() => {
+                                      const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                      const waStatus = typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+                                      if (waStatus !== 'FAILED') return null;
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRetryWhatsAppMessage(msg.id)}
+                                          className="text-[10px] text-red-600 hover:text-red-700 underline ml-1"
+                                          disabled={inboxMutations.retryWhatsAppMessage.isPending}
+                                          title="Retry WhatsApp send"
+                                        >
+                                          Retry
+                                        </button>
+                                      );
+                                    })()}
                                   </div>
                                 )}
                               </div>
@@ -1622,7 +1666,8 @@ function InboxContent() {
                       );
                     })}
                   </div>
-                ))}
+                  )}
+                />
               </>
               )}
               <div ref={messagesEndRef} />
@@ -1802,7 +1847,6 @@ function InboxContent() {
                     {!messageText.trim() && attachedFiles.length === 0 ? (
                       <button
                         onClick={startRecording}
-                        disabled={sending}
                         className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-green-50 text-text-tertiary hover:text-green-600 transition-all disabled:opacity-40"
                         title="Record voice note"
                       >
@@ -1811,12 +1855,12 @@ function InboxContent() {
                     ) : (
                       <button
                         onClick={handleSend}
-                        disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
+                        disabled={(!messageText.trim() && attachedFiles.length === 0)}
                         className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
                         style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
                         title="Send"
                       >
-                        {sending ? (
+                        {sendingCount > 0 ? (
                           <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         ) : (
                           <Send className="h-4 w-4 text-white" />

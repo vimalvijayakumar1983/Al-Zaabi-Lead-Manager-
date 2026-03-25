@@ -62,7 +62,15 @@ class ApiClient {
         Array.isArray(data.details)
           ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
           : (typeof data.details === 'string' ? data.details : '');
-      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Request failed'));
+      const err = new Error(details ? `${data.error}: ${details}` : (data.error || data.message || 'Request failed')) as Error & {
+        details?: any;
+        reasonCode?: string;
+        diagnostics?: any;
+      };
+      err.details = data;
+      if (typeof data.reasonCode === 'string') err.reasonCode = data.reasonCode;
+      if (data.diagnostics != null) err.diagnostics = data.diagnostics;
+      throw err;
     }
 
     return data;
@@ -95,7 +103,15 @@ class ApiClient {
         Array.isArray(data.details)
           ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
           : (typeof data.details === 'string' ? data.details : '');
-      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Upload failed'));
+      const err = new Error(details ? `${data.error}: ${details}` : (data.error || data.message || 'Upload failed')) as Error & {
+        details?: any;
+        reasonCode?: string;
+        diagnostics?: any;
+      };
+      err.details = data;
+      if (typeof data.reasonCode === 'string') err.reasonCode = data.reasonCode;
+      if (data.diagnostics != null) err.diagnostics = data.diagnostics;
+      throw err;
     }
     return data;
   }
@@ -1067,9 +1083,15 @@ class ApiClient {
     return this.request<{
       success: boolean;
       message: string;
+      reasonCode?: string;
       phoneNumberId?: string;
       displayPhoneNumber?: string | null;
       verifiedName?: string | null;
+      diagnostics?: {
+        token?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+        phoneNumberId?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+        waba?: { checked: boolean; ok: boolean | null; reasonCode?: string | null; message?: string | null };
+      };
       details?: any;
     }>(`/settings/whatsapp/test${qs}`, {
       method: 'POST',
@@ -1652,6 +1674,12 @@ class ApiClient {
   async deleteInboxMessage(messageId: string) {
     return this.request<any>(`/inbox/messages/${messageId}`, {
       method: 'DELETE',
+    });
+  }
+
+  async retryInboxWhatsAppMessage(messageId: string) {
+    return this.request<any>(`/inbox/messages/${messageId}/retry-whatsapp`, {
+      method: 'POST',
     });
   }
 
