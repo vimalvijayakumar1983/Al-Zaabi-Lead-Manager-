@@ -71,6 +71,9 @@ const offerLifecycleLabel: Record<string, string> = {
   REJECTED: 'Rejected',
 };
 
+// Offer lifecycle statuses considered "active" (shown in current offers section)
+const activeOfferStatuses = new Set(['ELIGIBLE', 'CONTACTED', 'ACCEPTED']);
+
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
   const fn = (obj.firstName || '').trim();
@@ -114,6 +117,7 @@ export default function LeadDetailPage() {
   const usersQuery = useLeadsUsersQuery(null);
   const meQuery = useLeadsMeQuery();
   const assignmentHistoryQuery = useLeadAssignmentHistoryQuery(lead?.id);
+  const [showOfferHistoryModal, setShowOfferHistoryModal] = useState(false);
 
   const availableTags = useMemo(() => {
     const rows = tagsQuery.data;

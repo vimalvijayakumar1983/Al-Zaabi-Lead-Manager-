@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { queryKeys } from '@/lib/query-keys';
 import { useReportCatalogQuery, useReportDefinitionsQuery } from '@/features/reports/hooks/useReportBuilderQueries';
+import { useSearchParams } from 'next/navigation';
 import {
   Plus,
   Save,
@@ -223,6 +224,8 @@ function nextMeasureKey(existing: ReportMeasure[]): string {
 
 export default function ReportBuilderPage() {
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
+  const prefillAppliedRef = useRef<string>('');
   const [dataset, setDataset] = useState<Dataset>('leads');
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const [name, setName] = useState<string>('New Report');
@@ -254,6 +257,7 @@ export default function ReportBuilderPage() {
   const catalog = (catalogQuery.data?.fields || []) as CatalogField[];
   const definitions = (definitionsQuery.data || []) as ReportDefinition[];
   const bootstrapLoading = catalogQuery.isPending || definitionsQuery.isPending;
+  const loading = bootstrapLoading || previewRunning;
 
   const dimensionFields = useMemo(
     () => catalog.filter((f) => f.kind === 'dimension' || f.dataType !== 'number'),
@@ -1274,12 +1278,22 @@ export default function ReportBuilderPage() {
                 <p className="text-2xs text-text-tertiary">
                   Use formulas with placeholders, e.g. <code>{'{m_1} / {m_2} * 100'}</code>.
                 </p>
+              </div>
+            </>
+          )}
+          <div className="card p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-text-primary">Preview</p>
+              {preview && (
+                <p className="text-2xs text-text-tertiary">
+                  {preview.meta.returnedRows}/{preview.meta.totalRows} rows • source {preview.meta.rawRows} • filtered {preview.meta.filteredRows}
+                </p>
               )}
             </div>
             {previewRunning ? <p className="text-sm text-text-tertiary">Loading preview…</p> : renderPreview}
           </div>
+          </div>
         </div>
       </div>
-    </div>
   );
 }
