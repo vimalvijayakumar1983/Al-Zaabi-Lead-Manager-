@@ -48,6 +48,7 @@ const publicLeadsRoutes = require('./routes/public-leads');
 const notificationRoutes = require('./routes/notifications');
 const inboxRoutes = require('./routes/inbox');
 const channelWebhookRoutes = require('./routes/channel-webhooks');
+const channelErpRoutes = require('./routes/channel-erp');
 const contactRoutes = require('./routes/contacts');
 const callLogRoutes = require('./routes/call-logs');
 const roleRoutes = require('./routes/roles');
@@ -143,6 +144,7 @@ const routeMounts = [
   ['/notifications', notificationRoutes],
   ['/inbox', inboxRoutes],
   ['/channels', channelWebhookRoutes],
+  ['/channels', channelErpRoutes],
   ['/contacts', contactRoutes],
   ['/call-logs', callLogRoutes],
   ['/roles', roleRoutes],

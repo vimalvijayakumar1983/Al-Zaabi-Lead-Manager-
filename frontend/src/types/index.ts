@@ -501,7 +501,8 @@ export type IntegrationPlatform =
   | 'email'
   | 'website'
   | 'webhook'
-  | 'zapier';
+  | 'zapier'
+  | 'erp';
 
 export type IntegrationStatus = 'connected' | 'disconnected' | 'error' | 'syncing';
 

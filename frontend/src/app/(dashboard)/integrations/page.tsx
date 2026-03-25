@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Activity,
   Globe,
@@ -33,7 +34,6 @@ import {
   Filter,
   Palette,
   Monitor,
-  Building2,
   FileText,
   Plug,
   Database,
@@ -247,6 +247,16 @@ const PLATFORM_DEFS: PlatformDef[] = [
     borderColor: 'border-orange-200',
     available: true,
   },
+  {
+    slug: 'erp',
+    name: 'ERP',
+    description: 'Receive inbound ERP API calls by division and provider',
+    icon: <Database className="w-6 h-6" />,
+    color: '#0EA5E9',
+    bgColor: 'bg-sky-50',
+    borderColor: 'border-sky-200',
+    available: true,
+  },
 ];
 
 const WEBHOOK_EVENTS = [
@@ -283,6 +293,25 @@ const formatDate = (dateStr: string): string =>
     hour: '2-digit',
     minute: '2-digit',
   });
+
+const getIntegrationErrorMessage = (intg: Integration): string => {
+  if (intg.errorMessage) return intg.errorMessage;
+
+  if (intg.platform === 'erp') {
+    const provider = String(intg.config?.erpProvider || '').toLowerCase();
+    const divisionId = String(intg.config?.divisionId || '');
+    const token = String(intg.config?.token || '');
+    const validProvider = ['facts', 'focus', 'cortex', 'uniqorn'].includes(provider);
+
+    if (!validProvider) return 'ERP provider is missing. Select FACTS, FOCUS, or CORTEX and save.';
+    if (!divisionId) return 'Division is missing. Select a division and save ERP integration.';
+    if (!token) {
+      return 'ERP token is missing. Enter Shared ERP Token, save, then test connection.';
+    }
+  }
+
+  return 'Connection error. Please check your configuration.';
+};
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -413,8 +442,9 @@ function ConfirmDialog({
 // ---------------------------------------------------------------------------
 
 export default function IntegrationsPage() {
+  const router = useRouter();
   const { user } = useAuthStore() as { user: User | null };
-  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const [activeDivisionId, setActiveDivisionId] = useState<string>('');
 
   // State: data
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -424,8 +454,13 @@ export default function IntegrationsPage() {
   const [logsLoading, setLogsLoading] = useState(false);
 
   // State: division
-  const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [divisions, setDivisions] = useState<Organization[]>([]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const fromSidebar = localStorage.getItem('activeDivisionId');
+    setActiveDivisionId(fromSidebar || user?.organizationId || '');
+  }, [user?.organizationId]);
 
   // State: modals
   const [activeModal, setActiveModal] = useState<string | null>(null);
@@ -482,6 +517,8 @@ export default function IntegrationsPage() {
   const [emailFromName, setEmailFromName] = useState('');
   const [emailReplyTo, setEmailReplyTo] = useState('');
   const [emailBcc, setEmailBcc] = useState('');
+  const [erpProvider, setErpProvider] = useState<'facts' | 'focus' | 'cortex' | 'uniqorn'>('facts');
+  const [erpToken, setErpToken] = useState('');
 
   // State: Webhook form
   const [webhookName, setWebhookName] = useState('');
@@ -581,9 +618,14 @@ export default function IntegrationsPage() {
   // Computed stats
   // -------------------------------------------------------------------------
   const filteredIntegrations = useMemo(() => {
-    if (selectedDivision === 'all') return integrations;
-    return integrations.filter((i) => i.divisionId === selectedDivision);
-  }, [integrations, selectedDivision]);
+    // ERP is division-bound; only show ERP records for the active sidebar division.
+    // Keep non-ERP integrations visible as before.
+    return integrations.filter((i) => {
+      if (i.platform !== 'erp') return true;
+      const configDivisionId = String(i.config?.divisionId || '');
+      return !!activeDivisionId && configDivisionId === activeDivisionId;
+    });
+  }, [integrations, activeDivisionId]);
 
   const stats = useMemo(() => {
     const total = filteredIntegrations.length;
@@ -619,12 +661,19 @@ export default function IntegrationsPage() {
     setSelectedIntegration(intg);
     setTestResult(null);
     try {
-      const detail = (await api.getIntegration(intg.id)) as unknown as {
-        integration: Integration;
-        logs: IntegrationLog[];
-      };
-      setSelectedIntegration(detail.integration);
-      setDetailLogs(detail.logs);
+      const detail = (await api.getIntegration(intg.id)) as unknown as
+        | { integration: Integration; logs: IntegrationLog[] }
+        | (Integration & { recentLogs?: IntegrationLog[] });
+
+      // API currently returns flat integration payload with recentLogs.
+      // Keep backward compatibility with nested { integration, logs } shape.
+      if ('integration' in detail) {
+        setSelectedIntegration(detail.integration);
+        setDetailLogs(Array.isArray(detail.logs) ? detail.logs : []);
+      } else {
+        setSelectedIntegration(detail as Integration);
+        setDetailLogs(Array.isArray(detail.recentLogs) ? detail.recentLogs : []);
+      }
     } catch {
       setDetailLogs([]);
     }
@@ -664,6 +713,10 @@ export default function IntegrationsPage() {
         setEmailFromName((cfg.fromName as string) ?? '');
         setEmailReplyTo((cfg.replyTo as string) ?? '');
         setEmailBcc((cfg.bcc as string) ?? '');
+        break;
+      case 'erp':
+        setErpProvider(((cfg.erpProvider as 'facts' | 'focus' | 'cortex' | 'uniqorn') ?? 'facts'));
+        setErpToken('');
         break;
       default:
         break;
@@ -711,6 +764,10 @@ export default function IntegrationsPage() {
         setEmailReplyTo('');
         setEmailBcc('');
         break;
+      case 'erp':
+        setErpProvider('facts');
+        setErpToken('');
+        break;
       default:
         break;
     }
@@ -733,7 +790,7 @@ export default function IntegrationsPage() {
             fieldMapping: fbFieldMapping,
           },
           fieldMapping: fbFieldMapping,
-          divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
+          divisionId: activeDivisionId || undefined,
         };
       case 'google':
         return {
@@ -747,7 +804,7 @@ export default function IntegrationsPage() {
             utmCampaign: gaUtmCampaign,
           },
           fieldMapping: gaFieldMapping,
-          divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
+          divisionId: activeDivisionId || undefined,
         };
       case 'whatsapp':
         return {
@@ -762,7 +819,7 @@ export default function IntegrationsPage() {
             verifyToken: waVerifyToken,
             autoCreateLead: waAutoCreateLead,
           },
-          divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
+          divisionId: activeDivisionId || undefined,
         };
       case 'email':
         return {
@@ -777,8 +834,24 @@ export default function IntegrationsPage() {
             replyTo: emailReplyTo,
             bcc: emailBcc,
           },
-          divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
+          divisionId: activeDivisionId || undefined,
         };
+      case 'erp':
+        {
+          const effectiveDivisionId =
+            activeDivisionId || divisions[0]?.id || '';
+        return {
+          platform: 'erp',
+          name: 'ERP',
+          credentials: {
+            token: erpToken,
+          },
+          config: {
+            erpProvider,
+            divisionId: effectiveDivisionId,
+          },
+        };
+        }
       default:
         return {};
     }
@@ -858,7 +931,7 @@ export default function IntegrationsPage() {
         config: {
           events: webhookEvents,
         },
-        divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
+        divisionId: activeDivisionId || undefined,
       };
       await api.createIntegration(payload as never);
       await loadData();
@@ -875,7 +948,7 @@ export default function IntegrationsPage() {
   const handleGenerateWidget = async () => {
     try {
       setSaving(true);
-      const divId = widgetConfig.divisionId || (selectedDivision !== 'all' ? selectedDivision : '');
+      const divId = widgetConfig.divisionId || activeDivisionId;
       const result = (await api.generateWidget(divId)) as unknown as {
         code: string;
         previewUrl: string;
@@ -1473,6 +1546,92 @@ export default function IntegrationsPage() {
           </div>
         );
 
+      case 'erp': {
+        const backendOrigin =
+          typeof window !== 'undefined'
+            ? window.location.origin.replace(':3000', ':4000')
+            : '';
+        const orgId = user?.organizationId || '<org-id>';
+        const effectiveDivisionId = activeDivisionId || divisions[0]?.id || '';
+        const availabilityDisabled = erpProvider !== 'cortex';
+
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-text-tertiary bg-sky-50 rounded-lg p-3 flex items-start gap-2">
+              <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-sky-600" />
+              Configure ERP provider and shared token, then share these inbound URLs with your ERP team.
+            </p>
+
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Select ERP</label>
+              <select
+                value={erpProvider}
+                onChange={(e) => setErpProvider(e.target.value as 'facts' | 'focus' | 'cortex' | 'uniqorn')}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              >
+                <option value="facts">FACTS</option>
+                <option value="focus">FOCUS</option>
+                <option value="cortex">CORTEX</option>
+                <option value="uniqorn">UNIQORN</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">
+                Shared ERP Token
+              </label>
+              <div className="relative">
+                <input
+                  type={showSecrets['erpToken'] ? 'text' : 'password'}
+                  value={erpToken}
+                  onChange={(e) => setErpToken(e.target.value)}
+                  className="w-full px-3 py-2 pr-10 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  placeholder="Send this in X-ERP-Token header"
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleSecretVisibility('erpToken')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-secondary"
+                >
+                  {showSecrets['erpToken'] ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+              <h4 className="text-sm font-medium text-text-primary">Division-specific inbound URLs</h4>
+              {!effectiveDivisionId && (
+                <p className="text-xs text-amber-700">
+                  Select a division from the top filter to generate real ERP URLs.
+                </p>
+              )}
+              <code className="block text-xs bg-white border border-gray-200 rounded px-3 py-2 break-all select-all">
+                {`${backendOrigin}/api/channels/erp/${orgId}/${effectiveDivisionId || '<select-division>'}/create-customer`}
+              </code>
+              <code className="block text-xs bg-white border border-gray-200 rounded px-3 py-2 break-all select-all">
+                {`${backendOrigin}/api/channels/erp/${orgId}/${effectiveDivisionId || '<select-division>'}/customer-sales`}
+              </code>
+              <code
+                className={`block text-xs border rounded px-3 py-2 break-all select-all ${
+                  availabilityDisabled
+                    ? 'bg-gray-100 border-gray-200 text-gray-400'
+                    : 'bg-white border-gray-200'
+                }`}
+              >
+                {`${backendOrigin}/api/channels/erp/${orgId}/${effectiveDivisionId || '<select-division>'}/doctor-availability`}
+              </code>
+              {availabilityDisabled && (
+                <p className="text-xs text-amber-700">doctor-availability is CORTEX-only.</p>
+              )}
+            </div>
+          </div>
+        );
+      }
+
       case 'website':
         return (
           <div className="space-y-4">
@@ -1835,7 +1994,7 @@ export default function IntegrationsPage() {
             <div className="mb-4 bg-red-50 rounded-lg p-3 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
               <p className="text-xs text-red-700">
-                {intg.errorMessage ?? 'Connection error. Please check your configuration.'}
+                {getIntegrationErrorMessage(intg)}
               </p>
             </div>
           )}
@@ -2153,44 +2312,6 @@ export default function IntegrationsPage() {
               </div>
             )}
 
-            {/* Recent activity log */}
-            <div>
-              <h3 className="text-sm font-semibold text-text-primary mb-3 flex items-center gap-2">
-                <Activity className="w-4 h-4" /> Recent Activity
-              </h3>
-              {detailLogs.length === 0 ? (
-                <p className="text-sm text-text-tertiary text-center py-6">No activity yet</p>
-              ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {detailLogs.slice(0, 20).map((log) => (
-                    <div
-                      key={log.id}
-                      className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg"
-                    >
-                      <div className="mt-0.5">
-                        {log.status === 'success' ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                        ) : log.status === 'error' ? (
-                          <XCircle className="w-4 h-4 text-red-500" />
-                        ) : log.status === 'warning' ? (
-                          <AlertTriangle className="w-4 h-4 text-amber-500" />
-                        ) : (
-                          <Info className="w-4 h-4 text-blue-500" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-text-primary">{log.event}</p>
-                        <p className="text-xs text-text-secondary mt-0.5">{log.message}</p>
-                      </div>
-                      <span className="text-xs text-text-tertiary whitespace-nowrap">
-                        {formatDate(log.createdAt)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {/* Test result */}
             {testResult && (
               <div
@@ -2211,18 +2332,50 @@ export default function IntegrationsPage() {
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between p-6 border-t border-gray-100">
+          <div className="p-6 border-t border-gray-100 space-y-3">
+            <div className="flex items-center justify-between">
             <button
               onClick={() => handleDisconnect(intg)}
               className="text-sm font-medium text-red-600 hover:text-red-700 flex items-center gap-1.5 px-3 py-2 hover:bg-red-50 rounded-lg transition-colors"
             >
               <Trash2 className="w-4 h-4" /> Disconnect
             </button>
-            <div className="flex items-center gap-3">
+              <span className="text-xs text-text-tertiary">Actions</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => router.push(`/integrations/activity?integrationId=${encodeURIComponent(intg.id)}`)}
+                className="btn-secondary text-sm px-3 py-2 flex items-center gap-1.5"
+              >
+                <Activity className="w-4 h-4" /> Recent Activity
+              </button>
+              {selectedPlatform.slug === 'erp' && (
+                <>
+                <button
+                  onClick={() =>
+                    router.push(
+                      `/integrations/data?divisionId=${encodeURIComponent(
+                        String(intg.config?.divisionId || activeDivisionId || '')
+                      )}`
+                    )
+                  }
+                  className="btn-secondary text-sm px-3 py-2 flex items-center gap-1.5"
+                >
+                  <Database className="w-4 h-4" /> Data
+                </button>
+                <button
+                  onClick={() => setActiveModal('erp-api-info')}
+                  className="btn-secondary text-sm px-3 py-2 flex items-center gap-1.5"
+                >
+                  <Code2 className="w-4 h-4" /> API Info
+                </button>
+                </>
+              )}
               <button
                 onClick={() => handleTestIntegration(intg.id)}
                 disabled={testing}
-                className="btn-secondary text-sm px-4 py-2 flex items-center gap-1.5"
+                className="btn-secondary text-sm px-3 py-2 flex items-center gap-1.5"
               >
                 {testing ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -2232,17 +2385,11 @@ export default function IntegrationsPage() {
                 Test
               </button>
               <button
-                onClick={() => void handleSyncNow(intg)}
-                className="btn-secondary text-sm px-4 py-2 flex items-center gap-1.5"
-              >
-                <RefreshCw className="w-4 h-4" /> Sync Now
-              </button>
-              <button
                 onClick={() => {
                   prefillForm(selectedPlatform.slug, intg);
                   setActiveModal('connect');
                 }}
-                className="btn-primary text-sm px-4 py-2 flex items-center gap-1.5"
+                className="btn-primary text-sm px-3 py-2 flex items-center gap-1.5 ml-auto"
               >
                 <Settings className="w-4 h-4" /> Edit Configuration
               </button>
@@ -2374,6 +2521,88 @@ export default function IntegrationsPage() {
     );
   };
 
+  const renderErpApiInfoModal = () => {
+    if (activeModal !== 'erp-api-info' || !selectedIntegration) return null;
+
+    const cfg = (selectedIntegration.config || {}) as Record<string, unknown>;
+    const provider = String(cfg.erpProvider || '').toUpperCase() || 'ERP';
+    const orgId = user?.organizationId || '<org-id>';
+    const divisionId = String(cfg.divisionId || '<division-id>');
+    const backendOrigin =
+      typeof window !== 'undefined' ? window.location.origin.replace(':3000', ':4000') : '';
+    const basePath = `${backendOrigin}/api/channels/erp/${orgId}/${divisionId}`;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col">
+          <div className="flex items-center justify-between p-6 border-b border-gray-100">
+            <div>
+              <h2 className="text-lg font-semibold text-text-primary">ERP API Information</h2>
+              <p className="text-sm text-text-secondary mt-1">
+                Provider: {provider} | Division: <code>{divisionId}</code>
+              </p>
+            </div>
+            <button
+              onClick={() => setActiveModal('manage')}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-text-secondary" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="bg-gray-50 rounded-lg p-4">
+              <p className="text-xs text-text-tertiary mb-2">Required Headers</p>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`Content-Type: application/json
+X-ERP-Token: <your-shared-token>`}</pre>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-text-primary">1) Create Customer</h3>
+              <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/create-customer`}</code>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`{
+  "externalCustomerId": "cust-1001",
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john@example.com",
+  "phone": "+971500000000",
+  "company": "Al Zaabi"
+}`}</pre>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-text-primary">2) Customer Sales</h3>
+              <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/customer-sales`}</code>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`{
+  "externalSaleId": "sale-9001",
+  "externalCustomerId": "cust-1001",
+  "amount": 2500.00,
+  "currency": "AED",
+  "status": "PAID",
+  "date": "2026-03-24"
+}`}</pre>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-text-primary">3) Doctor Availability</h3>
+              <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/doctor-availability`}</code>
+              <p className="text-xs text-amber-700">This endpoint is accepted only for CORTEX.</p>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`{
+  "externalAvailabilityId": "av-4455",
+  "doctorId": "doc-202",
+  "date": "2026-03-25",
+  "slots": [
+    { "from": "09:00", "to": "09:30", "available": true },
+    { "from": "09:30", "to": "10:00", "available": false }
+  ]
+}`}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // -------------------------------------------------------------------------
   // Render: loading state
   // -------------------------------------------------------------------------
@@ -2397,6 +2626,7 @@ export default function IntegrationsPage() {
       {renderConnectModal()}
       {renderManageModal()}
       {renderApiKeyModal()}
+      {renderErpApiInfoModal()}
       {confirmAction && (
         <ConfirmDialog
           title={confirmAction.title}
@@ -2422,24 +2652,16 @@ export default function IntegrationsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Division Selector (Super Admin only) */}
-          {isSuperAdmin && divisions.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-text-tertiary" />
-              <select
-                value={selectedDivision}
-                onChange={(e) => setSelectedDivision(e.target.value)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
-              >
-                <option value="all">All Divisions</option>
-                {divisions.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <button
+            onClick={() =>
+              router.push(
+                `/integrations/data${activeDivisionId ? `?divisionId=${encodeURIComponent(activeDivisionId)}` : ''}`
+              )
+            }
+            className="btn-secondary text-sm px-4 py-2 flex items-center gap-1.5"
+          >
+            <Database className="w-4 h-4" /> Data
+          </button>
           <RefreshButton onRefresh={loadData} />
         </div>
       </div>
