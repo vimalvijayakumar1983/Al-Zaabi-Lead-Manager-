@@ -2,7 +2,8 @@ const { Router } = require('express');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
-const { processInboundWhatsAppMessage, normalizePhone } = require('../services/whatsappInbound');
+const { broadcastDataChange } = require('../websocket/server');
+const { processInboundWhatsAppMessage, normalizePhone, resolveOrganizationId } = require('../services/whatsappInbound');
 
 /** Prefer contact row whose wa_id matches the message sender (newer payloads include multiple contacts). */
 function resolveContactProfileName(value, fromWaId) {
@@ -20,6 +21,88 @@ function resolveContactProfileName(value, fromWaId) {
 }
 
 const router = Router();
+
+function normalizeWaStatus(rawStatus) {
+  const s = String(rawStatus ?? '').toUpperCase();
+  if (!s) return null;
+  if (s === 'SENT') return 'SENT';
+  if (s === 'DELIVERED') return 'DELIVERED';
+  if (s === 'READ') return 'READ';
+  if (s === 'FAILED' || s === 'UNDELIVERED') return 'FAILED';
+  // Fall back to raw status so we can debug unknown states without losing them.
+  return s;
+}
+
+function parseWaStatusTimestamp(status) {
+  const ts = status?.timestamp ?? status?.time ?? null;
+  if (!ts) return null;
+  const num = typeof ts === 'string' ? Number(ts) : ts;
+  if (!Number.isFinite(num) || num <= 0) return null;
+  // Meta usually returns seconds since epoch; handle milliseconds as well.
+  const ms = num < 10_000_000_000 ? num * 1000 : num;
+  return new Date(ms);
+}
+
+async function processStatusUpdates({ phoneNumberId, displayPhoneNumber, statuses }) {
+  let organizationId = null;
+  try {
+    organizationId = await resolveOrganizationId(phoneNumberId, displayPhoneNumber);
+  } catch {
+    organizationId = null;
+  }
+
+  await Promise.allSettled(
+    statuses.map(async (s) => {
+      const waMessageId = s?.id;
+      if (!waMessageId) return;
+
+      const mappedStatus = normalizeWaStatus(s?.status);
+      const statusAt = parseWaStatusTimestamp(s) ?? new Date();
+
+      const comm = await prisma.communication.findFirst({
+        where: {
+          channel: 'WHATSAPP',
+          direction: 'OUTBOUND',
+          ...(organizationId ? { lead: { organizationId } } : {}),
+          metadata: { path: ['waMessageId'], equals: waMessageId },
+        },
+        select: {
+          id: true,
+          leadId: true,
+          metadata: true,
+          lead: { select: { id: true, organizationId: true } },
+        },
+      });
+
+      if (!comm || !comm.lead) return;
+
+      const nextMeta = {
+        ...(comm.metadata || {}),
+        waStatus: mappedStatus,
+        waStatusRaw: s?.status,
+        waStatusUpdatedAt: statusAt.toISOString(),
+      };
+
+      const data = {
+        metadata: nextMeta,
+      };
+
+      if (mappedStatus === 'READ') {
+        data.isRead = true;
+        data.readAt = statusAt;
+      }
+
+      await prisma.communication
+        .update({
+          where: { id: comm.id },
+          data,
+        })
+        .catch(() => {});
+
+      broadcastDataChange(comm.lead.organizationId, 'communication', 'updated', null, { entityId: comm.leadId }).catch(() => {});
+    })
+  );
+}
 
 /** Check if token is valid: env WHATSAPP_WEBHOOK_VERIFY_TOKEN or any org's settings.whatsappWebhookVerifyToken */
 async function isVerifyTokenValid(token) {
@@ -218,6 +301,11 @@ router.post('/', (req, res) => {
 
       if (statuses.length > 0) {
         logger.info('[WhatsApp Webhook] Status updates', { phoneNumberId, statuses: statuses.map((s) => ({ id: s.id, status: s.status, recipient_id: s.recipient_id })) });
+        setImmediate(() => {
+          processStatusUpdates({ phoneNumberId, displayPhoneNumber, statuses }).catch((err) => {
+            logger.error('[WhatsApp Webhook] Status processing failed', { err: err?.message, phoneNumberId });
+          });
+        });
       }
       if (errors.length > 0) {
         logger.warn('[WhatsApp Webhook] Errors in payload', { phoneNumberId, errors });

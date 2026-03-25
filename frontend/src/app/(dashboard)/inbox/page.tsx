@@ -1,7 +1,8 @@
 'use client';
 
-import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Virtuoso } from 'react-virtuoso';
 import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
@@ -10,7 +11,9 @@ import {
   useInboxBootstrapQuery,
   useInboxConversationsQuery,
   useInboxMessageMutations,
-  useInboxMessagesQuery,
+  INBOX_THREAD_LIMIT,
+  patchInboxThreadAfterOutbound,
+  useInboxThreadQuery,
   useInboxNotesQuery,
   useInboxRealtimeInvalidation,
   useInboxStatsQuery,
@@ -288,6 +291,8 @@ function InboxContent() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const threadScrollRestore = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  const lastThreadMsgIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
@@ -315,6 +320,11 @@ function InboxContent() {
     return activeDivisionId ? { divisionId: activeDivisionId } : {};
   }, []);
 
+  const threadCacheParams = useMemo(
+    () => ({ ...messageQueryParams, limit: INBOX_THREAD_LIMIT }),
+    [messageQueryParams]
+  );
+
   const divisionScope = useMemo(
     () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
     []
@@ -325,7 +335,7 @@ function InboxContent() {
   const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
 
   const conversationsQuery = useInboxConversationsQuery(conversationQueryParams as any);
-  const messagesQuery = useInboxMessagesQuery(selectedLeadId, messageQueryParams as any);
+  const threadQuery = useInboxThreadQuery(selectedLeadId, messageQueryParams as any);
   const notesQuery = useInboxNotesQuery(selectedLeadId);
   const attachmentsQuery = useInboxAttachmentsQuery(selectedLeadId);
   const statsQuery = useInboxStatsQuery(divisionScope);
@@ -334,8 +344,15 @@ function InboxContent() {
   const { onCommunicationChanged, onLeadChanged } = useInboxRealtimeInvalidation(selectedLeadId);
 
   const conversations = (conversationsQuery.data?.conversations || []) as Conversation[];
-  const messages = (messagesQuery.data?.messages || []) as Message[];
-  const leadInfo = (messagesQuery.data?.lead || null) as LeadInfo | null;
+  const messages = useMemo(() => {
+    const pages = threadQuery.data?.pages;
+    if (!pages?.length) return [] as Message[];
+    return pages
+      .slice()
+      .reverse()
+      .flatMap((p) => (p.messages || []) as Message[]);
+  }, [threadQuery.data?.pages]);
+  const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
   const notes = (notesQuery.data || []) as any[];
   const stats = statsQuery.data ?? null;
   const cannedResponses = (cannedQuery.data || []) as CannedResponse[];
@@ -348,20 +365,19 @@ function InboxContent() {
   const leadAttachments = (attachmentsQuery.data || []) as any[];
 
   const loadingConversations = conversationsQuery.isLoading;
-  const loadingMessages = !!selectedLeadId && messagesQuery.isLoading;
+  const loadingMessages = !!selectedLeadId && threadQuery.isPending;
 
   // Default send channel from the latest loaded server message (skip optimistic rows)
   useEffect(() => {
-    const list = messagesQuery.data?.messages as Message[] | undefined;
-    if (!list?.length) return;
-    const lastServer = [...list].reverse().find((m) => !m.id?.startsWith('temp-'));
+    if (!messages.length) return;
+    const lastServer = [...messages].reverse().find((m) => !m.id?.startsWith('temp-'));
     if (!lastServer) return;
     setSendChannel(
       lastServer.channel === 'CHAT'
         ? lastServer.platform?.toUpperCase() || 'CHAT'
         : lastServer.channel
     );
-  }, [messagesQuery.data?.messages, selectedLeadId]);
+  }, [messages, selectedLeadId]);
 
   // Auto-select lead from URL query param (e.g., /inbox?lead=<id>)
   useEffect(() => {
@@ -371,6 +387,10 @@ function InboxContent() {
       setMobileView('chat');
     }
   }, [searchParams, selectedLeadId]);
+
+  useEffect(() => {
+    lastThreadMsgIdRef.current = null;
+  }, [selectedLeadId]);
 
   // Map pipeline stage names to lead statuses for auto-sync
   const STAGE_NAME_TO_STATUS: Record<string, string> = {
@@ -398,30 +418,54 @@ function InboxContent() {
       }
       await api.updateLead(selectedLeadId, updateData);
       await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.inbox.messages(selectedLeadId, messageQueryParams as Record<string, unknown>),
-      });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', 'messages', selectedLeadId] });
     } catch (err) {
       console.error('Failed to update stage:', err);
     } finally {
       setUpdatingStage(false);
       setShowStageDropdown(false);
     }
-  }, [selectedLeadId, leadInfo, pipelineStages, queryClient, messageQueryParams]);
+  }, [selectedLeadId, leadInfo, pipelineStages, queryClient]);
 
   useEffect(() => {
     if (selectedLeadId) setAttachedFiles([]);
   }, [selectedLeadId]);
 
-  // Auto-scroll within the messages container (not the page)
-  useEffect(() => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+  const handleLoadOlderMessages = useCallback(async () => {
+    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
+    const el = messagesContainerRef.current;
+    if (el) {
+      threadScrollRestore.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
     }
+    await threadQuery.fetchNextPage();
+  }, [threadQuery]);
+
+  useLayoutEffect(() => {
+    const el = messagesContainerRef.current;
+    const snap = threadScrollRestore.current;
+    if (!el || !snap) return;
+    el.scrollTop = snap.prevTop + (el.scrollHeight - snap.prevHeight);
+    threadScrollRestore.current = null;
+  }, [threadQuery.data?.pages]);
+
+  // Auto-scroll to latest when a new message lands (skip prepend / "load older")
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el || threadScrollRestore.current) return;
+    const lastId = messages.length ? messages[messages.length - 1]?.id : null;
+    const prevLast = lastThreadMsgIdRef.current;
+    lastThreadMsgIdRef.current = lastId;
+    if (prevLast !== null && lastId === prevLast) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   useRealtimeSync(['communication'], useCallback((event) => {
-    onCommunicationChanged(event.entityId);
+    onCommunicationChanged({
+      entityId: event.entityId,
+      message: event.message != null && typeof event.message === 'object'
+        ? (event.message as Record<string, unknown>)
+        : undefined,
+    });
   }, [onCommunicationChanged]));
 
   useRealtimeSync(['lead'], useCallback((event) => {
@@ -441,7 +485,8 @@ function InboxContent() {
           Array.isArray(q.queryKey) &&
           q.queryKey[0] === 'inbox' &&
           q.queryKey[1] === 'messages' &&
-          q.queryKey[2] === selectedLeadId,
+          q.queryKey[2] === selectedLeadId &&
+          q.queryKey[3] === 'thread',
       });
     }
   }, [queryClient, selectedLeadId]));
@@ -455,7 +500,7 @@ function InboxContent() {
     if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
     const body = messageText.trim();
     const tempId = `temp-${Date.now()}`;
-    const msgKey = queryKeys.inbox.messages(selectedLeadId, messageQueryParams as Record<string, unknown>);
+    const msgKey = queryKeys.inbox.messagesThread(selectedLeadId, threadCacheParams as Record<string, unknown>);
 
     let channel = sendChannel;
     let platform: string | undefined;
@@ -479,8 +524,19 @@ function InboxContent() {
         _optimistic: true,
       };
       queryClient.setQueryData(msgKey, (old: any) => {
-        if (!old) return { messages: [optimisticMsg], lead: null };
-        return { ...old, messages: [...(old.messages || []), optimisticMsg] };
+        if (!old?.pages?.length) {
+          return {
+            pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
+            pageParams: [1],
+          };
+        }
+        const pages = [...old.pages];
+        const newest = 0;
+        pages[newest] = {
+          ...pages[newest],
+          messages: [...(pages[newest].messages || []), optimisticMsg],
+        };
+        return { ...old, pages };
       });
     }
 
@@ -488,29 +544,41 @@ function InboxContent() {
     setSending(true);
 
     try {
+      const threadParams = threadCacheParams as Record<string, unknown>;
       if (attachedFiles.length > 0) {
-        await inboxMutations.sendMessageWithAttachments.mutateAsync({
+        const sent = await inboxMutations.sendMessageWithAttachments.mutateAsync({
           leadId: selectedLeadId,
           channel,
           body,
           platform,
           files: attachedFiles,
         });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, { message: sent });
         setAttachedFiles([]);
       } else {
-        await inboxMutations.sendMessage.mutateAsync({
+        const sent = await inboxMutations.sendMessage.mutateAsync({
           leadId: selectedLeadId,
           channel,
           body,
           platform,
         });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, {
+          tempId,
+          message: sent,
+        });
       }
       inputRef.current?.focus();
     } catch (err: any) {
-      queryClient.setQueryData(msgKey, (old: any) => ({
-        ...old,
-        messages: (old?.messages || []).filter((m: Message) => m.id !== tempId),
-      }));
+      queryClient.setQueryData(msgKey, (old: any) => {
+        if (!old?.pages?.length) return old;
+        const pages = [...old.pages];
+        const newest = 0;
+        pages[newest] = {
+          ...pages[newest],
+          messages: (pages[newest].messages || []).filter((m: Message) => m.id !== tempId),
+        };
+        return { ...old, pages };
+      });
       console.error('Failed to send:', err);
     } finally {
       setSending(false);
@@ -674,12 +742,15 @@ function InboxContent() {
             channel = 'CHAT';
             platform = sendChannel.toLowerCase();
           }
-          await inboxMutations.sendMessageWithAttachments.mutateAsync({
+          const sent = await inboxMutations.sendMessageWithAttachments.mutateAsync({
             leadId: selectedLeadId,
             channel,
             body: '',
             platform,
             files: [file],
+          });
+          patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadCacheParams as Record<string, unknown>, {
+            message: sent,
           });
         } catch (err) {
           console.error('Failed to send voice note:', err);
@@ -730,9 +801,7 @@ function InboxContent() {
       await api.updateConversationStatus(selectedLeadId, status);
       setShowStatusDropdown(false);
       await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.inbox.messages(selectedLeadId, messageQueryParams as Record<string, unknown>),
-      });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', 'messages', selectedLeadId] });
     } catch (err) {
       console.error('Failed to update status:', err);
     }
@@ -960,7 +1029,7 @@ function InboxContent() {
         </div>
 
         {/* ── Conversation list ─────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1">
           {loadingConversations && conversations.length === 0 ? (
             <div className="p-3 space-y-2">
               {[...Array(8)].map((_, i) => (
@@ -985,137 +1054,141 @@ function InboxContent() {
               </p>
             </div>
           ) : (
-            sortedConversations.map(convo => {
-              const isPinned = pinnedConvos.has(convo.leadId);
-              const isSelected = selectedLeadId === convo.leadId;
-              const statusStyle = STATUS_COLORS[convo.leadStatus] || STATUS_COLORS.NEW;
+            <Virtuoso
+              style={{ height: '100%' }}
+              data={sortedConversations}
+              itemContent={(_, convo) => {
+                const isPinned = pinnedConvos.has(convo.leadId);
+                const isSelected = selectedLeadId === convo.leadId;
+                const statusStyle = STATUS_COLORS[convo.leadStatus] || STATUS_COLORS.NEW;
 
-              return (
-                <div key={convo.leadId} className="relative group">
-                  <button
-                    onClick={() => selectConversation(convo.leadId)}
-                    className={`w-full text-left px-3 py-2.5 border-b border-border-subtle transition-all ${
-                      isSelected
-                        ? 'bg-brand-50 border-l-[3px] border-l-brand-500'
-                        : 'hover:bg-surface-secondary border-l-[3px] border-l-transparent'
-                    } ${isPinned ? 'bg-amber-50/30' : ''}`}
-                  >
-                    <div className="flex gap-2.5">
-                      {/* Avatar with platform badge */}
-                      <div className="relative flex-shrink-0">
-                        <div
-                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm"
-                          style={{ backgroundColor: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
-                        >
-                          {convo.contactName.charAt(0).toUpperCase()}
-                        </div>
-                        {convo.lastMessage && (
-                          <div className="absolute -bottom-0.5 -right-0.5 h-4.5 w-4.5 rounded-full bg-white flex items-center justify-center shadow-xs ring-1 ring-white">
-                            <PlatformIcon platform={convo.lastMessage.platform} size={10} />
-                          </div>
-                        )}
-                        {isPinned && (
-                          <div className="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
-                            <Pin className="h-2.5 w-2.5 text-white" />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
-                              {convo.contactName || 'Unknown Contact'}
-                            </span>
-                            {/* Score badge */}
-                            {convo.leadScore >= 70 && (
-                              <span className="flex-shrink-0 h-4 w-4 rounded-full bg-amber-100 flex items-center justify-center">
-                                <Star className="h-2.5 w-2.5 text-amber-600" />
-                              </span>
-                            )}
+                return (
+                  <div key={convo.leadId} className="relative group">
+                    <button
+                      onClick={() => selectConversation(convo.leadId)}
+                      className={`w-full text-left px-3 py-2.5 border-b border-border-subtle transition-all ${
+                        isSelected
+                          ? 'bg-brand-50 border-l-[3px] border-l-brand-500'
+                          : 'hover:bg-surface-secondary border-l-[3px] border-l-transparent'
+                      } ${isPinned ? 'bg-amber-50/30' : ''}`}
+                    >
+                      <div className="flex gap-2.5">
+                        {/* Avatar with platform badge */}
+                        <div className="relative flex-shrink-0">
+                          <div
+                            className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm"
+                            style={{ backgroundColor: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
+                          >
+                            {convo.contactName.charAt(0).toUpperCase()}
                           </div>
                           {convo.lastMessage && (
-                            <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">
-                              {timeAgo(convo.lastMessage.createdAt)}
-                            </span>
+                            <div className="absolute -bottom-0.5 -right-0.5 h-4.5 w-4.5 rounded-full bg-white flex items-center justify-center shadow-xs ring-1 ring-white">
+                              <PlatformIcon platform={convo.lastMessage.platform} size={10} />
+                            </div>
+                          )}
+                          {isPinned && (
+                            <div className="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
+                              <Pin className="h-2.5 w-2.5 text-white" />
+                            </div>
                           )}
                         </div>
 
-                        {convo.company && (
-                          <p className="text-2xs text-text-tertiary truncate flex items-center gap-1">
-                            <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
-                            {convo.company}
-                          </p>
-                        )}
-
-                        {convo.lastMessage && (
-                          <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
-                            {convo.lastMessage.direction === 'OUTBOUND' && (
-                              <span className="text-text-tertiary">
-                                <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
+                                {convo.contactName || 'Unknown Contact'}
+                              </span>
+                              {/* Score badge */}
+                              {convo.leadScore >= 70 && (
+                                <span className="flex-shrink-0 h-4 w-4 rounded-full bg-amber-100 flex items-center justify-center">
+                                  <Star className="h-2.5 w-2.5 text-amber-600" />
+                                </span>
+                              )}
+                            </div>
+                            {convo.lastMessage && (
+                              <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">
+                                {timeAgo(convo.lastMessage.createdAt)}
                               </span>
                             )}
-                            {convo.lastMessage.metadata?.mediaType === 'image' || convo.lastMessage.metadata?.mediaType === 'sticker' ? (
-                              <span className="italic">📷 Photo{convo.lastMessage.metadata?.attachments?.[0]?.caption ? `: ${convo.lastMessage.metadata.attachments[0].caption}` : ''}</span>
-                            ) : convo.lastMessage.metadata?.mediaType === 'video' ? (
-                              <span className="italic">🎬 Video</span>
-                            ) : convo.lastMessage.metadata?.mediaType === 'audio' || convo.lastMessage.metadata?.mediaType === 'voice' ? (
-                              <span className="italic">🎤 Voice message</span>
-                            ) : convo.lastMessage.metadata?.mediaType === 'document' ? (
-                              <span className="italic">📄 {convo.lastMessage.metadata?.attachments?.[0]?.filename || 'Document'}</span>
-                            ) : convo.lastMessage.body}
-                          </p>
-                        )}
+                          </div>
 
-                        {/* Tags row */}
-                        <div className="flex items-center gap-1.5 mt-1">
-                          {/* Channel pill */}
-                          <span
-                            className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-2xs font-medium"
-                            style={{
-                              backgroundColor: `${PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1'}10`,
-                              color: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1',
-                            }}
-                          >
-                            <PlatformIcon platform={convo.lastMessage?.platform || 'CHAT'} size={8} />
-                            {convo.lastMessage?.platformInfo?.label || convo.lastMessage?.channel}
-                          </span>
-
-                          {/* Status pill */}
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
-                            {getStatusLabel(convo.leadStatus || 'NEW')}
-                          </span>
-
-                          {/* Unread count badge or message count */}
-                          {convo.unreadCount > 0 ? (
-                            <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
-                              {convo.unreadCount}
-                            </span>
-                          ) : (
-                            <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
-                              {convo.messageCount}
-                            </span>
+                          {convo.company && (
+                            <p className="text-2xs text-text-tertiary truncate flex items-center gap-1">
+                              <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
+                              {convo.company}
+                            </p>
                           )}
+
+                          {convo.lastMessage && (
+                            <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
+                              {convo.lastMessage.direction === 'OUTBOUND' && (
+                                <span className="text-text-tertiary">
+                                  <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                                </span>
+                              )}
+                              {convo.lastMessage.metadata?.mediaType === 'image' || convo.lastMessage.metadata?.mediaType === 'sticker' ? (
+                                <span className="italic">📷 Photo{convo.lastMessage.metadata?.attachments?.[0]?.caption ? `: ${convo.lastMessage.metadata.attachments[0].caption}` : ''}</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'video' ? (
+                                <span className="italic">🎬 Video</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'audio' || convo.lastMessage.metadata?.mediaType === 'voice' ? (
+                                <span className="italic">🎤 Voice message</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'document' ? (
+                                <span className="italic">📄 {convo.lastMessage.metadata?.attachments?.[0]?.filename || 'Document'}</span>
+                              ) : convo.lastMessage.body}
+                            </p>
+                          )}
+
+                          {/* Tags row */}
+                          <div className="flex items-center gap-1.5 mt-1">
+                            {/* Channel pill */}
+                            <span
+                              className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-2xs font-medium"
+                              style={{
+                                backgroundColor: `${PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1'}10`,
+                                color: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1',
+                              }}
+                            >
+                              <PlatformIcon platform={convo.lastMessage?.platform || 'CHAT'} size={8} />
+                              {convo.lastMessage?.platformInfo?.label || convo.lastMessage?.channel}
+                            </span>
+
+                            {/* Status pill */}
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
+                              {getStatusLabel(convo.leadStatus || 'NEW')}
+                            </span>
+
+                            {/* Unread count badge or message count */}
+                            {convo.unreadCount > 0 ? (
+                              <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
+                                {convo.unreadCount}
+                              </span>
+                            ) : (
+                              <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
+                                {convo.messageCount}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
-
-                  {/* Hover actions */}
-                  <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); togglePin(convo.leadId); }}
-                      className={`h-6 w-6 rounded flex items-center justify-center transition-colors ${isPinned ? 'bg-amber-100 text-amber-600' : 'bg-white/90 text-text-tertiary hover:text-text-primary shadow-xs'}`}
-                      title={isPinned ? 'Unpin' : 'Pin'}
-                    >
-                      <Pin className="h-3 w-3" />
                     </button>
+
+                    {/* Hover actions */}
+                    <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(convo.leadId); }}
+                        className={`h-6 w-6 rounded flex items-center justify-center transition-colors ${isPinned ? 'bg-amber-100 text-amber-600' : 'bg-white/90 text-text-tertiary hover:text-text-primary shadow-xs'}`}
+                        title={isPinned ? 'Unpin' : 'Pin'}
+                      >
+                        <Pin className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              }}
+            />
           )}
         </div>
 
@@ -1268,7 +1341,20 @@ function InboxContent() {
                   <p className="text-xs text-text-tertiary mt-1">Send the first message to start the conversation</p>
                 </div>
               ) : (
-                groupMessagesByDate(messages).map((group, gi) => (
+                <>
+                  {threadQuery.hasNextPage ? (
+                    <div className="flex justify-center pb-2">
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-brand-600 hover:text-brand-700 bg-white/90 px-3 py-1.5 rounded-full shadow-sm disabled:opacity-50"
+                        onClick={handleLoadOlderMessages}
+                        disabled={threadQuery.isFetchingNextPage}
+                      >
+                        {threadQuery.isFetchingNextPage ? 'Loading older…' : 'Load older messages'}
+                      </button>
+                    </div>
+                  ) : null}
+                {groupMessagesByDate(messages).map((group, gi) => (
                   <div key={gi}>
                     {/* Date separator */}
                     <div className="flex justify-center my-4">
@@ -1469,11 +1555,27 @@ function InboxContent() {
                                     <span className="text-[10px] text-gray-400">
                                       {formatTime(msg.createdAt)}
                                     </span>
-                                    {isOutbound && !msg._optimistic && (
-                                      <CheckCheck className="h-3 w-3 text-blue-500" />
-                                    )}
-                                    {msg._optimistic && (
-                                      <Check className="h-3 w-3 text-gray-400" />
+                                    {isOutbound && (
+                                      <>
+                                        {msg._optimistic ? (
+                                          <Check className="h-3 w-3 text-gray-400" />
+                                        ) : msg.channel === 'WHATSAPP' ? (
+                                          (() => {
+                                            const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                            const waStatus =
+                                              typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+
+                                            if (waStatus === 'READ') return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                            if (waStatus === 'DELIVERED')
+                                              return <CheckCheck className="h-3 w-3 text-gray-400" />;
+                                            if (waStatus === 'SENT') return <Check className="h-3 w-3 text-gray-400" />;
+                                            if (waStatus === 'FAILED') return <AlertCircle className="h-3 w-3 text-red-500" />;
+                                            return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                          })()
+                                        ) : (
+                                          <CheckCheck className="h-3 w-3 text-blue-500" />
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 )}
@@ -1497,7 +1599,8 @@ function InboxContent() {
                       );
                     })}
                   </div>
-                ))
+                ))}
+              </>
               )}
               <div ref={messagesEndRef} />
             </div>

@@ -31,6 +31,7 @@ import {
   UserCircle,
   Shield,
   Archive,
+  LayoutTemplate,
 } from 'lucide-react';
 
 const navItems = [
@@ -38,6 +39,7 @@ const navItems = [
   { href: '/leads', label: 'Leads', icon: Users, shortcut: '2', badge: null as string | null, permission: 'leads' },
   { href: '/contacts', label: 'Contacts', icon: UserCircle, shortcut: 'C', permission: 'contacts' },
   { href: '/inbox', label: 'Inbox', icon: Inbox, shortcut: 'I', permission: 'inbox' },
+  { href: '/whatsapp-templates', label: 'WA Templates', icon: LayoutTemplate, permission: 'inbox' },
   { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
   { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },

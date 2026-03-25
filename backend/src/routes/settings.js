@@ -1266,19 +1266,20 @@ function buildWhatsAppNumberLookup(settings) {
   return byPhoneId;
 }
 
-function sanitizeWhatsAppSettingsForClient(settings) {
+function sanitizeWhatsAppSettingsForClient(settings, revealSecrets = false) {
   const s = typeof settings === 'object' && settings ? settings : {};
   const raw = s.whatsappNumbers;
   let numbers = [];
   if (Array.isArray(raw) && raw.length > 0) {
     numbers = raw.map((n) => {
       const phoneNumberId = trimSettingStr(n?.phoneNumberId);
-      const hasToken = !!trimSettingStr(n?.token);
+      const tokenPlain = trimSettingStr(n?.token);
+      const hasToken = !!tokenPlain;
       return {
         label: trimSettingStr(n?.label) || '',
         phoneNumberId,
         displayPhone: trimSettingStr(n?.displayPhone) || '',
-        token: hasToken ? WHATSAPP_SECRET_MASK : '',
+        token: revealSecrets ? tokenPlain : (hasToken ? WHATSAPP_SECRET_MASK : ''),
         hasToken,
       };
     });
@@ -1290,18 +1291,20 @@ function sanitizeWhatsAppSettingsForClient(settings) {
         label: '',
         phoneNumberId: singleId,
         displayPhone: '',
-        token: singleTok ? WHATSAPP_SECRET_MASK : '',
+        token: revealSecrets ? singleTok : (singleTok ? WHATSAPP_SECRET_MASK : ''),
         hasToken: !!singleTok,
       }];
     }
   }
 
-  const hasVerify = !!trimSettingStr(s.whatsappWebhookVerifyToken);
+  const verifyPlain = trimSettingStr(s.whatsappWebhookVerifyToken);
+  const hasVerify = !!verifyPlain;
   return {
     whatsappNumbers: numbers,
-    whatsappWebhookVerifyToken: hasVerify ? WHATSAPP_SECRET_MASK : '',
+    whatsappWebhookVerifyToken: revealSecrets ? verifyPlain : (hasVerify ? WHATSAPP_SECRET_MASK : ''),
     hasWebhookVerifyToken: hasVerify,
     whatsappApiUrl: trimSettingStr(s.whatsappApiUrl) || '',
+    whatsappBusinessAccountId: trimSettingStr(s.whatsappBusinessAccountId) || '',
   };
 }
 
@@ -1361,6 +1364,13 @@ function mergeWhatsAppSettingsFromBody(existingSettings, body) {
   } else {
     delete nextSettings.whatsappApiUrl;
   }
+
+  if (body.whatsappBusinessAccountId !== undefined && body.whatsappBusinessAccountId !== null) {
+    const waba = trimSettingStr(body.whatsappBusinessAccountId);
+    if (waba) nextSettings.whatsappBusinessAccountId = waba;
+    else delete nextSettings.whatsappBusinessAccountId;
+  }
+
   delete nextSettings.whatsappPhoneNumberId;
   delete nextSettings.whatsappToken;
 
@@ -1377,6 +1387,7 @@ const whatsAppSaveSchema = z.object({
   })).optional(),
   whatsappWebhookVerifyToken: z.string().optional().nullable(),
   whatsappApiUrl: z.string().optional().nullable(),
+  whatsappBusinessAccountId: z.string().optional().nullable(),
 });
 
 const whatsAppTestSchema = z.object({
@@ -1393,7 +1404,9 @@ router.get('/whatsapp', authorize('ADMIN'), async (req, res, next) => {
       select: { settings: true },
     });
     const settings = typeof org?.settings === 'object' ? org.settings : {};
-    res.json(sanitizeWhatsAppSettingsForClient(settings));
+    const revealSecrets =
+      req.query.revealSecrets === 'true' || req.query.revealSecrets === '1';
+    res.json(sanitizeWhatsAppSettingsForClient(settings, revealSecrets));
   } catch (err) {
     next(err);
   }

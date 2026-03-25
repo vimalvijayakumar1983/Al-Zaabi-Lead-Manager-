@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
@@ -23,7 +24,7 @@ import {
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
   AtSign, Palette, ChevronDown, ChevronUp, Image, Save, Sparkles,
   Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
-  Download, RefreshCw, Inbox, Server, GitBranch,
+  Download, RefreshCw, Inbox, Server, GitBranch, Copy,
   Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
   MessageCircle,
 } from 'lucide-react';
@@ -620,40 +621,51 @@ function WhatsAppSection() {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
+  const [whatsappBusinessAccountId, setWhatsappBusinessAccountId] = useState('');
+  const [showWebhookVerifyToken, setShowWebhookVerifyToken] = useState(false);
+  /** Per number row: reveal access token (password → text). */
+  const [showAccessTokenByRowId, setShowAccessTokenByRowId] = useState<Record<string, boolean>>({});
 
   const effectiveDivisionId = isSuperAdmin ? selectedDivisionId : undefined;
 
-  const loadWhatsAppSettings = useCallback(async () => {
-    if (isSuperAdmin && !selectedDivisionId) return;
-    setLoading(true);
-    setError('');
-    try {
-      const data = await api.getWhatsAppSettings(effectiveDivisionId);
-      setWhatsappApiUrl(data.whatsappApiUrl || '');
-      setWebhookVerifyToken(
-        data.hasWebhookVerifyToken ? WHATSAPP_TOKEN_MASK : (data.whatsappWebhookVerifyToken || ''),
-      );
-      const raw = data.whatsappNumbers || [];
-      if (raw.length > 0) {
-        setNumbers(
-          raw.map((n, i) => ({
-            id: `n-${i}-${n.phoneNumberId || i}`,
-            label: n.label || '',
-            phoneNumberId: n.phoneNumberId || '',
-            displayPhone: n.displayPhone || '',
-            token: n.hasToken ? WHATSAPP_TOKEN_MASK : (n.token || ''),
-          })),
-        );
-      } else {
-        setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
+  const loadWhatsAppSettings = useCallback(
+    async (opts?: { revealSecrets?: boolean; silent?: boolean }) => {
+      if (isSuperAdmin && !selectedDivisionId) return;
+      if (!opts?.silent) setLoading(true);
+      setError('');
+      try {
+        const data = await api.getWhatsAppSettings(effectiveDivisionId, opts?.revealSecrets);
+        setWhatsappBusinessAccountId(data.whatsappBusinessAccountId || '');
+        setWhatsappApiUrl(data.whatsappApiUrl || '');
+        setWebhookVerifyToken(data.whatsappWebhookVerifyToken || '');
+        const raw = data.whatsappNumbers || [];
+        if (raw.length > 0) {
+          setNumbers(
+            raw.map((n, i) => ({
+              id: `n-${i}-${n.phoneNumberId || i}`,
+              label: n.label || '',
+              phoneNumberId: n.phoneNumberId || '',
+              displayPhone: n.displayPhone || '',
+              token: n.token || '',
+            })),
+          );
+        } else {
+          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to load WhatsApp settings');
+        if (!opts?.revealSecrets) {
+          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
+        }
+      } finally {
+        if (!opts?.silent) setLoading(false);
       }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load WhatsApp settings');
-      setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
-    } finally {
-      setLoading(false);
-    }
-  }, [isSuperAdmin, selectedDivisionId, effectiveDivisionId]);
+    },
+    [isSuperAdmin, selectedDivisionId, effectiveDivisionId]
+  );
 
   useEffect(() => {
     if (isSuperAdmin && !selectedDivisionId) {
@@ -667,12 +679,54 @@ function WhatsAppSection() {
     setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
   };
 
+  const webhookCallbackUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/api/whatsapp/webhook`;
+  }, []);
+
   const removeNumber = (id: string) => {
     setNumbers((prev) => (prev.length <= 1 ? prev : prev.filter((n) => n.id !== id)));
   };
 
   const updateNumber = (id: string, field: keyof WhatsAppNumberEntry, value: string) => {
     setNumbers((prev) => prev.map((n) => (n.id === id ? { ...n, [field]: value } : n)));
+  };
+
+  const handleTestConnection = async () => {
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      const firstConfiguredPhoneId = numbers
+        .map((n) => n.phoneNumberId.trim())
+        .find((v) => !!v);
+      const result = await api.testWhatsAppSettings(
+        firstConfiguredPhoneId ? { phoneNumberId: firstConfiguredPhoneId } : undefined,
+        effectiveDivisionId,
+      );
+      const details = [result.verifiedName, result.displayPhoneNumber].filter(Boolean).join(' · ');
+      setTestResult({
+        ok: true,
+        message: details ? `${result.message} (${details})` : result.message,
+      });
+    } catch (err: unknown) {
+      setTestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Connection test failed',
+      });
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const copyWebhookUrl = async () => {
+    if (!webhookCallbackUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookCallbackUrl);
+      setCopiedWebhookUrl(true);
+      setTimeout(() => setCopiedWebhookUrl(false), 2000);
+    } catch {
+      setCopiedWebhookUrl(false);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -697,6 +751,7 @@ function WhatsAppSection() {
           whatsappNumbers: payload.length > 0 ? payload : [],
           whatsappWebhookVerifyToken: webhookVerifyToken.trim(),
           whatsappApiUrl: whatsappApiUrl.trim(),
+          whatsappBusinessAccountId: whatsappBusinessAccountId.trim(),
         },
         effectiveDivisionId,
       );
@@ -755,13 +810,39 @@ function WhatsAppSection() {
           </p>
           <div>
             <label className="label">Verify token</label>
-            <input
-              type="text"
-              className="input font-mono text-sm"
-              value={webhookVerifyToken}
-              onChange={(e) => setWebhookVerifyToken(e.target.value)}
-              placeholder="e.g. my-secret-verify-token-123"
-            />
+            <div className="relative">
+              <input
+                type={showWebhookVerifyToken ? 'text' : 'password'}
+                className="input font-mono text-sm pr-10"
+                value={webhookVerifyToken}
+                onChange={(e) => setWebhookVerifyToken(e.target.value)}
+                placeholder="e.g. my-secret-verify-token-123"
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  const next = !showWebhookVerifyToken;
+                  if (next && webhookVerifyToken === WHATSAPP_TOKEN_MASK) {
+                    try {
+                      await loadWhatsAppSettings({ revealSecrets: true, silent: true });
+                    } catch {
+                      return;
+                    }
+                  }
+                  setShowWebhookVerifyToken(next);
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary transition-colors"
+                aria-label={showWebhookVerifyToken ? 'Hide verify token' : 'Show verify token'}
+              >
+                {showWebhookVerifyToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {webhookVerifyToken === WHATSAPP_TOKEN_MASK && (
+              <p className="text-xs text-text-tertiary mt-1">
+                Click the eye to load the saved verify token, or paste a new one to replace it.
+              </p>
+            )}
           </div>
           <div>
             <label className="label">WhatsApp API URL (optional)</label>
@@ -773,6 +854,38 @@ function WhatsAppSection() {
               placeholder="e.g. https://graph.facebook.com/v22.0"
             />
             <p className="text-xs text-text-tertiary mt-1">Leave empty to use server default. Required for sending messages.</p>
+          </div>
+          <div>
+            <label className="label">WhatsApp Business Account ID (WABA)</label>
+            <input
+              type="text"
+              className="input font-mono text-sm"
+              value={whatsappBusinessAccountId}
+              onChange={(e) => setWhatsappBusinessAccountId(e.target.value)}
+              placeholder="e.g. 123456789012345"
+            />
+            <p className="text-xs text-text-tertiary mt-1">
+              From Meta Business Suite → WhatsApp accounts → API setup, or Graph API. Required to sync message templates in{' '}
+              <Link href="/whatsapp-templates" className="text-brand-600 hover:underline">WhatsApp → Templates</Link>.
+            </p>
+          </div>
+          <div>
+            <label className="label">Webhook callback URL</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                className="input font-mono text-xs"
+                value={webhookCallbackUrl}
+                readOnly
+                placeholder="Open this page in browser to view callback URL"
+              />
+              <button type="button" className="btn-secondary px-3" onClick={copyWebhookUrl} disabled={!webhookCallbackUrl}>
+                {copiedWebhookUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-text-tertiary mt-1">
+              Set this as the webhook URL in Meta Developer Console and subscribe to message + message status events.
+            </p>
           </div>
         </div>
 
@@ -832,14 +945,46 @@ function WhatsAppSection() {
               <label className="label">Access Token</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                {(() => {
+                  const accessTokenRevealKey = entry.phoneNumberId.trim() || entry.id;
+                  const accessShown = !!showAccessTokenByRowId[accessTokenRevealKey];
+                  return (
+                    <>
                 <input
-                  type="password"
-                  className="input pl-10 font-mono text-sm"
+                  type={accessShown ? 'text' : 'password'}
+                  className="input pl-10 pr-10 font-mono text-sm"
                   value={entry.token}
                   onChange={(e) => updateNumber(entry.id, 'token', e.target.value)}
                   placeholder="Paste your WhatsApp access token"
+                  autoComplete="off"
                 />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const next = !showAccessTokenByRowId[accessTokenRevealKey];
+                    if (next && entry.token === WHATSAPP_TOKEN_MASK) {
+                      try {
+                        await loadWhatsAppSettings({ revealSecrets: true, silent: true });
+                      } catch {
+                        return;
+                      }
+                    }
+                    setShowAccessTokenByRowId((prev) => ({ ...prev, [accessTokenRevealKey]: next }));
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary transition-colors"
+                  aria-label={accessShown ? 'Hide access token' : 'Show access token'}
+                >
+                  {accessShown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+                    </>
+                  );
+                })()}
               </div>
+              {entry.token === WHATSAPP_TOKEN_MASK && (
+                <p className="text-xs text-text-tertiary mt-1">
+                  Click the eye to load the saved token from the server (admin only).
+                </p>
+              )}
             </div>
           </div>
         ))}
@@ -856,6 +1001,19 @@ function WhatsAppSection() {
           </div>
         )}
 
+        {testResult && (
+          <div
+            className={`flex items-center gap-2 p-3 rounded-lg text-sm ring-1 ${
+              testResult.ok
+                ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                : 'bg-red-50 text-red-700 ring-red-200'
+            }`}
+          >
+            {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <XCircle className="h-4 w-4 flex-shrink-0" />}
+            {testResult.message}
+          </div>
+        )}
+
         <div className="flex items-center justify-between pt-2">
           {success && (
             <div className="flex items-center gap-1.5 text-sm text-emerald-600 animate-fade-in">
@@ -864,9 +1022,15 @@ function WhatsAppSection() {
             </div>
           )}
           {!success && <div />}
-          <button type="submit" disabled={saving} className="btn-primary">
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={testLoading || saving} className="btn-secondary" onClick={handleTestConnection}>
+              {testLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Server className="h-4 w-4" />}
+              {testLoading ? 'Testing...' : 'Test connection'}
+            </button>
+            <button type="submit" disabled={saving} className="btn-primary">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
         </div>
       </form>
 

@@ -1,9 +1,128 @@
 'use client';
 
 import { useCallback, useMemo } from 'react';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+
+export const INBOX_THREAD_LIMIT = 50;
+
+/** Infinite query: pages[0] = API page 1 (newest chunk); append newest messages here. */
+const NEWEST_PAGE_IDX = 0;
+
+/** Merge API send response into the infinite thread cache (replace optimistic temp id or append). */
+export function patchInboxThreadAfterOutbound(
+  queryClient: QueryClient,
+  leadId: string,
+  threadParams: Record<string, unknown>,
+  opts: { tempId?: string; message: Record<string, unknown> }
+) {
+  const key = queryKeys.inbox.messagesThread(leadId, threadParams);
+  const { tempId, message: serverMsg } = opts;
+
+  queryClient.setQueryData(key, (old: unknown) => {
+    const o = old as {
+      pages: Array<{ messages?: Record<string, unknown>[] }>;
+      pageParams: unknown[];
+    } | null;
+    if (!o?.pages?.length) {
+      return {
+        pages: [
+          {
+            messages: [serverMsg],
+            lead: null,
+            pagination: { page: 1, totalPages: 1, hasMore: false },
+          },
+        ],
+        pageParams: [1],
+      };
+    }
+
+    const pages = o.pages.map((page, idx) => {
+      if (idx !== NEWEST_PAGE_IDX) return page;
+      const msgs = [...(page.messages || [])];
+      const id = String(serverMsg.id ?? '');
+
+      if (tempId) {
+        const t = msgs.findIndex((m) => String(m.id) === tempId);
+        if (t >= 0) {
+          msgs[t] = serverMsg;
+          return { ...page, messages: msgs };
+        }
+      }
+
+      if (id && !msgs.some((m) => String(m.id) === id)) {
+        msgs.push(serverMsg);
+      }
+      return { ...page, messages: msgs };
+    });
+
+    return { ...o, pages };
+  });
+}
+
+/** WebSocket: upsert a communication into every matching thread cache for this lead (merge by id, else append on newest page). */
+export function upsertCommunicationInThreadCaches(
+  queryClient: QueryClient,
+  leadId: string,
+  message: Record<string, unknown>
+) {
+  const mid = message.id != null ? String(message.id) : '';
+  if (!mid) return;
+
+  queryClient.setQueriesData(
+    {
+      predicate: (q) =>
+        Array.isArray(q.queryKey) &&
+        q.queryKey[0] === 'inbox' &&
+        q.queryKey[1] === 'messages' &&
+        q.queryKey[2] === leadId &&
+        q.queryKey[3] === 'thread',
+    },
+    (old: unknown) => {
+      const o = old as {
+        pages: Array<{ messages?: Record<string, unknown>[] }>;
+        pageParams: unknown[];
+      } | null;
+      if (!o?.pages?.length) {
+        return {
+          pages: [
+            {
+              messages: [message],
+              lead: null,
+              pagination: { page: 1, totalPages: 1, hasMore: false },
+            },
+          ],
+          pageParams: [1],
+        };
+      }
+
+      let found = false;
+      const pages = o.pages.map((page) => {
+        const msgs = (page.messages || []).map((m) => {
+          if (String(m.id) === mid) {
+            found = true;
+            return { ...m, ...message };
+          }
+          return m;
+        });
+        return { ...page, messages: msgs };
+      });
+
+      if (!found) {
+        const p0 = pages[NEWEST_PAGE_IDX];
+        const msgs = [...(p0.messages || [])];
+        if (!msgs.some((m) => String(m.id) === mid)) {
+          msgs.push(message);
+        }
+        pages[NEWEST_PAGE_IDX] = { ...p0, messages: msgs };
+      }
+
+      return { ...o, pages };
+    }
+  );
+}
 
 export function useInboxConversationsQuery(params?: {
   channel?: string;
@@ -30,6 +149,40 @@ export function useInboxMessagesQuery(
     queryKey: queryKeys.inbox.messages(leadId || 'none', params),
     queryFn: () => api.getInboxMessages(leadId!, params),
     enabled: !!leadId,
+    staleTime: 10_000,
+    gcTime: 10 * 60_000,
+    refetchInterval: options?.refetchInterval ?? false,
+  });
+}
+
+/** Latest chunk is page 1; fetchNextPage loads older history. */
+export function useInboxThreadQuery(
+  leadId: string | null,
+  params?: { channel?: string; divisionId?: string },
+  options?: { refetchInterval?: number | false }
+) {
+  const threadParams = useMemo(
+    () => ({ ...params, limit: INBOX_THREAD_LIMIT }),
+    [params?.channel, params?.divisionId]
+  );
+
+  return useInfiniteQuery({
+    queryKey: queryKeys.inbox.messagesThread(leadId || 'none', threadParams),
+    queryFn: ({ pageParam }) =>
+      api.getInboxMessages(leadId!, {
+        channel: params?.channel,
+        divisionId: params?.divisionId,
+        page: pageParam,
+        limit: INBOX_THREAD_LIMIT,
+      }),
+    enabled: !!leadId,
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const p = lastPage?.pagination;
+      if (!p) return undefined;
+      if (typeof p.hasMore === 'boolean') return p.hasMore ? p.page + 1 : undefined;
+      return p.page < p.totalPages ? p.page + 1 : undefined;
+    },
     staleTime: 10_000,
     gcTime: 10 * 60_000,
     refetchInterval: options?.refetchInterval ?? false,
@@ -102,7 +255,8 @@ export function useInboxRealtimeInvalidation(selectedLeadId: string | null) {
           Array.isArray(q.queryKey) &&
           q.queryKey[0] === 'inbox' &&
           q.queryKey[1] === 'messages' &&
-          q.queryKey[2] === leadId,
+          q.queryKey[2] === leadId &&
+          q.queryKey[3] === 'thread',
       });
     },
     [queryClient]
@@ -135,19 +289,23 @@ export function useInboxRealtimeInvalidation(selectedLeadId: string | null) {
     [queryClient, selectedLeadId]
   );
 
-  /** WebSocket `data_changed`: refresh lists + thread for the affected lead. */
+  /** WebSocket `data_changed`: merge message payload when present; otherwise refetch thread. */
   const onCommunicationChanged = useCallback(
-    (entityId?: string) => {
+    (event: { entityId?: string; message?: Record<string, unknown> } | undefined) => {
+      const entityId = event?.entityId;
+      const msg = event?.message;
       invalidateConversations();
       invalidateStats();
-      if (entityId) {
+      if (entityId && msg && typeof msg === 'object' && msg.id != null) {
+        upsertCommunicationInThreadCaches(queryClient, entityId, msg);
+      } else if (entityId) {
         invalidateMessagesForLead(entityId);
-        if (selectedLeadId === entityId) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.inbox.notes(entityId) });
-          queryClient.invalidateQueries({ queryKey: queryKeys.inbox.attachments(entityId) });
-        }
       } else if (selectedLeadId) {
         invalidateMessagesForLead(selectedLeadId);
+      }
+      if (entityId && selectedLeadId === entityId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox.notes(entityId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox.attachments(entityId) });
       }
     },
     [
@@ -187,6 +345,13 @@ export function useInboxRealtimeInvalidation(selectedLeadId: string | null) {
 export function useInboxMessageMutations(selectedLeadId: string | null) {
   const queryClient = useQueryClient();
 
+  const refreshInboxLists = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot }),
+      queryClient.invalidateQueries({ queryKey: ['inbox', 'stats'] }),
+    ]);
+  };
+
   const refreshAllInbox = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot }),
@@ -194,7 +359,10 @@ export function useInboxMessageMutations(selectedLeadId: string | null) {
       selectedLeadId
         ? queryClient.invalidateQueries({
             queryKey: queryKeys.inbox.messagesRoot,
-            predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[2] === selectedLeadId,
+            predicate: (q) =>
+              Array.isArray(q.queryKey) &&
+              q.queryKey[2] === selectedLeadId &&
+              q.queryKey[3] === 'thread',
           })
         : Promise.resolve(),
     ]);
@@ -202,22 +370,33 @@ export function useInboxMessageMutations(selectedLeadId: string | null) {
 
   const sendMessage = useMutation({
     mutationFn: api.sendInboxMessage.bind(api),
-    onSuccess: refreshAllInbox,
+    onSuccess: refreshInboxLists,
   });
 
   const sendMessageWithAttachments = useMutation({
     mutationFn: api.sendInboxMessageWithAttachments.bind(api),
-    onSuccess: refreshAllInbox,
+    onSuccess: refreshInboxLists,
   });
 
   const editMessage = useMutation({
     mutationFn: ({ messageId, body }: { messageId: string; body: string }) => api.editInboxMessage(messageId, body),
-    onSuccess: refreshAllInbox,
+    onSuccess: async (data) => {
+      await refreshInboxLists();
+      if (selectedLeadId && data && typeof data === 'object' && data.id != null) {
+        upsertCommunicationInThreadCaches(queryClient, selectedLeadId, data as Record<string, unknown>);
+      }
+    },
   });
 
   const deleteMessage = useMutation({
     mutationFn: (messageId: string) => api.deleteInboxMessage(messageId),
-    onSuccess: refreshAllInbox,
+    onSuccess: async (data) => {
+      await refreshInboxLists();
+      const comm = data && typeof data === 'object' ? (data as { communication?: Record<string, unknown> }).communication : undefined;
+      if (selectedLeadId && comm?.id != null) {
+        upsertCommunicationInThreadCaches(queryClient, selectedLeadId, comm);
+      }
+    },
   });
 
   const addNote = useMutation({

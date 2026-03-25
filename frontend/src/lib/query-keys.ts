@@ -7,6 +7,9 @@ export const queryKeys = {
     messagesRoot: ['inbox', 'messages'] as const,
     messages: (leadId: string, params?: Record<string, unknown>) =>
       ['inbox', 'messages', leadId, params || {}] as const,
+    /** Paginated thread (useInfiniteQuery); params should include limit for stable cache keys. */
+    messagesThread: (leadId: string, params?: Record<string, unknown>) =>
+      ['inbox', 'messages', leadId, 'thread', params || {}] as const,
     notes: (leadId: string) => ['inbox', 'notes', leadId] as const,
     attachments: (leadId: string) => ['inbox', 'attachments', leadId] as const,
     stats: (divisionId?: string | null) => ['inbox', 'stats', divisionId || 'all'] as const,

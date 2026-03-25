@@ -55,7 +55,12 @@ const playNotificationSound = () => {
   }
 };
 
-type DataChangeHandler = (event: { entity: string; action: string; entityId?: string }) => void;
+type DataChangeHandler = (event: {
+  entity: string;
+  action: string;
+  entityId?: string;
+  message?: unknown;
+}) => void;
 type NotificationAction = 'MARK_DONE' | 'SNOOZE' | 'ESCALATE';
 
 interface NotificationPagination {
@@ -93,7 +98,7 @@ interface NotificationStore {
   updatePreferences: (prefs: Partial<NotificationPreferences>) => Promise<void>;
   subscribeDataChange: (handler: DataChangeHandler) => void;
   unsubscribeDataChange: (handler: DataChangeHandler) => void;
-  dispatchDataChange: (event: { entity: string; action: string; entityId?: string }) => void;
+  dispatchDataChange: (event: { entity: string; action: string; entityId?: string; message?: unknown }) => void;
 }
 
 let ws: WebSocket | null = null;
@@ -463,6 +468,7 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
               entity: data.entity as string,
               action: data.action as string,
               entityId: data.entityId as string | undefined,
+              message: data.message as unknown,
             };
             dataChangeListeners.forEach((handler) => {
               try {
