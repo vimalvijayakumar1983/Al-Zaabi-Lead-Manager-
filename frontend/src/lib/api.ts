@@ -328,8 +328,8 @@ class ApiClient {
       period,
       ...(divisionId ? { divisionId } : {}),
       ...(filters?.teamMemberId ? { teamMemberId: filters.teamMemberId } : {}),
-      ...(filters?.dateFrom ? { dateFrom: filters.dateFrom } : {}),
-      ...(filters?.dateTo ? { dateTo: filters.dateTo } : {}),
+      ...(filters?.dateFrom ? { from: filters.dateFrom } : {}),
+      ...(filters?.dateTo ? { to: filters.dateTo } : {}),
     });
     return this.request<any>(`/analytics/dashboard-full?${q}`);
   }

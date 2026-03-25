@@ -83,6 +83,12 @@ const PERIODS: { value: Period; label: string; days: number }[] = [
   { value: 'custom', label: 'Custom Range', days: 30 },
 ];
 
+interface TeamFilterUser {
+  id: string;
+  firstName?: string | null;
+  lastName?: string | null;
+}
+
 const statusColors: Record<string, { bg: string; text: string; ring: string; dot: string }> = {
   NEW: { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-600/10', dot: 'bg-indigo-500' },
   CONTACTED: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-600/10', dot: 'bg-blue-500' },
@@ -274,6 +280,11 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>('30d');
   const [divisions, setDivisions] = useState<Organization[]>([]);
   const [divisionFilter, setDivisionFilter] = useState<string>('all');
+  const [teamMembers, setTeamMembers] = useState<TeamFilterUser[]>([]);
+  const [teamMemberFilter, setTeamMemberFilter] = useState<string>('all');
+  const [customFrom, setCustomFrom] = useState<string>('');
+  const [customTo, setCustomTo] = useState<string>('');
+  const [customApplied, setCustomApplied] = useState<boolean>(false);
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -285,13 +296,25 @@ export default function DashboardPage() {
     }
   }, [isSuperAdmin]);
 
+  // Load team members scoped by current division selection
+  useEffect(() => {
+    const selectedDivisionId = divisionFilter !== 'all' ? divisionFilter : undefined;
+    api.getUsers(selectedDivisionId)
+      .then((rows: any[]) => setTeamMembers(Array.isArray(rows) ? rows : []))
+      .catch(() => setTeamMembers([]));
+  }, [divisionFilter]);
+
   // Fetch consolidated dashboard data
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
-      const d = await api.getDashboardFull(period, divId);
+      const d = await api.getDashboardFull(period, divId, {
+        teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
+        dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
+        dateTo: period === 'custom' && customApplied ? (customTo || undefined) : undefined,
+      });
       if (d && typeof d === 'object' && d.kpis) {
         setData(d);
       } else {
@@ -303,7 +326,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [period, divisionFilter]);
+  }, [period, divisionFilter, teamMemberFilter, customApplied, customFrom, customTo]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -319,12 +342,18 @@ export default function DashboardPage() {
   // Real-time refresh
   useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
     const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
-    api.getDashboardFull(period, divId).then((d) => {
+    api.getDashboardFull(period, divId, {
+      teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
+      dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
+      dateTo: period === 'custom' && customApplied ? (customTo || undefined) : undefined,
+    }).then((d) => {
       if (d?.kpis) setData(d);
     }).catch(() => {});
   });
 
   const periodDays = PERIODS.find((p) => p.value === period)?.days || 30;
+
+  const canApplyCustomRange = period === 'custom' && !!customFrom && !!customTo;
 
   // Computed data
   const trendData = useMemo(() => {
@@ -406,9 +435,19 @@ export default function DashboardPage() {
             {isSuperAdmin
               ? 'Group-wide overview across all divisions.'
               : "Here's what's happening with your leads today."}
+            {teamMemberFilter !== 'all' && (
+              <span className="ml-1 text-brand-700">
+                Filtered by team member.
+              </span>
+            )}
+            {period === 'custom' && customApplied && (
+              <span className="ml-1 text-brand-700">
+                Custom: {customFrom} to {customTo}.
+              </span>
+            )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {isSuperAdmin && divisions.length > 0 && (
             <div className="relative">
               <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
@@ -420,14 +459,88 @@ export default function DashboardPage() {
               <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
             </div>
           )}
+          {!isSuperAdmin && teamMembers.length > 0 && (
+            <div className="relative">
+              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+              <select
+                className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
+                value={teamMemberFilter}
+                onChange={(e) => setTeamMemberFilter(e.target.value)}
+              >
+                <option value="all">All Team Members</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {getDisplayName(member.firstName, member.lastName)}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+            </div>
+          )}
+          {isSuperAdmin && teamMembers.length > 0 && (
+            <div className="relative">
+              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+              <select
+                className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
+                value={teamMemberFilter}
+                onChange={(e) => setTeamMemberFilter(e.target.value)}
+              >
+                <option value="all">All Team Members</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {getDisplayName(member.firstName, member.lastName)}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+            </div>
+          )}
           <div className="relative">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
             <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-              value={period} onChange={(e) => setPeriod(e.target.value as Period)}>
+              value={period}
+              onChange={(e) => {
+                const next = e.target.value as Period;
+                setPeriod(next);
+                if (next !== 'custom') setCustomApplied(false);
+              }}
+            >
               {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
           </div>
+          {period === 'custom' && (
+            <>
+              <input
+                type="date"
+                className="input py-2 text-xs w-auto"
+                value={customFrom}
+                onChange={(e) => {
+                  setCustomFrom(e.target.value);
+                  setCustomApplied(false);
+                }}
+              />
+              <input
+                type="date"
+                className="input py-2 text-xs w-auto"
+                value={customTo}
+                onChange={(e) => {
+                  setCustomTo(e.target.value);
+                  setCustomApplied(false);
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary text-xs py-2"
+                disabled={!canApplyCustomRange}
+                onClick={() => {
+                  if (canApplyCustomRange) setCustomApplied(true);
+                }}
+              >
+                Apply
+              </button>
+            </>
+          )}
           <RefreshButton onRefresh={fetchData} />
         </div>
       </div>
