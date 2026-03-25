@@ -319,8 +319,18 @@ class ApiClient {
     return this.request<any>(`/analytics/dashboard${q}`);
   }
 
-  async getDashboardFull(period = '30d', divisionId?: string) {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+  async getDashboardFull(
+    period = '30d',
+    divisionId?: string,
+    filters?: { teamMemberId?: string; dateFrom?: string; dateTo?: string }
+  ) {
+    const q = new URLSearchParams({
+      period,
+      ...(divisionId ? { divisionId } : {}),
+      ...(filters?.teamMemberId ? { teamMemberId: filters.teamMemberId } : {}),
+      ...(filters?.dateFrom ? { dateFrom: filters.dateFrom } : {}),
+      ...(filters?.dateTo ? { dateTo: filters.dateTo } : {}),
+    });
     return this.request<any>(`/analytics/dashboard-full?${q}`);
   }
 

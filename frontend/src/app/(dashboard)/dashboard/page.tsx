@@ -22,7 +22,7 @@ import { RefreshButton } from '@/components/RefreshButton';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
-type Period = '7d' | '30d' | '90d' | '180d' | '365d';
+type Period = '7d' | '30d' | '90d' | '180d' | '365d' | 'custom';
 
 interface DivisionStats {
   divisionId: string;
@@ -80,6 +80,7 @@ const PERIODS: { value: Period; label: string; days: number }[] = [
   { value: '90d', label: 'Last 90 days', days: 90 },
   { value: '180d', label: 'Last 6 months', days: 180 },
   { value: '365d', label: 'Last year', days: 365 },
+  { value: 'custom', label: 'Custom Range', days: 30 },
 ];
 
 const statusColors: Record<string, { bg: string; text: string; ring: string; dot: string }> = {
