@@ -149,6 +149,13 @@ interface WebhookItem {
   createdAt: string;
 }
 
+interface ErpCustomTableItem {
+  slug: string;
+  label: string;
+  externalIdKeysText: string;
+  sampleMappingsText: string;
+}
+
 // ---------------------------------------------------------------------------
 // Platform definitions
 // ---------------------------------------------------------------------------
@@ -271,6 +278,61 @@ const WEBHOOK_EVENTS = [
   'note.created',
   'task.completed',
 ];
+
+/** Sentinel value for "Other (custom)" CRM target in mapping rows. */
+const ERP_MAP_ROW_CUSTOM = '__custom__';
+
+/** CRM target → ERP JSON key (canonical → erpFieldMapping; custom → erpFieldMappingCustom). */
+interface ErpFieldMapRow {
+  crm: string;
+  /** When crm === ERP_MAP_ROW_CUSTOM, user-defined key stored under customData.erp.mappedFields (customer only). */
+  customTarget?: string;
+  erpKey: string;
+}
+
+const ERP_CUSTOMER_FIELD_OPTIONS: { value: string; label: string }[] = [
+  { value: 'externalCustomerId', label: 'External customer ID' },
+  { value: 'firstName', label: 'First name' },
+  { value: 'lastName', label: 'Last name' },
+  { value: 'fullName', label: 'Full name' },
+  { value: 'email', label: 'Email' },
+  { value: 'phone', label: 'Phone' },
+  { value: 'company', label: 'Company' },
+];
+
+const ERP_SALE_FIELD_OPTIONS: { value: string; label: string }[] = [
+  { value: 'externalSaleId', label: 'External sale ID' },
+  { value: 'externalCustomerId', label: 'External customer ID' },
+  { value: 'customerId', label: 'Customer ID' },
+];
+
+const ERP_AVAILABILITY_FIELD_OPTIONS: { value: string; label: string }[] = [
+  { value: 'externalAvailabilityId', label: 'External availability ID' },
+  { value: 'availabilityId', label: 'Availability ID' },
+  { value: 'doctorId', label: 'Doctor ID' },
+  { value: 'providerId', label: 'Provider ID' },
+  { value: 'id', label: 'ID' },
+];
+
+/** Matches backend ERP_CUSTOM_MAP_TARGET_RE */
+const ERP_CUSTOM_TARGET_KEY_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+
+function splitErpFieldMapRows(rows: ErpFieldMapRow[]) {
+  const canonical: Record<string, string> = {};
+  const custom: Record<string, string> = {};
+  for (const r of rows) {
+    const ek = r.erpKey.trim();
+    if (!ek) continue;
+    if (r.crm === ERP_MAP_ROW_CUSTOM) {
+      const t = (r.customTarget || '').trim();
+      if (!ERP_CUSTOM_TARGET_KEY_RE.test(t)) continue;
+      custom[t] = ek;
+    } else if (r.crm) {
+      canonical[r.crm] = ek;
+    }
+  }
+  return { canonical, custom };
+}
 
 const CRM_FIELDS = [
   'firstName',
@@ -519,6 +581,11 @@ export default function IntegrationsPage() {
   const [emailBcc, setEmailBcc] = useState('');
   const [erpProvider, setErpProvider] = useState<'facts' | 'focus' | 'cortex' | 'uniqorn'>('facts');
   const [erpToken, setErpToken] = useState('');
+  const [erpCustomerMapRows, setErpCustomerMapRows] = useState<ErpFieldMapRow[]>([]);
+  const [erpSaleMapRows, setErpSaleMapRows] = useState<ErpFieldMapRow[]>([]);
+  const [erpAvailMapRows, setErpAvailMapRows] = useState<ErpFieldMapRow[]>([]);
+  const [erpExtraKeysText, setErpExtraKeysText] = useState('');
+  const [erpCustomTables, setErpCustomTables] = useState<ErpCustomTableItem[]>([]);
 
   // State: Webhook form
   const [webhookName, setWebhookName] = useState('');
@@ -717,6 +784,85 @@ export default function IntegrationsPage() {
       case 'erp':
         setErpProvider(((cfg.erpProvider as 'facts' | 'focus' | 'cortex' | 'uniqorn') ?? 'facts'));
         setErpToken('');
+        {
+          const fm = cfg.erpFieldMapping as Record<string, Record<string, string>> | undefined;
+          const fmc = cfg.erpFieldMappingCustom as Record<string, Record<string, string>> | undefined;
+
+          const customerRows: ErpFieldMapRow[] = [];
+          if (fm?.customer && typeof fm.customer === 'object') {
+            for (const [crm, erpKey] of Object.entries(fm.customer)) {
+              customerRows.push({ crm, erpKey });
+            }
+          }
+          if (fmc?.customer && typeof fmc.customer === 'object') {
+            for (const [customTarget, erpKey] of Object.entries(fmc.customer)) {
+              customerRows.push({ crm: ERP_MAP_ROW_CUSTOM, customTarget, erpKey });
+            }
+          }
+          setErpCustomerMapRows(customerRows);
+
+          const saleRows: ErpFieldMapRow[] = [];
+          if (fm?.sale && typeof fm.sale === 'object') {
+            for (const [crm, erpKey] of Object.entries(fm.sale)) {
+              saleRows.push({ crm, erpKey });
+            }
+          }
+          if (fmc?.sale && typeof fmc.sale === 'object') {
+            for (const [customTarget, erpKey] of Object.entries(fmc.sale)) {
+              saleRows.push({ crm: ERP_MAP_ROW_CUSTOM, customTarget, erpKey });
+            }
+          }
+          setErpSaleMapRows(saleRows);
+
+          const availRows: ErpFieldMapRow[] = [];
+          if (fm?.doctor_availability && typeof fm.doctor_availability === 'object') {
+            for (const [crm, erpKey] of Object.entries(fm.doctor_availability)) {
+              availRows.push({ crm, erpKey });
+            }
+          }
+          if (fmc?.doctor_availability && typeof fmc.doctor_availability === 'object') {
+            for (const [customTarget, erpKey] of Object.entries(fmc.doctor_availability)) {
+              availRows.push({ crm: ERP_MAP_ROW_CUSTOM, customTarget, erpKey });
+            }
+          }
+          setErpAvailMapRows(availRows);
+
+          const ek = cfg.erpExtraFieldKeys;
+          setErpExtraKeysText(Array.isArray(ek) ? ek.filter((x) => typeof x === 'string').join('\n') : '');
+          const ct = Array.isArray(cfg.erpCustomTables) ? cfg.erpCustomTables : [];
+          setErpCustomTables(
+            ct
+              .filter((row) => row && typeof row === 'object')
+              .map((row) => {
+                const slug = String((row as Record<string, unknown>).slug || '').trim();
+                const label = String((row as Record<string, unknown>).label || '').trim();
+                const externalIdKeys = Array.isArray((row as Record<string, unknown>).externalIdKeys)
+                  ? ((row as Record<string, unknown>).externalIdKeys as unknown[])
+                      .filter((k) => typeof k === 'string' && k.trim())
+                      .map((k) => String(k).trim())
+                  : [];
+                const fieldMapping = (row as Record<string, unknown>).fieldMapping;
+                const fieldMappingCustom = (row as Record<string, unknown>).fieldMappingCustom;
+                const mergedMappings = {
+                  ...(fieldMapping && typeof fieldMapping === 'object' && !Array.isArray(fieldMapping)
+                    ? (fieldMapping as Record<string, string>)
+                    : {}),
+                  ...(fieldMappingCustom && typeof fieldMappingCustom === 'object' && !Array.isArray(fieldMappingCustom)
+                    ? (fieldMappingCustom as Record<string, string>)
+                    : {}),
+                };
+                const sampleMappingsText = Object.entries(mergedMappings)
+                  .map(([k, v]) => `${k}:${String(v)}`)
+                  .join('\n');
+                return {
+                  slug,
+                  label: label || slug,
+                  externalIdKeysText: externalIdKeys.join('\n'),
+                  sampleMappingsText,
+                };
+              })
+          );
+        }
         break;
       default:
         break;
@@ -767,6 +913,11 @@ export default function IntegrationsPage() {
       case 'erp':
         setErpProvider('facts');
         setErpToken('');
+        setErpCustomerMapRows([]);
+        setErpSaleMapRows([]);
+        setErpAvailMapRows([]);
+        setErpExtraKeysText('');
+        setErpCustomTables([]);
         break;
       default:
         break;
@@ -840,17 +991,90 @@ export default function IntegrationsPage() {
         {
           const effectiveDivisionId =
             activeDivisionId || divisions[0]?.id || '';
-        return {
-          platform: 'erp',
-          name: 'ERP',
-          credentials: {
-            token: erpToken,
-          },
-          config: {
+          const existingErp = getIntegrationForPlatform('erp');
+          const prevConfig =
+            existingErp?.config &&
+            typeof existingErp.config === 'object' &&
+            !Array.isArray(existingErp.config)
+              ? { ...(existingErp.config as Record<string, unknown>) }
+              : {};
+
+          const custSplit = splitErpFieldMapRows(erpCustomerMapRows);
+          const saleSplit = splitErpFieldMapRows(erpSaleMapRows);
+          const availSplit = splitErpFieldMapRows(erpAvailMapRows);
+
+          const fm: Record<string, Record<string, string>> = {};
+          if (Object.keys(custSplit.canonical).length) fm.customer = custSplit.canonical;
+          if (Object.keys(saleSplit.canonical).length) fm.sale = saleSplit.canonical;
+          if (Object.keys(availSplit.canonical).length) fm.doctor_availability = availSplit.canonical;
+
+          const fmc: Record<string, Record<string, string>> = {};
+          if (Object.keys(custSplit.custom).length) fmc.customer = custSplit.custom;
+          if (Object.keys(saleSplit.custom).length) fmc.sale = saleSplit.custom;
+          if (Object.keys(availSplit.custom).length) fmc.doctor_availability = availSplit.custom;
+
+          const extraLines = erpExtraKeysText
+            .split(/[\n,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+          const nextConfig: Record<string, unknown> = {
+            ...prevConfig,
             erpProvider,
             divisionId: effectiveDivisionId,
-          },
-        };
+          };
+          if (Object.keys(fm).length) nextConfig.erpFieldMapping = fm;
+          else delete nextConfig.erpFieldMapping;
+
+          if (Object.keys(fmc).length) nextConfig.erpFieldMappingCustom = fmc;
+          else delete nextConfig.erpFieldMappingCustom;
+
+          if (extraLines.length) nextConfig.erpExtraFieldKeys = extraLines;
+          else delete nextConfig.erpExtraFieldKeys;
+
+          const customTablesPayload = erpCustomTables
+            .map((t) => {
+              const slug = t.slug.trim().toLowerCase();
+              const label = t.label.trim();
+              const externalIdKeys = t.externalIdKeysText
+                .split(/[\n,]+/)
+                .map((s) => s.trim())
+                .filter(Boolean);
+              const mapEntries = t.sampleMappingsText
+                .split(/\n+/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => {
+                  const sep = line.indexOf(':');
+                  if (sep < 1) return null;
+                  const target = line.slice(0, sep).trim();
+                  const erpKey = line.slice(sep + 1).trim();
+                  if (!target || !erpKey) return null;
+                  return [target, erpKey] as const;
+                })
+                .filter((x): x is readonly [string, string] => !!x);
+              const fieldMappingCustom = Object.fromEntries(mapEntries);
+              if (!slug || externalIdKeys.length === 0) return null;
+              return {
+                slug,
+                label: label || slug,
+                externalIdKeys,
+                fieldMapping: {},
+                fieldMappingCustom,
+              };
+            })
+            .filter((x): x is Record<string, unknown> => !!x);
+          if (customTablesPayload.length) nextConfig.erpCustomTables = customTablesPayload;
+          else delete nextConfig.erpCustomTables;
+
+          return {
+            platform: 'erp',
+            name: 'ERP',
+            credentials: {
+              token: erpToken,
+            },
+            config: nextConfig,
+          };
         }
       default:
         return {};
@@ -1602,6 +1826,387 @@ export default function IntegrationsPage() {
               </div>
             </div>
 
+            <div className="rounded-lg border border-border bg-surface-secondary p-3 space-y-4">
+              <div>
+                <p className="text-sm font-medium text-text-primary mb-1">Field mapping (optional)</p>
+                <p className="text-xs text-text-tertiary mb-2">
+                  Map built-in CRM fields or choose <strong>Other (custom)</strong> to store values under{' '}
+                  <code className="text-[10px]">customData.erp.mappedFields</code> (create-customer only). Unmapped
+                  top-level keys can go to <code className="text-[10px]">customData.erp.extra</code> (see below).
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                    Create customer
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setErpCustomerMapRows((rows) => [
+                        ...rows,
+                        { crm: ERP_CUSTOMER_FIELD_OPTIONS[0]?.value || 'email', erpKey: '' },
+                      ])
+                    }
+                    className="text-xs flex items-center gap-1 text-brand-600 hover:text-brand-700"
+                  >
+                    <Plus className="w-3 h-3" /> Add row
+                  </button>
+                </div>
+                {erpCustomerMapRows.length === 0 && (
+                  <p className="text-xs text-text-tertiary">
+                    No overrides — default JSON keys are used. Add a row to remap fields or use Other (custom) for
+                    extra ERP fields.
+                  </p>
+                )}
+                {erpCustomerMapRows.map((row, idx) => (
+                  <div key={`ec-${idx}`} className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={row.crm}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setErpCustomerMapRows((rows) =>
+                          rows.map((r, i) =>
+                            i === idx
+                              ? {
+                                  ...r,
+                                  crm: v,
+                                  ...(v !== ERP_MAP_ROW_CUSTOM ? { customTarget: '' } : {}),
+                                }
+                              : r
+                          )
+                        );
+                      }}
+                      className="flex-1 min-w-[140px] px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    >
+                      {ERP_CUSTOMER_FIELD_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                      <option value={ERP_MAP_ROW_CUSTOM}>Other (custom)…</option>
+                    </select>
+                    {row.crm === ERP_MAP_ROW_CUSTOM && (
+                      <input
+                        type="text"
+                        value={row.customTarget || ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setErpCustomerMapRows((rows) =>
+                            rows.map((r, i) => (i === idx ? { ...r, customTarget: v } : r))
+                          );
+                        }}
+                        placeholder="customKey (e.g. vatNumber)"
+                        className="flex-1 min-w-[120px] px-2 py-1.5 border border-amber-200 bg-amber-50/50 rounded-lg text-xs font-mono"
+                        title="Letters, numbers, underscore; must start with a letter"
+                      />
+                    )}
+                    <input
+                      type="text"
+                      value={row.erpKey}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setErpCustomerMapRows((rows) =>
+                          rows.map((r, i) => (i === idx ? { ...r, erpKey: v } : r))
+                        );
+                      }}
+                      placeholder="ERP JSON key"
+                      className="flex-1 min-w-[120px] px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setErpCustomerMapRows((rows) => rows.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-text-tertiary hover:text-red-600 rounded-lg"
+                      title="Remove row"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2 border-t border-border-subtle pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                    Customer sales
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setErpSaleMapRows((rows) => [
+                        ...rows,
+                        { crm: ERP_SALE_FIELD_OPTIONS[0]?.value || 'externalSaleId', erpKey: '' },
+                      ])
+                    }
+                    className="text-xs flex items-center gap-1 text-brand-600 hover:text-brand-700"
+                  >
+                    <Plus className="w-3 h-3" /> Add row
+                  </button>
+                </div>
+                {erpSaleMapRows.map((row, idx) => (
+                  <div key={`es-${idx}`} className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={row.crm}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setErpSaleMapRows((rows) =>
+                          rows.map((r, i) =>
+                            i === idx
+                              ? {
+                                  ...r,
+                                  crm: v,
+                                  ...(v !== ERP_MAP_ROW_CUSTOM ? { customTarget: '' } : {}),
+                                }
+                              : r
+                          )
+                        );
+                      }}
+                      className="flex-1 min-w-[140px] px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    >
+                      {ERP_SALE_FIELD_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                      <option value={ERP_MAP_ROW_CUSTOM}>Other (custom)…</option>
+                    </select>
+                    {row.crm === ERP_MAP_ROW_CUSTOM && (
+                      <input
+                        type="text"
+                        value={row.customTarget || ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setErpSaleMapRows((rows) =>
+                            rows.map((r, i) => (i === idx ? { ...r, customTarget: v } : r))
+                          );
+                        }}
+                        placeholder="customKey"
+                        className="flex-1 min-w-[120px] px-2 py-1.5 border border-amber-200 bg-amber-50/50 rounded-lg text-xs font-mono"
+                        title="Saved in config for reference; full sale payload is still stored as raw"
+                      />
+                    )}
+                    <input
+                      type="text"
+                      value={row.erpKey}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setErpSaleMapRows((rows) =>
+                          rows.map((r, i) => (i === idx ? { ...r, erpKey: v } : r))
+                        );
+                      }}
+                      placeholder="ERP JSON key"
+                      className="flex-1 min-w-[120px] px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setErpSaleMapRows((rows) => rows.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-text-tertiary hover:text-red-600 rounded-lg"
+                      title="Remove row"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2 border-t border-border-subtle pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                    Doctor availability
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setErpAvailMapRows((rows) => [
+                        ...rows,
+                        { crm: ERP_AVAILABILITY_FIELD_OPTIONS[0]?.value || 'doctorId', erpKey: '' },
+                      ])
+                    }
+                    className="text-xs flex items-center gap-1 text-brand-600 hover:text-brand-700"
+                  >
+                    <Plus className="w-3 h-3" /> Add row
+                  </button>
+                </div>
+                {erpAvailMapRows.map((row, idx) => (
+                  <div key={`ea-${idx}`} className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={row.crm}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setErpAvailMapRows((rows) =>
+                          rows.map((r, i) =>
+                            i === idx
+                              ? {
+                                  ...r,
+                                  crm: v,
+                                  ...(v !== ERP_MAP_ROW_CUSTOM ? { customTarget: '' } : {}),
+                                }
+                              : r
+                          )
+                        );
+                      }}
+                      className="flex-1 min-w-[140px] px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    >
+                      {ERP_AVAILABILITY_FIELD_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                      <option value={ERP_MAP_ROW_CUSTOM}>Other (custom)…</option>
+                    </select>
+                    {row.crm === ERP_MAP_ROW_CUSTOM && (
+                      <input
+                        type="text"
+                        value={row.customTarget || ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setErpAvailMapRows((rows) =>
+                            rows.map((r, i) => (i === idx ? { ...r, customTarget: v } : r))
+                          );
+                        }}
+                        placeholder="customKey"
+                        className="flex-1 min-w-[120px] px-2 py-1.5 border border-amber-200 bg-amber-50/50 rounded-lg text-xs font-mono"
+                        title="Saved in config for reference; full availability payload is still stored as raw"
+                      />
+                    )}
+                    <input
+                      type="text"
+                      value={row.erpKey}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setErpAvailMapRows((rows) =>
+                          rows.map((r, i) => (i === idx ? { ...r, erpKey: v } : r))
+                        );
+                      }}
+                      placeholder="ERP JSON key"
+                      className="flex-1 min-w-[120px] px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setErpAvailMapRows((rows) => rows.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-text-tertiary hover:text-red-600 rounded-lg"
+                      title="Remove row"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-border-subtle pt-3">
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  Extra payload keys (optional)
+                </label>
+                <p className="text-xs text-text-tertiary mb-2">
+                  One key per line. If set, only these top-level keys are copied into{' '}
+                  <code className="text-[10px]">customData.erp.extra</code> for customers. Leave empty to include all
+                  unmapped top-level fields.
+                </p>
+                <textarea
+                  value={erpExtraKeysText}
+                  onChange={(e) => setErpExtraKeysText(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder={'loyaltyTier\nvatNumber'}
+                />
+              </div>
+
+              <div className="border-t border-border-subtle pt-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-medium text-text-secondary uppercase tracking-wide">Custom Tables</p>
+                    <p className="text-xs text-text-tertiary mt-1">
+                      Add additional ERP endpoints/tables (raw payload storage). Slug creates endpoint path.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setErpCustomTables((rows) => [
+                        ...rows,
+                        { slug: '', label: '', externalIdKeysText: 'id', sampleMappingsText: '' },
+                      ])
+                    }
+                    className="text-xs flex items-center gap-1 text-brand-600 hover:text-brand-700"
+                  >
+                    <Plus className="w-3 h-3" /> Add table
+                  </button>
+                </div>
+                {erpCustomTables.length === 0 && (
+                  <p className="text-xs text-text-tertiary">No custom tables configured.</p>
+                )}
+                {erpCustomTables.map((table, idx) => (
+                  <div key={`custom-table-${idx}`} className="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        value={table.slug}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setErpCustomTables((rows) => rows.map((r, i) => (i === idx ? { ...r, slug: v } : r)));
+                        }}
+                        placeholder="slug (e.g. stock)"
+                        className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs font-mono"
+                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={table.label}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setErpCustomTables((rows) => rows.map((r, i) => (i === idx ? { ...r, label: v } : r)));
+                          }}
+                          placeholder="Label"
+                          className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setErpCustomTables((rows) => rows.filter((_, i) => i !== idx))}
+                          className="p-1.5 text-text-tertiary hover:text-red-600 rounded-lg"
+                          title="Remove table"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[11px] text-text-secondary mb-1">External ID keys (one per line)</p>
+                        <textarea
+                          value={table.externalIdKeysText}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setErpCustomTables((rows) =>
+                              rows.map((r, i) => (i === idx ? { ...r, externalIdKeysText: v } : r))
+                            );
+                          }}
+                          rows={3}
+                          className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs font-mono"
+                          placeholder={'itemId\nsku\nid'}
+                        />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-text-secondary mb-1">Sample field mappings (target:erpKey)</p>
+                        <textarea
+                          value={table.sampleMappingsText}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setErpCustomTables((rows) =>
+                              rows.map((r, i) => (i === idx ? { ...r, sampleMappingsText: v } : r))
+                            );
+                          }}
+                          rows={3}
+                          className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs font-mono"
+                          placeholder={'sku:itemCode\nwarehouse:whCode'}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
               <h4 className="text-sm font-medium text-text-primary">Division-specific inbound URLs</h4>
               {!effectiveDivisionId && (
@@ -1627,6 +2232,13 @@ export default function IntegrationsPage() {
               {availabilityDisabled && (
                 <p className="text-xs text-amber-700">doctor-availability is CORTEX-only.</p>
               )}
+              {erpCustomTables
+                .filter((t) => t.slug.trim())
+                .map((table, idx) => (
+                  <code key={`custom-url-${idx}`} className="block text-xs bg-white border border-gray-200 rounded px-3 py-2 break-all select-all">
+                    {`${backendOrigin}/api/channels/erp/${orgId}/${effectiveDivisionId || '<select-division>'}/${table.slug.trim().toLowerCase()}`}
+                  </code>
+                ))}
             </div>
           </div>
         );
@@ -2525,12 +3137,95 @@ export default function IntegrationsPage() {
     if (activeModal !== 'erp-api-info' || !selectedIntegration) return null;
 
     const cfg = (selectedIntegration.config || {}) as Record<string, unknown>;
+    const canonicalMapping =
+      cfg.erpFieldMapping && typeof cfg.erpFieldMapping === 'object' && !Array.isArray(cfg.erpFieldMapping)
+        ? (cfg.erpFieldMapping as Record<string, Record<string, string>>)
+        : {};
+    const customMapping =
+      cfg.erpFieldMappingCustom && typeof cfg.erpFieldMappingCustom === 'object' && !Array.isArray(cfg.erpFieldMappingCustom)
+        ? (cfg.erpFieldMappingCustom as Record<string, Record<string, string>>)
+        : {};
+    const extraFieldKeys =
+      Array.isArray(cfg.erpExtraFieldKeys) ? cfg.erpExtraFieldKeys.filter((k) => typeof k === 'string') : [];
+
     const provider = String(cfg.erpProvider || '').toUpperCase() || 'ERP';
     const orgId = user?.organizationId || '<org-id>';
     const divisionId = String(cfg.divisionId || '<division-id>');
     const backendOrigin =
       typeof window !== 'undefined' ? window.location.origin.replace(':3000', ':4000') : '';
     const basePath = `${backendOrigin}/api/channels/erp/${orgId}/${divisionId}`;
+    const canonicalCustomer = canonicalMapping.customer || {};
+    const customCustomer = customMapping.customer || {};
+    const canonicalSale = canonicalMapping.sale || {};
+    const customSale = customMapping.sale || {};
+    const canonicalAvailability = canonicalMapping.doctor_availability || {};
+    const customAvailability = customMapping.doctor_availability || {};
+    const customTables = Array.isArray(cfg.erpCustomTables)
+      ? (cfg.erpCustomTables as Array<Record<string, unknown>>)
+      : [];
+
+    const createCustomerBody: Record<string, unknown> = {
+      externalCustomerId: 'cust-1001',
+      firstName: 'John',
+      lastName: 'Doe',
+      email: 'john@example.com',
+      phone: '+971500000000',
+      company: 'Al Zaabi',
+    };
+    Object.values(canonicalCustomer).forEach((erpKey) => {
+      if (typeof erpKey === 'string' && erpKey.trim() && createCustomerBody[erpKey] === undefined) {
+        createCustomerBody[erpKey] = `<mapped from ${erpKey}>`;
+      }
+    });
+    Object.entries(customCustomer).forEach(([target, erpKey]) => {
+      if (typeof erpKey === 'string' && erpKey.trim() && createCustomerBody[erpKey] === undefined) {
+        createCustomerBody[erpKey] = `<custom mapped: ${target}>`;
+      }
+    });
+    extraFieldKeys.forEach((k) => {
+      if (createCustomerBody[k] === undefined) {
+        createCustomerBody[k] = `<extra: ${k}>`;
+      }
+    });
+
+    const customerSalesBody: Record<string, unknown> = {
+      externalSaleId: 'sale-9001',
+      externalCustomerId: 'cust-1001',
+      amount: 2500.0,
+      currency: 'AED',
+      status: 'PAID',
+      date: '2026-03-24',
+    };
+    Object.values(canonicalSale).forEach((erpKey) => {
+      if (typeof erpKey === 'string' && erpKey.trim() && customerSalesBody[erpKey] === undefined) {
+        customerSalesBody[erpKey] = `<mapped from ${erpKey}>`;
+      }
+    });
+    Object.entries(customSale).forEach(([target, erpKey]) => {
+      if (typeof erpKey === 'string' && erpKey.trim() && customerSalesBody[erpKey] === undefined) {
+        customerSalesBody[erpKey] = `<custom mapped: ${target}>`;
+      }
+    });
+
+    const doctorAvailabilityBody: Record<string, unknown> = {
+      externalAvailabilityId: 'av-4455',
+      doctorId: 'doc-202',
+      date: '2026-03-25',
+      slots: [
+        { from: '09:00', to: '09:30', available: true },
+        { from: '09:30', to: '10:00', available: false },
+      ],
+    };
+    Object.values(canonicalAvailability).forEach((erpKey) => {
+      if (typeof erpKey === 'string' && erpKey.trim() && doctorAvailabilityBody[erpKey] === undefined) {
+        doctorAvailabilityBody[erpKey] = `<mapped from ${erpKey}>`;
+      }
+    });
+    Object.entries(customAvailability).forEach(([target, erpKey]) => {
+      if (typeof erpKey === 'string' && erpKey.trim() && doctorAvailabilityBody[erpKey] === undefined) {
+        doctorAvailabilityBody[erpKey] = `<custom mapped: ${target}>`;
+      }
+    });
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -2554,49 +3249,132 @@ export default function IntegrationsPage() {
             <div className="bg-gray-50 rounded-lg p-4">
               <p className="text-xs text-text-tertiary mb-2">Required Headers</p>
               <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`Content-Type: application/json
-X-ERP-Token: <your-shared-token>`}</pre>
+X-ERP-Token: <your-shared-token>
+Authorization: Bearer <your-shared-token>  (alternative)`}</pre>
+            </div>
+
+            <p className="text-xs text-text-secondary">
+              Optional: <code className="text-[11px]">erpFieldMapping</code> (built-in fields),{' '}
+              <code className="text-[11px]">erpFieldMappingCustom</code> (custom keys →{' '}
+              <code className="text-[11px]">customData.erp.mappedFields</code> on create-customer), and unmapped keys →{' '}
+              <code className="text-[11px]">customData.erp.extra</code>.
+            </p>
+
+            <div className="grid md:grid-cols-3 gap-3">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
+                <h4 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Canonical Mapping</h4>
+                {Object.keys(canonicalMapping).length === 0 ? (
+                  <p className="text-xs text-text-tertiary">No overrides configured.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {Object.entries(canonicalMapping).map(([section, map]) => (
+                      <div key={`canon-${section}`}>
+                        <p className="text-[11px] font-medium text-text-secondary mb-1">{section}</p>
+                        <div className="space-y-1">
+                          {Object.entries(map || {}).map(([target, erpKey]) => (
+                            <div key={`${section}-${target}`} className="text-[11px] text-text-primary font-mono break-all">
+                              {target} &larr; {String(erpKey)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 space-y-2">
+                <h4 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Custom Rows</h4>
+                {Object.keys(customMapping).length === 0 ? (
+                  <p className="text-xs text-text-tertiary">No custom rows configured.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {Object.entries(customMapping).map(([section, map]) => (
+                      <div key={`custom-${section}`}>
+                        <p className="text-[11px] font-medium text-text-secondary mb-1">{section}</p>
+                        <div className="space-y-1">
+                          {Object.entries(map || {}).map(([target, erpKey]) => (
+                            <div key={`${section}-${target}`} className="text-[11px] text-text-primary font-mono break-all">
+                              {target} &larr; {String(erpKey)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
+                <h4 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Extra Keys</h4>
+                {extraFieldKeys.length === 0 ? (
+                  <p className="text-xs text-text-tertiary">All unmapped top-level keys will be stored in extra.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {extraFieldKeys.map((k) => (
+                      <span key={`extra-${k}`} className="px-2 py-0.5 rounded bg-white border border-gray-200 text-[11px] font-mono">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="space-y-2">
               <h3 className="text-sm font-semibold text-text-primary">1) Create Customer</h3>
               <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/create-customer`}</code>
-              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`{
-  "externalCustomerId": "cust-1001",
-  "firstName": "John",
-  "lastName": "Doe",
-  "email": "john@example.com",
-  "phone": "+971500000000",
-  "company": "Al Zaabi"
-}`}</pre>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{JSON.stringify(createCustomerBody, null, 2)}</pre>
             </div>
 
             <div className="space-y-2">
               <h3 className="text-sm font-semibold text-text-primary">2) Customer Sales</h3>
               <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/customer-sales`}</code>
-              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`{
-  "externalSaleId": "sale-9001",
-  "externalCustomerId": "cust-1001",
-  "amount": 2500.00,
-  "currency": "AED",
-  "status": "PAID",
-  "date": "2026-03-24"
-}`}</pre>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{JSON.stringify(customerSalesBody, null, 2)}</pre>
             </div>
 
             <div className="space-y-2">
               <h3 className="text-sm font-semibold text-text-primary">3) Doctor Availability</h3>
               <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/doctor-availability`}</code>
               <p className="text-xs text-amber-700">This endpoint is accepted only for CORTEX.</p>
-              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{`{
-  "externalAvailabilityId": "av-4455",
-  "doctorId": "doc-202",
-  "date": "2026-03-25",
-  "slots": [
-    { "from": "09:00", "to": "09:30", "available": true },
-    { "from": "09:30", "to": "10:00", "available": false }
-  ]
-}`}</pre>
+              <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{JSON.stringify(doctorAvailabilityBody, null, 2)}</pre>
             </div>
+
+            {customTables
+              .filter((t) => t && typeof t === 'object')
+              .map((table, idx) => {
+                const slug = String(table.slug || '').trim().toLowerCase();
+                if (!slug) return null;
+                const label = String(table.label || slug);
+                const idKeys = Array.isArray(table.externalIdKeys)
+                  ? table.externalIdKeys.filter((k) => typeof k === 'string').map((k) => String(k))
+                  : [];
+                const fm = table.fieldMapping && typeof table.fieldMapping === 'object' && !Array.isArray(table.fieldMapping)
+                  ? (table.fieldMapping as Record<string, string>)
+                  : {};
+                const fmc = table.fieldMappingCustom && typeof table.fieldMappingCustom === 'object' && !Array.isArray(table.fieldMappingCustom)
+                  ? (table.fieldMappingCustom as Record<string, string>)
+                  : {};
+                const body: Record<string, unknown> = {};
+                idKeys.forEach((k, keyIndex) => {
+                  if (keyIndex === 0) body[k] = `${slug}-001`;
+                  else body[k] = `<optional id key>`;
+                });
+                Object.entries({ ...fm, ...fmc }).forEach(([target, erpKey]) => {
+                  if (!erpKey || body[erpKey] !== undefined) return;
+                  body[erpKey] = `<mapped: ${target}>`;
+                });
+                if (Object.keys(body).length === 0) {
+                  body.id = `${slug}-001`;
+                }
+                return (
+                  <div key={`custom-api-${idx}`} className="space-y-2">
+                    <h3 className="text-sm font-semibold text-text-primary">{`Custom: ${label}`}</h3>
+                    <code className="block text-xs bg-gray-50 border border-gray-200 rounded px-3 py-2 break-all">{`${basePath}/${slug}`}</code>
+                    <pre className="text-xs bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto">{JSON.stringify(body, null, 2)}</pre>
+                  </div>
+                );
+              })}
           </div>
         </div>
       </div>
