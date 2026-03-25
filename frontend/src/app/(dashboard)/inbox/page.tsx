@@ -287,8 +287,18 @@ function InboxContent() {
     };
     read();
     window.addEventListener('focus', read);
+    const onChanged = () => read();
+    window.addEventListener('active-division-changed', onChanged as any);
+    document.addEventListener('visibilitychange', read);
     return () => window.removeEventListener('focus', read);
   }, []);
+
+  // When division changes, force-refresh inbox queries so the menu/list reflects the new scope.
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inbox.messagesRoot });
+    queryClient.invalidateQueries({ queryKey: ['inbox', 'stats'] });
+  }, [activeDivisionId, queryClient]);
 
   // Attachments (pending uploads — server attachments come from TanStack Query)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);

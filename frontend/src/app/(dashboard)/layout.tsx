@@ -120,6 +120,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     } else {
       localStorage.removeItem('activeDivisionId');
     }
+    // Notify client pages (e.g. Inbox) that division scope changed.
+    // This helps when Next.js keeps pages mounted across navigations.
+    try {
+      window.dispatchEvent(new CustomEvent('active-division-changed', { detail: { divisionId } }));
+    } catch {
+      // ignore
+    }
     // Reload page data by triggering a navigation refresh
     window.location.reload();
   }, []);
