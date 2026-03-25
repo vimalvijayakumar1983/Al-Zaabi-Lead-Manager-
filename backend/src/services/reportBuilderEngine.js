@@ -147,6 +147,33 @@ const DATASET_DEFINITIONS = {
       { key: 'updatedAt', label: 'Updated At', kind: 'dimension', dataType: 'date' },
     ],
   },
+  campaign_assignments: {
+    key: 'campaign_assignments',
+    label: 'Campaign Offer Assignments',
+    defaultSortField: 'assignedAt',
+    fields: [
+      { key: 'id', label: 'Assignment ID', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Lifecycle Status', kind: 'dimension', dataType: 'string' },
+      { key: 'source', label: 'Assignment Source', kind: 'dimension', dataType: 'string' },
+      { key: 'notes', label: 'Notes', kind: 'dimension', dataType: 'string' },
+      { key: 'assignedAt', label: 'Assigned At', kind: 'dimension', dataType: 'date' },
+      { key: 'expiresAt', label: 'Expires At', kind: 'dimension', dataType: 'date' },
+      { key: 'discussedAt', label: 'Discussed At', kind: 'dimension', dataType: 'date' },
+      { key: 'redeemedAt', label: 'Redeemed At', kind: 'dimension', dataType: 'date' },
+      { key: 'lead.id', label: 'Lead ID', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.fullName', label: 'Lead Name', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.status', label: 'Lead Status', kind: 'dimension', dataType: 'string' },
+      { key: 'lead.source', label: 'Lead Source', kind: 'dimension', dataType: 'string' },
+      { key: 'campaign.id', label: 'Campaign ID', kind: 'dimension', dataType: 'string' },
+      { key: 'campaign.name', label: 'Campaign Name', kind: 'dimension', dataType: 'string' },
+      { key: 'campaign.type', label: 'Campaign Type', kind: 'dimension', dataType: 'string' },
+      { key: 'campaign.status', label: 'Campaign Status', kind: 'dimension', dataType: 'string' },
+      { key: 'campaignCode', label: 'Campaign Code', kind: 'dimension', dataType: 'string' },
+      { key: 'assignedBy.fullName', label: 'Assigned By', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+      { key: 'updatedAt', label: 'Updated At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
   lead_activities: {
     key: 'lead_activities',
     label: 'Lead Activities',
@@ -299,9 +326,11 @@ function getFieldValue(row, fieldKey, dataset) {
   if (fieldKey === 'user.fullName') return getPersonFullName(row.user);
   if (fieldKey === 'owner.fullName') return getPersonFullName(row.owner);
   if (fieldKey === 'contact.fullName') return getPersonFullName(row.contact);
+  if (fieldKey === 'assignedBy.fullName') return getPersonFullName(row.assignedBy);
   if (fieldKey === 'callOutcomeReason') return getCallReason(row.metadata);
   if (fieldKey === 'callOutcomeKey') return row?.metadata?.dispositionKey || null;
   if (fieldKey === 'insideOutsideCenter') return getInsideOutsideCenter(row.metadata);
+  if (fieldKey === 'campaignCode') return row?.campaign?.metadata?.campaignCode || null;
 
   if (dataset === 'tasks' && fieldKey === 'lead.status') {
     return row?.lead?.status || null;
@@ -720,6 +749,12 @@ function buildWhereForDataset(dataset, req, divisionId) {
       organizationId: scopedOrg,
     };
   }
+  if (dataset === 'campaign_assignments') {
+    return {
+      organizationId: scopedOrg,
+      ...(req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : {}),
+    };
+  }
   return {
     organizationId: scopedOrg,
     isArchived: false,
@@ -738,6 +773,10 @@ function applyDateWhere(baseWhere, config, dataset) {
       || f.field === 'lastContactedAt'
       || f.field === 'startDate'
       || f.field === 'endDate'
+      || f.field === 'assignedAt'
+      || f.field === 'expiresAt'
+      || f.field === 'discussedAt'
+      || f.field === 'redeemedAt'
     ));
   if (dateFilters.length === 0) return where;
 
@@ -749,6 +788,10 @@ function applyDateWhere(baseWhere, config, dataset) {
     if (filter.field === 'lastContactedAt') targetField = 'lastContactedAt';
     if (filter.field === 'startDate') targetField = 'startDate';
     if (filter.field === 'endDate') targetField = 'endDate';
+    if (filter.field === 'assignedAt') targetField = 'assignedAt';
+    if (filter.field === 'expiresAt') targetField = 'expiresAt';
+    if (filter.field === 'discussedAt') targetField = 'discussedAt';
+    if (filter.field === 'redeemedAt') targetField = 'redeemedAt';
   }
 
   const dateWhere = {};
@@ -784,7 +827,7 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
   const limit = Math.min(Math.max(Number(config.rawLimit || 2000), 100), 5000);
   const baseWhere = buildWhereForDataset(dataset, req, divisionId);
   const where = applyDateWhere(baseWhere, config, dataset);
-  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt', 'startDate', 'endDate', 'order'].includes(config?.rawSort?.field)
+  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt', 'startDate', 'endDate', 'order', 'assignedAt', 'expiresAt', 'discussedAt', 'redeemedAt'].includes(config?.rawSort?.field)
     ? config.rawSort.field
     : getDatasetDefinition(dataset).defaultSortField;
   const orderByDirection = String(config?.rawSort?.direction || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
@@ -961,6 +1004,45 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
           },
         },
         user: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+  }
+
+  if (dataset === 'campaign_assignments') {
+    return prisma.leadCampaignAssignment.findMany({
+      where,
+      orderBy,
+      take: limit,
+      select: {
+        id: true,
+        status: true,
+        source: true,
+        notes: true,
+        assignedAt: true,
+        expiresAt: true,
+        discussedAt: true,
+        redeemedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        lead: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            status: true,
+            source: true,
+          },
+        },
+        campaign: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            status: true,
+            metadata: true,
+          },
+        },
+        assignedBy: { select: { id: true, firstName: true, lastName: true } },
       },
     });
   }

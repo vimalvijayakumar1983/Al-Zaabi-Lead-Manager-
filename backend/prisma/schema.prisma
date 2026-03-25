@@ -54,6 +54,8 @@ model Organization {
   customRoles         CustomRole[]
   savedViews          SavedView[]
   reportDefinitions   ReportDefinition[]
+  campaignTemplates   CampaignTemplate[]
+  campaignAssignments LeadCampaignAssignment[]
 
   @@index([parentId])
   @@map("organizations")
@@ -113,6 +115,8 @@ model User {
   createdCustomRoles   CustomRole[]   @relation("CustomRoleCreator")
   createdViews         SavedView[]    @relation("ViewCreator")
   createdReports       ReportDefinition[] @relation("ReportCreator")
+  createdCampaignTemplates CampaignTemplate[] @relation("CampaignTemplateCreator")
+  assignedCampaignOffers   LeadCampaignAssignment[] @relation("CampaignOfferAssigner")
 
   @@index([organizationId])
   @@map("users")
@@ -188,6 +192,7 @@ model Lead {
   tags            LeadTag[]
   attachments     Attachment[]
   convertedContact Contact? @relation("ConvertedContact")
+  campaignAssignments LeadCampaignAssignment[]
 
   @@index([organizationId, status])
   @@index([organizationId, source])
@@ -640,11 +645,86 @@ model Campaign {
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  templateId     String?
+  template       CampaignTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   integrations   Integration[]
+  leadAssignments LeadCampaignAssignment[]
 
   @@index([organizationId])
+  @@index([templateId])
   @@map("campaigns")
+}
+
+model CampaignTemplate {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  config         Json     @default("{}")
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdById    String?
+  createdBy      User? @relation("CampaignTemplateCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  campaigns      Campaign[]
+
+  @@index([organizationId, isActive])
+  @@index([createdById])
+  @@map("campaign_templates")
+}
+
+enum OfferAssignmentStatus {
+  ELIGIBLE
+  CONTACTED
+  ACCEPTED
+  REDEEMED
+  EXPIRED
+  REJECTED
+}
+
+enum OfferAssignmentSource {
+  IMPORT
+  RULE
+  MANUAL
+  API
+}
+
+model LeadCampaignAssignment {
+  id             String   @id @default(uuid())
+  status         OfferAssignmentStatus @default(ELIGIBLE)
+  source         OfferAssignmentSource @default(MANUAL)
+  notes          String?
+  assignedAt     DateTime @default(now())
+  expiresAt      DateTime?
+  discussedAt    DateTime?
+  redeemedAt     DateTime?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  leadId         String
+  lead           Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  campaignId     String
+  campaign       Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  assignedById   String?
+  assignedBy     User? @relation("CampaignOfferAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([leadId, campaignId], map: "lead_campaign_assignment_unique")
+  @@index([organizationId, status])
+  @@index([organizationId, campaignId])
+  @@index([organizationId, leadId])
+  @@index([expiresAt])
+  @@map("lead_campaign_assignments")
 }
 
 enum CampaignType {
