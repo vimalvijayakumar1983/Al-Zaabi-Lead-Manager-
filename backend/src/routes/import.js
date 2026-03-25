@@ -1248,7 +1248,7 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
       return res.status(400).json({ error: 'File is required' });
     }
 
-    const { module = 'leads', fieldMapping: mappingStr, duplicateField } = req.body;
+    const { module = 'leads', fieldMapping: mappingStr, duplicateField, duplicateAction = 'skip' } = req.body;
     const fieldMapping = typeof mappingStr === 'string' ? JSON.parse(mappingStr) : (mappingStr || {});
     const fields = MODULE_FIELDS[module];
 
@@ -1259,6 +1259,8 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
     const rows = await parseFileToRows(req.file);
     const errors = [];
     const warnings = [];
+    const duplicateRows = [];
+    const skippedRows = [];
     let validCount = 0;
     let duplicateCount = 0;
 
@@ -1298,7 +1300,20 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
         });
         if (existing) {
           duplicateCount++;
-          warnings.push({ row: i + 2, type: 'duplicate', message: `Duplicate ${duplicateField}: ${mapped[duplicateField]}` });
+          const duplicateEntry = {
+            row: i + 2,
+            type: 'duplicate',
+            message: `Duplicate ${duplicateField}: ${mapped[duplicateField]}`,
+          };
+          warnings.push(duplicateEntry);
+          duplicateRows.push(duplicateEntry);
+          if (duplicateAction === 'skip') {
+            skippedRows.push({
+              row: i + 2,
+              type: 'will_skip_duplicate',
+              message: `Will be skipped (duplicate by ${duplicateField})`,
+            });
+          }
         }
       }
 
@@ -1310,8 +1325,13 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
       validCount,
       errorCount: errors.length,
       duplicateCount,
+      skippedEstimate: duplicateAction === 'skip' ? duplicateCount : 0,
       errors: errors.slice(0, 50),
       warnings: warnings.slice(0, 50),
+      duplicateRows: duplicateRows.slice(0, 100),
+      skippedRows: skippedRows.slice(0, 100),
+      duplicateActionApplied: duplicateField ? duplicateAction : null,
+      duplicateField: duplicateField || null,
     });
   } catch (err) {
     next(err);

@@ -50,6 +50,9 @@ interface ValidationResult {
   validCount: number;
   errorCount: number;
   duplicateCount: number;
+  estimatedSkippedCount: number;
+  estimatedImportableCount: number;
+  duplicateRows: { row: number; type: string; message: string }[];
   errors: { row: number; type: string; message: string }[];
   warnings: { row: number; type: string; message: string }[];
 }
