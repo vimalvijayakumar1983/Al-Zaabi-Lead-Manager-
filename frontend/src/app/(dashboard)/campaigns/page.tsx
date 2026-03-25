@@ -49,6 +49,8 @@ import {
   Keyboard,
   Check,
   MessageSquare,
+  History,
+  BarChart3,
 } from 'lucide-react';
 import type { Campaign, PaginatedResponse, User, Organization } from '@/types';
 import { api } from '@/lib/api';
@@ -1348,6 +1350,11 @@ function OfferStudioModal({
   const [searchSuggestionsLoading, setSearchSuggestionsLoading] = useState(false);
   const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
   const [assignments, setAssignments] = useState<any[]>([]);
+  const [offerDetailsOpen, setOfferDetailsOpen] = useState(false);
+  const [offerDetailsLead, setOfferDetailsLead] = useState<any | null>(null);
+  const [offerDetailsRows, setOfferDetailsRows] = useState<any[]>([]);
+  const [offerDetailsLoading, setOfferDetailsLoading] = useState(false);
+  const [offerDetailsBusyId, setOfferDetailsBusyId] = useState<string | null>(null);
   const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color?: string }>>([]);
   const [customTagInput, setCustomTagInput] = useState('');
   const [templates, setTemplates] = useState<any[]>([]);
@@ -1437,6 +1444,16 @@ function OfferStudioModal({
     const currentCampaignName = String(campaign?.name || '').trim().toLowerCase();
     if (scopedCampaignName) return scopedCampaignName === currentCampaignName;
     return templateName === currentCampaignName;
+  }
+
+  function openOfferInsightsReport() {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams({
+      dataset: 'campaign_assignments',
+      campaignId: campaign.id,
+      campaignName: campaign.name || '',
+    });
+    window.open(`/report-builder?${params.toString()}`, '_blank');
   }
 
   const loadAssignments = useCallback(async () => {
@@ -1612,6 +1629,51 @@ function OfferStudioModal({
     }
   }
 
+  async function openOfferDetails(lead: any) {
+    if (!lead?.id) return;
+    setOfferDetailsLead(lead);
+    setOfferDetailsOpen(true);
+    setOfferDetailsLoading(true);
+    try {
+      const rows = await api.getLeadCampaignOffers(lead.id);
+      setOfferDetailsRows(Array.isArray(rows) ? rows : []);
+    } catch (err: any) {
+      setOfferDetailsRows([]);
+      addToast('error', err?.message || 'Failed to load lead offers');
+    } finally {
+      setOfferDetailsLoading(false);
+    }
+  }
+
+  async function removeOfferFromLead(assignment: any) {
+    if (!assignment?.id) return;
+    const campaignName = assignment?.campaign?.name || 'this offer';
+    const confirmed = window.confirm(`Remove ${campaignName} from this lead? It will remain in history as removed.`);
+    if (!confirmed) return;
+    setOfferDetailsBusyId(assignment.id);
+    try {
+      const nextNotes = [assignment?.notes, '[Removed from lead in Offer Studio]']
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      await api.updateCampaignAssignment(assignment.id, {
+        status: 'EXPIRED',
+        notes: nextNotes,
+        expiresAt: new Date().toISOString(),
+      });
+      if (offerDetailsLead?.id) {
+        const rows = await api.getLeadCampaignOffers(offerDetailsLead.id);
+        setOfferDetailsRows(Array.isArray(rows) ? rows : []);
+      }
+      await Promise.all([loadAssignments(), loadAnalytics()]);
+      addToast('success', `${campaignName} removed from active offers`);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to remove offer');
+    } finally {
+      setOfferDetailsBusyId(null);
+    }
+  }
+
   function applyTemplate(templateId: string) {
     setSelectedTemplateId(templateId);
     const tpl = templates.find((t) => t.id === templateId);
@@ -1776,6 +1838,20 @@ function OfferStudioModal({
               <p className="text-xs text-text-tertiary">Redeemed</p>
               <p className="text-2xl font-bold text-text-primary">{analytics?.funnel?.redeemed ?? '—'}</p>
             </div>
+          </div>
+          <div className="card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h4 className="font-semibold text-text-primary">Offer Insights Report</h4>
+              <p className="text-sm text-text-secondary">Open a prefiltered campaign-offers report for this offer with enterprise filters and export-ready insights.</p>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary px-4 py-2 text-sm"
+              onClick={openOfferInsightsReport}
+            >
+              <BarChart3 className="w-4 h-4" />
+              Open Offer Insights
+            </button>
           </div>
 
           <div className="card p-4">
@@ -2057,7 +2133,8 @@ function OfferStudioModal({
                       <th className="py-2 pr-3">Status</th>
                       <th className="py-2 pr-3">Calls</th>
                       <th className="py-2 pr-3">Current Offers</th>
-                      <th className="py-2 pr-0">Last Updated</th>
+                      <th className="py-2 pr-3">Last Updated</th>
+                      <th className="py-2 pr-0">Offer Details</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2072,7 +2149,17 @@ function OfferStudioModal({
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row.status || '—'}</td>
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row?._count?.callLogs ?? 0}</td>
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row?._count?.campaignAssignments ?? 0}</td>
-                        <td className="py-2 pr-0 text-sm text-text-secondary">{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString() : '—'}</td>
+                        <td className="py-2 pr-3 text-sm text-text-secondary">{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString() : '—'}</td>
+                        <td className="py-2 pr-0">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs text-text-secondary hover:bg-gray-50"
+                            onClick={() => openOfferDetails(row)}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2118,6 +2205,7 @@ function OfferStudioModal({
                       <th className="py-2 pr-3">Score</th>
                       <th className="py-2 pr-3">Assigned At</th>
                       <th className="py-2 pr-3">Assigned By</th>
+                      <th className="py-2 pr-3">Details</th>
                       <th className="py-2 pr-0 w-[170px]">Lifecycle</th>
                     </tr>
                   </thead>
@@ -2132,6 +2220,21 @@ function OfferStudioModal({
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row.lead?.score ?? '—'}</td>
                         <td className="py-2 pr-3 text-sm text-text-secondary">{new Date(row.assignedAt).toLocaleDateString()}</td>
                         <td className="py-2 pr-3 text-sm text-text-secondary">{row.assignedBy ? `${row.assignedBy.firstName} ${row.assignedBy.lastName}` : 'System'}</td>
+                        <td className="py-2 pr-3">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs text-text-secondary hover:bg-gray-50"
+                            onClick={() => openOfferDetails({
+                              id: row?.lead?.id,
+                              fullName: row.leadName,
+                              firstName: row?.lead?.firstName,
+                              lastName: row?.lead?.lastName,
+                            })}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </button>
+                        </td>
                         <td className="py-2 pr-0 align-middle">
                           <div className="relative w-full max-w-[170px]">
                             <select
@@ -2158,6 +2261,92 @@ function OfferStudioModal({
           </div>
         </div>
       </div>
+      {offerDetailsOpen && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-3 sm:p-6"
+          onClick={() => setOfferDetailsOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <div>
+                <h4 className="text-lg font-bold text-text-primary">
+                  Offers for {offerDetailsLead?.fullName || `${offerDetailsLead?.firstName || ''} ${offerDetailsLead?.lastName || ''}`.trim() || 'Lead'}
+                </h4>
+                <p className="text-sm text-text-secondary">
+                  Current + historical campaign offers for this customer.
+                </p>
+              </div>
+              <button className="p-2 rounded-lg hover:bg-gray-100" onClick={() => setOfferDetailsOpen(false)}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              {offerDetailsLoading ? (
+                <p className="text-sm text-text-secondary">Loading offer history...</p>
+              ) : offerDetailsRows.length === 0 ? (
+                <p className="text-sm text-text-secondary">No offers found for this lead.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[900px]">
+                    <thead>
+                      <tr className="text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary border-b border-gray-100">
+                        <th className="py-2 pr-3">Campaign</th>
+                        <th className="py-2 pr-3">Status</th>
+                        <th className="py-2 pr-3">Source</th>
+                        <th className="py-2 pr-3">Assigned</th>
+                        <th className="py-2 pr-3">Expires</th>
+                        <th className="py-2 pr-3">Assigned By</th>
+                        <th className="py-2 pr-3">Notes</th>
+                        <th className="py-2 pr-0">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {offerDetailsRows.map((row) => {
+                        const isActive = ['ELIGIBLE', 'CONTACTED', 'ACCEPTED'].includes(String(row?.status || ''));
+                        return (
+                          <tr key={row.id} className="border-b border-gray-50">
+                            <td className="py-2 pr-3">
+                              <div className="font-medium text-text-primary">{row?.campaign?.name || '—'}</div>
+                              <div className="text-xs text-text-tertiary">{row?.campaign?.type || '—'}</div>
+                            </td>
+                            <td className="py-2 pr-3 text-sm text-text-secondary">{row?.status || '—'}</td>
+                            <td className="py-2 pr-3 text-sm text-text-secondary">{row?.source || '—'}</td>
+                            <td className="py-2 pr-3 text-sm text-text-secondary">{row?.assignedAt ? new Date(row.assignedAt).toLocaleDateString() : '—'}</td>
+                            <td className="py-2 pr-3 text-sm text-text-secondary">{row?.expiresAt ? new Date(row.expiresAt).toLocaleDateString() : '—'}</td>
+                            <td className="py-2 pr-3 text-sm text-text-secondary">{row?.assignedBy ? `${row.assignedBy.firstName} ${row.assignedBy.lastName}` : 'System'}</td>
+                            <td className="py-2 pr-3 text-sm text-text-secondary max-w-[240px] truncate">{row?.notes || '—'}</td>
+                            <td className="py-2 pr-0">
+                              {isActive ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                  onClick={() => removeOfferFromLead(row)}
+                                  disabled={offerDetailsBusyId === row.id}
+                                >
+                                  {offerDetailsBusyId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />}
+                                  Remove
+                                </button>
+                              ) : (
+                                <span className="text-xs text-text-tertiary">Historical</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-700">
+                Tip: This history view helps track active offers, removed offers, and lifecycle movement for each customer.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

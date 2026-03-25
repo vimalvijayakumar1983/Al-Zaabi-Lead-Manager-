@@ -169,6 +169,10 @@ class ApiClient {
     return this.request<any>(`/leads/${id}`);
   }
 
+  async getLeadCampaignOffers(leadId: string) {
+    return this.request<any[]>(`/leads/${leadId}/campaign-offers`);
+  }
+
   async generateLeadAISummary(id: string, force = false) {
     return this.request<{
       success: boolean;
