@@ -1,7 +1,8 @@
 const { prisma } = require('../config/database');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
-const { broadcastDataChange } = require('../websocket/server');
+const { enrichCommunicationForClient } = require('../utils/inboxCommunication');
+const { emitCommunicationChange } = require('../utils/inboxRealtimeEmit');
 const {
   digitsOnly,
   canonicalPhoneDigitsForWhatsApp,
@@ -379,7 +380,7 @@ async function processInboundWhatsAppMessage({
     commMetadata.attachments = [attachmentMeta];
   }
 
-  await prisma.communication.create({
+  const communication = await prisma.communication.create({
     data: {
       leadId: lead.id,
       channel: 'WHATSAPP',
@@ -388,6 +389,9 @@ async function processInboundWhatsAppMessage({
       metadata: commMetadata,
       userId: null,
     },
+    include: {
+      user: { select: { id: true, firstName: true, lastName: true } },
+    },
   });
 
   await prisma.lead.update({
@@ -395,7 +399,8 @@ async function processInboundWhatsAppMessage({
     data: { updatedAt: new Date() },
   });
 
-  broadcastDataChange(lead.organizationId, 'communication', 'created', null, { entityId: lead.id }).catch(() => {});
+  const enriched = await enrichCommunicationForClient(communication, lead.id);
+  emitCommunicationChange(lead.organizationId, 'created', null, lead.id, enriched);
 
   await prisma.leadActivity.create({
     data: {

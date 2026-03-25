@@ -393,6 +393,77 @@ async function sendMedia(to, mediaType, mediaId, caption, filename, organization
   return { messageId: messageId || null, ...data };
 }
 
+/**
+ * WABA + token for Graph management calls (message_templates, etc.).
+ */
+async function resolveWabaManagementConfig(organizationId) {
+  const resolved = await resolveSendConfig(organizationId);
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { settings: true },
+  });
+  const settings = typeof org?.settings === 'object' ? org.settings : {};
+  const wabaId = trimStr(settings.whatsappBusinessAccountId);
+  if (!wabaId) {
+    const err = new Error(
+      'WhatsApp Business Account ID (WABA) is not set. Add it in Settings → WhatsApp, then sync templates.'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const token = trimStr(resolved.token);
+  if (!token) {
+    const err = new Error('WhatsApp access token is not configured.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const apiUrl = trimStr(resolved.apiUrl || config.whatsapp?.apiUrl || process.env.WHATSAPP_API_URL || DEFAULT_WHATSAPP_API_URL).replace(/\/$/, '');
+  return { token, apiUrl, wabaId };
+}
+
+function normalizeTemplateLanguage(t) {
+  const lang = t?.language;
+  if (lang && typeof lang === 'object' && lang.code) return String(lang.code);
+  return String(lang || '');
+}
+
+/**
+ * Fetch all message templates for the org WABA from Meta Graph (paginated).
+ */
+async function fetchMessageTemplatesFromMeta(organizationId) {
+  const { token, apiUrl, wabaId } = await resolveWabaManagementConfig(organizationId);
+  const all = [];
+  let url = `${apiUrl}/${encodeURIComponent(wabaId)}/message_templates?fields=id,name,status,language,category,components,rejected_reason&limit=100`;
+
+  while (url) {
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const err = new Error(data.error?.message || `WhatsApp template API error: ${resp.status}`);
+      err.statusCode = resp.status;
+      err.details = data;
+      throw err;
+    }
+    if (Array.isArray(data.data)) {
+      for (const row of data.data) {
+        all.push({
+          waTemplateId: String(row.id),
+          name: String(row.name || ''),
+          language: normalizeTemplateLanguage(row),
+          status: row.status != null ? String(row.status) : null,
+          category: row.category != null ? String(row.category) : null,
+          rejectedReason: row.rejected_reason != null ? String(row.rejected_reason) : null,
+          components: row.components != null ? row.components : null,
+        });
+      }
+    }
+    url = data.paging?.next || null;
+  }
+  return all;
+}
+
 module.exports = {
   sendText,
   sendTemplate,
@@ -400,5 +471,7 @@ module.exports = {
   uploadMedia,
   downloadMedia,
   resolveSendConfig,
+  resolveWabaManagementConfig,
+  fetchMessageTemplatesFromMeta,
   MEDIA_MIME_MAP,
 };

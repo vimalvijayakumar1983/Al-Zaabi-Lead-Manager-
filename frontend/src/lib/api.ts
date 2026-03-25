@@ -58,7 +58,10 @@ class ApiClient {
     const data = await res.json();
 
     if (!res.ok) {
-      const details = data.details?.map((d: any) => `${d.field}: ${d.message}`).join(', ');
+      const details =
+        Array.isArray(data.details)
+          ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
+          : (typeof data.details === 'string' ? data.details : '');
       throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Request failed'));
     }
 
@@ -88,7 +91,11 @@ class ApiClient {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'Upload failed');
+      const details =
+        Array.isArray(data.details)
+          ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
+          : (typeof data.details === 'string' ? data.details : '');
+      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Upload failed'));
     }
     return data;
   }
@@ -954,13 +961,17 @@ class ApiClient {
   }
 
   /** WhatsApp Cloud API credentials — stored per division (SUPER_ADMIN: pass divisionId). */
-  async getWhatsAppSettings(divisionId?: string) {
-    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+  async getWhatsAppSettings(divisionId?: string, revealSecrets?: boolean) {
+    const q = new URLSearchParams();
+    if (divisionId) q.set('divisionId', divisionId);
+    if (revealSecrets) q.set('revealSecrets', 'true');
+    const qs = q.toString() ? `?${q.toString()}` : '';
     return this.request<{
       whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
       whatsappWebhookVerifyToken: string;
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
+      whatsappBusinessAccountId?: string;
     }>(`/settings/whatsapp${qs}`);
   }
 
@@ -969,6 +980,7 @@ class ApiClient {
       whatsappNumbers: Array<{ label?: string; phoneNumberId: string; displayPhone?: string; token?: string }>;
       whatsappWebhookVerifyToken?: string;
       whatsappApiUrl?: string;
+      whatsappBusinessAccountId?: string;
     },
     divisionId?: string,
   ) {
@@ -978,7 +990,44 @@ class ApiClient {
       whatsappWebhookVerifyToken: string;
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
+      whatsappBusinessAccountId?: string;
     }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async listWhatsAppTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      templates: Array<{
+        id: string;
+        waTemplateId: string;
+        name: string;
+        language: string;
+        status: string | null;
+        category: string | null;
+        rejectedReason: string | null;
+        lastSyncedAt: string;
+      }>;
+      lastSyncedAt: string | null;
+    }>(`/whatsapp/templates${qs}`);
+  }
+
+  async syncWhatsAppTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      success: boolean;
+      syncedCount: number;
+      templates: Array<{
+        id: string;
+        waTemplateId: string;
+        name: string;
+        language: string;
+        status: string | null;
+        category: string | null;
+        rejectedReason: string | null;
+        lastSyncedAt: string;
+      }>;
+      lastSyncedAt: string;
+    }>(`/whatsapp/templates/sync${qs}`, { method: 'POST' });
   }
 
   async testWhatsAppSettings(data?: { phoneNumberId?: string }, divisionId?: string) {

@@ -19,6 +19,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/leads': { title: 'Leads', description: 'Manage and track your leads' },
   '/contacts': { title: 'Contacts', description: 'Manage your contacts and relationships' },
   '/inbox': { title: 'Inbox', description: 'Omnichannel messaging hub' },
+  '/whatsapp-templates': { title: 'WhatsApp Templates', description: 'Sync message templates from Meta' },
   '/pipeline': { title: 'Pipeline', description: 'Drag and drop leads between stages' },
   '/tasks': { title: 'Tasks', description: 'Manage follow-ups and activities' },
   '/communication': { title: 'Communication', description: 'WhatsApp, Instagram, and more' },

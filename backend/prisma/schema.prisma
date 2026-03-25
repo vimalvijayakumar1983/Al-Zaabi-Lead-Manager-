@@ -56,6 +56,7 @@ model Organization {
   reportDefinitions   ReportDefinition[]
   campaignTemplates   CampaignTemplate[]
   campaignAssignments LeadCampaignAssignment[]
+  whatsAppMessageTemplates WhatsAppMessageTemplate[]
 
   @@index([parentId])
   @@map("organizations")
@@ -66,6 +67,27 @@ enum Plan {
   STARTER
   PROFESSIONAL
   ENTERPRISE
+}
+
+/// Cached Meta message templates for WhatsApp Business (per division org).
+model WhatsAppMessageTemplate {
+  id             String   @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  waTemplateId   String
+  name           String
+  language       String
+  status         String?
+  category       String?
+  rejectedReason String?
+  components     Json?
+  lastSyncedAt   DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, waTemplateId])
+  @@index([organizationId, name])
+  @@map("whatsapp_message_templates")
 }
 
 // ─── Users & Access Control ──────────────────────────────────────
@@ -817,6 +839,7 @@ model Attachment {
   size      Int
   url       String
   data      String?  @db.Text
+  storageKey String?
   createdAt DateTime @default(now())
 
   leadId    String

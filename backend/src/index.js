@@ -41,6 +41,7 @@ const analyticsRoutes = require('./routes/analytics');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
+const whatsappTemplatesRoutes = require('./routes/whatsappTemplates');
 const importRoutes = require('./routes/import');
 const settingsRoutes = require('./routes/settings');
 const integrationsRoutes = require('./routes/integrations');
@@ -136,6 +137,7 @@ const routeMounts = [
   ['/users', userRoutes],
   ['/webhooks', webhookRoutes],
   ['/whatsapp/webhook', whatsappWebhookRoutes],
+  ['/whatsapp', whatsappTemplatesRoutes],
   ['/import', importRoutes],
   ['/settings', settingsRoutes],
   ['/integrations', integrationsRoutes],
