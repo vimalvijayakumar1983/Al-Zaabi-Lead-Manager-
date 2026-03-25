@@ -1218,6 +1218,7 @@ router.get('/sla/dashboard', async (req, res, next) => {
 // ─── Email Configuration ─────────────────────────────────────
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
+const { resolveSendConfig } = require('../services/whatsappService');
 
 // Helper: resolve target organization for division-scoped settings (email, WhatsApp, etc.)
 // SUPER_ADMIN must pass ?divisionId=<uuid>; ADMIN uses their own org (division)
@@ -1378,6 +1379,10 @@ const whatsAppSaveSchema = z.object({
   whatsappApiUrl: z.string().optional().nullable(),
 });
 
+const whatsAppTestSchema = z.object({
+  phoneNumberId: z.string().optional().nullable(),
+});
+
 router.get('/whatsapp', authorize('ADMIN'), async (req, res, next) => {
   try {
     const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp');
@@ -1412,6 +1417,52 @@ router.put('/whatsapp', authorize('ADMIN'), validate(whatsAppSaveSchema), async 
     });
 
     res.json(sanitizeWhatsAppSettingsForClient(mergedSettings));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/whatsapp/test', authorize('ADMIN'), validate(whatsAppTestSchema), async (req, res, next) => {
+  try {
+    const targetOrgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp');
+    if (!targetOrgId) return;
+
+    const resolved = await resolveSendConfig(targetOrgId);
+    const apiUrl = trimSettingStr(resolved?.apiUrl) || 'https://graph.facebook.com/v22.0';
+    const token = trimSettingStr(resolved?.token);
+    let phoneNumberId = trimSettingStr(req.validated?.phoneNumberId);
+
+    // Fallback to any sendable number in settings if caller didn't specify one.
+    if (!phoneNumberId) {
+      phoneNumberId = trimSettingStr(resolved?.phoneNumberId);
+    }
+
+    if (!token || !phoneNumberId) {
+      return res.status(400).json({
+        success: false,
+        message: 'WhatsApp token and phone number ID are required. Save settings first.',
+      });
+    }
+
+    const url = `${apiUrl.replace(/\/$/, '')}/${phoneNumberId}?fields=display_phone_number,verified_name,id`;
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await resp.json().catch(() => ({}));
+
+    if (!resp.ok) {
+      const message = data?.error?.message || `WhatsApp API error: ${resp.status}`;
+      return res.status(resp.status).json({ success: false, message, details: data });
+    }
+
+    return res.json({
+      success: true,
+      message: 'WhatsApp connection verified successfully',
+      phoneNumberId: data?.id || phoneNumberId,
+      displayPhoneNumber: data?.display_phone_number || null,
+      verifiedName: data?.verified_name || null,
+    });
   } catch (err) {
     next(err);
   }

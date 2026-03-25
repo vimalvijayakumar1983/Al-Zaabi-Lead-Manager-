@@ -229,7 +229,7 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-sm font-medium text-text-primary">Password</label>
                 {!isRegister && (
-                  <Link href="/forgot-password" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
+                  <Link href="/forgot-password" tabIndex={-1} className="text-xs text-brand-600 hover:text-brand-700 font-medium">
                     Forgot password?
                   </Link>
                 )}

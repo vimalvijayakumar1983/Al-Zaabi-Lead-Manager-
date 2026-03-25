@@ -1,10 +1,25 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
+import { queryKeys } from '@/lib/query-keys';
+import { useInboxMessagesQuery } from '@/features/inbox/hooks/useInboxQueries';
+import {
+  useLeadDetailQuery,
+  usePipelineStagesAllQuery,
+  useLeadAssignmentHistoryQuery,
+  useLeadCallLogsQuery,
+  useLeadsCustomFieldsQuery,
+  useLeadsTagsQuery,
+  useLeadsFieldConfigQuery,
+  useLeadsUsersQuery,
+  useLeadsMeQuery,
+  useLeadsInvalidate,
+} from '@/features/leads/hooks/useLeadsQueries';
+import type { Lead, User } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
 import { LogCallModalDynamic } from '../components/log-call-modal';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -55,7 +70,6 @@ const offerLifecycleLabel: Record<string, string> = {
   EXPIRED: 'Expired',
   REJECTED: 'Rejected',
 };
-const activeOfferStatuses = new Set(['ELIGIBLE', 'CONTACTED', 'ACCEPTED']);
 
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
@@ -78,45 +92,103 @@ function sortCommunicationsByDate(comms: { createdAt?: string | Date }[]) {
   );
 }
 
+/** After realtime lead refetches, wait this long with no further events before syncing list + dashboard. */
+const REFRESH_LEAD_LIST_DEBOUNCE_MS = 20_000;
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const dispatchDataChange = useNotificationStore((s) => s.dispatchDataChange);
   const addToast = useNotificationStore((s) => s.addToast);
-  const [lead, setLead] = useState<Lead | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { invalidateListAndDashboard } = useLeadsInvalidate();
+  const leadIdStr = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
+  const leadQuery = useLeadDetailQuery(leadIdStr || undefined);
+  const lead = leadQuery.data ?? null;
+  const pipelineStagesAllQuery = usePipelineStagesAllQuery();
+  const orgId = lead?.organizationId ?? null;
+  const tagsScopeKey = `detail-org-${orgId ?? 'none'}`;
+  const tagsQuery = useLeadsTagsQuery(tagsScopeKey, orgId, { enabled: !!orgId });
+  const customFieldsQuery = useLeadsCustomFieldsQuery(orgId);
+  const fieldConfigQuery = useLeadsFieldConfigQuery(orgId, { enabled: !!orgId });
+  const usersQuery = useLeadsUsersQuery(null);
+  const meQuery = useLeadsMeQuery();
+  const assignmentHistoryQuery = useLeadAssignmentHistoryQuery(lead?.id);
+
+  const availableTags = useMemo(() => {
+    const rows = tagsQuery.data;
+    return Array.isArray(rows) ? rows : [];
+  }, [tagsQuery.data]);
+
+  const customFields = useMemo(
+    () => (Array.isArray(customFieldsQuery.data) ? customFieldsQuery.data : []),
+    [customFieldsQuery.data]
+  );
+
+  const fieldConfig = fieldConfigQuery.data?.builtInFields ? fieldConfigQuery.data : null;
+
+  const fullUsers = useMemo(
+    () => (Array.isArray(usersQuery.data) ? usersQuery.data : []),
+    [usersQuery.data]
+  );
+  const currentUserId = meQuery.data?.id ?? '';
+
+  const assignmentHistory = useMemo(
+    () => (Array.isArray(assignmentHistoryQuery.data) ? assignmentHistoryQuery.data : []),
+    [assignmentHistoryQuery.data]
+  );
+
+  const pipelineStages = useMemo(() => {
+    const leadData = leadQuery.data;
+    const stagesData = pipelineStagesAllQuery.data;
+    if (!leadData || !stagesData) return [];
+    const allStages = (stagesData as { stages?: unknown[] }).stages || (stagesData as unknown[]) || [];
+    const stageOrgId = leadData?.stage?.organizationId || leadData?.organizationId;
+    const matchingStages = stageOrgId
+      ? (allStages as { organizationId?: string }[]).filter((s) => s.organizationId === stageOrgId)
+      : [];
+    if (matchingStages.length > 0) return matchingStages as { id: string; name: string; color: string }[];
+    if (allStages.length > 0) {
+      const firstOrgId = (allStages[0] as { organizationId?: string }).organizationId;
+      return (allStages as { organizationId?: string }[]).filter((s) => s.organizationId === firstOrgId) as {
+        id: string;
+        name: string;
+        color: string;
+      }[];
+    }
+    return [];
+  }, [leadQuery.data, pipelineStagesAllQuery.data]);
+
+  const loading = leadQuery.isPending && !leadQuery.data;
   const [aiSummaryData, setAiSummaryData] = useState<any | null>(null);
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
   const [aiSummaryCopied, setAiSummaryCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
+
+  const callLogsQuery = useLeadCallLogsQuery(leadIdStr || undefined, {
+    enabled: activeTab === 'call_logs' && !!leadIdStr,
+  });
+  const callLogs = Array.isArray(callLogsQuery.data) ? callLogsQuery.data : [];
+  const callLogsLoading = callLogsQuery.isLoading && activeTab === 'call_logs';
+
   const [noteContent, setNoteContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showCommModal, setShowCommModal] = useState(false);
   const [showCallLogModal, setShowCallLogModal] = useState(false);
-  const [callLogs, setCallLogs] = useState<any[]>([]);
-  const [callLogsLoading, setCallLogsLoading] = useState(false);
   const [updatingOfferAssignmentId, setUpdatingOfferAssignmentId] = useState<string | null>(null);
   const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
   const [convertingToContact, setConvertingToContact] = useState(false);
-  const [showOfferHistoryModal, setShowOfferHistoryModal] = useState(false);
-  const [availableTags, setAvailableTags] = useState<Array<{ id: string; name: string; color: string }>>([]);
   const [tagInput, setTagInput] = useState('');
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
-  const [fullUsers, setFullUsers] = useState<User[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
   // Chat state
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [chatLoading, setChatLoading] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
   const [chatChannel, setChatChannel] = useState<string>('WHATSAPP');
   const [chatPlatform, setChatPlatform] = useState<string>('');
@@ -131,15 +203,36 @@ export default function LeadDetailPage() {
   const editInputRef = useRef<HTMLTextAreaElement>(null);
 
   const [unreadCommsCount, setUnreadCommsCount] = useState(0);
-  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
-
-  const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
 
   // ─── Lead Navigation System ────────────────────────────────────────
   type LeadPreview = { id: string; name: string; status: string; company: string; callCount: number };
   type NavData = { leadIds: string[]; leadPreviews: LeadPreview[]; viewName: string; totalInView: number; currentPage: number; pageSize: number; timestamp: number };
   const [navData, setNavData] = useState<NavData | null>(null);
   const [visitedIds, setVisitedIds] = useState<Set<string>>(new Set());
+
+  const inboxMessagesParams = useMemo(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const divisionId = lead?.organizationId || activeDivisionId || undefined;
+    return { limit: 100, ...(divisionId ? { divisionId } : {}) };
+  }, [lead?.organizationId]);
+
+  const chatMessagesLeadId =
+    activeTab === 'communications' && lead?.id && leadIdStr ? leadIdStr : null;
+
+  const messagesQuery = useInboxMessagesQuery(chatMessagesLeadId, inboxMessagesParams, {
+    refetchInterval: chatMessagesLeadId ? 10_000 : false,
+  });
+
+  const chatMessages = useMemo(() => {
+    const raw = messagesQuery.data?.messages;
+    if (messagesQuery.isError && lead?.communications?.length) {
+      return sortCommunicationsByDate(lead.communications);
+    }
+    return Array.isArray(raw) ? raw : [];
+  }, [messagesQuery.data, messagesQuery.isError, lead?.communications]);
+
+  const chatLoading = messagesQuery.isLoading && chatMessages.length === 0;
+  const refetchInboxMessages = messagesQuery.refetch;
 
   // Read navigation data from sessionStorage (set by leads list page)
   useEffect(() => {
@@ -161,6 +254,12 @@ export default function LeadDetailPage() {
     } catch (_) { /* sessionStorage unavailable */ }
   }, [id]);
 
+  useEffect(() => {
+    if (lead?.unreadCommunications != null) {
+      setUnreadCommsCount(lead.unreadCommunications);
+    }
+  }, [lead?.id, lead?.unreadCommunications]);
+
   const currentNavIndex = navData ? navData.leadIds.indexOf(id) : -1;
   const hasPrev = navData !== null && currentNavIndex > 0;
   const hasNext = navData !== null && currentNavIndex >= 0 && currentNavIndex < navData.leadIds.length - 1;
@@ -181,6 +280,8 @@ export default function LeadDetailPage() {
 
   // Keyboard shortcuts ref (actual handler defined after handleSaveAndNext)
   const saveAndNextRef = useRef<(() => void) | null>(null);
+  /** Debounced list/dashboard invalidation after realtime `refreshLead` (bursts coalesce into one sync). */
+  const realtimeListSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getFieldLabel = (key: string, defaultLabel: string): string => {
     if (!fieldConfig) return defaultLabel;
@@ -198,94 +299,62 @@ export default function LeadDetailPage() {
     return '+971' + cleaned;
   };
 
-  useEffect(() => {
-    // Scope custom fields to the lead's division when available
-    const divisionId = lead?.organizationId;
-    api.getCustomFields(divisionId || undefined).then(setCustomFields).catch(() => {});
-  }, [lead?.organizationId]);
+  const fetchLeadDetail = useCallback(async () => {
+    if (!id) return;
+    const data = await queryClient.fetchQuery({
+      queryKey: queryKeys.leads.detail(id as string),
+      queryFn: () => api.getLead(id as string),
+    });
+    setUnreadCommsCount(data?.unreadCommunications || 0);
+  }, [id, queryClient]);
 
-  useEffect(() => {
-    const divisionId = lead?.organizationId;
-    if (!divisionId) return;
-    api.getFieldConfig(divisionId)
-      .then((data: any) => {
-        if (data && data.builtInFields) {
-          setFieldConfig(data);
-        }
-      })
-      .catch(() => {
-        setFieldConfig(null);
-      });
-  }, [lead?.organizationId]);
-
-  useEffect(() => {
-    const divisionId = lead?.organizationId;
-    if (!divisionId) {
-      setAvailableTags([]);
-      return;
-    }
-    api.getTags(divisionId)
-      .then((rows: any) => setAvailableTags(Array.isArray(rows) ? rows : []))
-      .catch(() => setAvailableTags([]));
-  }, [lead?.organizationId]);
-
-
-  // Pipeline stages are now fetched alongside the lead in the initial load
-  // effect below to avoid a visible delay (waterfall). This effect only
-  // re-runs if the stage org changes after the initial load (e.g. after edit).
-  const stageOrgRef = useRef<string | null>(null);
-  useEffect(() => {
-    const stageOrgId = lead?.stage?.organizationId || lead?.organizationId;
-    if (!stageOrgId || stageOrgId === stageOrgRef.current) return;
-    stageOrgRef.current = stageOrgId;
-    // Skip if stages were already loaded by the initial fetch
-    if (pipelineStages.length > 0) return;
-    fetchStagesForOrg(stageOrgId);
-  }, [lead?.stage?.organizationId, lead?.organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchStagesForOrg = useCallback(async (orgId: string) => {
-    try {
-      const data: any = await api.getPipelineStages(orgId);
-      const stages = data.stages || data || [];
-      if (stages.length > 0) {
-        setPipelineStages(stages);
-      } else {
-        // Lead may belong to a GROUP org (no stages). Fetch all stages
-        // across divisions so the stepper still renders.
-        const fallback: any = await api.getPipelineStages();
-        const allStages = fallback.stages || fallback || [];
-        if (allStages.length > 0) {
-          const firstOrgId = allStages[0].organizationId;
-          setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
-        }
-      }
-    } catch {
-      setPipelineStages([]);
-    }
-  }, []);
-
-  // Fetch users for assignment panel
-  useEffect(() => {
-    Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]: [any, any]) => {
-      setFullUsers(Array.isArray(userList) ? userList : []);
-      setCurrentUserId(me?.id || '');
-    }).catch(() => {});
-  }, []);
-
-  // Fetch assignment history
-  useEffect(() => {
-    if (lead?.id) {
-      api.getAssignmentHistory(lead.id)
-        .then((data: any) => setAssignmentHistory(Array.isArray(data) ? data : []))
-        .catch(() => setAssignmentHistory([]));
-    }
-  }, [lead?.id]);
-
+  /** Refetch lead detail + unread; schedule list/dashboard sync after quiet period (realtime / websocket). */
   const refreshLead = useCallback(async () => {
-    const data = await api.getLead(id);
-    setLead(data);
-    setUnreadCommsCount(data.unreadCommunications || 0);
-  }, [id]);
+    await fetchLeadDetail();
+    if (realtimeListSyncTimerRef.current) clearTimeout(realtimeListSyncTimerRef.current);
+    realtimeListSyncTimerRef.current = setTimeout(() => {
+      realtimeListSyncTimerRef.current = null;
+      void invalidateListAndDashboard();
+    }, REFRESH_LEAD_LIST_DEBOUNCE_MS);
+  }, [fetchLeadDetail, invalidateListAndDashboard]);
+
+  /** After user-driven mutations: sync immediately and cancel any pending debounced realtime sync. */
+  const refreshLeadAndSyncLists = useCallback(async () => {
+    if (realtimeListSyncTimerRef.current) {
+      clearTimeout(realtimeListSyncTimerRef.current);
+      realtimeListSyncTimerRef.current = null;
+    }
+    await fetchLeadDetail();
+    await invalidateListAndDashboard();
+  }, [fetchLeadDetail, invalidateListAndDashboard]);
+
+  useEffect(() => {
+    return () => {
+      if (realtimeListSyncTimerRef.current) clearTimeout(realtimeListSyncTimerRef.current);
+    };
+  }, []);
+
+  const invalidateInboxSurfaces = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+    await queryClient.invalidateQueries({ queryKey: ['inbox', 'stats'] });
+  }, [queryClient]);
+
+  const handleOfferLifecycleUpdate = useCallback(async (assignmentId: string, status: string) => {
+    setUpdatingOfferAssignmentId(assignmentId);
+    try {
+      await api.updateCampaignAssignment(assignmentId, {
+        status,
+        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
+        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
+      });
+      await refreshLeadAndSyncLists();
+      addToast({ type: 'success', title: 'Offer Updated', message: `Lifecycle changed to ${offerLifecycleLabel[status] || status}.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Offer Update Failed', message: err?.message || 'Unable to update offer lifecycle.' });
+    } finally {
+      setUpdatingOfferAssignmentId(null);
+    }
+  }, [addToast, refreshLeadAndSyncLists]);
 
   const handleOfferLifecycleUpdate = useCallback(async (assignmentId: string, status: string) => {
     setUpdatingOfferAssignmentId(assignmentId);
@@ -312,46 +381,16 @@ export default function LeadDetailPage() {
       const payload = response?.data || null;
       setAiSummaryData(payload);
       if (payload?.summary) {
-        setLead((prev) => (prev ? { ...prev, aiSummary: payload.summary } : prev));
+        queryClient.setQueryData(queryKeys.leads.detail(id), (prev: Lead | undefined) =>
+          prev ? { ...prev, aiSummary: payload.summary } : prev
+        );
       }
     } catch (err: any) {
       setAiSummaryError(err?.message || 'Failed to generate AI summary');
     } finally {
       setAiSummaryLoading(false);
     }
-  }, [id]);
-
-  useEffect(() => {
-    // Fetch lead + pipeline stages in parallel to avoid the stepper
-    // popping in after the rest of the page has rendered.
-    const loadLead = api.getLead(id);
-    const loadStages = api.getPipelineStages(); // all stages for user's orgs
-
-    Promise.all([loadLead, loadStages])
-      .then(([leadData, stagesData]: [any, any]) => {
-        setLead(leadData);
-        setUnreadCommsCount(leadData?.unreadCommunications || 0);
-
-        const allStages = stagesData?.stages || stagesData || [];
-        // Pick stages matching the lead's division
-        const stageOrgId = leadData?.stage?.organizationId || leadData?.organizationId;
-        const matchingStages = stageOrgId
-          ? allStages.filter((s: any) => s.organizationId === stageOrgId)
-          : [];
-
-        if (matchingStages.length > 0) {
-          setPipelineStages(matchingStages);
-          stageOrgRef.current = stageOrgId;
-        } else if (allStages.length > 0) {
-          // Fallback: use stages from the first division found
-          const firstOrgId = allStages[0].organizationId;
-          setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
-          stageOrgRef.current = firstOrgId;
-        }
-      })
-      .catch((err) => console.error('Failed to load lead:', err))
-      .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, queryClient]);
 
   useEffect(() => {
     loadLeadAISummary(false).catch(() => {});
@@ -362,7 +401,7 @@ export default function LeadDetailPage() {
     if (stage.id === lead.stageId) return;
     try {
       await api.moveLead(lead.id, stage.id, 0);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${stage.name}` });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Stage Update Failed', message: err.message });
@@ -373,7 +412,7 @@ export default function LeadDetailPage() {
     if (!lead || !noteContent.trim()) return;
     await api.addLeadNote(lead.id, noteContent);
     setNoteContent('');
-    await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+    await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
   };
 
   const handleDelete = async () => {
@@ -458,7 +497,7 @@ export default function LeadDetailPage() {
 
       await api.updateLead(lead.id, data);
       setIsEditing(false);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Lead Saved', message: 'Lead details updated successfully' });
       return true;
     } catch (err: any) {
@@ -506,7 +545,7 @@ export default function LeadDetailPage() {
     try {
       await api.createTask({ ...taskData, leadId: lead!.id });
       setShowTaskModal(false);
-      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Task Created', message: 'New task has been created' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Task Creation Failed', message: err.message });
@@ -517,31 +556,22 @@ export default function LeadDetailPage() {
     try {
       await api.logCommunication({ ...commData, leadId: lead!.id });
       setShowCommModal(false);
-      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Communication Logged', message: 'Communication has been recorded' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Log Communication Failed', message: err.message });
     }
   };
 
-  const loadCallLogs = useCallback(async () => {
-    if (!lead?.id) return;
-    setCallLogsLoading(true);
-    try {
-      const logs = await api.getCallLogs(lead.id);
-      setCallLogs(logs);
-    } catch {
-      setCallLogs([]);
-    } finally {
-      setCallLogsLoading(false);
-    }
-  }, [lead?.id]);
-
   const handleLogCall = async (callData: any) => {
     try {
       await api.logCall({ ...callData, leadId: lead!.id });
       setShowCallLogModal(false);
-      await Promise.all([refreshLead(), loadCallLogs(), loadLeadAISummary(true)]);
+      await Promise.all([
+        refreshLeadAndSyncLists(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.leads.callLogs(lead!.id) }),
+        loadLeadAISummary(true),
+      ]);
       addToast({ type: 'success', title: 'Call Logged', message: 'Call log has been recorded' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Log Call Failed', message: err.message });
@@ -552,7 +582,7 @@ export default function LeadDetailPage() {
     try {
       await api.sendEmail({ leadId: lead!.id, ...emailData });
       setShowEmailComposer(false);
-      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Email Sent', message: 'Email has been sent successfully' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Send Email Failed', message: err.message });
@@ -564,7 +594,7 @@ export default function LeadDetailPage() {
     try {
       await api.updateLead(lead.id, { status: 'WON' });
       setShowConvertModal(false);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Lead Converted', message: 'Lead has been marked as Won' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Conversion Failed', message: err.message });
@@ -598,7 +628,7 @@ export default function LeadDetailPage() {
     setTagBusy(true);
     try {
       await api.addLeadTags(lead.id, { tagIds: [tagId] });
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       setTagInput('');
       setTagPickerOpen(false);
       addToast({ type: 'success', title: 'Tag Added', message: 'Tag has been added to this lead.' });
@@ -607,7 +637,7 @@ export default function LeadDetailPage() {
     } finally {
       setTagBusy(false);
     }
-  }, [addToast, lead?.id, refreshLead]);
+  }, [addToast, lead?.id, refreshLeadAndSyncLists]);
 
   const handleCreateAndAddTag = useCallback(async () => {
     const name = tagInput.trim();
@@ -630,8 +660,8 @@ export default function LeadDetailPage() {
       }
 
       await Promise.all([
-        refreshLead(),
-        api.getTags(lead.organizationId).then((rows: any) => setAvailableTags(Array.isArray(rows) ? rows : [])),
+        refreshLeadAndSyncLists(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.leads.tags(tagsScopeKey) }),
       ]);
       setTagInput('');
       setTagPickerOpen(false);
@@ -641,67 +671,31 @@ export default function LeadDetailPage() {
     } finally {
       setTagBusy(false);
     }
-  }, [addToast, lead?.id, lead?.organizationId, refreshLead, tagInput]);
+  }, [addToast, lead?.id, lead?.organizationId, refreshLeadAndSyncLists, tagInput, queryClient, tagsScopeKey]);
 
   const handleRemoveTag = useCallback(async (tagId: string) => {
     if (!lead?.id || !tagId) return;
     setTagBusy(true);
     try {
       await api.removeLeadTag(lead.id, tagId);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Tag Removed', message: 'Tag has been removed from this lead.' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Failed to Remove Tag', message: err?.message || 'Unable to remove tag.' });
     } finally {
       setTagBusy(false);
     }
-  }, [addToast, lead?.id, refreshLead]);
-
-  // Load chat messages when Communications tab is active
-  // The backend auto-marks unread messages as read when fetched
-  const loadChatMessages = useCallback(async (backgroundPoll?: boolean) => {
-    const background = backgroundPoll === true;
-    if (!id) return;
-    if (!background) setChatLoading(true);
-    try {
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const divisionId = lead?.organizationId || activeDivisionId || undefined;
-      const data = await api.getInboxMessages(id, { limit: 100, ...(divisionId ? { divisionId } : {}) });
-      setChatMessages(data.messages || []);
-      // Backend marks messages as read on fetch; reset local unread count
-      setUnreadCommsCount(0);
-    } catch {
-      // Fallback to lead's communications if inbox API fails
-      if (lead?.communications) {
-        setChatMessages(sortCommunicationsByDate(lead.communications));
-      }
-    } finally {
-      if (!background) setChatLoading(false);
-    }
-  }, [id, lead?.organizationId, lead?.communications]);
+  }, [addToast, lead?.id, refreshLeadAndSyncLists]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
-      loadChatMessages();
-      // Also explicitly mark as read and notify other components
       api.markConversationRead(lead.id).then(() => {
         setUnreadCommsCount(0);
-        // Notify any mounted list pages to refresh (e.g. lead list channel counts)
         dispatchDataChange({ entity: 'communication', action: 'updated', entityId: lead.id });
       }).catch((err) => console.error('Failed to mark conversation read:', err));
     }
-    if (activeTab === 'call_logs' && lead?.id) {
-      loadCallLogs();
-    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
-
-  // Poll for new messages when Communications tab is active (background refresh, no loading overlay)
-  useEffect(() => {
-    if (activeTab !== 'communications' || !lead?.id) return;
-    const interval = setInterval(() => loadChatMessages(true), 10000);
-    return () => clearInterval(interval);
-  }, [activeTab, lead?.id, loadChatMessages]);
+  }, [activeTab, lead?.id]);
 
   // Real-time sync: refresh lead data when lead or note changes
   useRealtimeSync(['lead', 'note'], useCallback((event) => {
@@ -714,9 +708,9 @@ export default function LeadDetailPage() {
   // Real-time sync: refresh chat messages when communications change (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
     if (event.entityId && event.entityId !== id) return;
-    loadChatMessages();
+    refetchInboxMessages();
     loadLeadAISummary(true).catch(() => {});
-  }, [id, loadChatMessages, loadLeadAISummary]));
+  }, [id, refetchInboxMessages, loadLeadAISummary]));
 
   // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
   useRealtimeSync(['task'], useCallback(() => {
@@ -748,7 +742,6 @@ export default function LeadDetailPage() {
     const tempId = `temp-${Date.now()}`;
     const platform = chatPlatform || chatChannel;
 
-    // Optimistic: add message instantly
     const optimisticMsg = {
       id: tempId,
       direction: 'OUTBOUND',
@@ -760,7 +753,11 @@ export default function LeadDetailPage() {
       user: { id: currentUserId, firstName: 'You', lastName: '' },
       _optimistic: true,
     };
-    setChatMessages(prev => [...prev, optimisticMsg]);
+    const msgKey = queryKeys.inbox.messages(lead.id, inboxMessagesParams);
+    queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+      ...(old || {}),
+      messages: [...(old?.messages || []), optimisticMsg],
+    }));
     setChatMessage('');
     setSendingChat(true);
 
@@ -771,11 +768,18 @@ export default function LeadDetailPage() {
         body,
         platform: chatPlatform || undefined,
       });
-      // Replace optimistic message with real one
-      setChatMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: platform.toUpperCase() } : m));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).map((m) =>
+          m.id === tempId ? { ...sent, platform: platform.toUpperCase() } : m
+        ),
+      }));
+      void invalidateInboxSurfaces();
     } catch (err: any) {
-      // Remove optimistic message on failure
-      setChatMessages(prev => prev.filter(m => m.id !== tempId));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).filter((m) => m.id !== tempId),
+      }));
       addToast({ type: 'error', title: 'Message Failed', message: err.message });
     } finally {
       setSendingChat(false);
@@ -784,11 +788,18 @@ export default function LeadDetailPage() {
 
   const handleEditMessage = async (messageId: string) => {
     if (!editingBody.trim()) return;
+    const msgKey = queryKeys.inbox.messages(lead!.id, inboxMessagesParams);
     try {
       const updated = await api.editInboxMessage(messageId, editingBody.trim());
-      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).map((m) =>
+          m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m
+        ),
+      }));
       setEditingMsgId(null);
       setEditingBody('');
+      void invalidateInboxSurfaces();
       addToast({ type: 'success', title: 'Message Edited', message: 'Message has been updated' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Edit Failed', message: err.message });
@@ -804,10 +815,17 @@ export default function LeadDetailPage() {
       variant: 'danger',
     });
     if (!confirmed) return;
+    const msgKey = queryKeys.inbox.messages(lead!.id, inboxMessagesParams);
     try {
       await api.deleteInboxMessage(messageId);
-      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).map((m) =>
+          m.id === messageId ? { ...m, isDeleted: true, body: '' } : m
+        ),
+      }));
       setMenuOpenMsgId(null);
+      void invalidateInboxSurfaces();
       addToast({ type: 'success', title: 'Message Deleted', message: 'Message has been deleted' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Delete Failed', message: err.message });
@@ -1028,8 +1046,8 @@ export default function LeadDetailPage() {
                 if (!confirmed) return;
                 try {
                   await api.unblockLead(lead.id);
+                  await refreshLeadAndSyncLists();
                   addToast({ type: 'success', title: 'Lead Unblocked', message: 'Lead has been unblocked' });
-                  window.location.reload();
                 } catch (err: any) {
                   addToast({ type: 'error', title: 'Unblock Failed', message: err.message || 'Failed to unblock lead' });
                 }
@@ -1318,26 +1336,15 @@ export default function LeadDetailPage() {
           <div className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-semibold text-gray-900">Offer Campaigns</h3>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
-                  {activeOfferAssignments.length} active
-                </span>
-                {historicalOfferAssignments.length > 0 && (
-                  <button
-                    type="button"
-                    className="text-xs font-medium text-brand-600 hover:text-brand-700"
-                    onClick={() => setShowOfferHistoryModal(true)}
-                  >
-                    History ({historicalOfferAssignments.length})
-                  </button>
-                )}
-              </div>
+              <span className="text-xs text-gray-500">
+                {(lead.campaignAssignments || []).length} attached
+              </span>
             </div>
-            {activeOfferAssignments.length === 0 ? (
-              <p className="text-sm text-gray-500">No active offers are attached to this lead right now.</p>
+            {(lead.campaignAssignments || []).length === 0 ? (
+              <p className="text-sm text-gray-500">No active offers are attached to this lead yet.</p>
             ) : (
               <div className="space-y-2.5">
-                {activeOfferAssignments.map((assignment) => {
+                {(lead.campaignAssignments || []).map((assignment) => {
                   const status = assignment.status || 'ELIGIBLE';
                   return (
                     <div key={assignment.id} className="rounded-lg border border-gray-200 p-3 bg-white">
@@ -1680,7 +1687,7 @@ export default function LeadDetailPage() {
             currentUserId={currentUserId}
             onReassign={async (leadId: string, assignedToId: string, reason?: string) => {
               await api.reassignLead(leadId, assignedToId, reason);
-              refreshLead();
+              await refreshLeadAndSyncLists();
             }}
             assignmentHistory={assignmentHistory}
           />
@@ -1838,7 +1845,7 @@ export default function LeadDetailPage() {
                         <input
                           type="checkbox"
                           checked={task.status === 'COMPLETED'}
-                          onChange={() => api.completeTask(task.id).then(() => refreshLead())}
+                          onChange={() => api.completeTask(task.id).then(() => refreshLeadAndSyncLists())}
                           className="h-4 w-4 rounded border-gray-300 text-brand-600"
                         />
                         <div className="flex-1 min-w-0">

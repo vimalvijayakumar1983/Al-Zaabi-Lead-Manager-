@@ -20,6 +20,8 @@ interface KanbanViewProps {
   leads: Lead[];
   onStatusChange: (leadId: string, status: string) => Promise<void>;
   customFields?: CustomField[];
+  /** Prefetch lead detail (e.g. TanStack Query) when hovering a card link */
+  onLeadHover?: (leadId: string) => void;
 }
 
 function getDisplayName(lead: { firstName?: string | null; lastName?: string | null }) {
@@ -38,7 +40,7 @@ function getDisplayInitials(lead: { firstName?: string | null; lastName?: string
   return (parts[0]?.[0] || '?').toUpperCase();
 }
 
-export function KanbanView({ leads, onStatusChange, customFields = [] }: KanbanViewProps) {
+export function KanbanView({ leads, onStatusChange, customFields = [], onLeadHover }: KanbanViewProps) {
   const [draggedLead, setDraggedLead] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -136,7 +138,12 @@ export function KanbanView({ leads, onStatusChange, customFields = [] }: KanbanV
                     draggedLead === lead.id ? 'opacity-50 scale-95' : ''
                   }`}
                 >
-                  <Link href={`/leads/${lead.id}`} className="block" onClick={(e) => draggedLead && e.preventDefault()}>
+                  <Link
+                    href={`/leads/${lead.id}`}
+                    className="block"
+                    onMouseEnter={() => onLeadHover?.(lead.id)}
+                    onClick={(e) => draggedLead && e.preventDefault()}
+                  >
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-[10px] font-medium text-white">

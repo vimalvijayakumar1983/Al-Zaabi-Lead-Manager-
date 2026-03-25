@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { queryKeys } from '@/lib/query-keys';
+import { useReportCatalogQuery, useReportDefinitionsQuery } from '@/features/reports/hooks/useReportBuilderQueries';
 import {
   Plus,
   Save,
@@ -220,20 +222,14 @@ function nextMeasureKey(existing: ReportMeasure[]): string {
 }
 
 export default function ReportBuilderPage() {
-  const searchParams = useSearchParams();
-  const prefillAppliedRef = useRef<string | null>(null);
-  const guidedInitRef = useRef<boolean>(false);
-  const skipAutoOpenRef = useRef<boolean>(false);
-  const guidedInitializedRef = useRef<boolean>(false);
+  const queryClient = useQueryClient();
   const [dataset, setDataset] = useState<Dataset>('leads');
-  const [catalog, setCatalog] = useState<CatalogField[]>([]);
-  const [definitions, setDefinitions] = useState<ReportDefinition[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const [name, setName] = useState<string>('New Report');
   const [description, setDescription] = useState<string>('');
   const [config, setConfig] = useState<ReportConfig>(EMPTY_CONFIG);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [previewRunning, setPreviewRunning] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [divisionId, setDivisionId] = useState<string | undefined>(undefined);
   const [guidedMode, setGuidedMode] = useState<boolean>(true);
@@ -253,35 +249,11 @@ export default function ReportBuilderPage() {
     setDivisionId(activeDivisionId);
   }, []);
 
-  useEffect(() => {
-    if (prefillDataset !== 'campaign_assignments') return;
-    if (dataset !== 'campaign_assignments') {
-      setDataset('campaign_assignments');
-    }
-  }, [prefillDataset, dataset]);
-
-  const loadCatalog = useCallback(async (targetDataset: Dataset, targetDivisionId?: string) => {
-    const result = await api.getReportCatalog(targetDataset, targetDivisionId);
-    setCatalog((result?.fields || []) as CatalogField[]);
-  }, []);
-
-  const loadDefinitions = useCallback(async (targetDataset: Dataset, targetDivisionId?: string) => {
-    const rows = await api.getReportDefinitions({ dataset: targetDataset, divisionId: targetDivisionId });
-    setDefinitions(rows as ReportDefinition[]);
-  }, []);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        setLoading(true);
-        await Promise.all([loadCatalog(dataset, divisionId), loadDefinitions(dataset, divisionId)]);
-      } catch (err: unknown) {
-        toast.error((err as Error)?.message || 'Failed to load report builder');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [dataset, divisionId, loadCatalog, loadDefinitions]);
+  const catalogQuery = useReportCatalogQuery(dataset, divisionId);
+  const definitionsQuery = useReportDefinitionsQuery(dataset, divisionId);
+  const catalog = (catalogQuery.data?.fields || []) as CatalogField[];
+  const definitions = (definitionsQuery.data || []) as ReportDefinition[];
+  const bootstrapLoading = catalogQuery.isPending || definitionsQuery.isPending;
 
   const dimensionFields = useMemo(
     () => catalog.filter((f) => f.kind === 'dimension' || f.dataType !== 'number'),
@@ -393,7 +365,7 @@ export default function ReportBuilderPage() {
 
   const runPreview = useCallback(async () => {
     try {
-      setLoading(true);
+      setPreviewRunning(true);
       const result = await api.previewReport({
         dataset,
         divisionId,
@@ -404,7 +376,7 @@ export default function ReportBuilderPage() {
     } catch (err: unknown) {
       toast.error((err as Error)?.message || 'Preview failed');
     } finally {
-      setLoading(false);
+      setPreviewRunning(false);
     }
   }, [config, dataset, divisionId]);
 
@@ -426,13 +398,13 @@ export default function ReportBuilderPage() {
         setSelectedReportId((created as ReportDefinition).id);
         toast.success('Report saved');
       }
-      await loadDefinitions(dataset, divisionId);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.reports.definitions(dataset, divisionId) });
     } catch (err: unknown) {
       toast.error((err as Error)?.message || 'Save failed');
     } finally {
       setSaving(false);
     }
-  }, [config, dataset, description, divisionId, loadDefinitions, name, selectedReportId]);
+  }, [config, dataset, description, divisionId, name, queryClient, selectedReportId]);
 
   const deleteDefinition = useCallback(async () => {
     if (!selectedReportId) return;
@@ -440,12 +412,12 @@ export default function ReportBuilderPage() {
     try {
       await api.deleteReportDefinition(selectedReportId);
       toast.success('Report deleted');
-      await loadDefinitions(dataset, divisionId);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.reports.definitions(dataset, divisionId) });
       openNew();
     } catch (err: unknown) {
       toast.error((err as Error)?.message || 'Delete failed');
     }
-  }, [dataset, divisionId, loadDefinitions, openNew, selectedReportId]);
+  }, [dataset, divisionId, openNew, queryClient, selectedReportId]);
 
   const toggleDimension = useCallback((fieldKey: string) => {
     setConfig((prev) => {
@@ -798,12 +770,10 @@ export default function ReportBuilderPage() {
               <Plus className="h-4 w-4 mr-1" />
               New
             </button>
-            {!guidedMode && (
-              <button className="btn-secondary" onClick={runPreview} disabled={loading}>
-                <Play className="h-4 w-4 mr-1" />
-                Run Preview
-              </button>
-            )}
+            <button className="btn-secondary" onClick={runPreview} disabled={bootstrapLoading || previewRunning}>
+              <Play className="h-4 w-4 mr-1" />
+              Run Preview
+            </button>
             <button className="btn-primary" onClick={saveDefinition} disabled={saving}>
               <Save className="h-4 w-4 mr-1" />
               {selectedReportId ? 'Update' : 'Save'}
@@ -831,7 +801,14 @@ export default function ReportBuilderPage() {
             </select>
             <div className="mt-3 flex items-center justify-between">
               <p className="text-xs font-semibold text-text-primary">Saved Reports</p>
-              <button className="btn-icon h-7 w-7" onClick={() => void loadDefinitions(dataset, divisionId)}>
+              <button
+                type="button"
+                className="btn-icon h-7 w-7"
+                onClick={() => {
+                  void catalogQuery.refetch();
+                  void definitionsQuery.refetch();
+                }}
+              >
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -1297,47 +1274,10 @@ export default function ReportBuilderPage() {
                 <p className="text-2xs text-text-tertiary">
                   Use formulas with placeholders, e.g. <code>{'{m_1} / {m_2} * 100'}</code>.
                 </p>
-                <div className="space-y-2">
-                  {config.calculatedFields.map((calc, idx) => (
-                    <div key={`calc-${idx}`} className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
-                      <div>
-                        <label className="text-2xs text-text-tertiary">Key</label>
-                        <input className="input mt-1" value={calc.key} onChange={(e) => updateCalculatedField(idx, { key: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="text-2xs text-text-tertiary">Label</label>
-                        <input className="input mt-1" value={calc.label || ''} onChange={(e) => updateCalculatedField(idx, { label: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="text-2xs text-text-tertiary">Scope</label>
-                        <select className="input mt-1" value={calc.scope || 'aggregate'} onChange={(e) => updateCalculatedField(idx, { scope: e.target.value as 'row' | 'aggregate' })}>
-                          <option value="aggregate">Aggregate</option>
-                          <option value="row">Row</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-2xs text-text-tertiary">Formula</label>
-                        <input className="input mt-1" value={calc.formula} onChange={(e) => updateCalculatedField(idx, { formula: e.target.value })} />
-                      </div>
-                      <button className="btn-secondary text-red-600" onClick={() => removeCalculatedField(idx)}>Remove</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="card p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm font-semibold text-text-primary">Preview</p>
-                  {preview && (
-                    <p className="text-2xs text-text-tertiary">
-                      {preview.meta.returnedRows}/{preview.meta.totalRows} rows • source {preview.meta.rawRows} • filtered {preview.meta.filteredRows}
-                    </p>
-                  )}
-                </div>
-                {loading ? <p className="text-sm text-text-tertiary">Loading preview…</p> : renderPreview}
-              </div>
-            </>
-          )}
+              )}
+            </div>
+            {previewRunning ? <p className="text-sm text-text-tertiary">Loading preview…</p> : renderPreview}
+          </div>
         </div>
       </div>
     </div>

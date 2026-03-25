@@ -1,7 +1,20 @@
 'use client';
 
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
+import {
+  useInboxAttachmentsQuery,
+  useInboxBootstrapQuery,
+  useInboxConversationsQuery,
+  useInboxMessageMutations,
+  useInboxMessagesQuery,
+  useInboxNotesQuery,
+  useInboxRealtimeInvalidation,
+  useInboxStatsQuery,
+} from '@/features/inbox/hooks/useInboxQueries';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -192,9 +205,36 @@ function getDisplayInitials(first?: string | null, last?: string | null): string
 
 // ─── Main Component ─────────────────────────────────────────────────
 
+function InboxLoadingSkeleton() {
+  return (
+    <div className="flex h-[calc(100vh-7.5rem)] sm:h-[calc(100vh-5rem)] -m-3 sm:-m-4 md:-m-6 bg-white overflow-hidden border border-border rounded-xl animate-pulse">
+      <div className="hidden md:flex flex-col w-80 lg:w-[340px] border-r border-border p-3 gap-3">
+        <div className="h-8 bg-surface-tertiary rounded-lg w-2/3" />
+        <div className="h-9 bg-surface-tertiary rounded-lg" />
+        <div className="space-y-2 mt-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex gap-2">
+              <div className="h-11 w-11 rounded-full bg-surface-tertiary shrink-0" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3 bg-surface-tertiary rounded w-3/4" />
+                <div className="h-2 bg-surface-tertiary rounded w-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col min-w-0 p-4 gap-4">
+        <div className="h-10 bg-surface-tertiary rounded-lg w-1/2" />
+        <div className="flex-1 rounded-xl bg-surface-tertiary/60 min-h-[200px]" />
+        <div className="h-12 bg-surface-tertiary rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
 export default function InboxPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>}>
+    <Suspense fallback={<InboxLoadingSkeleton />}>
       <InboxContent />
     </Suspense>
   );
@@ -204,16 +244,9 @@ function InboxContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuthStore();
+  const queryClient = useQueryClient();
 
-  // State
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [leadInfo, setLeadInfo] = useState<LeadInfo | null>(null);
-  const [stats, setStats] = useState<any>(null);
-  const [notes, setNotes] = useState<any[]>([]);
-  const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([]);
-
   const [channelFilter, setChannelFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -222,27 +255,12 @@ function InboxContent() {
   const [sendChannel, setSendChannel] = useState('WHATSAPP');
   const [showChannelPicker, setShowChannelPicker] = useState(false);
 
-  const [loadingConversations, setLoadingConversations] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
   // Right panel tabs: info | notes | canned | attachments
   const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
-  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
 
-  // Fetch custom status labels
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
-      .catch(() => {});
-  }, []);
-
-  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -251,9 +269,8 @@ function InboxContent() {
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
   const [inboxSortBy, setInboxSortBy] = useState<'latest' | 'oldest' | 'unread' | 'name'>('latest');
 
-  // Attachments
+  // Attachments (pending uploads — server attachments come from TanStack Query)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -261,8 +278,6 @@ function InboxContent() {
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Pipeline stages for stage editing
-  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
   const [showStageDropdown, setShowStageDropdown] = useState(false);
   const [updatingStage, setUpdatingStage] = useState(false);
 
@@ -285,72 +300,68 @@ function InboxContent() {
     return () => clearTimeout(searchTimeout.current);
   }, [searchQuery]);
 
-  // ─── Load conversations ───────────────────────────────────────────
-  const loadConversations = useCallback(async () => {
-    try {
-      setLoadingConversations(true);
-      const params: any = {};
-      if (channelFilter !== 'ALL') params.channel = channelFilter;
-      if (debouncedSearch) params.search = debouncedSearch;
-      if (statusFilter) params.status = statusFilter;
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      if (activeDivisionId) params.divisionId = activeDivisionId;
-
-      const res = await api.getInboxConversations(params);
-      setConversations(res.conversations || []);
-    } catch (err) {
-      console.error('Failed to load conversations:', err);
-    } finally {
-      setLoadingConversations(false);
-    }
+  const conversationQueryParams = useMemo(() => {
+    const params: Record<string, unknown> = {};
+    if (channelFilter !== 'ALL') params.channel = channelFilter;
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (statusFilter) params.status = statusFilter;
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    if (activeDivisionId) params.divisionId = activeDivisionId;
+    return params;
   }, [channelFilter, debouncedSearch, statusFilter]);
 
-  // ─── Load messages for selected lead (background = no full loading, feels real-time) ──────────────────────────────
-  const loadMessages = useCallback(async (leadId: string, options?: { background?: boolean }) => {
-    const background = options?.background === true;
-    try {
-      if (!background) setLoadingMessages(true);
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const res = await api.getInboxMessages(leadId, activeDivisionId ? { divisionId: activeDivisionId } : undefined);
-      setMessages(res.messages || []);
-      setLeadInfo(res.lead || null);
-
-      if (res.messages?.length > 0) {
-        const lastMsg = res.messages[res.messages.length - 1];
-        setSendChannel(lastMsg.channel === 'CHAT' ? lastMsg.platform?.toUpperCase() || 'CHAT' : lastMsg.channel);
-      }
-    } catch (err) {
-      console.error('Failed to load messages:', err);
-    } finally {
-      if (!background) setLoadingMessages(false);
-    }
-  }, []);
-
-  // ─── Load notes ───────────────────────────────────────────────────
-  const loadNotes = useCallback(async (leadId: string) => {
-    try {
-      const res = await api.getInternalNotes(leadId);
-      setNotes(res || []);
-    } catch { setNotes([]); }
-  }, []);
-
-  // ─── Load canned responses ────────────────────────────────────────
-  useEffect(() => {
-    api.getCannedResponses()
-      .then((data: any) => setCannedResponses(data || []))
-      .catch(() => setCannedResponses([]));
-    api.getPipelineStages()
-      .then((data: any) => setPipelineStages(data.stages || data || []))
-      .catch(() => setPipelineStages([]));
-  }, []);
-
-  // ─── Load stats ───────────────────────────────────────────────────
-  useEffect(() => {
+  const messageQueryParams = useMemo(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getInboxStats(activeDivisionId || undefined).then(setStats).catch(() => {});
+    return activeDivisionId ? { divisionId: activeDivisionId } : {};
   }, []);
 
-  useEffect(() => { loadConversations(); }, [loadConversations]);
+  const divisionScope = useMemo(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
+    []
+  );
+
+  const fieldConfigQuery = useLeadsFieldConfigQuery(divisionScope);
+  const statusLabels = (fieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
+  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
+
+  const conversationsQuery = useInboxConversationsQuery(conversationQueryParams as any);
+  const messagesQuery = useInboxMessagesQuery(selectedLeadId, messageQueryParams as any);
+  const notesQuery = useInboxNotesQuery(selectedLeadId);
+  const attachmentsQuery = useInboxAttachmentsQuery(selectedLeadId);
+  const statsQuery = useInboxStatsQuery(divisionScope);
+  const { cannedResponses: cannedQuery, pipelineStages: pipelineQuery } = useInboxBootstrapQuery();
+  const inboxMutations = useInboxMessageMutations(selectedLeadId);
+  const { onCommunicationChanged, onLeadChanged } = useInboxRealtimeInvalidation(selectedLeadId);
+
+  const conversations = (conversationsQuery.data?.conversations || []) as Conversation[];
+  const messages = (messagesQuery.data?.messages || []) as Message[];
+  const leadInfo = (messagesQuery.data?.lead || null) as LeadInfo | null;
+  const notes = (notesQuery.data || []) as any[];
+  const stats = statsQuery.data ?? null;
+  const cannedResponses = (cannedQuery.data || []) as CannedResponse[];
+  const rawPipeline = pipelineQuery.data as any;
+  const pipelineStages = (rawPipeline?.stages ?? (Array.isArray(rawPipeline) ? rawPipeline : [])) as {
+    id: string;
+    name: string;
+    color: string;
+  }[];
+  const leadAttachments = (attachmentsQuery.data || []) as any[];
+
+  const loadingConversations = conversationsQuery.isLoading;
+  const loadingMessages = !!selectedLeadId && messagesQuery.isLoading;
+
+  // Default send channel from the latest loaded server message (skip optimistic rows)
+  useEffect(() => {
+    const list = messagesQuery.data?.messages as Message[] | undefined;
+    if (!list?.length) return;
+    const lastServer = [...list].reverse().find((m) => !m.id?.startsWith('temp-'));
+    if (!lastServer) return;
+    setSendChannel(
+      lastServer.channel === 'CHAT'
+        ? lastServer.platform?.toUpperCase() || 'CHAT'
+        : lastServer.channel
+    );
+  }, [messagesQuery.data?.messages, selectedLeadId]);
 
   // Auto-select lead from URL query param (e.g., /inbox?lead=<id>)
   useEffect(() => {
@@ -378,7 +389,6 @@ function InboxContent() {
     setUpdatingStage(true);
     try {
       const stage = pipelineStages.find(s => s.id === stageId);
-      // Auto-sync status when stage changes
       const updateData: any = { stageId };
       if (stage) {
         const matchedStatus = STAGE_NAME_TO_STATUS[stage.name.toLowerCase()];
@@ -387,33 +397,21 @@ function InboxContent() {
         }
       }
       await api.updateLead(selectedLeadId, updateData);
-      // Reload lead info in background so conversation doesn't flash loading
-      await loadMessages(selectedLeadId, { background: true });
-      loadConversations();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.inbox.messages(selectedLeadId, messageQueryParams as Record<string, unknown>),
+      });
     } catch (err) {
       console.error('Failed to update stage:', err);
     } finally {
       setUpdatingStage(false);
       setShowStageDropdown(false);
     }
-  }, [selectedLeadId, leadInfo, pipelineStages, loadConversations, loadMessages]);
-
-  // ─── Load lead attachments ──────────────────────────────────────────
-  const loadAttachments = useCallback(async (leadId: string) => {
-    try {
-      const res = await api.getLeadAttachments(leadId);
-      setLeadAttachments(res || []);
-    } catch { setLeadAttachments([]); }
-  }, []);
+  }, [selectedLeadId, leadInfo, pipelineStages, queryClient, messageQueryParams]);
 
   useEffect(() => {
-    if (selectedLeadId) {
-      loadMessages(selectedLeadId);
-      loadNotes(selectedLeadId);
-      loadAttachments(selectedLeadId);
-      setAttachedFiles([]);
-    }
-  }, [selectedLeadId, loadMessages, loadNotes, loadAttachments]);
+    if (selectedLeadId) setAttachedFiles([]);
+  }, [selectedLeadId]);
 
   // Auto-scroll within the messages container (not the page)
   useEffect(() => {
@@ -422,41 +420,42 @@ function InboxContent() {
     }
   }, [messages]);
 
-  // Real-time sync: refresh conversations and messages on communication changes (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
-    loadConversations();
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId, { background: true });
-    }
-  }, [loadConversations, loadMessages, selectedLeadId]));
+    onCommunicationChanged(event.entityId);
+  }, [onCommunicationChanged]));
 
-  // Real-time sync: refresh conversations + right panel lead info when leads change (background)
   useRealtimeSync(['lead'], useCallback((event) => {
-    loadConversations();
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId, { background: true });
-    }
-  }, [loadConversations, loadMessages, selectedLeadId]));
+    onLeadChanged(event.entityId);
+  }, [onLeadChanged]));
 
-  // Real-time sync: refresh notes panel when notes change
   useRealtimeSync(['note'], useCallback((event) => {
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadNotes(selectedLeadId);
+    if (event.entityId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inbox.notes(event.entityId) });
     }
-  }, [loadNotes, selectedLeadId]));
+  }, [queryClient]));
 
-  // Real-time sync: refresh lead info when tasks change (background)
   useRealtimeSync(['task'], useCallback(() => {
     if (selectedLeadId) {
-      loadMessages(selectedLeadId, { background: true });
+      queryClient.invalidateQueries({
+        predicate: (q) =>
+          Array.isArray(q.queryKey) &&
+          q.queryKey[0] === 'inbox' &&
+          q.queryKey[1] === 'messages' &&
+          q.queryKey[2] === selectedLeadId,
+      });
     }
-  }, [loadMessages, selectedLeadId]));
+  }, [queryClient, selectedLeadId]));
+
+  const refreshConversationList = useCallback(() => {
+    conversationsQuery.refetch();
+  }, [conversationsQuery]);
 
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
     if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
     const body = messageText.trim();
     const tempId = `temp-${Date.now()}`;
+    const msgKey = queryKeys.inbox.messages(selectedLeadId, messageQueryParams as Record<string, unknown>);
 
     let channel = sendChannel;
     let platform: string | undefined;
@@ -465,7 +464,6 @@ function InboxContent() {
       platform = sendChannel.toLowerCase();
     }
 
-    // Optimistic: add message instantly (only for text-only messages)
     if (attachedFiles.length === 0) {
       const optimisticMsg: Message = {
         id: tempId,
@@ -480,7 +478,10 @@ function InboxContent() {
         user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
         _optimistic: true,
       };
-      setMessages(prev => [...prev, optimisticMsg]);
+      queryClient.setQueryData(msgKey, (old: any) => {
+        if (!old) return { messages: [optimisticMsg], lead: null };
+        return { ...old, messages: [...(old.messages || []), optimisticMsg] };
+      });
     }
 
     setMessageText('');
@@ -488,23 +489,28 @@ function InboxContent() {
 
     try {
       if (attachedFiles.length > 0) {
-        await api.sendInboxMessageWithAttachments({
-          leadId: selectedLeadId, channel, body, platform, files: attachedFiles,
+        await inboxMutations.sendMessageWithAttachments.mutateAsync({
+          leadId: selectedLeadId,
+          channel,
+          body,
+          platform,
+          files: attachedFiles,
         });
         setAttachedFiles([]);
-        // Reload messages in background so conversation doesn't flash loading
-        await loadMessages(selectedLeadId, { background: true });
-        loadAttachments(selectedLeadId);
       } else {
-        const sent = await api.sendInboxMessage({ leadId: selectedLeadId, channel, body, platform });
-        // Replace optimistic message with real one
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: (platform || sendChannel).toUpperCase() } : m));
+        await inboxMutations.sendMessage.mutateAsync({
+          leadId: selectedLeadId,
+          channel,
+          body,
+          platform,
+        });
       }
-      loadConversations();
       inputRef.current?.focus();
     } catch (err: any) {
-      // Remove optimistic message on failure
-      setMessages(prev => prev.filter(m => m.id !== tempId));
+      queryClient.setQueryData(msgKey, (old: any) => ({
+        ...old,
+        messages: (old?.messages || []).filter((m: Message) => m.id !== tempId),
+      }));
       console.error('Failed to send:', err);
     } finally {
       setSending(false);
@@ -515,8 +521,10 @@ function InboxContent() {
   const handleEditMessage = async (messageId: string) => {
     if (!editingBody.trim()) return;
     try {
-      const updated = await api.editInboxMessage(messageId, editingBody.trim());
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      await inboxMutations.editMessage.mutateAsync({
+        messageId,
+        body: editingBody.trim(),
+      });
       setEditingMsgId(null);
       setEditingBody('');
     } catch (err: any) {
@@ -535,8 +543,7 @@ function InboxContent() {
     });
     if (!confirmed) return;
     try {
-      await api.deleteInboxMessage(messageId);
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      await inboxMutations.deleteMessage.mutateAsync(messageId);
       setMenuOpenMsgId(null);
     } catch (err: any) {
       console.error('Failed to delete:', err);
@@ -667,11 +674,13 @@ function InboxContent() {
             channel = 'CHAT';
             platform = sendChannel.toLowerCase();
           }
-          await api.sendInboxMessageWithAttachments({
-            leadId: selectedLeadId, channel, body: '', platform, files: [file],
+          await inboxMutations.sendMessageWithAttachments.mutateAsync({
+            leadId: selectedLeadId,
+            channel,
+            body: '',
+            platform,
+            files: [file],
           });
-          await loadMessages(selectedLeadId, { background: true });
-          loadConversations();
         } catch (err) {
           console.error('Failed to send voice note:', err);
         } finally {
@@ -705,9 +714,8 @@ function InboxContent() {
     if (!noteText.trim() || !selectedLeadId || savingNote) return;
     try {
       setSavingNote(true);
-      await api.addInternalNote(selectedLeadId, noteText.trim());
+      await inboxMutations.addNote.mutateAsync({ leadId: selectedLeadId, body: noteText.trim() });
       setNoteText('');
-      await loadNotes(selectedLeadId);
     } catch (err) {
       console.error('Failed to save note:', err);
     } finally {
@@ -721,8 +729,10 @@ function InboxContent() {
     try {
       await api.updateConversationStatus(selectedLeadId, status);
       setShowStatusDropdown(false);
-      await loadMessages(selectedLeadId, { background: true });
-      loadConversations();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.inbox.messages(selectedLeadId, messageQueryParams as Record<string, unknown>),
+      });
     } catch (err) {
       console.error('Failed to update status:', err);
     }
@@ -743,18 +753,24 @@ function InboxContent() {
     setMobileView('chat');
     setShowConvoActions(null);
 
-    // Find conversation and mark as read if it has unread messages
     const convo = conversations.find(c => c.leadId === leadId);
     if (convo && convo.unreadCount > 0) {
-      // Optimistically clear the unread count in the UI
-      setConversations(prev =>
-        prev.map(c => c.leadId === leadId ? { ...c, unreadCount: 0 } : c)
+      queryClient.setQueryData(
+        queryKeys.inbox.conversations(conversationQueryParams as Record<string, unknown>),
+        (old: any) => {
+          if (!old?.conversations) return old;
+          return {
+            ...old,
+            conversations: old.conversations.map((c: Conversation) =>
+              c.leadId === leadId ? { ...c, unreadCount: 0 } : c
+            ),
+          };
+        }
       );
-      // Mark as read on the server and refresh global notification count
       api.markConversationRead(leadId).catch(() => {});
       fetchUnreadCount();
     }
-  }, [conversations, fetchUnreadCount]);
+  }, [conversations, conversationQueryParams, fetchUnreadCount, queryClient]);
 
   // ─── Toggle pin ───────────────────────────────────────────────────
   const togglePin = (leadId: string) => {
@@ -860,8 +876,8 @@ function InboxContent() {
                 <p className="text-2xs text-text-tertiary">{conversations.length} conversations</p>
               </div>
             </div>
-            <button onClick={() => loadConversations()} className="btn-icon" title="Refresh">
-              <RefreshCw className={`h-4 w-4 ${loadingConversations ? 'animate-spin' : ''}`} />
+            <button onClick={() => refreshConversationList()} className="btn-icon" title="Refresh">
+              <RefreshCw className={`h-4 w-4 ${conversationsQuery.isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
 

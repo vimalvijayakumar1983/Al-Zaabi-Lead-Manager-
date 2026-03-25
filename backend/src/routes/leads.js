@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
+const { logger } = require('../config/logger');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
@@ -1114,7 +1115,7 @@ router.get('/:id', async (req, res, next) => {
       }
     } catch { /* non-critical — breakdown is optional */ }
 
-    res.json({
+    const payload = {
       ...lead,
       score: freshScore,
       conversionProb: freshConversionProb,
@@ -1122,7 +1123,58 @@ router.get('/:id', async (req, res, next) => {
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
       doNotCallByUser,
       scoreBreakdown,
+    };
+    try {
+      res.json(payload);
+    } catch (serializeErr) {
+      logger.error('GET /leads/:id response serialization failed', {
+        leadId: lead.id,
+        message: serializeErr.message,
+      });
+      next(serializeErr);
+    }
+  } catch (err) {
+    logger.error('GET /leads/:id failed', {
+      leadId: req.params?.id,
+      code: err.code,
+      meta: err.meta,
+      message: err.message,
     });
+    next(err);
+  }
+});
+
+// ─── Get Lead Offer Campaign Assignments ─────────────────────────
+router.get('/:id/campaign-offers', async (req, res, next) => {
+  try {
+    const leadWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) leadWhere.assignedToId = req.user.id;
+    const lead = await prisma.lead.findFirst({
+      where: leadWhere,
+      select: { id: true, organizationId: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const assignments = await prisma.leadCampaignAssignment.findMany({
+      where: { leadId: lead.id, organizationId: lead.organizationId },
+      orderBy: [{ status: 'asc' }, { assignedAt: 'desc' }],
+      include: {
+        campaign: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            status: true,
+            startDate: true,
+            endDate: true,
+            metadata: true,
+          },
+        },
+        assignedBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    res.json(assignments);
   } catch (err) {
     next(err);
   }
