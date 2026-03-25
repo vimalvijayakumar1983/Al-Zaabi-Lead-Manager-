@@ -53,6 +53,11 @@ interface ValidationResult {
   validCount: number;
   errorCount: number;
   duplicateCount: number;
+  skippedEstimate?: number;
+  duplicateActionApplied?: string | null;
+  duplicateField?: string | null;
+  skippedRows?: { row: number; type: string; message: string }[];
+  duplicateRows: { row: number; type: string; message: string }[];
   errors: { row: number; type: string; message: string }[];
   warnings: { row: number; type: string; message: string }[];
 }
@@ -283,6 +288,35 @@ function ImportWizard() {
     } finally {
       setValidating(false);
     }
+  };
+
+  const downloadValidationRows = (
+    rows: Array<{ row: number; type: string; message: string }>,
+    filenamePrefix: string,
+  ) => {
+    if (!rows.length) return;
+    const escapeCsv = (value: string | number) => {
+      const str = String(value ?? '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+    const csvLines = [
+      ['row', 'type', 'message'].map(escapeCsv).join(','),
+      ...rows.map((entry) =>
+        [entry.row, entry.type, entry.message].map(escapeCsv).join(',')
+      ),
+    ];
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${filenamePrefix}-${selectedModule}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   };
 
   const handleImport = async () => {
@@ -982,10 +1016,60 @@ function ImportWizard() {
                   <p className="text-2xs text-text-tertiary">Total Rows</p>
                   <p className="text-lg font-bold text-text-primary">{validation.totalRows}</p>
                 </div>
+                <div className={`p-3 rounded-lg ${(validation.skippedEstimate || 0) > 0 ? 'bg-rose-50 ring-1 ring-rose-200' : 'bg-gray-50 ring-1 ring-gray-200'}`}>
+                  <p className={`text-2xs ${(validation.skippedEstimate || 0) > 0 ? 'text-rose-600' : 'text-text-tertiary'}`}>Estimated Skipped</p>
+                  <p className={`text-lg font-bold ${(validation.skippedEstimate || 0) > 0 ? 'text-rose-700' : 'text-text-tertiary'}`}>{validation.skippedEstimate || 0}</p>
+                </div>
               </div>
+
+              {(validation.duplicateRows?.length || 0) > 0 && (
+                <div className="mb-4 p-3 rounded-lg bg-amber-50 ring-1 ring-amber-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800">Duplicate Rows Preview</p>
+                      <p className="text-2xs text-amber-700">
+                        Found {(validation.duplicateRows || []).length} duplicate rows
+                        {validation.duplicateField ? ` by ${validation.duplicateField}` : ''}.
+                        {validation.duplicateActionApplied === 'skip' ? ' These rows will be skipped.' : ''}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => downloadValidationRows(validation.duplicateRows || [], 'duplicate-rows')}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download Duplicates CSV
+                    </button>
+                  </div>
+                  <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+                    {(validation.duplicateRows || []).slice(0, 20).map((dup, i) => (
+                      <div key={i} className="flex items-start gap-2 p-2 rounded bg-amber-100/70 text-2xs text-amber-800">
+                        <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                        <span>Row {dup.row}: {dup.message}</span>
+                      </div>
+                    ))}
+                    {(validation.duplicateRows || []).length > 20 && (
+                      <p className="text-2xs text-amber-700 text-center py-1">
+                        ... and {(validation.duplicateRows || []).length - 20} more duplicates
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {validation.errors.length > 0 && (
                 <div className="space-y-1 max-h-40 overflow-y-auto">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => downloadValidationRows(validation.errors || [], 'validation-errors')}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download Errors CSV
+                    </button>
+                  </div>
                   {validation.errors.slice(0, 20).map((err, i) => (
                     <div key={i} className="flex items-start gap-2 p-2 rounded bg-red-50 text-2xs text-red-700">
                       <XCircle className="h-3 w-3 flex-shrink-0 mt-0.5" />
