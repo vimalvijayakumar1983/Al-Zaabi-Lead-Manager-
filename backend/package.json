@@ -4,7 +4,7 @@
   "description": "Enterprise Lead Management System - Backend API",
   "main": "src/index.js",
   "scripts": {
-    "postinstall": "prisma generate",
+    "postinstall": "npx prisma generate --schema prisma/schema.prisma",
     "start": "node src/index.js",
     "build": "npx prisma generate && npx prisma migrate deploy",
     "dev": "nodemon src/index.js",
@@ -13,6 +13,9 @@
     "prisma:seed": "node prisma/seed.js",
     "test": "jest --coverage",
     "lint": "eslint src/"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1016.0",
