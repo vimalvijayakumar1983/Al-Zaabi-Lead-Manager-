@@ -1,35 +1,17 @@
-FROM node:22-alpine AS base
+# Backend API — copy prisma before npm ci so postinstall can run prisma generate
+FROM node:20-bookworm-slim
+
 WORKDIR /app
 
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+COPY scripts ./scripts
 
-# Install dependencies
-COPY package.json package-lock.json* ./
-RUN npm ci --production=false
+RUN npm ci --omit=dev
 
-# Copy Prisma schema and generate client
-COPY prisma ./prisma/
-RUN npx prisma generate
-
-# Copy application code
-COPY . .
-
-# Production stage
-FROM node:22-alpine
-WORKDIR /app
-
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
-
-COPY --from=base /app/node_modules ./node_modules
-COPY --from=base /app/prisma ./prisma
-COPY --from=base /app/src ./src
-COPY --from=base /app/package.json ./
+COPY src ./src
 
 ENV NODE_ENV=production
 EXPOSE 4000
 
-# Run migrations and start server
-# Resolve any previously failed migrations before deploying
-CMD ["sh", "-c", "npx prisma migrate resolve --rolled-back 20260313000000_add_notifications_integrations_apikeys 2>/dev/null; npx prisma migrate resolve --rolled-back 20260318200000_add_sla_tracking 2>/dev/null; npx prisma migrate deploy && node prisma/seed.js; node src/index.js"]
+CMD ["node", "src/index.js"]
