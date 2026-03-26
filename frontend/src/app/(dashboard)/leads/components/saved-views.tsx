@@ -16,10 +16,14 @@ export interface SavedView {
     maxScore?: number | string;
     dateFrom?: string;
     dateTo?: string;
+    updatedFrom?: string;
+    updatedTo?: string;
     tags?: string;
     stageId?: string;
     divisionId?: string;
     callOutcome?: string;
+    lastCallFrom?: string;
+    lastCallTo?: string;
     showBlocked?: string;
     budgetMin?: number | string;
     budgetMax?: number | string;

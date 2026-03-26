@@ -122,4 +122,16 @@ const orgScope = async (req, _res, next) => {
   next();
 };
 
-module.exports = { authenticate, authorize, orgScope };
+/**
+ * When the client passes ?divisionId=… (sidebar selection), return that id only if
+ * the user may access it (in req.orgIds). Otherwise null → caller uses full req.orgIds scope.
+ */
+function resolveDivisionScope(req, divisionId) {
+  let v = divisionId;
+  if (Array.isArray(v)) v = v[0];
+  const raw = typeof v === 'string' ? v.trim() : '';
+  if (!raw || !Array.isArray(req.orgIds) || req.orgIds.length === 0) return null;
+  return req.orgIds.includes(raw) ? raw : null;
+}
+
+module.exports = { authenticate, authorize, orgScope, resolveDivisionScope };

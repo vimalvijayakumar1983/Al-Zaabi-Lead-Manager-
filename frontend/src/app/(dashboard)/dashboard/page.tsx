@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import type { Organization } from '@/types';
 import Link from 'next/link';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -21,10 +21,12 @@ import {
   Timer, FileText, Phone, PhoneCall, Mail, Eye, Shield,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
+import type { Organization } from '@/types';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
-type Period = '7d' | '30d' | '90d' | '180d' | '365d';
+type Period = '7d' | '30d' | '90d' | '180d' | '365d' | 'custom';
 
 interface DivisionStats {
   divisionId: string;
@@ -37,8 +39,11 @@ interface DivisionStats {
 }
 
 interface DashboardFullData {
+  /** Calendar span for the selected preset or custom range (trend chart padding). */
+  periodDays?: number;
   kpis: {
     totalLeads: number;
+    totalLeadsChange: number;
     newLeads: number;
     newLeadsChange: number;
     wonLeads: number;
@@ -82,7 +87,14 @@ const PERIODS: { value: Period; label: string; days: number }[] = [
   { value: '90d', label: 'Last 90 days', days: 90 },
   { value: '180d', label: 'Last 6 months', days: 180 },
   { value: '365d', label: 'Last year', days: 365 },
+  { value: 'custom', label: 'Custom Range', days: 30 },
 ];
+
+interface TeamFilterUser {
+  id: string;
+  firstName?: string | null;
+  lastName?: string | null;
+}
 
 const statusColors: Record<string, { bg: string; text: string; ring: string; dot: string }> = {
   NEW: { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-600/10', dot: 'bg-indigo-500' },
@@ -107,12 +119,6 @@ const SOURCE_CHART_COLORS = [
   '#64748b', '#84cc16', '#a855f7', '#e11d48',
 ];
 
-const divisionColors = [
-  'bg-blue-100 text-blue-700', 'bg-purple-100 text-purple-700',
-  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
-  'bg-pink-100 text-pink-700', 'bg-cyan-100 text-cyan-700',
-];
-
 const activityIcons: Record<string, typeof Activity> = {
   STATUS_CHANGE: TrendingUp, STAGE_CHANGE: ArrowRight, NOTE_ADDED: FileText,
   EMAIL_SENT: Mail, CALL_MADE: Phone, LEAD_CREATED: UserPlus,
@@ -135,6 +141,13 @@ const TASK_PRIORITY_DOT: Record<string, { dot: string }> = {
   MEDIUM: { dot: 'bg-blue-500' },
   LOW: { dot: 'bg-gray-400' },
 };
+
+const divisionColors = [
+  'bg-brand-100 text-brand-700', 'bg-indigo-100 text-indigo-700',
+  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
+  'bg-cyan-100 text-cyan-700', 'bg-purple-100 text-purple-700',
+  'bg-red-100 text-red-700', 'bg-blue-100 text-blue-700',
+];
 
 // ─── Utility ────────────────────────────────────────────────────────
 
@@ -288,6 +301,12 @@ export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState<Period>('30d');
+  const [activeDivisionId, setActiveDivisionId] = useState<string | undefined>(undefined);
+  const [teamMembers, setTeamMembers] = useState<TeamFilterUser[]>([]);
+  const [teamMemberFilter, setTeamMemberFilter] = useState<string>('all');
+  const [customFrom, setCustomFrom] = useState<string>('');
+  const [customTo, setCustomTo] = useState<string>('');
+  const [customApplied, setCustomApplied] = useState<boolean>(false);
   const [divisionFilter, setDivisionFilter] = useState<string>('all');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -330,7 +349,7 @@ export default function DashboardPage() {
         if (cfg.statusLabels) setStatusLabels(cfg.statusLabels);
       })
       .catch(() => {});
-  }, []);
+  }, [activeDivisionId]);
 
   // Debounced real-time refresh — avoids hammering /dashboard-full on websocket bursts
   useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
@@ -345,13 +364,17 @@ export default function DashboardPage() {
     if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
   }, []);
 
-  const periodDays = PERIODS.find((p) => p.value === period)?.days || 30;
+  const periodDaysFromPreset = PERIODS.find((p) => p.value === period)?.days || 30;
+  const canApplyCustomRange = period === 'custom' && !!customFrom && !!customTo;
 
   // Computed data
   const trendData = useMemo(() => {
     if (!data?.trends) return [];
-    return fillDates(data.trends, periodDays);
-  }, [data?.trends, periodDays]);
+    const span = typeof data.periodDays === 'number' && data.periodDays > 0
+      ? data.periodDays
+      : periodDaysFromPreset;
+    return fillDates(data.trends, span);
+  }, [data?.trends, data?.periodDays, periodDaysFromPreset]);
 
   const sourceChartData = useMemo(() => {
     if (!data?.leadsBySource) return [];
@@ -393,7 +416,7 @@ export default function DashboardPage() {
       change: number | null;
     }>;
     return [
-      { label: 'Total Leads', value: fmt(kpis.totalLeads), icon: Users, color: 'brand', change: null as number | null },
+      { label: 'Leads added', value: fmt(kpis.totalLeads), icon: Users, color: 'brand', change: kpis.totalLeadsChange ?? (null as number | null) },
       { label: `${getStatusLabel('NEW')} Leads`, value: fmt(kpis.newLeads), icon: UserPlus, color: 'indigo', change: kpis.newLeadsChange },
       { label: `${getStatusLabel('WON')} Deals`, value: fmt(kpis.wonLeads), icon: Trophy, color: 'emerald', change: kpis.wonLeadsChange },
       { label: `${getStatusLabel('LOST')} Deals`, value: fmt(kpis.lostLeads), icon: XCircle, color: 'red', change: kpis.lostLeadsChange },
@@ -442,6 +465,7 @@ export default function DashboardPage() {
   const teamLeaderboard = data.teamLeaderboard || [];
   const recentActivities = data.recentActivities || [];
 
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* ─── Header ─────────────────────────────────────────────────── */}
@@ -452,18 +476,35 @@ export default function DashboardPage() {
           </h1>
           <p className="text-sm text-text-secondary mt-0.5">
             {isSuperAdmin
-              ? 'Group-wide overview across all divisions.'
+              ? 'Division-scoped overview based on sidebar division selection.'
               : "Here's what's happening with your leads today."}
+            {teamMemberFilter !== 'all' && (
+              <span className="ml-1 text-brand-700">
+                Filtered by team member.
+              </span>
+            )}
+            {period === 'custom' && customApplied && (
+              <span className="ml-1 text-brand-700">
+                Custom: {customFrom} to {customTo}.
+              </span>
+            )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {isSuperAdmin && divisions.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {teamMembers.length > 0 && (
             <div className="relative">
-              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-              <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-                value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)}>
-                <option value="all">All Divisions</option>
-                {divisions.map((div) => <option key={div.id} value={div.id}>{div.name}</option>)}
+              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+              <select
+                className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
+                value={teamMemberFilter}
+                onChange={(e) => setTeamMemberFilter(e.target.value)}
+              >
+                <option value="all">All Team Members</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {getDisplayName(member.firstName, member.lastName)}
+                  </option>
+                ))}
               </select>
               <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
             </div>
@@ -471,11 +512,49 @@ export default function DashboardPage() {
           <div className="relative">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
             <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-              value={period} onChange={(e) => setPeriod(e.target.value as Period)}>
+              value={period}
+              onChange={(e) => {
+                const next = e.target.value as Period;
+                setPeriod(next);
+                if (next !== 'custom') setCustomApplied(false);
+              }}
+            >
               {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
           </div>
+          {period === 'custom' && (
+            <>
+              <input
+                type="date"
+                className="input py-2 text-xs w-auto"
+                value={customFrom}
+                onChange={(e) => {
+                  setCustomFrom(e.target.value);
+                  setCustomApplied(false);
+                }}
+              />
+              <input
+                type="date"
+                className="input py-2 text-xs w-auto"
+                value={customTo}
+                onChange={(e) => {
+                  setCustomTo(e.target.value);
+                  setCustomApplied(false);
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary text-xs py-2"
+                disabled={!canApplyCustomRange}
+                onClick={() => {
+                  if (canApplyCustomRange) setCustomApplied(true);
+                }}
+              >
+                Apply
+              </button>
+            </>
+          )}
           <RefreshButton
             onRefresh={async () => {
               await dashboardQuery.refetch();
