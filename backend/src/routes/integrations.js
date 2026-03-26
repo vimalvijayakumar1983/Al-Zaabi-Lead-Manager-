@@ -125,6 +125,7 @@ const erpDataQuerySchema = z.object({
   integrationId: z.string().uuid().optional(),
   divisionId: z.string().uuid().optional(),
   entityType: z.string().optional(),
+  search: z.string().trim().max(200).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(1000).optional().default(300),
 });
@@ -289,11 +290,12 @@ router.get('/api-keys', async (req, res, next) => {
 // IMPORTANT: Must be before /:id to avoid wildcard capture
 router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next) => {
   try {
-    const { integrationId, divisionId, entityType, page, limit } = req.validatedQuery || req.query;
+    const { integrationId, divisionId, entityType, search, page, limit } = req.validatedQuery || req.query;
     const pageNum = Number(page || 1);
     const limitNum = Number(limit || 300);
     const safePageNum = Math.max(1, pageNum);
     const offset = (safePageNum - 1) * limitNum;
+    const searchTerm = String(search || '').trim().toLowerCase();
 
     const scopedIntegrations = await prisma.integration.findMany({
       where: {
@@ -331,38 +333,18 @@ router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next
         integrationId: { in: allowedIntegrationIds },
         ...(entityType ? { entityType } : {}),
       };
-      const [rows, typeRows, totalCount] = await Promise.all([
-        erpExternalRefModel.findMany({
-          where,
-          include: {
-            integration: {
-              select: {
-                id: true,
-                config: true,
-                status: true,
-                organizationId: true,
-                createdAt: true,
-              },
-            },
+      const include = {
+        integration: {
+          select: {
+            id: true,
+            config: true,
+            status: true,
+            organizationId: true,
+            createdAt: true,
           },
-          orderBy: { updatedAt: 'desc' },
-          skip: offset,
-          take: limitNum,
-        }),
-        erpExternalRefModel.findMany({
-          where,
-          select: { entityType: true },
-        }),
-        erpExternalRefModel.count({ where }),
-      ]);
-
-      total = totalCount;
-      countsByEntity = typeRows.reduce((acc, row) => {
-        acc[row.entityType] = (acc[row.entityType] || 0) + 1;
-        return acc;
-      }, {});
-
-      data = rows.map((row) => ({
+        },
+      };
+      const mapRow = (row) => ({
         id: row.id,
         integrationId: row.integrationId,
         provider: String(row.integration?.config?.erpProvider || '').toLowerCase() || null,
@@ -373,7 +355,58 @@ router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next
         payload: row.externalPayload || {},
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
-      }));
+      });
+      const matchesSearch = (row) => {
+        if (!searchTerm) return true;
+        const haystack = [
+          String(row.entityType || ''),
+          String(row.externalId || ''),
+          String(row.crmEntityId || ''),
+          String(row.integration?.config?.erpProvider || ''),
+          String(row.integration?.config?.divisionId || ''),
+          JSON.stringify(row.externalPayload || {}),
+        ]
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(searchTerm);
+      };
+
+      if (!searchTerm) {
+        const [rows, typeRows, totalCount] = await Promise.all([
+          erpExternalRefModel.findMany({
+            where,
+            include,
+            orderBy: { updatedAt: 'desc' },
+            skip: offset,
+            take: limitNum,
+          }),
+          erpExternalRefModel.findMany({
+            where,
+            select: { entityType: true },
+          }),
+          erpExternalRefModel.count({ where }),
+        ]);
+
+        total = totalCount;
+        countsByEntity = typeRows.reduce((acc, row) => {
+          acc[row.entityType] = (acc[row.entityType] || 0) + 1;
+          return acc;
+        }, {});
+        data = rows.map(mapRow);
+      } else {
+        const allRows = await erpExternalRefModel.findMany({
+          where,
+          include,
+          orderBy: { updatedAt: 'desc' },
+        });
+        const filtered = allRows.filter(matchesSearch);
+        total = filtered.length;
+        countsByEntity = filtered.reduce((acc, row) => {
+          acc[row.entityType] = (acc[row.entityType] || 0) + 1;
+          return acc;
+        }, {});
+        data = filtered.slice(offset, offset + limitNum).map(mapRow);
+      }
     } else {
       // Fallback for deployments without ERP foundation models in Prisma schema:
       // derive ERP data from integration logs payloads.
@@ -395,21 +428,40 @@ router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next
         OR: [{ action: { in: Object.keys(actionToEntity) } }, { action: { startsWith: 'erp_custom_' } }],
         ...(requestedAction ? { action: requestedAction } : {}),
       };
-      const [logs, countLogs] = await Promise.all([
-        prisma.integrationLog.findMany({
-          where: logsWhere,
-          orderBy: { createdAt: 'desc' },
-          skip: offset,
-          take: limitNum,
-        }),
-        prisma.integrationLog.findMany({
-          where: logsWhere,
-          select: { action: true },
-        }),
-      ]);
+      const logs = await prisma.integrationLog.findMany({
+        where: logsWhere,
+        orderBy: { createdAt: 'desc' },
+      });
 
-      total = countLogs.length;
-      countsByEntity = countLogs.reduce((acc, row) => {
+      const filteredLogs = logs.filter((log) => {
+        if (!searchTerm) return true;
+        const integration = scopedIntegrations.find((i) => i.id === log.integrationId);
+        const entity =
+          actionToEntity[log.action] ||
+          (log.action.startsWith('erp_custom_') ? `custom_${log.action.slice('erp_custom_'.length)}` : 'unknown');
+        const payload = log.payload || {};
+        const externalId =
+          payload.externalCustomerId ||
+          payload.externalSaleId ||
+          payload.externalAvailabilityId ||
+          payload.id ||
+          '-';
+        const crmEntityId = payload.crmEntityId || '-';
+        const haystack = [
+          String(entity || ''),
+          String(externalId || ''),
+          String(crmEntityId || ''),
+          String(integration?.config?.erpProvider || ''),
+          String(integration?.config?.divisionId || ''),
+          JSON.stringify(payload),
+        ]
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(searchTerm);
+      });
+
+      total = filteredLogs.length;
+      countsByEntity = filteredLogs.reduce((acc, row) => {
         const entity =
           actionToEntity[row.action] ||
           (row.action.startsWith('erp_custom_') ? `custom_${row.action.slice('erp_custom_'.length)}` : 'unknown');
@@ -417,7 +469,7 @@ router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next
         return acc;
       }, {});
 
-      data = logs.map((log) => {
+      data = filteredLogs.slice(offset, offset + limitNum).map((log) => {
         const integration = scopedIntegrations.find((i) => i.id === log.integrationId);
         const entity =
           actionToEntity[log.action] ||

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Database, Filter, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import { Database, Filter, Loader2, Pencil, Search, Trash2, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -43,12 +43,12 @@ export default function ErpDataPage() {
 
   const [selectedDivision, setSelectedDivision] = useState(initialDivision);
   const [selectedEntity, setSelectedEntity] = useState('all');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [editingRow, setEditingRow] = useState<ErpDataRow | null>(null);
   const [editPayloadText, setEditPayloadText] = useState('');
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
   const [configuredCustomEntities, setConfiguredCustomEntities] = useState<string[]>([]);
 
   const divisionsQuery = useQuery({
@@ -57,12 +57,18 @@ export default function ErpDataPage() {
     staleTime: 60_000,
   });
 
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => window.clearTimeout(t);
+  }, [search]);
+
   const erpDataQuery = useQuery({
-    queryKey: ['erp-data', selectedDivision, selectedEntity, page, limit],
+    queryKey: ['erp-data', selectedDivision, selectedEntity, debouncedSearch, page, limit],
     queryFn: () =>
       api.getErpData({
         divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
         entityType: selectedEntity !== 'all' ? selectedEntity : undefined,
+        search: debouncedSearch || undefined,
         page,
         limit,
       }) as Promise<{
@@ -76,7 +82,7 @@ export default function ErpDataPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [selectedDivision, selectedEntity, limit]);
+  }, [selectedDivision, selectedEntity, debouncedSearch, limit]);
 
   const divisions = Array.isArray(divisionsQuery.data) ? divisionsQuery.data : [];
   const rows = erpDataQuery.data?.data || [];
@@ -197,7 +203,16 @@ export default function ErpDataPage() {
             Customers, sales, and availability records received from ERP endpoints
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="w-4 h-4 text-text-tertiary absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search all fields, including payload..."
+              className="w-[320px] max-w-[75vw] pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+            />
+          </div>
           {isSuperAdmin && divisions.length > 0 && (
             <select
               value={selectedDivision}
@@ -258,7 +273,7 @@ export default function ErpDataPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-text-secondary">
+                  <td colSpan={8} className="px-4 py-10 text-center text-text-secondary">
                     <div className="inline-flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
                       Loading ERP data...
@@ -267,7 +282,7 @@ export default function ErpDataPage() {
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-text-secondary">
+                  <td colSpan={8} className="px-4 py-10 text-center text-text-secondary">
                     No ERP records found.
                   </td>
                 </tr>

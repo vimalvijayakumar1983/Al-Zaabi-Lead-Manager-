@@ -873,7 +873,7 @@ class ApiClient {
     return this.request<IntegrationPlatformInfo[]>('/integrations/platforms');
   }
 
-  async getErpData(params?: { integrationId?: string; divisionId?: string; entityType?: string; page?: number; limit?: number }) {
+  async getErpData(params?: { integrationId?: string; divisionId?: string; entityType?: string; search?: string; page?: number; limit?: number }) {
     const query = params
       ? '?' + new URLSearchParams(
           Object.entries(params)
