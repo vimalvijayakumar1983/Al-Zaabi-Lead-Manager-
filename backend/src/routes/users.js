@@ -2,7 +2,7 @@ const { Router } = require('express');
 const { z } = require('zod');
 const bcrypt = require('bcryptjs');
 const { prisma } = require('../config/database');
-const { authenticate, authorize, orgScope } = require('../middleware/auth');
+const { authenticate, authorize, orgScope, resolveDivisionScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { broadcastDataChange } = require('../websocket/server');
@@ -120,13 +120,9 @@ router.get('/', async (req, res, next) => {
   try {
     const { divisionId } = req.query;
 
-    // SUPER_ADMIN sees users across all divisions; optionally filter by division
-    let orgFilter;
-    if (divisionId && req.isSuperAdmin) {
-      orgFilter = divisionId;
-    } else {
-      orgFilter = { in: req.orgIds };
-    }
+    // Sidebar division: scope list to that org when user may access it (any role, incl. SUPER_ADMIN)
+    const scopedDivisionId = resolveDivisionScope(req, divisionId);
+    const orgFilter = scopedDivisionId ? scopedDivisionId : { in: req.orgIds };
 
     const users = await prisma.user.findMany({
       where: { organizationId: orgFilter },

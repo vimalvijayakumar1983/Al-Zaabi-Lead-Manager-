@@ -118,6 +118,12 @@ class ApiClient {
     return this.request<any>(`/leads${query}`);
   }
 
+  /** Overview + reachability for leads toolbar; same query params as getLeads (filters + division). */
+  async getLeadsStats(params?: Record<string, string | number>) {
+    const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+    return this.request<any>(`/leads/stats${query}`);
+  }
+
   async globalSearch(q: string) {
     return this.request<any>(`/leads/search/global?q=${encodeURIComponent(q)}`);
   }
@@ -315,7 +321,7 @@ class ApiClient {
 
   // Analytics
   async getDashboard(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
     return this.request<any>(`/analytics/dashboard${q}`);
   }
 
@@ -400,7 +406,7 @@ class ApiClient {
 
   // Users
   async getUsers(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
     return this.request<any[]>(`/users${q}`);
   }
 
@@ -1189,7 +1195,8 @@ class ApiClient {
     if (params?.role) queryParams.set('role', params.role);
     if (params?.isActive) queryParams.set('isActive', params.isActive);
     const qs = queryParams.toString();
-    return this.request<DivisionUser[]>(`/divisions/${divisionId}/users${qs ? '?' + qs : ''}`);
+    const enc = encodeURIComponent(divisionId);
+    return this.request<DivisionUser[]>(`/divisions/${enc}/users${qs ? '?' + qs : ''}`);
   }
 
   async getDivisionStats(divisionId: string): Promise<DivisionStats> {

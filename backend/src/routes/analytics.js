@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { prisma } = require('../config/database');
-const { authenticate, orgScope } = require('../middleware/auth');
+const { authenticate, orgScope, resolveDivisionScope } = require('../middleware/auth');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -21,7 +21,8 @@ function getDisplayName(obj) {
 }
 
 function getOrgFilter(req, divisionId) {
-  if (divisionId && req.isSuperAdmin) return divisionId;
+  const scoped = resolveDivisionScope(req, divisionId);
+  if (scoped) return scoped;
   return { in: req.orgIds };
 }
 
@@ -39,8 +40,9 @@ async function resolveTeamMemberForScope(req, divisionId, requestedTeamMemberId)
     id: scopedId,
     isActive: true,
   };
-  if (divisionId && req.isSuperAdmin) {
-    where.organizationId = divisionId;
+  const scopedDiv = resolveDivisionScope(req, divisionId);
+  if (scopedDiv) {
+    where.organizationId = scopedDiv;
   } else {
     where.organizationId = { in: req.orgIds };
   }
@@ -57,7 +59,13 @@ async function resolveTeamMemberForScope(req, divisionId, requestedTeamMemberId)
  * SALES_REP/VIEWER only see leads assigned to them.
  */
 function getLeadWhere(req, divisionId, extra = {}) {
-  const where = { organizationId: getOrgFilter(req, divisionId), isArchived: false, ...extra };
+  // Match default leads list: hide archived and Do-Not-Call unless callers override via `extra`
+  const where = {
+    organizationId: getOrgFilter(req, divisionId),
+    isArchived: false,
+    doNotCall: false,
+    ...extra,
+  };
   if (req.isRestrictedRole) where.assignedToId = req.user.id;
   return where;
 }
@@ -77,13 +85,44 @@ function buildPeriodFilter(period, dateRange) {
         dateFilter.lte = to;
       }
     }
+    if (dateFilter.gte && dateFilter.lte) {
+      const currentStart = dateFilter.gte;
+      const currentEnd = dateFilter.lte;
+      const durationMs = currentEnd.getTime() - currentStart.getTime();
+      const prevEndExclusive = new Date(currentStart.getTime());
+      const prevStart = new Date(currentStart.getTime() - durationMs);
+      const days = Math.max(1, Math.ceil(durationMs / 86400000));
+      return {
+        start: currentStart,
+        dateFilter: { gte: currentStart, lte: currentEnd },
+        isCustom: true,
+        prevStart,
+        prevEnd: prevEndExclusive,
+        days,
+      };
+    }
     if (dateFilter.gte || dateFilter.lte) {
-      return { start: dateFilter.gte || new Date(0), dateFilter, isCustom: true };
+      const pd = getPeriodDates(period);
+      return {
+        start: dateFilter.gte || new Date(0),
+        dateFilter,
+        isCustom: true,
+        prevStart: pd.prevStart,
+        prevEnd: pd.prevEnd,
+        days: pd.days,
+      };
     }
   }
 
-  const { start } = getPeriodDates(period);
-  return { start, dateFilter: { gte: start }, isCustom: false };
+  const pd = getPeriodDates(period);
+  return {
+    start: pd.start,
+    dateFilter: { gte: pd.start },
+    isCustom: false,
+    prevStart: pd.prevStart,
+    prevEnd: pd.prevEnd,
+    days: pd.days,
+  };
 }
 
 /**
@@ -1619,7 +1658,6 @@ router.get('/dashboard-full', async (req, res, next) => {
   try {
     const { divisionId, period = '30d', teamMemberId, from, to } = req.query;
     const orgFilter = getOrgFilter(req, divisionId);
-    const { start, prevStart, prevEnd, days } = getPeriodDates(period);
     const now = new Date();
     const scopedTeamMemberId = await resolveTeamMemberForScope(req, divisionId, teamMemberId);
 
@@ -1627,11 +1665,13 @@ router.get('/dashboard-full', async (req, res, next) => {
       from: typeof from === 'string' ? from : undefined,
       to: typeof to === 'string' ? to : undefined,
     });
+    const { prevStart, prevEnd, days } = customDate;
 
     const lw = getLeadWhere(req, divisionId);
     if (scopedTeamMemberId && !req.isRestrictedRole) {
       lw.assignedToId = scopedTeamMemberId;
     }
+    const lwInPeriod = { ...lw, createdAt: customDate.dateFilter };
     const actWhere = req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : { lead: { organizationId: orgFilter } };
     if (scopedTeamMemberId && !req.isRestrictedRole) {
       actWhere.lead = { ...(actWhere.lead || {}), assignedToId: scopedTeamMemberId };
@@ -1646,7 +1686,7 @@ router.get('/dashboard-full', async (req, res, next) => {
     // ── Parallel fetch everything ──
     const [
       // KPI counts
-      totalLeads, curNew, prevNew, curWon, prevWon, curLost, prevLost,
+      totalLeads, prevTotalLeads, curNew, prevNew, curWon, prevWon, curLost, prevLost,
       curPipeAgg, prevPipeAgg, wonRevenueAgg,
       // Breakdowns
       leadsByStatus, leadsBySource,
@@ -1664,22 +1704,28 @@ router.get('/dashboard-full', async (req, res, next) => {
       // SLA stats
       slaAtRisk, slaBreached,
     ] = await Promise.all([
-      prisma.lead.count({ where: lw }),
-      prisma.lead.count({ where: { ...lw, createdAt: customDate.dateFilter } }),
+      prisma.lead.count({ where: lwInPeriod }),
       prisma.lead.count({ where: { ...lw, createdAt: { gte: prevStart, lt: prevEnd } } }),
+      prisma.lead.count({ where: { ...lwInPeriod, status: 'NEW' } }),
+      prisma.lead.count({ where: { ...lw, status: 'NEW', createdAt: { gte: prevStart, lt: prevEnd } } }),
       prisma.lead.count({ where: { ...lw, status: 'WON', updatedAt: customDate.dateFilter } }),
       prisma.lead.count({ where: { ...lw, status: 'WON', updatedAt: { gte: prevStart, lt: prevEnd } } }),
       prisma.lead.count({ where: { ...lw, status: 'LOST', updatedAt: customDate.dateFilter } }),
       prisma.lead.count({ where: { ...lw, status: 'LOST', updatedAt: { gte: prevStart, lt: prevEnd } } }),
       prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null } }, _sum: { budget: true } }),
       prisma.lead.aggregate({ where: { ...lw, status: { notIn: ['LOST'] }, budget: { not: null }, createdAt: { gte: prevStart, lt: prevEnd } }, _sum: { budget: true } }),
-      prisma.lead.aggregate({ where: { ...lw, status: 'WON', budget: { not: null } }, _sum: { budget: true }, _avg: { budget: true }, _count: true }),
+      prisma.lead.aggregate({
+        where: { ...lw, status: 'WON', budget: { not: null }, updatedAt: customDate.dateFilter },
+        _sum: { budget: true },
+        _avg: { budget: true },
+        _count: true,
+      }),
 
-      prisma.lead.groupBy({ by: ['status'], where: lw, _count: { status: true } }),
-      prisma.lead.groupBy({ by: ['source'], where: lw, _count: { source: true } }),
+      prisma.lead.groupBy({ by: ['status'], where: lwInPeriod, _count: { status: true } }),
+      prisma.lead.groupBy({ by: ['source'], where: lwInPeriod, _count: { source: true } }),
 
       prisma.lead.findMany({
-        where: lw, orderBy: { createdAt: 'desc' }, take: 8,
+        where: lwInPeriod, orderBy: { createdAt: 'desc' }, take: 8,
         select: { id: true, firstName: true, lastName: true, email: true, company: true, source: true, status: true, score: true, budget: true, createdAt: true, assignedTo: { select: { firstName: true, lastName: true, avatar: true } } },
       }),
       prisma.task.findMany({
@@ -1706,13 +1752,31 @@ router.get('/dashboard-full', async (req, res, next) => {
         where: { organizationId: orgFilter },
         orderBy: { order: 'asc' },
         include: {
-          _count: { select: { leads: { where: { isArchived: false, ...(scopedTeamMemberId && !req.isRestrictedRole ? { assignedToId: scopedTeamMemberId } : {}) } } } },
-          leads: { select: { budget: true }, where: { isArchived: false, budget: { not: null }, ...(scopedTeamMemberId && !req.isRestrictedRole ? { assignedToId: scopedTeamMemberId } : {}) } },
+          _count: {
+            select: {
+              leads: {
+                where: {
+                  isArchived: false,
+                  doNotCall: false,
+                  ...(scopedTeamMemberId && !req.isRestrictedRole ? { assignedToId: scopedTeamMemberId } : {}),
+                },
+              },
+            },
+          },
+          leads: {
+            select: { budget: true },
+            where: {
+              isArchived: false,
+              doNotCall: false,
+              budget: { not: null },
+              ...(scopedTeamMemberId && !req.isRestrictedRole ? { assignedToId: scopedTeamMemberId } : {}),
+            },
+          },
         },
       }),
 
       prisma.lead.findMany({
-        where: lw,
+        where: lwInPeriod,
         select: { score: true, status: true },
       }),
 
@@ -1749,7 +1813,7 @@ router.get('/dashboard-full', async (req, res, next) => {
           isActive: true,
           ...(scopedTeamMemberId ? { id: scopedTeamMemberId } : {}),
         },
-        select: { id: true, firstName: true, lastName: true, avatar: true, role: true, _count: { select: { assignedLeads: true } } },
+        select: { id: true, firstName: true, lastName: true, avatar: true, role: true },
       });
     }
 
@@ -1807,19 +1871,22 @@ router.get('/dashboard-full', async (req, res, next) => {
       if (b) { b.total++; if (l.status === 'WON') b.won++; }
     }
 
-    // ── Process team leaderboard ──
+    // ── Process team leaderboard (same division / team scope as lw — not global org) ──
     let teamLeaderboard = [];
     if (!req.isRestrictedRole && teamUsers.length > 0) {
       const enriched = await Promise.all(teamUsers.slice(0, 10).map(async u => {
-        const [won, revenue] = await Promise.all([
-          prisma.lead.count({ where: { assignedToId: u.id, status: 'WON' } }),
-          prisma.lead.aggregate({ where: { assignedToId: u.id, status: 'WON', budget: { not: null } }, _sum: { budget: true } }),
+        const base = { ...lw, assignedToId: u.id };
+        const [totalScoped, won, revenue] = await Promise.all([
+          prisma.lead.count({ where: base }),
+          prisma.lead.count({ where: { ...base, status: 'WON' } }),
+          prisma.lead.aggregate({ where: { ...base, status: 'WON', budget: { not: null } }, _sum: { budget: true } }),
         ]);
         return {
           id: u.id, name: getDisplayName(u), avatar: u.avatar, role: u.role,
-          totalLeads: u._count.assignedLeads, wonLeads: won,
+          totalLeads: totalScoped,
+          wonLeads: won,
           wonRevenue: Number(revenue._sum.budget || 0),
-          conversionRate: u._count.assignedLeads > 0 ? Math.round((won / u._count.assignedLeads) * 10000) / 100 : 0,
+          conversionRate: totalScoped > 0 ? Math.round((won / totalScoped) * 10000) / 100 : 0,
         };
       }));
       teamLeaderboard = enriched.sort((a, b) => b.wonRevenue - a.wonRevenue || b.conversionRate - a.conversionRate).slice(0, 5);
@@ -1851,17 +1918,23 @@ router.get('/dashboard-full', async (req, res, next) => {
       }
     }
 
-    const totalWon = await prisma.lead.count({ where: { ...lw, status: 'WON' } });
+    const closedInPeriod = curWon + curLost;
+    const conversionRate = closedInPeriod > 0
+      ? Math.round((curWon / closedInPeriod) * 10000) / 100
+      : 0;
 
     res.json({
+      periodDays: days,
       kpis: {
-        totalLeads, newLeads: curNew, newLeadsChange: pctChange(curNew, prevNew),
+        totalLeads,
+        totalLeadsChange: pctChange(totalLeads, prevTotalLeads),
+        newLeads: curNew, newLeadsChange: pctChange(curNew, prevNew),
         wonLeads: curWon, wonLeadsChange: pctChange(curWon, prevWon),
         lostLeads: curLost, lostLeadsChange: pctChange(curLost, prevLost),
         pipelineValue: curPipe, pipelineValueChange: pctChange(curPipe, prevPipe),
-        conversionRate: totalLeads > 0 ? Math.round((totalWon / totalLeads) * 10000) / 100 : 0,
+        conversionRate,
         conversionRateChange: pctChange(curWon, prevWon),
-        wonRevenue, avgDealSize, totalWon,
+        wonRevenue, avgDealSize, totalWon: curWon,
         activities: curActivities, activitiesChange: pctChange(curActivities, prevActivities),
         overdueTasks,
         slaAtRisk: slaAtRisk || 0,

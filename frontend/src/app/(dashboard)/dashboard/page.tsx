@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -18,6 +18,7 @@ import {
   Timer, FileText, Phone, PhoneCall, Mail, Eye, Shield,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -34,8 +35,11 @@ interface DivisionStats {
 }
 
 interface DashboardFullData {
+  /** Calendar span for the selected preset or custom range (trend chart padding). */
+  periodDays?: number;
   kpis: {
     totalLeads: number;
+    totalLeadsChange: number;
     newLeads: number;
     newLeadsChange: number;
     wonLeads: number;
@@ -281,18 +285,62 @@ export default function DashboardPage() {
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
-  // Single source of truth: follow active division from sidebar selection
-  useEffect(() => {
+  const dashboardFetchSeq = useRef(0);
+
+  // Read division from localStorage before paint so the first /users request is scoped (avoids race with unscoped fetch)
+  useLayoutEffect(() => {
     if (typeof window === 'undefined') return;
     const stored = localStorage.getItem('activeDivisionId') || undefined;
     setActiveDivisionId(stored);
   }, []);
 
-  // Load team members scoped by active division
+  // Same-tab + cross-tab division changes
   useEffect(() => {
-    api.getUsers(activeDivisionId)
-      .then((rows: any[]) => setTeamMembers(Array.isArray(rows) ? rows : []))
-      .catch(() => setTeamMembers([]));
+    if (typeof window === 'undefined') return;
+
+    const readStored = () => localStorage.getItem('activeDivisionId') || undefined;
+
+    const onDivisionChanged = (e: Event) => {
+      const d = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
+      if (d && 'divisionId' in d) {
+        setActiveDivisionId(d.divisionId || undefined);
+      } else {
+        setActiveDivisionId(readStored());
+      }
+    };
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== 'activeDivisionId') return;
+      setActiveDivisionId(e.newValue || undefined);
+    };
+
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  // Load team members: division API when a division is selected (strict scope); org-wide list only when none selected
+  useEffect(() => {
+    let cancelled = false;
+    const divId = activeDivisionId;
+
+    (async () => {
+      try {
+        const rows = divId
+          ? await api.getDivisionUsers(divId)
+          : await api.getUsers(undefined);
+        if (!cancelled) setTeamMembers(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setTeamMembers([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeDivisionId]);
 
   // Reset invalid team filter when division changes (or member no longer in scope)
@@ -306,6 +354,7 @@ export default function DashboardPage() {
 
   // Fetch consolidated dashboard data
   const fetchData = useCallback(async () => {
+    const seq = ++dashboardFetchSeq.current;
     try {
       setLoading(true);
       setError(null);
@@ -315,29 +364,31 @@ export default function DashboardPage() {
         dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
         dateTo: period === 'custom' && customApplied ? (customTo || undefined) : undefined,
       });
+      if (seq !== dashboardFetchSeq.current) return;
       if (d && typeof d === 'object' && d.kpis) {
         setData(d);
       } else {
         setError('Unexpected response format');
       }
     } catch (err: any) {
+      if (seq !== dashboardFetchSeq.current) return;
       console.error('Dashboard fetch error:', err);
       setError(err.message || 'Failed to load dashboard');
     } finally {
-      setLoading(false);
+      if (seq === dashboardFetchSeq.current) setLoading(false);
     }
   }, [period, activeDivisionId, teamMemberFilter, customApplied, customFrom, customTo]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Fetch custom status labels
+  // Fetch custom status labels when division scope changes
   useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    api.getFieldConfig(activeDivisionId || undefined)
-      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
+    api.getFieldConfig(activeDivisionId)
+      .then((data) => {
+        if (data.statusLabels) setStatusLabels(data.statusLabels);
+      })
       .catch(() => {});
-  }, []);
+  }, [activeDivisionId]);
 
   // Real-time refresh
   useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
@@ -351,15 +402,18 @@ export default function DashboardPage() {
     }).catch(() => {});
   });
 
-  const periodDays = PERIODS.find((p) => p.value === period)?.days || 30;
+  const periodDaysFromPreset = PERIODS.find((p) => p.value === period)?.days || 30;
 
   const canApplyCustomRange = period === 'custom' && !!customFrom && !!customTo;
 
   // Computed data
   const trendData = useMemo(() => {
     if (!data?.trends) return [];
-    return fillDates(data.trends, periodDays);
-  }, [data?.trends, periodDays]);
+    const span = typeof data.periodDays === 'number' && data.periodDays > 0
+      ? data.periodDays
+      : periodDaysFromPreset;
+    return fillDates(data.trends, span);
+  }, [data?.trends, data?.periodDays, periodDaysFromPreset]);
 
   const sourceChartData = useMemo(() => {
     if (!data?.leadsBySource) return [];
@@ -394,7 +448,7 @@ export default function DashboardPage() {
   const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
 
   const kpiCards = [
-    { label: 'Total Leads', value: fmt(k.totalLeads), icon: Users, color: 'brand', change: null },
+    { label: 'Leads added', value: fmt(k.totalLeads), icon: Users, color: 'brand', change: k.totalLeadsChange },
     { label: `${getStatusLabel('NEW')} Leads`, value: fmt(k.newLeads), icon: UserPlus, color: 'indigo', change: k.newLeadsChange },
     { label: `${getStatusLabel('WON')} Deals`, value: fmt(k.wonLeads), icon: Trophy, color: 'emerald', change: k.wonLeadsChange },
     { label: `${getStatusLabel('LOST')} Deals`, value: fmt(k.lostLeads), icon: XCircle, color: 'red', change: k.lostLeadsChange },

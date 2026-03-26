@@ -12,6 +12,7 @@ import NotificationCenter from '@/components/NotificationCenter';
 import ToastProvider from '@/components/ToastProvider';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { GlobalSearch } from './components/global-search';
+import { ACTIVE_DIVISION_CHANGED } from '@/lib/activeDivisionEvents';
 import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu } from 'lucide-react';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
@@ -118,9 +119,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     } else {
       localStorage.removeItem('activeDivisionId');
     }
-    // Reload page data by triggering a navigation refresh
-    window.location.reload();
-  }, []);
+    window.dispatchEvent(
+      new CustomEvent(ACTIVE_DIVISION_CHANGED, { detail: { divisionId } })
+    );
+    router.refresh();
+  }, [router]);
 
   useEffect(() => {
     loadUser();
