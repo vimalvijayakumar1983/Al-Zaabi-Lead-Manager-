@@ -155,6 +155,7 @@ export interface Lead {
   }>;
   _count?: { activities: number; tasks: number; communications: number; callLogs: number };
   channelCounts?: Record<string, number>;
+  firstMessage?: { channel: string; body: string; createdAt: string } | null;
   unreadChannelCounts?: Record<string, number>;
   unreadCommunications?: number;
   lastInboundMessage?: { channel: string; body: string; createdAt: string } | null;
@@ -500,7 +501,8 @@ export type IntegrationPlatform =
   | 'email'
   | 'website'
   | 'webhook'
-  | 'zapier';
+  | 'zapier'
+  | 'erp';
 
 export type IntegrationStatus = 'connected' | 'disconnected' | 'error' | 'syncing';
 

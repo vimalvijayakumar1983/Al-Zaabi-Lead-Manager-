@@ -4,10 +4,20 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { prisma } = require('../config/database');
+const { logger } = require('../config/logger');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate, validateQuery } = require('../middleware/validate');
 const { broadcastDataChange } = require('../websocket/server');
+const { PLATFORM_MAP, resolvePlatform, enrichCommunicationForClient } = require('../utils/inboxCommunication');
+const { emitCommunicationChange } = require('../utils/inboxRealtimeEmit');
 const { regenerateLeadSummaryById } = require('../services/aiService');
+const { sendText: sendWhatsAppText, sendMedia: sendWhatsAppMedia, uploadMedia: uploadWhatsAppMedia } = require('../services/whatsappService');
+const {
+  isAttachmentObjectStorageEnabled,
+  uploadInboxAttachmentBuffer,
+  getInboxAttachmentReadUrl,
+} = require('../services/attachmentStorage');
+const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
 const { findStageForStatus } = require('../utils/statusStageMapping');
 
 // ─── Display name helper (deduplication) ─────────────────────────
@@ -64,11 +74,17 @@ router.get('/attachments/file/:id', async (req, res, next) => {
 
     const attachment = await prisma.attachment.findFirst({
       where: { id },
-      select: { id: true, filename: true, mimeType: true, data: true, size: true },
+      select: { id: true, filename: true, mimeType: true, data: true, size: true, storageKey: true },
     });
 
     if (!attachment) {
       return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    if (attachment.storageKey) {
+      const signed = await getInboxAttachmentReadUrl(attachment.storageKey);
+      if (signed) return res.redirect(302, signed);
+      return res.status(502).json({ error: 'Attachment storage temporarily unavailable' });
     }
 
     // If we have base64 data stored, serve it
@@ -100,39 +116,47 @@ router.get('/attachments/file/:id', async (req, res, next) => {
 // All routes below require authentication
 router.use(authenticate, orgScope);
 
-// ─── Channel metadata helpers ─────────────────────────────────────
-
-const PLATFORM_MAP = {
-  WHATSAPP: { label: 'WhatsApp', color: '#25D366', icon: 'whatsapp' },
-  EMAIL: { label: 'Email', color: '#EA4335', icon: 'email' },
-  SMS: { label: 'SMS', color: '#6366f1', icon: 'sms' },
-  PHONE: { label: 'Phone', color: '#06b6d4', icon: 'phone' },
-  CHAT: { label: 'Live Chat', color: '#3b82f6', icon: 'chat' },
-  // Sub-platforms stored in metadata.platform
-  FACEBOOK: { label: 'Facebook', color: '#1877F2', icon: 'facebook' },
-  INSTAGRAM: { label: 'Instagram', color: '#E4405F', icon: 'instagram' },
-  GOOGLE: { label: 'Google', color: '#4285F4', icon: 'google' },
-  WEBCHAT: { label: 'Website Chat', color: '#8b5cf6', icon: 'webchat' },
-};
-
-function resolvePlatform(comm) {
-  if (comm.channel === 'CHAT' && comm.metadata?.platform) {
-    return comm.metadata.platform.toUpperCase();
+/**
+ * Inbox org scope — align with GET /leads: SUPER_ADMIN may pass ?divisionId= to scope to one division
+ * (required when that division is not under req.orgIds, e.g. parentId=null misconfiguration).
+ */
+function buildInboxOrgFilter(req, divisionIdRaw) {
+  const divisionId = divisionIdRaw && String(divisionIdRaw).trim();
+  if (divisionId) {
+    if (req.isSuperAdmin) {
+      return divisionId;
+    }
+    if (req.orgIds.includes(divisionId)) {
+      return divisionId;
+    }
   }
-  return comm.channel;
+  return { in: req.orgIds };
+}
+
+/** Lead visible in inbox: org-scoped, or any org if SUPER_ADMIN (matches leads list + orphan divisions). */
+async function findInboxLead(req, leadId) {
+  let lead = await prisma.lead.findFirst({
+    where: { id: leadId, organizationId: { in: req.orgIds } },
+  });
+  if (!lead && req.isSuperAdmin) {
+    lead = await prisma.lead.findFirst({ where: { id: leadId } });
+  }
+  return lead;
 }
 
 // ─── List Conversations (grouped by lead) ─────────────────────────
 
 router.get('/conversations', async (req, res, next) => {
   try {
-    const { channel, search, status, page = '1', limit = '30' } = req.query;
+    const { channel, search, status, page = '1', limit = '30', divisionId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
+    const orgFilter = buildInboxOrgFilter(req, divisionId);
+
     // Find leads that have communications
     const where = {
-      organizationId: { in: req.orgIds },
+      organizationId: orgFilter,
       isArchived: false,
       communications: { some: {} },
     };
@@ -220,6 +244,7 @@ router.get('/conversations', async (req, res, next) => {
           platform,
           platformInfo: PLATFORM_MAP[platform] || PLATFORM_MAP.CHAT,
           createdAt: lastMsg.createdAt,
+          metadata: lastMsg.metadata || {},
         } : null,
       };
     });
@@ -241,21 +266,30 @@ router.get('/conversations', async (req, res, next) => {
 router.get('/conversations/:leadId/messages', async (req, res, next) => {
   try {
     const { leadId } = req.params;
-    const { channel, page = '1', limit = '50' } = req.query;
+    const { channel, page = '1', limit = '50', divisionId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
-    // Verify lead belongs to org
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-      select: {
-        id: true, firstName: true, lastName: true, email: true, phone: true,
-        company: true, status: true, score: true, source: true, jobTitle: true,
-        createdAt: true, budget: true, organizationId: true,
-        assignedTo: { select: { id: true, firstName: true, lastName: true } },
-        stage: { select: { id: true, name: true, color: true } },
-      },
+    const orgFilter = buildInboxOrgFilter(req, divisionId);
+    const divisionScoped = Boolean(divisionId && String(divisionId).trim());
+
+    const leadSelect = {
+      id: true, firstName: true, lastName: true, email: true, phone: true,
+      company: true, status: true, score: true, source: true, jobTitle: true,
+      createdAt: true, budget: true, organizationId: true,
+      assignedTo: { select: { id: true, firstName: true, lastName: true } },
+      stage: { select: { id: true, name: true, color: true } },
+    };
+
+    // Verify lead belongs to org (or scoped division for SUPER_ADMIN)
+    let lead = await prisma.lead.findFirst({
+      where: { id: leadId, organizationId: orgFilter },
+      select: leadSelect,
     });
+    // SUPER_ADMIN without explicit divisionId: same as findInboxLead (orphan / out-of-tree orgs)
+    if (!lead && req.isSuperAdmin && !divisionScoped) {
+      lead = await prisma.lead.findFirst({ where: { id: leadId }, select: leadSelect });
+    }
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const msgWhere = { leadId };
@@ -268,54 +302,35 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
       }
     }
 
-    const [messages, total] = await Promise.all([
+    // Fetch newest-first so page 1 = latest messages; then reverse for chronological display
+    const [rawMessages, total] = await Promise.all([
       prisma.communication.findMany({
         where: msgWhere,
         include: {
           user: { select: { id: true, firstName: true, lastName: true } },
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: 'desc' },
         skip,
         take,
       }),
       prisma.communication.count({ where: msgWhere }),
     ]);
+    const messages = rawMessages.reverse();
 
-    // Look up attachment records for this lead to patch URLs
-    const leadAttachments = await prisma.attachment.findMany({
-      where: { leadId },
-      select: { id: true, filename: true, url: true },
-    });
-    const attByFilename = {};
-    for (const a of leadAttachments) {
-      attByFilename[a.filename] = a;
-    }
+    const enriched = await Promise.all(messages.map((m) => enrichCommunicationForClient(m, leadId)));
 
-    // Enrich messages with platform info and patched attachment URLs
-    const enriched = messages.map(m => {
-      const meta = m.metadata || {};
-      if (meta.attachments && Array.isArray(meta.attachments)) {
-        meta.attachments = meta.attachments.map((att) => {
-          // If attachment has an ID, use the serve endpoint
-          if (att.id) return { ...att, url: `/inbox/attachments/file/${att.id}` };
-          // Try to match by filename
-          const match = attByFilename[att.filename];
-          if (match) return { ...att, id: match.id, url: `/inbox/attachments/file/${match.id}` };
-          return att;
-        });
-      }
-      return {
-        ...m,
-        metadata: meta,
-        platform: resolvePlatform(m),
-        platformInfo: PLATFORM_MAP[resolvePlatform(m)] || PLATFORM_MAP.CHAT,
-      };
-    });
-
+    const pageNum = parseInt(page, 10) || 1;
+    const totalPages = Math.ceil(total / take) || 1;
     res.json({
       lead,
       messages: enriched,
-      pagination: { total, page: parseInt(page), limit: take, totalPages: Math.ceil(total / take) },
+      pagination: {
+        total,
+        page: pageNum,
+        limit: take,
+        totalPages,
+        hasMore: pageNum < totalPages,
+      },
     });
 
     // Auto-mark unread inbound messages as read when viewed
@@ -345,10 +360,7 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
   try {
     const { leadId, channel, body, subject, platform, metadata = {} } = req.validated;
 
-    // Verify lead
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // Store platform in metadata for CHAT channels
@@ -391,24 +403,77 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
       data: { updatedAt: new Date() },
     });
 
-    // TODO: Dispatch to actual channel APIs (WhatsApp Business API, Facebook Graph API, etc.)
-    // This is where platform-specific sending logic would go:
-    // - WHATSAPP: Call WhatsApp Business API
-    // - FACEBOOK: Call Facebook Messenger Send API
-    // - INSTAGRAM: Call Instagram Messaging API
-    // - EMAIL: Call email service (SendGrid, etc.)
-    // - GOOGLE: Call Google Business Messages API
+    // Dispatch to WhatsApp when channel is WHATSAPP
+    if (channel === 'WHATSAPP') {
+      const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
+      if (!phone) {
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: { ...(communication.metadata || {}), sendError: 'Lead has no phone number' } },
+        }).catch(() => {});
+        return res.status(400).json({ error: 'Lead has no phone number' });
+      }
+      try {
+        const sendResult = await sendWhatsAppText(phone, body, lead.organizationId);
+        const waMessageId = sendResult?.messageId || null;
+        if (waMessageId) {
+          const now = new Date();
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: {
+              metadata: {
+                ...(communication.metadata || {}),
+                waMessageId,
+                waStatus: 'SENT',
+                waStatusUpdatedAt: now.toISOString(),
+              },
+            },
+          }).catch(() => {});
+          communication.metadata = {
+            ...(communication.metadata || {}),
+            waMessageId,
+            waStatus: 'SENT',
+            waStatusUpdatedAt: now.toISOString(),
+          };
+        }
+        const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+        if (rawDigits && rawDigits !== phone) {
+          await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
+      } catch (sendErr) {
+        // WhatsApp / Meta token can expire (e.g. "Session has expired").
+        // Do not propagate Meta's 401 back to the frontend as an app-auth failure.
+        // Instead, mark the message as failed and keep the inbox request successful.
+        const now = new Date();
+        const nextMeta = {
+          ...(communication.metadata || {}),
+          sendError: sendErr?.message || String(sendErr),
+          waStatus: 'FAILED',
+          waStatusUpdatedAt: now.toISOString(),
+        };
 
-    const enriched = {
-      ...communication,
-      platform: resolvePlatform(communication),
-      platformInfo: PLATFORM_MAP[resolvePlatform(communication)] || PLATFORM_MAP.CHAT,
-    };
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: nextMeta },
+        }).catch(() => {});
+
+        // Ensure the API response includes the failure status without re-fetching.
+        communication.metadata = nextMeta;
+
+        logger.error('WhatsApp send failed (non-fatal for inbox UI)', {
+          leadId,
+          communicationId: communication.id,
+          error: sendErr?.message || String(sendErr),
+        });
+      }
+    }
+
+    const enriched = await enrichCommunicationForClient(communication, leadId);
 
     res.status(201).json(enriched);
     refreshLeadAISummaryAsync(leadId);
 
-    broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
+    emitCommunicationChange(lead.organizationId, 'created', req.user.id, leadId, enriched);
   } catch (err) { next(err); }
 });
 
@@ -443,28 +508,19 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       return res.status(400).json({ error: 'leadId and channel are required' });
     }
 
-    // Verify lead
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-    // Build attachment metadata — store base64 in DB for serverless persistence
-    const attachmentData = files.map(f => ({
-      filename: f.originalname,
-      mimeType: f.mimetype,
-      size: f.size,
-      data: `data:${f.mimetype};base64,${f.buffer.toString('base64')}`,
-    }));
+    const useS3 = isAttachmentObjectStorageEnabled();
+    const orgId = lead.organizationId;
 
     const msgMetadata = {};
     if (platform) msgMetadata.platform = platform.toLowerCase();
-    // Store lightweight attachment info in metadata (no base64 data)
-    if (attachmentData.length > 0) {
-      msgMetadata.attachments = attachmentData.map(a => ({
-        filename: a.filename,
-        mimeType: a.mimeType,
-        size: a.size,
+    if (files.length > 0) {
+      msgMetadata.attachments = files.map((f) => ({
+        filename: f.originalname,
+        mimeType: f.mimetype,
+        size: f.size,
       }));
     }
 
@@ -485,28 +541,58 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       },
     });
 
-    // Create Attachment records linked to lead (store base64 data in DB)
     const savedAttachments = [];
-    for (const att of attachmentData) {
+    for (const f of files) {
+      const base64 = `data:${f.mimetype};base64,${f.buffer.toString('base64')}`;
       const record = await prisma.attachment.create({
         data: {
           leadId,
-          filename: att.filename,
-          mimeType: att.mimeType,
-          size: att.size,
-          url: '', // will set after we have the ID
-          data: att.data,
+          filename: f.originalname,
+          mimeType: f.mimetype,
+          size: f.size,
+          url: '',
+          data: useS3 ? null : base64,
+          storageKey: null,
         },
       });
-      // Set URL to the serve endpoint using the attachment ID
       const url = `/inbox/attachments/file/${record.id}`;
-      await prisma.attachment.update({ where: { id: record.id }, data: { url } });
-      savedAttachments.push({ ...att, url, id: record.id });
+      let storageKey = null;
+      if (useS3) {
+        try {
+          storageKey = await uploadInboxAttachmentBuffer({
+            buffer: f.buffer,
+            mimeType: f.mimetype,
+            organizationId: orgId,
+            leadId,
+            attachmentId: record.id,
+            filename: f.originalname,
+          });
+        } catch (s3Err) {
+          logger.error('Inbox attachment S3 upload failed; using database blob', { err: s3Err.message });
+          await prisma.attachment.update({
+            where: { id: record.id },
+            data: { data: base64 },
+          });
+        }
+      }
+      await prisma.attachment.update({
+        where: { id: record.id },
+        data: storageKey ? { url, storageKey } : { url },
+      });
+      savedAttachments.push({
+        filename: f.originalname,
+        mimeType: f.mimetype,
+        size: f.size,
+        url,
+        id: record.id,
+        buffer: f.buffer,
+      });
     }
 
     // Update communication metadata with persistent URLs
+    let finalMetadata = msgMetadata;
     if (savedAttachments.length > 0) {
-      const updatedMeta = {
+      finalMetadata = {
         ...msgMetadata,
         attachments: savedAttachments.map(a => ({
           id: a.id,
@@ -518,8 +604,87 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       };
       await prisma.communication.update({
         where: { id: communication.id },
-        data: { metadata: updatedMeta },
+        data: { metadata: finalMetadata },
       });
+      communication.metadata = finalMetadata;
+    }
+
+    // ─── Send via WhatsApp API if channel is WHATSAPP ───────────
+    if (channel === 'WHATSAPP' && lead.phone) {
+      const phone = canonicalPhoneDigitsForWhatsApp(lead.phone?.replace(/\D/g, '') || '');
+      if (phone) {
+        const waMessageIds = [];
+        let lastWaSendErr = null;
+        // Send each attachment as a separate WhatsApp media message
+        for (const att of savedAttachments) {
+          try {
+            const waMediaType = att.mimeType.startsWith('image/') ? 'image'
+              : att.mimeType.startsWith('video/') ? 'video'
+              : att.mimeType.startsWith('audio/') ? 'audio'
+              : 'document';
+            const buf = Buffer.isBuffer(att.buffer)
+              ? att.buffer
+              : Buffer.from(String(att.data || '').replace(/^data:[^;]+;base64,/, ''), 'base64');
+            const { mediaId } = await uploadWhatsAppMedia(buf, att.mimeType, att.filename, lead.organizationId);
+            const caption = (savedAttachments.length === 1 && body) ? body : undefined;
+            const mediaSendResult = await sendWhatsAppMedia(phone, waMediaType, mediaId, caption, att.filename, lead.organizationId);
+            if (mediaSendResult?.messageId) {
+              waMessageIds.push(mediaSendResult.messageId);
+            }
+          } catch (waErr) {
+            logger.error('WhatsApp media send failed for attachment', { err: waErr.message, filename: att.filename });
+            lastWaSendErr = waErr;
+          }
+        }
+        // If there's a text body and either no attachments or multiple attachments (caption only sent with single), send text separately
+        if (body && (savedAttachments.length !== 1)) {
+          try {
+            const textSendResult = await sendWhatsAppText(phone, body, lead.organizationId);
+            if (textSendResult?.messageId) {
+              waMessageIds.push(textSendResult.messageId);
+            }
+          } catch (waErr) {
+            logger.error('WhatsApp text send failed', { err: waErr.message });
+            lastWaSendErr = waErr;
+          }
+        }
+        if (waMessageIds.length > 0) {
+          const now = new Date();
+          const lastWaMessageId = waMessageIds[waMessageIds.length - 1] || null;
+          const nextMeta = {
+            ...(communication.metadata || {}),
+            waMessageIds,
+            ...(lastWaMessageId ? { waMessageId: lastWaMessageId } : {}),
+            waStatus: 'SENT',
+            waStatusUpdatedAt: now.toISOString(),
+          };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
+        } else {
+          // If WhatsApp send failed (e.g. token/session expired), mark the row as FAILED
+          // so the UI doesn't show "delivered" ticks.
+          const now = new Date();
+          const nextMeta = {
+            ...(communication.metadata || {}),
+            sendError: lastWaSendErr?.message || 'WhatsApp send failed (no messageId returned)',
+            waStatus: 'FAILED',
+            waStatusUpdatedAt: now.toISOString(),
+          };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
+        }
+        // Normalize lead phone if needed
+        const rawDigits = lead.phone?.replace(/\D/g, '') || '';
+        if (rawDigits && rawDigits !== phone) {
+          await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
+      }
     }
 
     // Activity log
@@ -545,16 +710,12 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
       data: { updatedAt: new Date() },
     });
 
-    const enriched = {
-      ...communication,
-      platform: resolvePlatform(communication),
-      platformInfo: PLATFORM_MAP[resolvePlatform(communication)] || PLATFORM_MAP.CHAT,
-    };
+    const enriched = await enrichCommunicationForClient(communication, leadId);
 
     res.status(201).json(enriched);
     refreshLeadAISummaryAsync(leadId);
 
-    broadcastDataChange(lead.organizationId, 'communication', 'created', req.user.id, { entityId: leadId }).catch(() => {});
+    emitCommunicationChange(lead.organizationId, 'created', req.user.id, leadId, enriched);
   } catch (err) { next(err); }
 });
 
@@ -564,9 +725,7 @@ router.get('/conversations/:leadId/attachments', async (req, res, next) => {
   try {
     const { leadId } = req.params;
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const attachments = await prisma.attachment.findMany({
@@ -591,9 +750,7 @@ router.post('/conversations/:leadId/read', async (req, res, next) => {
   try {
     const { leadId } = req.params;
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     // Mark all unread inbound messages for this lead as read
@@ -614,7 +771,8 @@ router.post('/conversations/:leadId/read', async (req, res, next) => {
 
 router.get('/stats', async (req, res, next) => {
   try {
-    const orgFilter = { in: req.orgIds };
+    const { divisionId } = req.query;
+    const orgFilter = buildInboxOrgFilter(req, divisionId);
 
     const [totalConversations, byChannel, recentInbound, totalMessages] = await Promise.all([
       prisma.lead.count({
@@ -664,9 +822,7 @@ router.patch('/conversations/:leadId/status', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid status value', details: parsed.error.errors });
     }
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const updateData = { status: parsed.data.status };
@@ -717,9 +873,7 @@ router.post('/conversations/:leadId/notes', async (req, res, next) => {
       return res.status(400).json({ error: 'Note body is required', details: parsed.error.errors });
     }
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const note = await prisma.leadNote.create({
@@ -746,9 +900,7 @@ router.get('/conversations/:leadId/notes', async (req, res, next) => {
   try {
     const { leadId } = req.params;
 
-    const lead = await prisma.lead.findFirst({
-      where: { id: leadId, organizationId: { in: req.orgIds } },
-    });
+    const lead = await findInboxLead(req, leadId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const notes = await prisma.leadNote.findMany({
@@ -775,7 +927,7 @@ router.patch('/messages/:messageId', validate(z.object({
       include: { lead: { select: { organizationId: true } } },
     });
     if (!message) return res.status(404).json({ error: 'Message not found' });
-    if (message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
+    if (!req.isSuperAdmin && message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     // Only the sender can edit their own outbound messages
@@ -792,10 +944,11 @@ router.patch('/messages/:messageId', validate(z.object({
       include: { user: { select: { id: true, firstName: true, lastName: true } } },
     });
 
-    res.json(updated);
+    const enriched = await enrichCommunicationForClient(updated, message.leadId);
+    res.json(enriched);
     refreshLeadAISummaryAsync(message.leadId);
 
-    broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
+    emitCommunicationChange(message.lead.organizationId, 'updated', req.user.id, message.leadId, enriched);
   } catch (err) { next(err); }
 });
 
@@ -809,7 +962,7 @@ router.delete('/messages/:messageId', async (req, res, next) => {
       include: { lead: { select: { organizationId: true } } },
     });
     if (!message) return res.status(404).json({ error: 'Message not found' });
-    if (message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
+    if (!req.isSuperAdmin && message.lead.organizationId && !req.orgIds.includes(message.lead.organizationId)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     // Only the sender can delete their own outbound messages
@@ -822,10 +975,18 @@ router.delete('/messages/:messageId', async (req, res, next) => {
       data: { isDeleted: true, body: '' },
     });
 
-    res.json({ message: 'Message deleted' });
+    const afterDelete = await prisma.communication.findUnique({
+      where: { id: messageId },
+      include: { user: { select: { id: true, firstName: true, lastName: true } } },
+    });
+    const enriched = afterDelete ? await enrichCommunicationForClient(afterDelete, message.leadId) : null;
+
+    res.json({ message: 'Message deleted', communication: enriched });
     refreshLeadAISummaryAsync(message.leadId);
 
-    broadcastDataChange(message.lead.organizationId, 'communication', 'updated', req.user.id, { entityId: message.leadId }).catch(() => {});
+    if (enriched) {
+      emitCommunicationChange(message.lead.organizationId, 'updated', req.user.id, message.leadId, enriched);
+    }
   } catch (err) { next(err); }
 });
 

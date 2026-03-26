@@ -2,6 +2,8 @@ const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
 const { authenticate, orgScope, resolveDivisionScope } = require('../middleware/auth');
+const { logger } = require('../config/logger');
+
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { calculateLeadScore, predictConversion, calculateFullScore, rescoreAndPersist } = require('../utils/leadScoring');
@@ -642,6 +644,12 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           distinct: ['leadId'],
           select: { leadId: true, channel: true, body: true, createdAt: true },
         }),
+        prisma.communication.findMany({
+          where: { leadId: { in: leadIds } },
+          orderBy: { createdAt: 'asc' },
+          distinct: ['leadId'],
+          select: { leadId: true, channel: true, body: true, createdAt: true },
+        }),
       ]);
 
       // Build channel counts map: { leadId: { WHATSAPP: 3, EMAIL: 5, ... } }
@@ -664,6 +672,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
           createdAt: msg.createdAt,
         };
       }
+
     }
 
     // Get org settings for SLA info
@@ -1149,23 +1158,6 @@ router.get('/:id', async (req, res, next) => {
         },
         communications: { orderBy: { createdAt: 'desc' }, take: 20 },
         attachments: { orderBy: { createdAt: 'desc' } },
-        campaignAssignments: {
-          orderBy: [{ status: 'asc' }, { assignedAt: 'desc' }],
-          include: {
-            campaign: {
-              select: {
-                id: true,
-                name: true,
-                type: true,
-                status: true,
-                startDate: true,
-                endDate: true,
-                metadata: true,
-              },
-            },
-            assignedBy: { select: { id: true, firstName: true, lastName: true } },
-          },
-        },
         _count: { select: { activities: true, tasks: true, communications: true } },
       },
     });
@@ -1214,7 +1206,7 @@ router.get('/:id', async (req, res, next) => {
       }
     } catch { /* non-critical — breakdown is optional */ }
 
-    res.json({
+    const payload = {
       ...lead,
       score: freshScore,
       conversionProb: freshConversionProb,
@@ -1222,8 +1214,23 @@ router.get('/:id', async (req, res, next) => {
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
       doNotCallByUser,
       scoreBreakdown,
-    });
+    };
+    try {
+      res.json(payload);
+    } catch (serializeErr) {
+      logger.error('GET /leads/:id response serialization failed', {
+        leadId: lead.id,
+        message: serializeErr.message,
+      });
+      next(serializeErr);
+    }
   } catch (err) {
+    logger.error('GET /leads/:id failed', {
+      leadId: req.params?.id,
+      code: err.code,
+      meta: err.meta,
+      message: err.message,
+    });
     next(err);
   }
 });

@@ -2,6 +2,26 @@ const jwt = require('jsonwebtoken');
 const { config } = require('../config/env');
 const { prisma } = require('../config/database');
 
+/** All organization IDs in the subtree rooted at rootId (includes root). */
+async function collectDescendantOrgIds(rootId) {
+  const ids = new Set([rootId]);
+  let frontier = [rootId];
+  while (frontier.length) {
+    const children = await prisma.organization.findMany({
+      where: { parentId: { in: frontier } },
+      select: { id: true },
+    });
+    frontier = [];
+    for (const c of children) {
+      if (!ids.has(c.id)) {
+        ids.add(c.id);
+        frontier.push(c.id);
+      }
+    }
+  }
+  return Array.from(ids);
+}
+
 /**
  * JWT authentication middleware
  */
@@ -77,11 +97,17 @@ const orgScope = async (req, _res, next) => {
     const orgId = req.user.organizationId;
     const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { type: true, parentId: true } });
     const groupId = org?.type === 'GROUP' ? orgId : (org?.parentId || orgId);
-    const children = await prisma.organization.findMany({
-      where: { parentId: groupId },
-      select: { id: true },
+    // Full subtree (not only direct children) so nested divisions are included
+    let orgIds = await collectDescendantOrgIds(groupId);
+    // Extra divisions explicitly linked to this user (e.g. parentId=null divisions)
+    const memberships = await prisma.divisionMembership.findMany({
+      where: { userId: req.user.id },
+      select: { divisionId: true },
     });
-    req.orgIds = [groupId, ...children.map(c => c.id)];
+    for (const m of memberships) {
+      if (!orgIds.includes(m.divisionId)) orgIds.push(m.divisionId);
+    }
+    req.orgIds = orgIds;
     req.isSuperAdmin = req.user.role === 'SUPER_ADMIN';
   } else {
     req.orgIds = [req.user.organizationId];

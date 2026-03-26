@@ -16,6 +16,10 @@ const {
 
 const router = Router();
 
+function isObject(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
 // ─── Source mapping from platform to valid LeadSource enum ──────────
 const PLATFORM_SOURCE_MAP = {
   whatsapp: 'WHATSAPP',
@@ -183,6 +187,22 @@ async function storeInboundMessage(leadId, { channel, body, subject, platform, m
   return communication;
 }
 
+async function hasInboundByExternalMessageId(leadId, externalId) {
+  if (!externalId) return false;
+  const existing = await prisma.communication.findFirst({
+    where: {
+      leadId,
+      direction: 'INBOUND',
+      OR: [
+        { metadata: { path: ['waMessageId'], equals: externalId } },
+        { metadata: { path: ['externalMessageId'], equals: externalId } },
+      ],
+    },
+    select: { id: true },
+  });
+  return !!existing;
+}
+
 // ─── WhatsApp Webhook ───────────────────────────────────────────────
 // WhatsApp Business API sends webhooks here
 router.post('/whatsapp/:organizationId', async (req, res) => {
@@ -195,10 +215,20 @@ router.post('/whatsapp/:organizationId', async (req, res) => {
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const messages = value?.messages || [];
+    const statuses = value?.statuses || [];
+
+    // 1) Inbound messages
+    const contactMap = {};
+    const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+    for (const c of contacts) {
+      const waId = String(c?.wa_id || '').trim();
+      if (!waId) continue;
+      contactMap[waId] = c;
+    }
 
     for (const msg of messages) {
       const senderPhone = msg.from; // e.g. "971501234567"
-      const senderName = value?.contacts?.[0]?.profile?.name || 'WhatsApp User';
+      const senderName = contactMap[senderPhone]?.profile?.name || value?.contacts?.[0]?.profile?.name || 'WhatsApp User';
       const body = msg.text?.body || msg.caption || '[Media message]';
 
       const lead = await findOrCreateLead(organizationId, {
@@ -207,16 +237,71 @@ router.post('/whatsapp/:organizationId', async (req, res) => {
         platform: 'whatsapp',
       });
 
+      const msgId = msg.id ? String(msg.id).trim() : '';
+      if (msgId && await hasInboundByExternalMessageId(lead.id, msgId)) {
+        continue;
+      }
+
       await storeInboundMessage(lead.id, {
         channel: 'WHATSAPP',
         body,
         platform: 'whatsapp',
         metadata: {
-          waMessageId: msg.id,
+          waMessageId: msgId || undefined,
+          externalMessageId: msgId || undefined,
           waTimestamp: msg.timestamp,
           messageType: msg.type,
+          displayPhoneNumber: value?.metadata?.display_phone_number || undefined,
+          phoneNumberId: value?.metadata?.phone_number_id || undefined,
         },
       });
+    }
+
+    // 2) Delivery/read/failure statuses for outbound messages
+    for (const st of statuses) {
+      const waMessageId = String(st?.id || '').trim();
+      if (!waMessageId) continue;
+
+      const normalizedStatus = String(st?.status || '').toLowerCase(); // sent|delivered|read|failed
+      const recipientId = String(st?.recipient_id || '').trim();
+      const statusMeta = {
+        waStatus: normalizedStatus || null,
+        waStatusAt: st?.timestamp ? new Date(Number(st.timestamp) * 1000).toISOString() : new Date().toISOString(),
+        waConversation: isObject(st?.conversation) ? st.conversation : undefined,
+        waPricing: isObject(st?.pricing) ? st.pricing : undefined,
+        waErrors: Array.isArray(st?.errors) ? st.errors : undefined,
+      };
+
+      const candidates = await prisma.communication.findMany({
+        where: {
+          lead: { organizationId },
+          direction: 'OUTBOUND',
+          channel: 'WHATSAPP',
+          OR: [
+            { metadata: { path: ['waMessageId'], equals: waMessageId } },
+            { metadata: { path: ['waMessageIds'], array_contains: [waMessageId] } },
+          ],
+        },
+        select: { id: true, metadata: true, leadId: true, lead: { select: { organizationId: true } } },
+      });
+
+      for (const row of candidates) {
+        const nextMeta = {
+          ...(isObject(row.metadata) ? row.metadata : {}),
+          ...statusMeta,
+          waMessageId: waMessageId,
+          waRecipientId: recipientId || undefined,
+        };
+        await prisma.communication.update({
+          where: { id: row.id },
+          data: {
+            metadata: nextMeta,
+            isRead: normalizedStatus === 'read' ? true : undefined,
+            readAt: normalizedStatus === 'read' ? new Date() : undefined,
+          },
+        });
+        broadcastDataChange(row.lead.organizationId, 'communication', 'updated', null, { entityId: row.leadId }).catch(() => {});
+      }
     }
 
     res.status(200).json({ status: 'ok' });
@@ -233,17 +318,27 @@ router.get('/whatsapp/:organizationId', async (req, res) => {
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token) {
-    // Verify token against stored integration verify token
+    // Verify token against division settings first, then integrations fallback.
     try {
-      const integration = await prisma.integration.findFirst({
-        where: {
-          organizationId: req.params.organizationId,
-          platform: 'whatsapp',
-          status: { not: 'disconnected' },
-        },
-        select: { config: true },
+      const org = await prisma.organization.findUnique({
+        where: { id: req.params.organizationId },
+        select: { settings: true },
       });
-      const storedToken = integration?.config?.verifyToken;
+      const settingsToken = String(org?.settings?.whatsappWebhookVerifyToken || '').trim();
+      let storedToken = settingsToken;
+
+      if (!storedToken) {
+        const integration = await prisma.integration.findFirst({
+          where: {
+            organizationId: req.params.organizationId,
+            platform: 'whatsapp',
+            status: { not: 'disconnected' },
+          },
+          select: { config: true },
+        });
+        storedToken = String(integration?.config?.verifyToken || '').trim();
+      }
+
       if (storedToken && storedToken !== token) {
         logger.warn(`WhatsApp verify token mismatch for org ${req.params.organizationId}`);
         return res.sendStatus(403);

@@ -58,7 +58,10 @@ class ApiClient {
     const data = await res.json();
 
     if (!res.ok) {
-      const details = data.details?.map((d: any) => `${d.field}: ${d.message}`).join(', ');
+      const details =
+        Array.isArray(data.details)
+          ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
+          : (typeof data.details === 'string' ? data.details : '');
       throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Request failed'));
     }
 
@@ -88,7 +91,11 @@ class ApiClient {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'Upload failed');
+      const details =
+        Array.isArray(data.details)
+          ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
+          : (typeof data.details === 'string' ? data.details : '');
+      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Upload failed'));
     }
     return data;
   }
@@ -714,6 +721,38 @@ class ApiClient {
     return this.request<IntegrationPlatformInfo[]>('/integrations/platforms');
   }
 
+  async getErpData(params?: { integrationId?: string; divisionId?: string; entityType?: string; page?: number; limit?: number }) {
+    const query = params
+      ? '?' + new URLSearchParams(
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
+            .map(([k, v]) => [k, String(v)])
+        ).toString()
+      : '';
+    return this.request<{
+      data: Array<{
+        id: string;
+        integrationId: string;
+        provider: string | null;
+        divisionId: string | null;
+        entityType: string;
+        externalId: string;
+        crmEntityId: string;
+        payload: Record<string, unknown>;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      total: number;
+      countsByEntity: Record<string, number>;
+      pagination?: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+      };
+    }>(`/integrations/erp-data${query}`);
+  }
+
   // ─── Widget & API Keys ─────────────────────────────────────────
 
   async generateWidget(config: string | WidgetConfig) {
@@ -874,8 +913,31 @@ class ApiClient {
   }
 
   // Communications
+  async getCommunications(leadId: string) {
+    return this.request<any[]>('/communications/lead/' + leadId);
+  }
+
+  /** Leads that have at least one WhatsApp message, with last message preview (for Communication → WhatsApp tab). */
+  async getWhatsAppConversations() {
+    return this.request<Array<{ lead: { id: string; firstName: string; lastName: string; phone: string | null }; lastMessage: { body: string; createdAt: string; direction: string } }>>('/communications/whatsapp-conversations');
+  }
+
   async sendEmail(data: { leadId: string; to: string; subject: string; body: string }) {
     return this.request<any>('/communications/send-email', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsApp(data: { leadId: string; body: string }) {
+    return this.request<any>('/communications/send-whatsapp', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendWhatsAppTemplate(data: { leadId: string; templateName?: string; languageCode?: string }) {
+    return this.request<any>('/communications/send-whatsapp-template', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -944,6 +1006,91 @@ class ApiClient {
 
   async updateOrganization(data: { name?: string; domain?: string | null; settings?: Record<string, any> }) {
     return this.request<any>('/settings/organization', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  /** WhatsApp Cloud API credentials — stored per division (SUPER_ADMIN: pass divisionId). */
+  async getWhatsAppSettings(divisionId?: string, revealSecrets?: boolean) {
+    const q = new URLSearchParams();
+    if (divisionId) q.set('divisionId', divisionId);
+    if (revealSecrets) q.set('revealSecrets', 'true');
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+      whatsappBusinessAccountId?: string;
+    }>(`/settings/whatsapp${qs}`);
+  }
+
+  async saveWhatsAppSettings(
+    data: {
+      whatsappNumbers: Array<{ label?: string; phoneNumberId: string; displayPhone?: string; token?: string }>;
+      whatsappWebhookVerifyToken?: string;
+      whatsappApiUrl?: string;
+      whatsappBusinessAccountId?: string;
+    },
+    divisionId?: string,
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
+      whatsappWebhookVerifyToken: string;
+      hasWebhookVerifyToken?: boolean;
+      whatsappApiUrl: string;
+      whatsappBusinessAccountId?: string;
+    }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async listWhatsAppTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      templates: Array<{
+        id: string;
+        waTemplateId: string;
+        name: string;
+        language: string;
+        status: string | null;
+        category: string | null;
+        rejectedReason: string | null;
+        lastSyncedAt: string;
+      }>;
+      lastSyncedAt: string | null;
+    }>(`/whatsapp/templates${qs}`);
+  }
+
+  async syncWhatsAppTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      success: boolean;
+      syncedCount: number;
+      templates: Array<{
+        id: string;
+        waTemplateId: string;
+        name: string;
+        language: string;
+        status: string | null;
+        category: string | null;
+        rejectedReason: string | null;
+        lastSyncedAt: string;
+      }>;
+      lastSyncedAt: string;
+    }>(`/whatsapp/templates/sync${qs}`, { method: 'POST' });
+  }
+
+  async testWhatsAppSettings(data?: { phoneNumberId?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      success: boolean;
+      message: string;
+      phoneNumberId?: string;
+      displayPhoneNumber?: string | null;
+      verifiedName?: string | null;
+      details?: any;
+    }>(`/settings/whatsapp/test${qs}`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    });
   }
 
   async getNotificationPreferences() {
@@ -1445,21 +1592,34 @@ class ApiClient {
   }
   // ─── Inbox / Omnichannel ──────────────────────────────────────────
 
-  async getInboxConversations(params?: { channel?: string; search?: string; status?: string; page?: number; limit?: number }) {
+  async getInboxConversations(params?: {
+    channel?: string;
+    search?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+    /** Align with GET /leads — SUPER_ADMIN division switcher scopes inbox to one division */
+    divisionId?: string;
+  }) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.search) q.set('search', params.search);
     if (params?.status) q.set('status', params.status);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations?${q.toString()}`);
   }
 
-  async getInboxMessages(leadId: string, params?: { channel?: string; page?: number; limit?: number }) {
+  async getInboxMessages(
+    leadId: string,
+    params?: { channel?: string; page?: number; limit?: number; divisionId?: string }
+  ) {
     const q = new URLSearchParams();
     if (params?.channel) q.set('channel', params.channel);
     if (params?.page) q.set('page', String(params.page));
     if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.divisionId) q.set('divisionId', params.divisionId);
     return this.request<any>(`/inbox/conversations/${leadId}/messages?${q.toString()}`);
   }
 
@@ -1470,8 +1630,9 @@ class ApiClient {
     });
   }
 
-  async getInboxStats() {
-    return this.request<any>('/inbox/stats');
+  async getInboxStats(divisionId?: string) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {

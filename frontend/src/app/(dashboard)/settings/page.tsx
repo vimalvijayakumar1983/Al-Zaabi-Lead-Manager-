@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { premiumAlert, premiumConfirm } from '@/lib/premiumDialogs';
@@ -23,16 +24,18 @@ import {
   Pencil, X, Type, Hash, Calendar, List, ToggleLeft, Link2,
   AtSign, Palette, ChevronDown, ChevronUp, Image, Save, Sparkles,
   Send, CheckCircle2, XCircle, Loader2, Code2, LayoutTemplate,
-  Download, RefreshCw, Inbox, Server, GitBranch,
+  Download, RefreshCw, Inbox, Server, GitBranch, Copy,
   Filter, Info, ArrowUpDown, SlidersHorizontal, Search, Settings2, LayoutGrid, DollarSign, Star, Tag, Layers, Users, BarChart3, Briefcase, Clock,
+  MessageCircle,
 } from 'lucide-react';
 
-type Tab = 'profile' | 'security' | 'organization' | 'divisionBranding' | 'customFields' | 'leadSources' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
+type Tab = 'profile' | 'security' | 'organization' | 'whatsapp' | 'divisionBranding' | 'customFields' | 'leadSources' | 'pipelineStages' | 'callDispositions' | 'email' | 'emailTemplates' | 'notifications' | 'recycleBinAccess' | 'audit' | 'danger';
 
 const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean; superAdminOnly?: boolean; divisionAdmin?: boolean }[] = [
   { key: 'profile', label: 'Profile', icon: User2 },
   { key: 'security', label: 'Security', icon: Lock },
   { key: 'organization', label: 'Organization', icon: Building2, adminOnly: true },
+  { key: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, adminOnly: true },
   { key: 'divisionBranding', label: 'Division Branding', icon: Palette, divisionAdmin: true },
   { key: 'customFields', label: 'Custom Fields', icon: Columns3, adminOnly: true },
   { key: 'leadSources', label: 'Lead Sources', icon: Tag, adminOnly: true },
@@ -112,6 +115,7 @@ export default function SettingsPage() {
           {activeTab === 'profile' && <ProfileSection />}
           {activeTab === 'security' && <SecuritySection />}
           {activeTab === 'organization' && isAdmin && <OrganizationSection />}
+          {activeTab === 'whatsapp' && isAdmin && <WhatsAppSection />}
           {activeTab === 'divisionBranding' && (isSuperAdmin || user?.role === 'ADMIN') && (
             <DivisionBrandingSection isSuperAdmin={isSuperAdmin} />
           )}
@@ -601,6 +605,455 @@ function OrganizationSection() {
   );
 }
 
+/* ─── WhatsApp Section (admin only, per division) ───────────────── */
+const WHATSAPP_TOKEN_MASK = '••••••••';
+
+type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; displayPhone: string; token: string };
+
+function WhatsAppSection() {
+  const { user } = useAuthStore();
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const [selectedDivisionId, setSelectedDivisionId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [numbers, setNumbers] = useState<WhatsAppNumberEntry[]>([]);
+  const [webhookVerifyToken, setWebhookVerifyToken] = useState('');
+  const [whatsappApiUrl, setWhatsappApiUrl] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
+  const [whatsappBusinessAccountId, setWhatsappBusinessAccountId] = useState('');
+  const [showWebhookVerifyToken, setShowWebhookVerifyToken] = useState(false);
+  /** Per number row: reveal access token (password → text). */
+  const [showAccessTokenByRowId, setShowAccessTokenByRowId] = useState<Record<string, boolean>>({});
+
+  const effectiveDivisionId = isSuperAdmin ? selectedDivisionId : undefined;
+
+  const loadWhatsAppSettings = useCallback(
+    async (opts?: { revealSecrets?: boolean; silent?: boolean }) => {
+      if (isSuperAdmin && !selectedDivisionId) return;
+      if (!opts?.silent) setLoading(true);
+      setError('');
+      try {
+        const data = await api.getWhatsAppSettings(effectiveDivisionId, opts?.revealSecrets);
+        setWhatsappBusinessAccountId(data.whatsappBusinessAccountId || '');
+        setWhatsappApiUrl(data.whatsappApiUrl || '');
+        setWebhookVerifyToken(data.whatsappWebhookVerifyToken || '');
+        const raw = data.whatsappNumbers || [];
+        if (raw.length > 0) {
+          setNumbers(
+            raw.map((n, i) => ({
+              id: `n-${i}-${n.phoneNumberId || i}`,
+              label: n.label || '',
+              phoneNumberId: n.phoneNumberId || '',
+              displayPhone: n.displayPhone || '',
+              token: n.token || '',
+            })),
+          );
+        } else {
+          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to load WhatsApp settings');
+        if (!opts?.revealSecrets) {
+          setNumbers([{ id: 'n-0', label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
+        }
+      } finally {
+        if (!opts?.silent) setLoading(false);
+      }
+    },
+    [isSuperAdmin, selectedDivisionId, effectiveDivisionId]
+  );
+
+  useEffect(() => {
+    if (isSuperAdmin && !selectedDivisionId) {
+      setLoading(false);
+      return;
+    }
+    loadWhatsAppSettings();
+  }, [isSuperAdmin, selectedDivisionId, loadWhatsAppSettings]);
+
+  const addNumber = () => {
+    setNumbers((prev) => [...prev, { id: `n-${Date.now()}`, label: '', phoneNumberId: '', displayPhone: '', token: '' }]);
+  };
+
+  const webhookCallbackUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/api/whatsapp/webhook`;
+  }, []);
+
+  const removeNumber = (id: string) => {
+    setNumbers((prev) => (prev.length <= 1 ? prev : prev.filter((n) => n.id !== id)));
+  };
+
+  const updateNumber = (id: string, field: keyof WhatsAppNumberEntry, value: string) => {
+    setNumbers((prev) => prev.map((n) => (n.id === id ? { ...n, [field]: value } : n)));
+  };
+
+  const handleTestConnection = async () => {
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      const firstConfiguredPhoneId = numbers
+        .map((n) => n.phoneNumberId.trim())
+        .find((v) => !!v);
+      const result = await api.testWhatsAppSettings(
+        firstConfiguredPhoneId ? { phoneNumberId: firstConfiguredPhoneId } : undefined,
+        effectiveDivisionId,
+      );
+      const details = [result.verifiedName, result.displayPhoneNumber].filter(Boolean).join(' · ');
+      setTestResult({
+        ok: true,
+        message: details ? `${result.message} (${details})` : result.message,
+      });
+    } catch (err: unknown) {
+      setTestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Connection test failed',
+      });
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const copyWebhookUrl = async () => {
+    if (!webhookCallbackUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookCallbackUrl);
+      setCopiedWebhookUrl(true);
+      setTimeout(() => setCopiedWebhookUrl(false), 2000);
+    } catch {
+      setCopiedWebhookUrl(false);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSaving(true);
+    setSuccess(false);
+    try {
+      const payload = numbers
+        .filter((n) => n.phoneNumberId.trim() || n.token.trim() || n.displayPhone.trim())
+        .map(({ label, phoneNumberId, displayPhone, token }) => {
+          const t = token.trim();
+          return {
+            label: label.trim() || undefined,
+            phoneNumberId: phoneNumberId.trim(),
+            displayPhone: displayPhone.trim() || undefined,
+            token: t === WHATSAPP_TOKEN_MASK ? WHATSAPP_TOKEN_MASK : (t || undefined),
+          };
+        });
+      await api.saveWhatsAppSettings(
+        {
+          whatsappNumbers: payload.length > 0 ? payload : [],
+          whatsappWebhookVerifyToken: webhookVerifyToken.trim(),
+          whatsappApiUrl: whatsappApiUrl.trim(),
+          whatsappBusinessAccountId: whatsappBusinessAccountId.trim(),
+        },
+        effectiveDivisionId,
+      );
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+      await loadWhatsAppSettings();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading && (!isSuperAdmin || selectedDivisionId)) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader title="WhatsApp" description="Connect WhatsApp Business per division" />
+        {isSuperAdmin && (
+          <DivisionEmailSelector
+            selectedDivisionId={selectedDivisionId}
+            onSelect={(id) => { setSelectedDivisionId(id); }}
+            hintText="WhatsApp numbers and tokens are stored per division. Select the division to configure."
+          />
+        )}
+        <div className="card p-6 space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i}><div className="skeleton h-4 w-24 mb-2" /><div className="skeleton h-10 w-full rounded-lg" /></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <SectionHeader
+        title="WhatsApp"
+        description="Add WhatsApp Business numbers and webhook verify token for Meta (per division)."
+      />
+
+      {isSuperAdmin && (
+        <DivisionEmailSelector
+          selectedDivisionId={selectedDivisionId}
+          onSelect={(id) => { setSelectedDivisionId(id); }}
+          hintText="WhatsApp numbers and tokens are stored per division. Select the division to configure."
+        />
+      )}
+
+      {(!isSuperAdmin || selectedDivisionId) && (
+      <>
+      <form onSubmit={handleSave} className="space-y-4">
+        <div className="card p-5 space-y-4 border border-border-subtle">
+          <h3 className="text-sm font-semibold text-text-primary">Webhook verify token (Meta)</h3>
+          <p className="text-sm text-text-secondary">
+            Set this in Meta Developer Console → WhatsApp → Configuration → Webhook as the &quot;Verify token&quot;.
+          </p>
+          <div>
+            <label className="label">Verify token</label>
+            <div className="relative">
+              <input
+                type={showWebhookVerifyToken ? 'text' : 'password'}
+                className="input font-mono text-sm pr-10"
+                value={webhookVerifyToken}
+                onChange={(e) => setWebhookVerifyToken(e.target.value)}
+                placeholder="e.g. my-secret-verify-token-123"
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  const next = !showWebhookVerifyToken;
+                  if (next && webhookVerifyToken === WHATSAPP_TOKEN_MASK) {
+                    try {
+                      await loadWhatsAppSettings({ revealSecrets: true, silent: true });
+                    } catch {
+                      return;
+                    }
+                  }
+                  setShowWebhookVerifyToken(next);
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary transition-colors"
+                aria-label={showWebhookVerifyToken ? 'Hide verify token' : 'Show verify token'}
+              >
+                {showWebhookVerifyToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {webhookVerifyToken === WHATSAPP_TOKEN_MASK && (
+              <p className="text-xs text-text-tertiary mt-1">
+                Click the eye to load the saved verify token, or paste a new one to replace it.
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="label">WhatsApp API URL (optional)</label>
+            <input
+              type="url"
+              className="input font-mono text-sm"
+              value={whatsappApiUrl}
+              onChange={(e) => setWhatsappApiUrl(e.target.value)}
+              placeholder="e.g. https://graph.facebook.com/v22.0"
+            />
+            <p className="text-xs text-text-tertiary mt-1">Leave empty to use server default. Required for sending messages.</p>
+          </div>
+          <div>
+            <label className="label">WhatsApp Business Account ID (WABA)</label>
+            <input
+              type="text"
+              className="input font-mono text-sm"
+              value={whatsappBusinessAccountId}
+              onChange={(e) => setWhatsappBusinessAccountId(e.target.value)}
+              placeholder="e.g. 123456789012345"
+            />
+            <p className="text-xs text-text-tertiary mt-1">
+              From Meta Business Suite → WhatsApp accounts → API setup, or Graph API. Required to sync message templates in{' '}
+              <Link href="/whatsapp-templates" className="text-brand-600 hover:underline">WhatsApp → Templates</Link>.
+            </p>
+          </div>
+          <div>
+            <label className="label">Webhook callback URL</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                className="input font-mono text-xs"
+                value={webhookCallbackUrl}
+                readOnly
+                placeholder="Open this page in browser to view callback URL"
+              />
+              <button type="button" className="btn-secondary px-3" onClick={copyWebhookUrl} disabled={!webhookCallbackUrl}>
+                {copiedWebhookUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-text-tertiary mt-1">
+              Set this as the webhook URL in Meta Developer Console and subscribe to message + message status events.
+            </p>
+          </div>
+        </div>
+
+        {numbers.map((entry) => (
+          <div key={entry.id} className="card p-5 space-y-4 border border-border-subtle">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-text-primary">
+                Number {numbers.indexOf(entry) + 1}
+                {entry.label ? ` · ${entry.label}` : ''}
+              </span>
+              {numbers.length > 1 && (
+                <button type="button" onClick={() => removeNumber(entry.id)} className="text-sm text-red-600 hover:text-red-700">
+                  Remove
+                </button>
+              )}
+            </div>
+            <div>
+              <label className="label">Label (optional)</label>
+              <input
+                type="text"
+                className="input"
+                value={entry.label}
+                onChange={(e) => updateNumber(entry.id, 'label', e.target.value)}
+                placeholder="e.g. Sales, Support"
+              />
+            </div>
+            <div>
+              <label className="label">Phone Number ID</label>
+              <div className="relative">
+                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                <input
+                  type="text"
+                  className="input pl-10 font-mono text-sm"
+                  value={entry.phoneNumberId}
+                  onChange={(e) => updateNumber(entry.id, 'phoneNumberId', e.target.value)}
+                  placeholder="e.g. 1010197338847846"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="label">Display phone (optional, for webhook routing)</label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                <input
+                  type="text"
+                  className="input pl-10 font-mono text-sm"
+                  value={entry.displayPhone}
+                  onChange={(e) => updateNumber(entry.id, 'displayPhone', e.target.value)}
+                  placeholder="e.g. +16505551111 — must match webhook metadata.display_phone_number"
+                />
+              </div>
+              <p className="text-xs text-text-tertiary mt-1">
+                If Meta sends a test <code className="text-2xs">phone_number_id</code> that does not match your real WABA ID, set this to the same business line as in the webhook (digits only also work).
+              </p>
+            </div>
+            <div>
+              <label className="label">Access Token</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary" />
+                {(() => {
+                  const accessTokenRevealKey = entry.phoneNumberId.trim() || entry.id;
+                  const accessShown = !!showAccessTokenByRowId[accessTokenRevealKey];
+                  return (
+                    <>
+                <input
+                  type={accessShown ? 'text' : 'password'}
+                  className="input pl-10 pr-10 font-mono text-sm"
+                  value={entry.token}
+                  onChange={(e) => updateNumber(entry.id, 'token', e.target.value)}
+                  placeholder="Paste your WhatsApp access token"
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const next = !showAccessTokenByRowId[accessTokenRevealKey];
+                    if (next && entry.token === WHATSAPP_TOKEN_MASK) {
+                      try {
+                        await loadWhatsAppSettings({ revealSecrets: true, silent: true });
+                      } catch {
+                        return;
+                      }
+                    }
+                    setShowAccessTokenByRowId((prev) => ({ ...prev, [accessTokenRevealKey]: next }));
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary transition-colors"
+                  aria-label={accessShown ? 'Hide access token' : 'Show access token'}
+                >
+                  {accessShown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+                    </>
+                  );
+                })()}
+              </div>
+              {entry.token === WHATSAPP_TOKEN_MASK && (
+                <p className="text-xs text-text-tertiary mt-1">
+                  Click the eye to load the saved token from the server (admin only).
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+
+        <button type="button" onClick={addNumber} className="btn-secondary w-full gap-2">
+          <Plus className="h-4 w-4" />
+          Add another number
+        </button>
+
+        {error && (
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-sm text-red-700 ring-1 ring-red-200">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {testResult && (
+          <div
+            className={`flex items-center gap-2 p-3 rounded-lg text-sm ring-1 ${
+              testResult.ok
+                ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                : 'bg-red-50 text-red-700 ring-red-200'
+            }`}
+          >
+            {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <XCircle className="h-4 w-4 flex-shrink-0" />}
+            {testResult.message}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          {success && (
+            <div className="flex items-center gap-1.5 text-sm text-emerald-600 animate-fade-in">
+              <Check className="h-4 w-4" />
+              WhatsApp settings saved
+            </div>
+          )}
+          {!success && <div />}
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={testLoading || saving} className="btn-secondary" onClick={handleTestConnection}>
+              {testLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Server className="h-4 w-4" />}
+              {testLoading ? 'Testing...' : 'Test connection'}
+            </button>
+            <button type="submit" disabled={saving} className="btn-primary">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </form>
+
+      <div className="card p-5 bg-surface-secondary/50">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
+          <MessageCircle className="h-4 w-4 text-text-tertiary" />
+          How to get these
+        </h3>
+        <ul className="text-sm text-text-secondary space-y-1.5 list-disc list-inside">
+          <li>Meta Developer Console → your app → WhatsApp → API setup</li>
+          <li><strong>Phone number ID</strong> is next to your WhatsApp Business number</li>
+          <li><strong>Access token</strong> is under Temporary or system user token</li>
+          <li>Use the same <strong>Verify token</strong> in Meta webhook configuration</li>
+          <li>Each division can use its own WhatsApp Business number and tokens.</li>
+          <li>Optional <strong>Display phone</strong> helps route webhooks when the test payload uses a placeholder Phone Number ID.</li>
+        </ul>
+      </div>
+      </>
+      )}
+    </div>
+  );
+}
+
 /* ─── Division Branding Section (NEW - Multi-tenant) ─────────────── */
 function DivisionBrandingSection({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const [divisions, setDivisions] = useState<Organization[]>([]);
@@ -882,16 +1335,28 @@ function DivisionBrandingSection({ isSuperAdmin }: { isSuperAdmin: boolean }) {
           {success && (
             <div className="flex items-center gap-1.5 text-sm text-emerald-600 animate-fade-in">
               <Check className="h-4 w-4" />
-              Division branding updated successfully
+              WhatsApp credentials saved
             </div>
           )}
           {!success && <div />}
           <button type="submit" disabled={saving} className="btn-primary">
-            <Save className="h-3.5 w-3.5" />
-            {saving ? 'Saving...' : 'Save Branding'}
+            {saving ? 'Saving...' : 'Save'}
           </button>
         </div>
       </form>
+
+      <div className="card p-5 bg-surface-secondary/50">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
+          <MessageCircle className="h-4 w-4 text-text-tertiary" />
+          How to get these
+        </h3>
+        <ul className="text-sm text-text-secondary space-y-1.5 list-disc list-inside">
+          <li>Go to <a href="https://developers.facebook.com" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">developers.facebook.com</a> → your app → WhatsApp → API setup</li>
+          <li><strong>Phone number ID</strong> is shown next to your WhatsApp Business number</li>
+          <li><strong>Access token</strong> is under “Temporary access token” (testing) or create a system user token for production</li>
+          <li>You can add multiple numbers; incoming messages to any of them will be linked to this organization.</li>
+        </ul>
+      </div>
     </div>
   );
 }
@@ -4436,7 +4901,16 @@ function CustomFieldModal({
 }
 
 // Internal components - not exported (Next.js page files only allow default export)
-function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivisionId: string; onSelect: (id: string) => void }) {
+function DivisionEmailSelector({
+  selectedDivisionId,
+  onSelect,
+  hintText,
+}: {
+  selectedDivisionId: string;
+  onSelect: (id: string) => void;
+  /** Shown under the dropdown (e.g. per email vs WhatsApp). */
+  hintText?: string;
+}) {
   const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -4475,7 +4949,9 @@ function DivisionEmailSelector({ selectedDivisionId, onSelect }: { selectedDivis
           </select>
         </div>
       </div>
-      <p className="text-2xs text-text-tertiary mt-2">Email settings are configured per division. Select the division you want to configure.</p>
+      <p className="text-2xs text-text-tertiary mt-2">
+        {hintText || 'Email settings are configured per division. Select the division you want to configure.'}
+      </p>
     </div>
   );
 }

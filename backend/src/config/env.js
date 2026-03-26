@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -46,6 +47,9 @@ const config = {
     apiUrl: process.env.WHATSAPP_API_URL,
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    /** When no division matches webhook phone_number_id / display phone, route inbound here (dev / single-tenant). Must be a valid Organization id. */
+    unmatchedFallbackOrgId: process.env.WHATSAPP_UNMATCHED_FALLBACK_ORG_ID || null,
   },
 
   // AI
@@ -56,6 +60,24 @@ const config = {
 
   // Webhook
   webhookSecret: process.env.WEBHOOK_SECRET || 'webhook-secret',
+
+  /** Optional S3-compatible object storage for inbox attachments (AWS S3, R2, MinIO). */
+  attachmentsS3: {
+    bucket: process.env.S3_BUCKET || process.env.ATTACHMENTS_S3_BUCKET || '',
+    region: process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+    endpoint: process.env.S3_ENDPOINT || process.env.ATTACHMENTS_S3_ENDPOINT || '',
+    forcePathStyle:
+      process.env.S3_FORCE_PATH_STYLE === 'true' ||
+      process.env.ATTACHMENTS_S3_FORCE_PATH_STYLE === 'true',
+    keyPrefix: process.env.S3_ATTACHMENT_PREFIX || process.env.ATTACHMENTS_S3_PREFIX || 'inbox',
+    /** Presigned GET redirect TTL (seconds). */
+    signedUrlTtlSeconds: parseInt(
+      process.env.S3_SIGNED_URL_TTL_SECONDS || process.env.ATTACHMENTS_S3_URL_TTL || '3600',
+      10
+    ) || 3600,
+  },
 };
 
 module.exports = { config };

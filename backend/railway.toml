@@ -1,0 +1,6 @@
+# Use backend Dockerfile (same pattern as vimalcode branch).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+# Let Dockerfile CMD run migrations + start (do not override with bare `node src/index.js`).

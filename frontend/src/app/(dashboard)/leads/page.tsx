@@ -1,9 +1,27 @@
 'use client';
 
 import { Suspense, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
+
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
+import {
+  buildLeadsListParams,
+  useCallOutcomeOptions,
+  useDispositionStudioQuery,
+  useLeadSourcesQuery,
+  useLeadsCustomFieldsQuery,
+  useLeadsDashboardQuery,
+  useLeadsFieldConfigQuery,
+  useLeadsInvalidate,
+  useLeadsListQuery,
+  useLeadsMeQuery,
+  useLeadsPipelineStagesQuery,
+  useLeadsTagsQuery,
+  useLeadsUsersQuery,
+} from '@/features/leads/hooks/useLeadsQueries';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
@@ -218,11 +236,28 @@ function LeadsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const addToast = useNotificationStore((s) => s.addToast);
   const analyticsScope = searchParams.get('analyticsScope');
+  const { invalidateList, invalidateListAndDashboard, invalidateDashboard } = useLeadsInvalidate();
+
+  const prefetchLeadDetail = useCallback(
+    (leadId: string) => {
+      queryClient.prefetchQuery({
+        queryKey: queryKeys.leads.detail(leadId),
+        queryFn: () => api.getLead(leadId),
+        staleTime: 30_000,
+      });
+    },
+    [queryClient]
+  );
+
+  const divisionScope = useMemo(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
+    []
+  );
 
   // ─── State ──────────────────────────────────────────────────────
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [pagination, setPagination] = useState(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -279,55 +314,92 @@ function LeadsContent() {
 
   // Column management
   const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumns());
-  const [customLabels, setCustomLabels] = useState<Record<string, string>>({});
   const [showColumnManager, setShowColumnManager] = useState(false);
 
-  // Status labels (custom per division)
-  const [statusLabelsMap, setStatusLabelsMap] = useState<Record<string, string>>({});
-  const [leadSourceOptions, setLeadSourceOptions] = useState<LeadSourceOption[]>(DEFAULT_LEAD_SOURCE_OPTIONS);
-  const [callOutcomeOptions, setCallOutcomeOptions] = useState<Array<{ value: string; label: string; icon?: string; group?: string; isActive?: boolean }>>([]);
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data.statusLabels) setStatusLabelsMap(data.statusLabels); })
-      .catch(() => {});
-  }, []);
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getLeadSources(activeDivisionId || undefined)
-      .then((data: any) => {
-        const next = Array.isArray(data?.sources) ? data.sources.filter((s: any) => s?.isActive !== false) : [];
-        if (next.length > 0) {
-          setLeadSourceOptions(next);
-        } else {
-          setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS);
-        }
-      })
-      .catch(() => setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS));
-  }, []);
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getDispositionStudio(activeDivisionId || undefined)
-      .then((data: any) => {
-        const options = Array.isArray(data?.dispositions)
-          ? [...data.dispositions]
-              .sort((a: any, b: any) => Number(a?.sortOrder || 0) - Number(b?.sortOrder || 0))
-              .map((d: any) => ({
-                value: String(d?.key || ''),
-                label: String(d?.label || d?.key || ''),
-                icon: d?.icon || '📝',
-                group: d?.category || 'Other',
-                isActive: d?.isActive !== false,
-              }))
-              .filter((d: any) => d.value && d.label)
-          : [];
-        setCallOutcomeOptions(options);
-      })
-      .catch(() => setCallOutcomeOptions([]));
-  }, []);
+  const meQuery = useLeadsMeQuery();
+  const meReady = meQuery.isSuccess || meQuery.isError;
+  const currentUser = (meQuery.data ?? null) as User | null;
+  const usersQuery = useLeadsUsersQuery(null);
+  const users = (usersQuery.data || []) as User[];
+  const dashboardQuery = useLeadsDashboardQuery(divisionScope);
+  const stats = dashboardQuery.data ?? null;
+  const customFieldsQuery = useLeadsCustomFieldsQuery(divisionScope);
+  const customFields = (customFieldsQuery.data || []) as CustomField[];
+  const leadSourcesQuery = useLeadSourcesQuery(divisionScope);
+  const dispositionQuery = useDispositionStudioQuery(divisionScope);
+  const fieldConfigQuery = useLeadsFieldConfigQuery(divisionScope);
+  const tagsQuery = useLeadsTagsQuery(divisionScope || 'org', divisionScope);
+  const pipelineStagesQuery = useLeadsPipelineStagesQuery(divisionScope);
+
+  const statusLabelsMap = (fieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
+  const customLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    (fieldConfigQuery.data?.builtInFields || []).forEach((f: { key?: string; customLabel?: string }) => {
+      if (f.customLabel && f.key) labels[f.key] = f.customLabel;
+    });
+    return labels;
+  }, [fieldConfigQuery.data]);
+
+  const leadSourceOptions = useMemo((): LeadSourceOption[] => {
+    const data = leadSourcesQuery.data as { sources?: LeadSourceOption[] } | undefined;
+    const next = Array.isArray(data?.sources) ? data.sources.filter((s: any) => s?.isActive !== false) : [];
+    if (next.length > 0) return next as LeadSourceOption[];
+    return DEFAULT_LEAD_SOURCE_OPTIONS;
+  }, [leadSourcesQuery.data]);
+
+  const callOutcomeOptions = useCallOutcomeOptions(dispositionQuery.data);
+
+  const listParams = useMemo(
+    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope),
+    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]
+  );
+
+  const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
+  const leadsRes = leadsQuery.data as any;
+  const leads: Lead[] = Array.isArray(leadsRes?.data)
+    ? leadsRes.data
+    : Array.isArray(leadsRes)
+      ? leadsRes
+      : [];
+
+  /** v5: `isLoading` is only `isPending && isFetching`, so there is a gap where the list is still empty
+   *  but `isLoading` is false (pending, fetch not started yet). Keep the table in loading state until
+   *  we have real response data for the current query key (e.g. after pagination/filter changes). */
+  const loading =
+    !meReady ||
+    (!leadsQuery.data && (leadsQuery.isPending || leadsQuery.isFetching));
+  const error = leadsQuery.isError ? (leadsQuery.error as Error)?.message || 'Failed to load leads' : null;
+
+  /** Header + "Total" KPI use the same number: list `pagination.total` when the list response is present (matches filters/scope), else dashboard overview until the list loads. */
+  const alignedTotalLeads = useMemo(() => {
+    const res = leadsQuery.data as { pagination?: { total?: number } } | undefined;
+    if (typeof res?.pagination?.total === 'number') return res.pagination.total;
+    if (stats?.overview?.totalLeads != null) return stats.overview.totalLeads;
+    return pagination.total;
+  }, [leadsQuery.data, stats?.overview?.totalLeads, pagination.total]);
+
+  const allTags = (tagsQuery.data || []) as { id: string; name: string; color: string }[];
+
+  const stages = useMemo(() => {
+    const data = pipelineStagesQuery.data as { stages?: any[] } | undefined;
+    const rawStages = data?.stages || data || [];
+    const arr = Array.isArray(rawStages) ? rawStages : [];
+    const seen = new Set<string>();
+    return arr.filter((stage: any) => {
+      const key = `${stage.id || ''}::${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }) as {
+      id: string;
+      name: string;
+      color?: string;
+      organizationId?: string;
+      isWonStage?: boolean;
+      isLostStage?: boolean;
+    }[];
+  }, [pipelineStagesQuery.data]);
+
   const getStatusLabel = (status: string): string => {
     return statusLabelsMap[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
   };
@@ -349,193 +421,38 @@ function LeadsContent() {
 
   // Advanced filters
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showBulkReassign, setShowBulkReassign] = useState(false);
   const [showAllocationSettings, setShowAllocationSettings] = useState(false);
   const [showWorkload, setShowWorkload] = useState(false);
-  const [users, setUsers] = useState<User[]>([]);
-  const [allTags, setAllTags] = useState<{id: string; name: string; color: string}[]>([]);
-  const [stages, setStages] = useState<{
-    id: string;
-    name: string;
-    color?: string;
-    organizationId?: string;
-    isWonStage?: boolean;
-    isLostStage?: boolean;
-  }[]>([]);
-
-  // Custom fields
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
 
   const visibleColumns = columns.filter((c) => c.visible);
 
-  /** Same division scope as GET /leads (sidebar + filter); read storage at call time to avoid race with layout. */
-  const resolveListDivisionId = useCallback((): string | undefined => {
-    if (typeof window === 'undefined') return undefined;
-    const activeDivisionId = localStorage.getItem('activeDivisionId')?.trim() || undefined;
-    if (filters.divisionId && filters.divisionId !== 'all') {
-      return filters.divisionId;
+  useEffect(() => {
+    const res = leadsQuery.data as { pagination?: typeof pagination } | undefined;
+    if (res?.pagination) {
+      setPagination((prev) => ({
+        ...prev,
+        total: res.pagination!.total ?? prev.total,
+        page: res.pagination!.page ?? prev.page,
+        limit: res.pagination!.limit ?? prev.limit,
+        totalPages: res.pagination!.totalPages ?? prev.totalPages,
+      }));
     }
-    if (activeDivisionId && analyticsScope !== 'all') {
-      return activeDivisionId;
-    }
-    return undefined;
-  }, [filters.divisionId, analyticsScope]);
-
-  const statsFetchSeq = useRef(0);
-
-  /** Query params for GET /leads (filters + sort). Same shape for table fetch and full export. */
-  const buildLeadsListParams = useCallback((): Record<string, string | number> => {
-    const params: Record<string, string | number> = { sortBy, sortOrder };
-    const scopedDiv = resolveListDivisionId();
-    if (scopedDiv) params.divisionId = scopedDiv;
-    if (filters.search) params.search = filters.search;
-    if (filters.status) params.status = filters.status;
-    if (filters.source) params.source = filters.source;
-    if (filters.assignedToId === '__unassigned__') {
-      params.assignedToId = 'unassigned';
-    } else if (filters.assignedToId === '__current_user__' && currentUser) {
-      params.assignedToId = currentUser.id;
-    } else if (filters.assignedToId && filters.assignedToId !== '__current_user__') {
-      params.assignedToId = filters.assignedToId;
-    }
-    if (filters.minScore) params.minScore = filters.minScore;
-    if (filters.maxScore) params.maxScore = filters.maxScore;
-    if (filters.dateFrom) params.dateFrom = filters.dateFrom;
-    if (filters.dateTo) params.dateTo = filters.dateTo;
-    if (filters.updatedFrom) params.updatedFrom = filters.updatedFrom;
-    if (filters.updatedTo) params.updatedTo = filters.updatedTo;
-    if (filters.company) params.company = filters.company;
-    if (filters.jobTitle) params.jobTitle = filters.jobTitle;
-    if (filters.location) params.location = filters.location;
-    if (filters.campaign) params.campaign = filters.campaign;
-    if (filters.productInterest) params.productInterest = filters.productInterest;
-    if (filters.budgetMin) params.budgetMin = filters.budgetMin;
-    if (filters.budgetMax) params.budgetMax = filters.budgetMax;
-    if (filters.tags) params.tags = filters.tags;
-    if (filters.hasEmail) params.hasEmail = filters.hasEmail;
-    if (filters.hasPhone) params.hasPhone = filters.hasPhone;
-    if (filters.conversionMin) params.conversionMin = filters.conversionMin;
-    if (filters.conversionMax) params.conversionMax = filters.conversionMax;
-    if (filters.stageId) params.stageId = filters.stageId;
-    if (filters.callOutcome) params.callOutcome = filters.callOutcome;
-    if (filters.callOutcomeReason) params.callOutcomeReason = filters.callOutcomeReason;
-    if (filters.callOutcomeMode) params.callOutcomeMode = filters.callOutcomeMode;
-    if (filters.lastCallFrom) params.lastCallFrom = filters.lastCallFrom;
-    if (filters.lastCallTo) params.lastCallTo = filters.lastCallTo;
-    if (filters.minCallCount) params.minCallCount = filters.minCallCount;
-    if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
-    if (filters.showBlocked) params.showBlocked = filters.showBlocked;
-    return params;
-  }, [filters, sortBy, sortOrder, currentUser, resolveListDivisionId]);
-
-  // ─── Data Fetching ──────────────────────────────────────────────
-
-  const fetchLeads = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params: Record<string, string | number> = {
-        ...buildLeadsListParams(),
-        page: pagination.page,
-        limit: pagination.limit,
-      };
-      const res = await api.getLeads(params) as any;
-      const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
-      setLeads(leadsData);
-      if (res?.pagination) {
-        setPagination(prev => ({
-          ...prev,
-          total: res.pagination.total ?? prev.total,
-          page: res.pagination.page ?? prev.page,
-          limit: res.pagination.limit ?? prev.limit,
-          totalPages: res.pagination.totalPages ?? prev.totalPages,
-        }));
-      }
-    } catch (err: any) {
-      console.error('Failed to fetch leads:', err);
-      setError(err.message || 'Failed to load leads. Please check that the backend server is running.');
-    } finally {
-      setLoading(false);
-    }
-  }, [pagination.page, pagination.limit, buildLeadsListParams]);
-
-  const fetchStats = useCallback(async () => {
-    const seq = ++statsFetchSeq.current;
-    try {
-      const params: Record<string, string | number> = {
-        ...buildLeadsListParams(),
-        page: 1,
-        limit: 20,
-      };
-      const data = await api.getLeadsStats(params);
-      if (seq !== statsFetchSeq.current) return;
-      setStats(data);
-    } catch {
-      if (seq === statsFetchSeq.current) setStats(null);
-    }
-  }, [buildLeadsListParams, statsDivisionId]);
-
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return;
-    const stored = localStorage.getItem('activeDivisionId') || undefined;
-    setStatsDivisionId(stored);
-  }, []);
+  }, [leadsQuery.data]);
 
   useEffect(() => {
-    const onDivisionChanged = (e: Event) => {
-      const d = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
-      if (d && 'divisionId' in d) {
-        setStatsDivisionId(d.divisionId || undefined);
-      } else {
-        setStatsDivisionId(localStorage.getItem('activeDivisionId') || undefined);
-      }
-    };
-    const onStorage = (ev: StorageEvent) => {
-      if (ev.key !== 'activeDivisionId') return;
-      setStatsDivisionId(ev.newValue || undefined);
-    };
-    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, []);
-
-  const fetchUsers = useCallback(async () => {
-    try {
-      const data = await api.getUsers();
-      setUsers(data as User[]);
-    } catch { /* non-critical */ }
-  }, []);
-
-  const fetchCurrentUser = useCallback(async () => {
-    try {
-      const me = await api.getMe();
-      setCurrentUser(me);
-    } catch { /* non-critical */ }
-  }, []);
-
-  const fetchCustomFields = useCallback(async () => {
-    try {
-      // Scope custom fields to the active division (if super admin has one selected)
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const data = await api.getCustomFields(activeDivisionId || undefined);
-      setCustomFields(data as CustomField[]);
-      // Rebuild columns with custom fields
-      setColumns(prev => {
-        const updated = loadColumns(data as CustomField[]);
-        // Preserve user's visibility/order preferences from existing columns
-        const prevMap = new Map(prev.map(c => [c.id, c]));
-        return updated.map(c => {
-          const existing = prevMap.get(c.id);
-          if (existing) return { ...c, visible: existing.visible };
-          return c;
-        });
+    const data = customFieldsQuery.data as CustomField[] | undefined;
+    if (!data) return;
+    setColumns((prev) => {
+      const updated = loadColumns(data);
+      const prevMap = new Map(prev.map((c) => [c.id, c]));
+      return updated.map((c) => {
+        const existing = prevMap.get(c.id);
+        if (existing) return { ...c, visible: existing.visible };
+        return c;
       });
-    } catch { /* non-critical */ }
-  }, []);
+    });
+  }, [customFieldsQuery.data]);
 
   // Load saved views from server + migrate localStorage views
   useEffect(() => {
@@ -590,16 +507,6 @@ function LeadsContent() {
     };
     loadServerViews();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
-  useEffect(() => { fetchLeads(); }, [fetchLeads]);
-  useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
-  useEffect(() => {
-    fetchUsers();
-    fetchCustomFields();
-  }, [fetchUsers, fetchCustomFields]);
 
   // One-time drill-down params should not keep applying by default
   // on subsequent division loads/navigation.
@@ -676,45 +583,11 @@ function LeadsContent() {
     } catch { /* sessionStorage unavailable */ }
   }, [filters, sortBy, sortOrder, viewMode, pagination.page, activeViewId]);
 
-  // Fetch field config to get custom labels for column headers
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const params = new URLSearchParams();
-    if (activeDivisionId) params.append('divisionId', activeDivisionId);
-    fetch(`/api/settings/field-config?${params}`, {
-      headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        const labels: Record<string, string> = {};
-        (data.builtInFields || []).forEach((f: any) => {
-          if (f.customLabel) labels[f.key] = f.customLabel;
-        });
-        setCustomLabels(labels);
-      })
-      .catch(() => {});
-  }, []);
+  const onRealtimeLeads = useCallback(() => {
+    invalidateListAndDashboard();
+  }, [invalidateListAndDashboard]);
 
-  // Auto-refresh when data changes (including the current user marking messages as read)
-  useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getTags().then((data: any) => setAllTags(data || [])).catch(() => {});
-    api
-      .getPipelineStages(activeDivisionId || undefined)
-      .then((data: any) => {
-        const rawStages = data.stages || data || [];
-        const seen = new Set<string>();
-        const deduped = rawStages.filter((stage: any) => {
-          const key = `${stage.id || ''}::${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        setStages(deduped);
-      })
-      .catch(() => {});
-  }, []);
+  useRealtimeSync(['lead', 'communication'], onRealtimeLeads);
 
   const getLeadDivisionId = useCallback((lead: Lead): string | null => {
     return (lead as any).organizationId || (lead as any).organization?.id || null;
@@ -775,8 +648,7 @@ function LeadsContent() {
       }
       await api.createLead(data);
       setShowForm(false);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Lead Created', message: 'New lead has been created successfully' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to create lead' });
@@ -814,8 +686,7 @@ function LeadsContent() {
       await api.bulkUpdateLeads(Array.from(selectedLeads), { status });
       setSelectedLeads(new Set());
       setShowBulkActions(false);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Status Updated', message: `${selectedLeads.size} lead(s) updated to ${status}` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update leads' }); }
   };
@@ -825,8 +696,7 @@ function LeadsContent() {
       await api.bulkUpdateLeads(Array.from(selectedLeads), { assignedToId });
       setShowBulkReassign(false);
       setSelectedLeads(new Set());
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Leads Reassigned', message: `${selectedLeads.size} lead(s) reassigned successfully` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to reassign leads' }); }
   };
@@ -847,8 +717,7 @@ function LeadsContent() {
         await api.deleteLead(ids[i]);
       }
       setSelectedLeads(new Set());
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Leads Moved', message: `${ids.length} lead(s) moved to Recycle Bin` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete leads' }); }
   };
@@ -858,8 +727,7 @@ function LeadsContent() {
       await api.updateLead(leadId, { status });
       setQuickActionId(null);
       setQuickActionPosition(null);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Status Updated', message: `Lead status changed to ${status}` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update status' }); }
   };
@@ -877,8 +745,7 @@ function LeadsContent() {
       await api.deleteLead(leadId);
       setQuickActionId(null);
       setQuickActionPosition(null);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Lead Moved', message: 'Lead moved to Recycle Bin' });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete lead' }); }
   };
@@ -891,8 +758,8 @@ function LeadsContent() {
       data[field] = value || null;
     }
     await api.updateLead(leadId, data);
-    fetchLeads();
-    if (field === 'status') fetchStats();
+    invalidateList();
+    if (field === 'status') invalidateDashboard();
   };
 
   const handleSelectView = (view: SavedView) => {
@@ -1113,7 +980,11 @@ function LeadsContent() {
         );
       case 'name':
         return (
-          <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
+          <Link
+            href={`/leads/${lead.id}`}
+            className="flex items-center gap-2.5 group"
+            onMouseEnter={() => prefetchLeadDetail(lead.id)}
+          >
             <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
               {getInitials(lead)}
             </div>
@@ -1161,7 +1032,7 @@ function LeadsContent() {
         return (
           <InlineEdit value={currentVal} onSave={async (v) => {
               if (useStages) {
-                try { await api.moveLead(lead.id, v, 0); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Lead Moved', message: 'Lead stage updated' }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
+                try { await api.moveLead(lead.id, v, 0); invalidateListAndDashboard(); addToast({ type: 'success', title: 'Lead Moved', message: 'Lead stage updated' }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
               } else {
                 handleInlineUpdate(lead.id, 'status', v);
               }
@@ -1392,7 +1263,7 @@ function LeadsContent() {
                 <InlineEdit value={String(value)} onSave={async (v) => {
                   const newCustomData = { ...customData, [fieldName]: v ? parseFloat(v) : null };
                   await api.updateLead(lead.id, { customData: newCustomData });
-                  fetchLeads();
+                  invalidateList();
                 }} type="number" placeholder="-" displayClassName="text-sm text-gray-700" />
               );
             default:
@@ -1400,7 +1271,7 @@ function LeadsContent() {
                 <InlineEdit value={String(value)} onSave={async (v) => {
                   const newCustomData = { ...customData, [fieldName]: v || null };
                   await api.updateLead(lead.id, { customData: newCustomData });
-                  fetchLeads();
+                  invalidateList();
                 }} placeholder="-" displayClassName="text-sm text-gray-700" />
               );
           }
@@ -1458,17 +1329,11 @@ function LeadsContent() {
       <div className="flex items-center justify-between flex-shrink-0 pt-4 px-1">
         <div>
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Leads</h1>
-          <p className="text-text-secondary mt-0.5 text-sm">{pagination.total} leads total</p>
+          <p className="text-text-secondary mt-0.5 text-sm">{alignedTotalLeads.toLocaleString()} leads total</p>
         </div>
         <div className="flex items-center gap-2">
-          <RefreshButton onRefresh={() => { fetchLeads(); fetchStats(); }} />
-          <button
-            type="button"
-            onClick={() => void exportCSV()}
-            disabled={exporting}
-            className="btn-secondary text-xs gap-1.5 disabled:opacity-60"
-            title="Export all leads matching current filters (visible columns). May take a moment for large lists."
-          >
+          <RefreshButton onRefresh={() => { invalidateListAndDashboard(); }} />
+          <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
             {exporting ? 'Exporting…' : 'Export'}
           </button>
@@ -1481,8 +1346,8 @@ function LeadsContent() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 flex-shrink-0">
-          <StatCard label="Total" value={stats.overview.totalLeads} color="brand" subtitle="Matches current filters" />
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
+          <StatCard label="Total" value={alignedTotalLeads} color="brand" />
           <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
           <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
           <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="green" />
@@ -1653,6 +1518,7 @@ function LeadsContent() {
             >
               <Link
                 href={`/leads/${activeQuickLead.id}`}
+                onMouseEnter={() => prefetchLeadDetail(activeQuickLead.id)}
                 onClick={() => {
                   setQuickActionId(null);
                   setQuickActionPosition(null);
@@ -1671,8 +1537,7 @@ function LeadsContent() {
                         await api.moveLead(activeQuickLead.id, s.id, 0);
                         setQuickActionId(null);
                         setQuickActionPosition(null);
-                        fetchLeads();
-                        fetchStats();
+                        invalidateListAndDashboard();
                         addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${s.name}` });
                       } catch (err: any) {
                         addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' });
@@ -1715,7 +1580,7 @@ function LeadsContent() {
                         {bulkStageOptions.length > 0
                           ? bulkStageOptions.map((s) => (
                               <button key={s.id || `${s.organizationId || ''}:${s.name}`} onClick={async () => {
-                                try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
+                                try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); invalidateListAndDashboard(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
                               }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                                 <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
                                 {s.name}
@@ -1782,7 +1647,7 @@ function LeadsContent() {
                           </div>
                           <p className="text-sm font-medium text-red-800">Failed to load leads</p>
                           <p className="text-xs text-red-600 max-w-md">{error}</p>
-                          <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-2">Retry</button>
+                          <button onClick={() => leadsQuery.refetch()} className="btn-primary text-sm mt-2">Retry</button>
                         </div>
                       </td></tr>
                     ) : leads.length === 0 ? (
@@ -1800,6 +1665,7 @@ function LeadsContent() {
                       leads.map((lead, rowIndex) => (
                         <tr key={lead.id}
                           className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
+                          onMouseEnter={() => prefetchLeadDetail(lead.id)}
                           onClick={(e) => {
                             const target = e.target as HTMLElement;
                             if (target.closest('input, button, a, select, [role="listbox"], [data-inline-edit]')) return;
@@ -1829,7 +1695,7 @@ function LeadsContent() {
                 <div className="card p-12 text-center">
                   <p className="text-sm font-medium text-red-800">Failed to load leads</p>
                   <p className="text-xs text-red-600 mt-1">{error}</p>
-                  <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-3">Retry</button>
+                  <button onClick={() => leadsQuery.refetch()} className="btn-primary text-sm mt-3">Retry</button>
                 </div>
               ) : leads.length === 0 ? (
                 <div className="card p-12 text-center">
@@ -1839,7 +1705,12 @@ function LeadsContent() {
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {leads.map((lead) => (
-                      <Link key={lead.id} href={`/leads/${lead.id}`} className="card p-4 hover:shadow-md transition-shadow group">
+                      <Link
+                        key={lead.id}
+                        href={`/leads/${lead.id}`}
+                        className="card p-4 hover:shadow-md transition-shadow group"
+                        onMouseEnter={() => prefetchLeadDetail(lead.id)}
+                      >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
                             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
@@ -1881,10 +1752,11 @@ function LeadsContent() {
                             </span>
                           ) : null}
                         </div>
-                        {/* Channel Indicators */}
-                        {lead.channelCounts && Object.keys(lead.channelCounts).length > 0 && (
-                          <div className="flex items-center gap-1.5 mt-2">
-                            {Object.entries(lead.channelCounts).map(([channel, count]) => {
+                        {/* Channel indicators + first message */}
+                        {((lead.channelCounts && Object.keys(lead.channelCounts).length > 0) || lead.firstMessage) && (
+                          <div className="mt-2 space-y-1">
+                            <div className="flex items-center gap-1.5">
+                            {lead.channelCounts && Object.entries(lead.channelCounts).map(([channel, count]) => {
                               const cfgMap: Record<string, { color: string; bg: string; label: string }> = {
                                 WHATSAPP: { color: '#25D366', bg: 'bg-green-50', label: 'WhatsApp' },
                                 EMAIL: { color: '#6366F1', bg: 'bg-indigo-50', label: 'Email' },
@@ -1905,7 +1777,11 @@ function LeadsContent() {
                                 </span>
                               );
                             })}
-                            {lead.lastInboundMessage && (
+                            </div>
+                            {lead.firstMessage?.body && (
+                              <p className="text-[11px] text-gray-500 truncate" title={lead.firstMessage.body}>{lead.firstMessage.body}</p>
+                            )}
+                            {lead.lastInboundMessage && !lead.firstMessage?.body && (
                               <span className="text-[10px] text-gray-400 truncate max-w-[120px]" title={`Last: ${lead.lastInboundMessage.body}`}>
                                 {lead.lastInboundMessage.body.substring(0, 30)}{lead.lastInboundMessage.body.length > 30 ? '...' : ''}
                               </span>
@@ -1933,16 +1809,28 @@ function LeadsContent() {
           {/* ═══════════════════ KANBAN VIEW ═══════════════════ */}
           {viewMode === 'kanban' && (
             <div>
-              <KanbanView
-                leads={leads}
-                customFields={customFields}
-                onStatusChange={async (leadId, status) => {
-                  await handleQuickStatus(leadId, status);
-                }}
-              />
-              <div className="mt-4">
-                <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
-              </div>
+              {loading ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-16">
+                  <div className="h-8 w-8 rounded-lg bg-brand-100 flex items-center justify-center animate-pulse-soft">
+                    <div className="h-4 w-4 rounded-full border-2 border-brand-600 border-t-transparent animate-spin" />
+                  </div>
+                  <span className="text-sm text-text-tertiary">Loading leads...</span>
+                </div>
+              ) : (
+                <>
+                  <KanbanView
+                    leads={leads}
+                    customFields={customFields}
+                    onLeadHover={prefetchLeadDetail}
+                    onStatusChange={async (leadId, status) => {
+                      await handleQuickStatus(leadId, status);
+                    }}
+                  />
+                  <div className="mt-4">
+                    <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1963,11 +1851,22 @@ function LeadsContent() {
       {showAllocationSettings && (
         <AllocationSettings
           isOpen={showAllocationSettings}
-          onClose={() => { setShowAllocationSettings(false); fetchLeads(); }}
+          onClose={() => { setShowAllocationSettings(false); invalidateList(); }}
           users={users}
         />
       )}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} sourceOptions={leadSourceOptions} />}
+      {showForm && (
+        <CreateLeadModal
+          onClose={() => setShowForm(false)}
+          onSubmit={handleCreateLead}
+          customFields={customFields}
+          users={users}
+          currentUserId={currentUser?.id}
+          userRole={currentUser?.role}
+          sourceOptions={leadSourceOptions}
+          tagsList={allTags}
+        />
+      )}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
     </>
@@ -2058,6 +1957,7 @@ interface CreateLeadModalProps {
   currentUserId?: string;
   userRole?: string;
   sourceOptions?: LeadSourceOption[];
+  tagsList?: { id: string; name: string; color: string }[];
 }
 
 function CreateLeadModal({
@@ -2068,6 +1968,7 @@ function CreateLeadModal({
   currentUserId,
   userRole,
   sourceOptions = FALLBACK_SOURCE_OPTIONS,
+  tagsList = [],
 }: CreateLeadModalProps) {
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
@@ -2091,45 +1992,27 @@ function CreateLeadModal({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [availableTags, setAvailableTags] = useState<{id: string; name: string; color: string}[]>([]);
+  const availableTags = tagsList;
   const [tagInput, setTagInput] = useState('');
   const [showTagDropdown, setShowTagDropdown] = useState(false);
-  const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
-  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const createModalDivisionScope = useMemo(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
+    []
+  );
+  const createModalFieldConfigQuery = useLeadsFieldConfigQuery(createModalDivisionScope);
+  const fieldConfig = useMemo(() => {
+    const config: Record<string, { isRequired?: boolean; customLabel?: string }> = {};
+    (createModalFieldConfigQuery.data?.builtInFields || []).forEach((f: { key?: string; isRequired?: boolean; customLabel?: string }) => {
+      if (!f.key) return;
+      config[f.key] = { isRequired: !!f.isRequired, customLabel: f.customLabel || undefined };
+    });
+    return config;
+  }, [createModalFieldConfigQuery.data]);
+  const statusLabels = (createModalFieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
   const effectiveSourceOptions = useMemo(
     () => (sourceOptions.length > 0 ? sourceOptions.filter((s) => s.isActive !== false) : FALLBACK_SOURCE_OPTIONS),
     [sourceOptions]
   );
-
-  // Fetch available tags for the division
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    if (activeDivisionId) {
-      api.getTags(activeDivisionId).then((data: any) => setAvailableTags(Array.isArray(data) ? data : [])).catch(() => {});
-    } else {
-      api.getTags().then((data: any) => setAvailableTags(Array.isArray(data) ? data : [])).catch(() => {});
-    }
-  }, []);
-
-  // Fetch field config to know which fields are required for this division
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const params = new URLSearchParams();
-    if (activeDivisionId) params.append('divisionId', activeDivisionId);
-    fetch(`/api/settings/field-config?${params}`, {
-      headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        const config: Record<string, { isRequired?: boolean; customLabel?: string }> = {};
-        (data.builtInFields || []).forEach((f: any) => {
-          config[f.key] = { isRequired: f.isRequired || false, customLabel: f.customLabel || undefined };
-        });
-        setFieldConfig(config);
-        if (data.statusLabels) setStatusLabels(data.statusLabels);
-      })
-      .catch(() => {}); // fallback: only name required (hardcoded)
-  }, []);
 
   const getStatusLabel = (status: string): string => {
     return statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());

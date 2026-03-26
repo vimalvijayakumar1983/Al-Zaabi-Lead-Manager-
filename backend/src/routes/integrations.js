@@ -77,6 +77,14 @@ const AVAILABLE_PLATFORMS = [
     status: 'available',
     requiresOAuth: false,
   },
+  {
+    id: 'erp',
+    name: 'ERP',
+    icon: 'database',
+    description: 'Inbound ERP APIs for divisions (FACTS, FOCUS, CORTEX)',
+    status: 'available',
+    requiresOAuth: false,
+  },
 ];
 
 // ─── Validation Schemas ────────────────────────────────────────────────────────
@@ -90,6 +98,7 @@ const platformEnum = z.enum([
   'website',
   'webhook',
   'zapier',
+  'erp',
 ]);
 
 const createIntegrationSchema = z.object({
@@ -110,6 +119,14 @@ const updateIntegrationSchema = z.object({
 const logsQuerySchema = paginationSchema.extend({
   action: z.string().optional(),
   status: z.enum(['success', 'error', 'pending']).optional(),
+});
+
+const erpDataQuerySchema = z.object({
+  integrationId: z.string().uuid().optional(),
+  divisionId: z.string().uuid().optional(),
+  entityType: z.string().optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(1000).optional().default(300),
 });
 
 const generateApiKeySchema = z.object({
@@ -191,6 +208,26 @@ router.get('/', async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
     });
 
+    const integrationIds = integrations.map((row) => row.id);
+    const recentErrorLogs = integrationIds.length
+      ? await prisma.integrationLog.findMany({
+          where: {
+            integrationId: { in: integrationIds },
+            status: 'error',
+            errorMessage: { not: null },
+          },
+          select: { integrationId: true, errorMessage: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+        })
+      : [];
+
+    const latestErrorByIntegration = {};
+    for (const log of recentErrorLogs) {
+      if (!latestErrorByIntegration[log.integrationId] && log.errorMessage) {
+        latestErrorByIntegration[log.integrationId] = log.errorMessage;
+      }
+    }
+
     const formatted = integrations.map((row) => ({
       id: row.id,
       platform: row.platform,
@@ -202,6 +239,7 @@ router.get('/', async (req, res, next) => {
       campaignId: row.campaignId,
       campaignName: row.campaign?.name || null,
       createdBy: row.createdById,
+      errorMessage: latestErrorByIntegration[row.id] || null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     }));
@@ -238,6 +276,145 @@ router.get('/api-keys', async (req, res, next) => {
         createdAt: k.createdAt,
       }))
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /erp-data — List ERP payload data ───────────────────────────────────────
+// IMPORTANT: Must be before /:id to avoid wildcard capture
+router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next) => {
+  try {
+    const { integrationId, divisionId, entityType, page, limit } = req.validatedQuery || req.query;
+
+    const where = {
+      organizationId: { in: req.orgIds },
+      integration: { platform: 'erp' },
+    };
+
+    if (integrationId) {
+      where.integrationId = integrationId;
+    }
+    if (entityType) {
+      where.entityType = entityType;
+    }
+
+    const erpExternalRefModel = prisma.erpExternalRef || prisma.erpExternalRefs;
+    let data = [];
+    if (erpExternalRefModel && typeof erpExternalRefModel.findMany === 'function') {
+      const rows = await erpExternalRefModel.findMany({
+        where,
+        include: {
+          integration: {
+            select: {
+              id: true,
+              config: true,
+              status: true,
+              organizationId: true,
+              createdAt: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: limit || 300,
+      });
+
+      const filtered = divisionId
+        ? rows.filter((row) => String(row.integration?.config?.divisionId || '') === String(divisionId))
+        : rows;
+
+      data = filtered.map((row) => ({
+        id: row.id,
+        integrationId: row.integrationId,
+        provider: String(row.integration?.config?.erpProvider || '').toLowerCase() || null,
+        divisionId: row.integration?.config?.divisionId || null,
+        entityType: row.entityType,
+        externalId: row.externalId,
+        crmEntityId: row.crmEntityId,
+        payload: row.externalPayload || {},
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }));
+    } else {
+      // Fallback for deployments without ERP foundation models in Prisma schema:
+      // derive ERP data from integration logs payloads.
+      const integrations = await prisma.integration.findMany({
+        where: {
+          organizationId: { in: req.orgIds },
+          platform: 'erp',
+        },
+        select: { id: true, config: true },
+      });
+
+      const filteredIntegrationIds = integrations
+        .filter((i) => !divisionId || String(i.config?.divisionId || '') === String(divisionId))
+        .map((i) => i.id);
+
+      if (filteredIntegrationIds.length > 0) {
+        const actionToEntity = {
+          erp_create_customer: 'customer',
+          erp_customer_sales: 'sale',
+          erp_doctor_availability: 'doctor_availability',
+        };
+        const logs = await prisma.integrationLog.findMany({
+          where: {
+            integrationId: { in: filteredIntegrationIds },
+            action: { in: Object.keys(actionToEntity) },
+            ...(entityType ? { action: `erp_${entityType === 'customer' ? 'create_customer' : entityType === 'sale' ? 'customer_sales' : 'doctor_availability'}` } : {}),
+          },
+          orderBy: { createdAt: 'desc' },
+          take: limit || 300,
+        });
+
+        data = logs.map((log) => {
+          const integration = integrations.find((i) => i.id === log.integrationId);
+          const entity = actionToEntity[log.action] || 'unknown';
+          const payload = log.payload || {};
+          return {
+            id: log.id,
+            integrationId: log.integrationId,
+            provider: String(integration?.config?.erpProvider || '').toLowerCase() || null,
+            divisionId: integration?.config?.divisionId || null,
+            entityType: entity,
+            externalId:
+              payload.externalCustomerId ||
+              payload.externalSaleId ||
+              payload.externalAvailabilityId ||
+              payload.id ||
+              '-',
+            crmEntityId: payload.crmEntityId || '-',
+            payload,
+            createdAt: log.createdAt,
+            updatedAt: log.createdAt,
+          };
+        });
+      }
+    }
+
+    const total = data.length;
+    const pageNum = Number(page || 1);
+    const limitNum = Number(limit || 300);
+    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+    const safePage = Math.min(pageNum, totalPages);
+    const start = (safePage - 1) * limitNum;
+    const pagedData = data.slice(start, start + limitNum);
+
+    const countsByEntity = data.reduce((acc, item) => {
+      acc[item.entityType] = (acc[item.entityType] || 0) + 1;
+      return acc;
+    }, {});
+
+    res.json({
+      data: pagedData,
+      total,
+      countsByEntity,
+      pagination: {
+        page: safePage,
+        limit: limitNum,
+        total,
+        totalPages,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -785,6 +962,23 @@ async function testPlatformConnection(integration) {
     }
     case 'zapier': {
       return { success: true, message: 'Zapier integration is ready. Configure Zaps in your Zapier dashboard.' };
+    }
+    case 'erp': {
+      const provider = String(config?.erpProvider || '').toLowerCase();
+      const divisionId = config?.divisionId;
+      const token = credentials?.token || config?.token;
+      const allowedProviders = ['facts', 'focus', 'cortex', 'uniqorn'];
+
+      if (!allowedProviders.includes(provider)) {
+        return { success: false, message: 'ERP provider is required: facts, focus, cortex, or uniqorn' };
+      }
+      if (!divisionId) {
+        return { success: false, message: 'Division ID is required for ERP integration' };
+      }
+      if (!token) {
+        return { success: false, message: 'ERP shared token is required' };
+      }
+      return { success: true, message: `ERP (${provider.toUpperCase()}) configuration verified` };
     }
     default:
       return { success: false, message: `Platform "${platform}" is not supported yet` };

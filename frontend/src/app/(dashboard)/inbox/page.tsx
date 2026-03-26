@@ -1,7 +1,23 @@
 'use client';
 
-import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Virtuoso } from 'react-virtuoso';
+import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
+import {
+  useInboxAttachmentsQuery,
+  useInboxBootstrapQuery,
+  useInboxConversationsQuery,
+  useInboxMessageMutations,
+  INBOX_THREAD_LIMIT,
+  patchInboxThreadAfterOutbound,
+  useInboxThreadQuery,
+  useInboxNotesQuery,
+  useInboxRealtimeInvalidation,
+  useInboxStatsQuery,
+} from '@/features/inbox/hooks/useInboxQueries';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -14,7 +30,7 @@ import {
   Archive, Tag, Filter, MoreHorizontal, Bookmark, Pin,
   ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase, Paperclip,
   Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft, FileText, Image, Download,
-  Pencil, Trash2, Ban, ArrowUpDown,
+  Pencil, Trash2, Ban, ArrowUpDown, Mic, Square,
 } from 'lucide-react';
 
 // ─── Platform Icons (SVG) ───────────────────────────────────────────
@@ -118,6 +134,7 @@ interface Conversation {
     platform: string;
     platformInfo: { label: string; color: string; icon: string };
     createdAt: string;
+    metadata?: any;
   } | null;
 }
 
@@ -191,9 +208,36 @@ function getDisplayInitials(first?: string | null, last?: string | null): string
 
 // ─── Main Component ─────────────────────────────────────────────────
 
+function InboxLoadingSkeleton() {
+  return (
+    <div className="flex h-[calc(100vh-7.5rem)] sm:h-[calc(100vh-5rem)] -m-3 sm:-m-4 md:-m-6 bg-white overflow-hidden border border-border rounded-xl animate-pulse">
+      <div className="hidden md:flex flex-col w-80 lg:w-[340px] border-r border-border p-3 gap-3">
+        <div className="h-8 bg-surface-tertiary rounded-lg w-2/3" />
+        <div className="h-9 bg-surface-tertiary rounded-lg" />
+        <div className="space-y-2 mt-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex gap-2">
+              <div className="h-11 w-11 rounded-full bg-surface-tertiary shrink-0" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3 bg-surface-tertiary rounded w-3/4" />
+                <div className="h-2 bg-surface-tertiary rounded w-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col min-w-0 p-4 gap-4">
+        <div className="h-10 bg-surface-tertiary rounded-lg w-1/2" />
+        <div className="flex-1 rounded-xl bg-surface-tertiary/60 min-h-[200px]" />
+        <div className="h-12 bg-surface-tertiary rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
 export default function InboxPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>}>
+    <Suspense fallback={<InboxLoadingSkeleton />}>
       <InboxContent />
     </Suspense>
   );
@@ -203,16 +247,9 @@ function InboxContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuthStore();
+  const queryClient = useQueryClient();
 
-  // State
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [leadInfo, setLeadInfo] = useState<LeadInfo | null>(null);
-  const [stats, setStats] = useState<any>(null);
-  const [notes, setNotes] = useState<any[]>([]);
-  const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([]);
-
   const [channelFilter, setChannelFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -221,27 +258,12 @@ function InboxContent() {
   const [sendChannel, setSendChannel] = useState('WHATSAPP');
   const [showChannelPicker, setShowChannelPicker] = useState(false);
 
-  const [loadingConversations, setLoadingConversations] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
   // Right panel tabs: info | notes | canned | attachments
   const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
-  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
 
-  // Fetch custom status labels
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
-      .catch(() => {});
-  }, []);
-
-  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -250,13 +272,43 @@ function InboxContent() {
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
   const [inboxSortBy, setInboxSortBy] = useState<'latest' | 'oldest' | 'unread' | 'name'>('latest');
 
-  // Attachments
+  // Division scope (SUPER_ADMIN switcher writes to localStorage). In production builds,
+  // client-side navigation won't remount this page, so read localStorage into state
+  // and refresh on focus to avoid stale division-scoped inbox data.
+  const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => {
+      try {
+        const v = localStorage.getItem('activeDivisionId');
+        setActiveDivisionId(v && v.trim() ? v : null);
+      } catch {
+        setActiveDivisionId(null);
+      }
+    };
+    read();
+    window.addEventListener('focus', read);
+    const onChanged = () => read();
+    window.addEventListener('active-division-changed', onChanged as any);
+    document.addEventListener('visibilitychange', read);
+    return () => window.removeEventListener('focus', read);
+  }, []);
+
+  // When division changes, force-refresh inbox queries so the menu/list reflects the new scope.
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inbox.messagesRoot });
+    queryClient.invalidateQueries({ queryKey: ['inbox', 'stats'] });
+  }, [activeDivisionId, queryClient]);
+
+  // Attachments (pending uploads — server attachments come from TanStack Query)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Pipeline stages for stage editing
-  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
   const [showStageDropdown, setShowStageDropdown] = useState(false);
   const [updatingStage, setUpdatingStage] = useState(false);
 
@@ -267,6 +319,8 @@ function InboxContent() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const threadScrollRestore = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  const lastThreadMsgIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
@@ -279,67 +333,74 @@ function InboxContent() {
     return () => clearTimeout(searchTimeout.current);
   }, [searchQuery]);
 
-  // ─── Load conversations ───────────────────────────────────────────
-  const loadConversations = useCallback(async () => {
-    try {
-      setLoadingConversations(true);
-      const params: any = {};
-      if (channelFilter !== 'ALL') params.channel = channelFilter;
-      if (debouncedSearch) params.search = debouncedSearch;
-      if (statusFilter) params.status = statusFilter;
+  const conversationQueryParams = useMemo(() => {
+    const params: Record<string, unknown> = {};
+    if (channelFilter !== 'ALL') params.channel = channelFilter;
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (statusFilter) params.status = statusFilter;
+    if (activeDivisionId) params.divisionId = activeDivisionId;
+    return params;
+  }, [channelFilter, debouncedSearch, statusFilter, activeDivisionId]);
 
-      const res = await api.getInboxConversations(params);
-      setConversations(res.conversations || []);
-    } catch (err) {
-      console.error('Failed to load conversations:', err);
-    } finally {
-      setLoadingConversations(false);
-    }
-  }, [channelFilter, debouncedSearch, statusFilter]);
+  const messageQueryParams = useMemo(() => {
+    return activeDivisionId ? { divisionId: activeDivisionId } : {};
+  }, [activeDivisionId]);
 
-  // ─── Load messages for selected lead ──────────────────────────────
-  const loadMessages = useCallback(async (leadId: string) => {
-    try {
-      setLoadingMessages(true);
-      const res = await api.getInboxMessages(leadId);
-      setMessages(res.messages || []);
-      setLeadInfo(res.lead || null);
+  const threadCacheParams = useMemo(
+    () => ({ ...messageQueryParams, limit: INBOX_THREAD_LIMIT }),
+    [messageQueryParams]
+  );
 
-      if (res.messages?.length > 0) {
-        const lastMsg = res.messages[res.messages.length - 1];
-        setSendChannel(lastMsg.channel === 'CHAT' ? lastMsg.platform?.toUpperCase() || 'CHAT' : lastMsg.channel);
-      }
-    } catch (err) {
-      console.error('Failed to load messages:', err);
-    } finally {
-      setLoadingMessages(false);
-    }
-  }, []);
+  const divisionScope = activeDivisionId;
 
-  // ─── Load notes ───────────────────────────────────────────────────
-  const loadNotes = useCallback(async (leadId: string) => {
-    try {
-      const res = await api.getInternalNotes(leadId);
-      setNotes(res || []);
-    } catch { setNotes([]); }
-  }, []);
+  const fieldConfigQuery = useLeadsFieldConfigQuery(divisionScope);
+  const statusLabels = (fieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
+  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
 
-  // ─── Load canned responses ────────────────────────────────────────
+  const conversationsQuery = useInboxConversationsQuery(conversationQueryParams as any);
+  const threadQuery = useInboxThreadQuery(selectedLeadId, messageQueryParams as any);
+  const notesQuery = useInboxNotesQuery(selectedLeadId);
+  const attachmentsQuery = useInboxAttachmentsQuery(selectedLeadId);
+  const statsQuery = useInboxStatsQuery(divisionScope);
+  const { cannedResponses: cannedQuery, pipelineStages: pipelineQuery } = useInboxBootstrapQuery();
+  const inboxMutations = useInboxMessageMutations(selectedLeadId);
+  const { onCommunicationChanged, onLeadChanged } = useInboxRealtimeInvalidation(selectedLeadId);
+
+  const conversations = (conversationsQuery.data?.conversations || []) as Conversation[];
+  const messages = useMemo(() => {
+    const pages = threadQuery.data?.pages;
+    if (!pages?.length) return [] as Message[];
+    return pages
+      .slice()
+      .reverse()
+      .flatMap((p) => (p.messages || []) as Message[]);
+  }, [threadQuery.data?.pages]);
+  const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
+  const notes = (notesQuery.data || []) as any[];
+  const stats = statsQuery.data ?? null;
+  const cannedResponses = (cannedQuery.data || []) as CannedResponse[];
+  const rawPipeline = pipelineQuery.data as any;
+  const pipelineStages = (rawPipeline?.stages ?? (Array.isArray(rawPipeline) ? rawPipeline : [])) as {
+    id: string;
+    name: string;
+    color: string;
+  }[];
+  const leadAttachments = (attachmentsQuery.data || []) as any[];
+
+  const loadingConversations = conversationsQuery.isLoading;
+  const loadingMessages = !!selectedLeadId && threadQuery.isPending;
+
+  // Default send channel from the latest loaded server message (skip optimistic rows)
   useEffect(() => {
-    api.getCannedResponses()
-      .then((data: any) => setCannedResponses(data || []))
-      .catch(() => setCannedResponses([]));
-    api.getPipelineStages()
-      .then((data: any) => setPipelineStages(data.stages || data || []))
-      .catch(() => setPipelineStages([]));
-  }, []);
-
-  // ─── Load stats ───────────────────────────────────────────────────
-  useEffect(() => {
-    api.getInboxStats().then(setStats).catch(() => {});
-  }, []);
-
-  useEffect(() => { loadConversations(); }, [loadConversations]);
+    if (!messages.length) return;
+    const lastServer = [...messages].reverse().find((m) => !m.id?.startsWith('temp-'));
+    if (!lastServer) return;
+    setSendChannel(
+      lastServer.channel === 'CHAT'
+        ? lastServer.platform?.toUpperCase() || 'CHAT'
+        : lastServer.channel
+    );
+  }, [messages, selectedLeadId]);
 
   // Auto-select lead from URL query param (e.g., /inbox?lead=<id>)
   useEffect(() => {
@@ -349,6 +410,10 @@ function InboxContent() {
       setMobileView('chat');
     }
   }, [searchParams, selectedLeadId]);
+
+  useEffect(() => {
+    lastThreadMsgIdRef.current = null;
+  }, [selectedLeadId]);
 
   // Map pipeline stage names to lead statuses for auto-sync
   const STAGE_NAME_TO_STATUS: Record<string, string> = {
@@ -367,7 +432,6 @@ function InboxContent() {
     setUpdatingStage(true);
     try {
       const stage = pipelineStages.find(s => s.id === stageId);
-      // Auto-sync status when stage changes
       const updateData: any = { stageId };
       if (stage) {
         const matchedStatus = STAGE_NAME_TO_STATUS[stage.name.toLowerCase()];
@@ -376,77 +440,90 @@ function InboxContent() {
         }
       }
       await api.updateLead(selectedLeadId, updateData);
-      // Reload full lead info to reflect both stage + status changes
-      await loadMessages(selectedLeadId);
-      loadConversations();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', 'messages', selectedLeadId] });
     } catch (err) {
       console.error('Failed to update stage:', err);
     } finally {
       setUpdatingStage(false);
       setShowStageDropdown(false);
     }
-  }, [selectedLeadId, leadInfo, pipelineStages, loadConversations, loadMessages]);
-
-  // ─── Load lead attachments ──────────────────────────────────────────
-  const loadAttachments = useCallback(async (leadId: string) => {
-    try {
-      const res = await api.getLeadAttachments(leadId);
-      setLeadAttachments(res || []);
-    } catch { setLeadAttachments([]); }
-  }, []);
+  }, [selectedLeadId, leadInfo, pipelineStages, queryClient]);
 
   useEffect(() => {
-    if (selectedLeadId) {
-      loadMessages(selectedLeadId);
-      loadNotes(selectedLeadId);
-      loadAttachments(selectedLeadId);
-      setAttachedFiles([]);
-    }
-  }, [selectedLeadId, loadMessages, loadNotes, loadAttachments]);
+    if (selectedLeadId) setAttachedFiles([]);
+  }, [selectedLeadId]);
 
-  // Auto-scroll within the messages container (not the page)
-  useEffect(() => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+  const handleLoadOlderMessages = useCallback(async () => {
+    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
+    const el = messagesContainerRef.current;
+    if (el) {
+      threadScrollRestore.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
     }
+    await threadQuery.fetchNextPage();
+  }, [threadQuery]);
+
+  useLayoutEffect(() => {
+    const el = messagesContainerRef.current;
+    const snap = threadScrollRestore.current;
+    if (!el || !snap) return;
+    el.scrollTop = snap.prevTop + (el.scrollHeight - snap.prevHeight);
+    threadScrollRestore.current = null;
+  }, [threadQuery.data?.pages]);
+
+  // Auto-scroll to latest when a new message lands (skip prepend / "load older")
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el || threadScrollRestore.current) return;
+    const lastId = messages.length ? messages[messages.length - 1]?.id : null;
+    const prevLast = lastThreadMsgIdRef.current;
+    lastThreadMsgIdRef.current = lastId;
+    if (prevLast !== null && lastId === prevLast) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  // Real-time sync: refresh conversations and messages on communication changes
   useRealtimeSync(['communication'], useCallback((event) => {
-    loadConversations();
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId);
-    }
-  }, [loadConversations, loadMessages, selectedLeadId]));
+    onCommunicationChanged({
+      entityId: event.entityId,
+      message: event.message != null && typeof event.message === 'object'
+        ? (event.message as Record<string, unknown>)
+        : undefined,
+    });
+  }, [onCommunicationChanged]));
 
-  // Real-time sync: refresh conversations + right panel lead info when leads change
   useRealtimeSync(['lead'], useCallback((event) => {
-    loadConversations();
-    // Refresh right panel lead info if the changed lead is the one we're viewing
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId);
-    }
-  }, [loadConversations, loadMessages, selectedLeadId]));
+    onLeadChanged(event.entityId);
+  }, [onLeadChanged]));
 
-  // Real-time sync: refresh notes panel when notes change
   useRealtimeSync(['note'], useCallback((event) => {
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadNotes(selectedLeadId);
+    if (event.entityId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inbox.notes(event.entityId) });
     }
-  }, [loadNotes, selectedLeadId]));
+  }, [queryClient]));
 
-  // Real-time sync: refresh lead info when tasks change (tasks can affect lead)
   useRealtimeSync(['task'], useCallback(() => {
     if (selectedLeadId) {
-      loadMessages(selectedLeadId);
+      queryClient.invalidateQueries({
+        predicate: (q) =>
+          Array.isArray(q.queryKey) &&
+          q.queryKey[0] === 'inbox' &&
+          q.queryKey[1] === 'messages' &&
+          q.queryKey[2] === selectedLeadId &&
+          q.queryKey[3] === 'thread',
+      });
     }
-  }, [loadMessages, selectedLeadId]));
+  }, [queryClient, selectedLeadId]));
+
+  const refreshConversationList = useCallback(() => {
+    conversationsQuery.refetch();
+  }, [conversationsQuery]);
 
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
     if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
     const body = messageText.trim();
     const tempId = `temp-${Date.now()}`;
+    const msgKey = queryKeys.inbox.messagesThread(selectedLeadId, threadCacheParams as Record<string, unknown>);
 
     let channel = sendChannel;
     let platform: string | undefined;
@@ -455,7 +532,6 @@ function InboxContent() {
       platform = sendChannel.toLowerCase();
     }
 
-    // Optimistic: add message instantly (only for text-only messages)
     if (attachedFiles.length === 0) {
       const optimisticMsg: Message = {
         id: tempId,
@@ -470,31 +546,62 @@ function InboxContent() {
         user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
         _optimistic: true,
       };
-      setMessages(prev => [...prev, optimisticMsg]);
+      queryClient.setQueryData(msgKey, (old: any) => {
+        if (!old?.pages?.length) {
+          return {
+            pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
+            pageParams: [1],
+          };
+        }
+        const pages = [...old.pages];
+        const newest = 0;
+        pages[newest] = {
+          ...pages[newest],
+          messages: [...(pages[newest].messages || []), optimisticMsg],
+        };
+        return { ...old, pages };
+      });
     }
 
     setMessageText('');
     setSending(true);
 
     try {
+      const threadParams = threadCacheParams as Record<string, unknown>;
       if (attachedFiles.length > 0) {
-        await api.sendInboxMessageWithAttachments({
-          leadId: selectedLeadId, channel, body, platform, files: attachedFiles,
+        const sent = await inboxMutations.sendMessageWithAttachments.mutateAsync({
+          leadId: selectedLeadId,
+          channel,
+          body,
+          platform,
+          files: attachedFiles,
         });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, { message: sent });
         setAttachedFiles([]);
-        // For attachments, do a full reload since we need attachment metadata
-        await loadMessages(selectedLeadId);
-        loadAttachments(selectedLeadId);
       } else {
-        const sent = await api.sendInboxMessage({ leadId: selectedLeadId, channel, body, platform });
-        // Replace optimistic message with real one
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: (platform || sendChannel).toUpperCase() } : m));
+        const sent = await inboxMutations.sendMessage.mutateAsync({
+          leadId: selectedLeadId,
+          channel,
+          body,
+          platform,
+        });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, {
+          tempId,
+          message: sent,
+        });
       }
-      loadConversations();
       inputRef.current?.focus();
     } catch (err: any) {
-      // Remove optimistic message on failure
-      setMessages(prev => prev.filter(m => m.id !== tempId));
+      queryClient.setQueryData(msgKey, (old: any) => {
+        if (!old?.pages?.length) return old;
+        const pages = [...old.pages];
+        const newest = 0;
+        pages[newest] = {
+          ...pages[newest],
+          messages: (pages[newest].messages || []).filter((m: Message) => m.id !== tempId),
+        };
+        return { ...old, pages };
+      });
       console.error('Failed to send:', err);
     } finally {
       setSending(false);
@@ -505,8 +612,10 @@ function InboxContent() {
   const handleEditMessage = async (messageId: string) => {
     if (!editingBody.trim()) return;
     try {
-      const updated = await api.editInboxMessage(messageId, editingBody.trim());
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      await inboxMutations.editMessage.mutateAsync({
+        messageId,
+        body: editingBody.trim(),
+      });
       setEditingMsgId(null);
       setEditingBody('');
     } catch (err: any) {
@@ -525,8 +634,7 @@ function InboxContent() {
     });
     if (!confirmed) return;
     try {
-      await api.deleteInboxMessage(messageId);
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      await inboxMutations.deleteMessage.mutateAsync(messageId);
       setMenuOpenMsgId(null);
     } catch (err: any) {
       console.error('Failed to delete:', err);
@@ -568,22 +676,131 @@ function InboxContent() {
   }
 
   function isImageFile(mimeType: string) {
-    return mimeType.startsWith('image/');
+    return mimeType?.startsWith('image/') && !mimeType?.includes('webp');
+  }
+
+  function isImageOrSticker(mimeType: string) {
+    return mimeType?.startsWith('image/');
+  }
+
+  function isAudioFile(mimeType: string) {
+    return mimeType?.startsWith('audio/');
+  }
+
+  function isVideoFile(mimeType: string) {
+    return mimeType?.startsWith('video/');
   }
 
   function getFileIcon(mimeType: string) {
-    if (mimeType.startsWith('image/')) return '🖼';
+    if (mimeType?.startsWith('image/')) return '🖼';
     if (mimeType === 'application/pdf') return '📄';
-    if (mimeType.startsWith('video/')) return '🎬';
-    if (mimeType.startsWith('audio/')) return '🎵';
-    if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return '📊';
-    if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📽';
-    if (mimeType.includes('document') || mimeType.includes('word')) return '📝';
+    if (mimeType?.startsWith('video/')) return '🎬';
+    if (mimeType?.startsWith('audio/')) return '🎵';
+    if (mimeType?.includes('spreadsheet') || mimeType?.includes('excel')) return '📊';
+    if (mimeType?.includes('presentation') || mimeType?.includes('powerpoint')) return '📽';
+    if (mimeType?.includes('document') || mimeType?.includes('word')) return '📝';
     return '📎';
+  }
+
+  function isMediaPlaceholderBody(body: string) {
+    if (!body) return false;
+    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio)\]$/.test(body.trim()) || body.trim() === '(no text)';
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recordingChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordingChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+        setRecordingTime(0);
+      };
+
+      recorder.start(100);
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
+    } catch (err) {
+      console.error('Microphone access denied:', err);
+    }
+  };
+
+  const stopAndSendRecording = async () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+
+    return new Promise<void>((resolve) => {
+      const prevOnStop = recorder.onstop;
+      recorder.onstop = async (e) => {
+        if (prevOnStop) (prevOnStop as any).call(recorder, e);
+        setIsRecording(false);
+
+        const chunks = recordingChunksRef.current;
+        if (chunks.length === 0 || !selectedLeadId) { resolve(); return; }
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        const ext = (recorder.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
+        const file = new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type });
+
+        setSending(true);
+        try {
+          let channel = sendChannel;
+          let platform: string | undefined;
+          if (['FACEBOOK', 'INSTAGRAM', 'GOOGLE', 'WEBCHAT'].includes(sendChannel)) {
+            channel = 'CHAT';
+            platform = sendChannel.toLowerCase();
+          }
+          const sent = await inboxMutations.sendMessageWithAttachments.mutateAsync({
+            leadId: selectedLeadId,
+            channel,
+            body: '',
+            platform,
+            files: [file],
+          });
+          patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadCacheParams as Record<string, unknown>, {
+            message: sent,
+          });
+        } catch (err) {
+          console.error('Failed to send voice note:', err);
+        } finally {
+          setSending(false);
+        }
+        resolve();
+      };
+      recorder.stop();
+    });
+  };
+
+  const cancelRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+    setIsRecording(false);
+    recordingChunksRef.current = [];
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    setRecordingTime(0);
+  };
+
+  const formatRecordingTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   // ─── Save internal note ───────────────────────────────────────────
@@ -591,9 +808,8 @@ function InboxContent() {
     if (!noteText.trim() || !selectedLeadId || savingNote) return;
     try {
       setSavingNote(true);
-      await api.addInternalNote(selectedLeadId, noteText.trim());
+      await inboxMutations.addNote.mutateAsync({ leadId: selectedLeadId, body: noteText.trim() });
       setNoteText('');
-      await loadNotes(selectedLeadId);
     } catch (err) {
       console.error('Failed to save note:', err);
     } finally {
@@ -607,8 +823,8 @@ function InboxContent() {
     try {
       await api.updateConversationStatus(selectedLeadId, status);
       setShowStatusDropdown(false);
-      await loadMessages(selectedLeadId);
-      loadConversations();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', 'messages', selectedLeadId] });
     } catch (err) {
       console.error('Failed to update status:', err);
     }
@@ -629,18 +845,24 @@ function InboxContent() {
     setMobileView('chat');
     setShowConvoActions(null);
 
-    // Find conversation and mark as read if it has unread messages
     const convo = conversations.find(c => c.leadId === leadId);
     if (convo && convo.unreadCount > 0) {
-      // Optimistically clear the unread count in the UI
-      setConversations(prev =>
-        prev.map(c => c.leadId === leadId ? { ...c, unreadCount: 0 } : c)
+      queryClient.setQueryData(
+        queryKeys.inbox.conversations(conversationQueryParams as Record<string, unknown>),
+        (old: any) => {
+          if (!old?.conversations) return old;
+          return {
+            ...old,
+            conversations: old.conversations.map((c: Conversation) =>
+              c.leadId === leadId ? { ...c, unreadCount: 0 } : c
+            ),
+          };
+        }
       );
-      // Mark as read on the server and refresh global notification count
       api.markConversationRead(leadId).catch(() => {});
       fetchUnreadCount();
     }
-  }, [conversations, fetchUnreadCount]);
+  }, [conversations, conversationQueryParams, fetchUnreadCount, queryClient]);
 
   // ─── Toggle pin ───────────────────────────────────────────────────
   const togglePin = (leadId: string) => {
@@ -746,8 +968,8 @@ function InboxContent() {
                 <p className="text-2xs text-text-tertiary">{conversations.length} conversations</p>
               </div>
             </div>
-            <button onClick={() => loadConversations()} className="btn-icon" title="Refresh">
-              <RefreshCw className={`h-4 w-4 ${loadingConversations ? 'animate-spin' : ''}`} />
+            <button onClick={() => refreshConversationList()} className="btn-icon" title="Refresh">
+              <RefreshCw className={`h-4 w-4 ${conversationsQuery.isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
 
@@ -830,7 +1052,7 @@ function InboxContent() {
         </div>
 
         {/* ── Conversation list ─────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1">
           {loadingConversations && conversations.length === 0 ? (
             <div className="p-3 space-y-2">
               {[...Array(8)].map((_, i) => (
@@ -855,129 +1077,141 @@ function InboxContent() {
               </p>
             </div>
           ) : (
-            sortedConversations.map(convo => {
-              const isPinned = pinnedConvos.has(convo.leadId);
-              const isSelected = selectedLeadId === convo.leadId;
-              const statusStyle = STATUS_COLORS[convo.leadStatus] || STATUS_COLORS.NEW;
+            <Virtuoso
+              style={{ height: '100%' }}
+              data={sortedConversations}
+              itemContent={(_, convo) => {
+                const isPinned = pinnedConvos.has(convo.leadId);
+                const isSelected = selectedLeadId === convo.leadId;
+                const statusStyle = STATUS_COLORS[convo.leadStatus] || STATUS_COLORS.NEW;
 
-              return (
-                <div key={convo.leadId} className="relative group">
-                  <button
-                    onClick={() => selectConversation(convo.leadId)}
-                    className={`w-full text-left px-3 py-2.5 border-b border-border-subtle transition-all ${
-                      isSelected
-                        ? 'bg-brand-50 border-l-[3px] border-l-brand-500'
-                        : 'hover:bg-surface-secondary border-l-[3px] border-l-transparent'
-                    } ${isPinned ? 'bg-amber-50/30' : ''}`}
-                  >
-                    <div className="flex gap-2.5">
-                      {/* Avatar with platform badge */}
-                      <div className="relative flex-shrink-0">
-                        <div
-                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm"
-                          style={{ backgroundColor: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
-                        >
-                          {convo.contactName.charAt(0).toUpperCase()}
-                        </div>
-                        {convo.lastMessage && (
-                          <div className="absolute -bottom-0.5 -right-0.5 h-4.5 w-4.5 rounded-full bg-white flex items-center justify-center shadow-xs ring-1 ring-white">
-                            <PlatformIcon platform={convo.lastMessage.platform} size={10} />
-                          </div>
-                        )}
-                        {isPinned && (
-                          <div className="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
-                            <Pin className="h-2.5 w-2.5 text-white" />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
-                              {convo.contactName || 'Unknown Contact'}
-                            </span>
-                            {/* Score badge */}
-                            {convo.leadScore >= 70 && (
-                              <span className="flex-shrink-0 h-4 w-4 rounded-full bg-amber-100 flex items-center justify-center">
-                                <Star className="h-2.5 w-2.5 text-amber-600" />
-                              </span>
-                            )}
+                return (
+                  <div key={convo.leadId} className="relative group">
+                    <button
+                      onClick={() => selectConversation(convo.leadId)}
+                      className={`w-full text-left px-3 py-2.5 border-b border-border-subtle transition-all ${
+                        isSelected
+                          ? 'bg-brand-50 border-l-[3px] border-l-brand-500'
+                          : 'hover:bg-surface-secondary border-l-[3px] border-l-transparent'
+                      } ${isPinned ? 'bg-amber-50/30' : ''}`}
+                    >
+                      <div className="flex gap-2.5">
+                        {/* Avatar with platform badge */}
+                        <div className="relative flex-shrink-0">
+                          <div
+                            className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm"
+                            style={{ backgroundColor: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
+                          >
+                            {convo.contactName.charAt(0).toUpperCase()}
                           </div>
                           {convo.lastMessage && (
-                            <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">
-                              {timeAgo(convo.lastMessage.createdAt)}
-                            </span>
+                            <div className="absolute -bottom-0.5 -right-0.5 h-4.5 w-4.5 rounded-full bg-white flex items-center justify-center shadow-xs ring-1 ring-white">
+                              <PlatformIcon platform={convo.lastMessage.platform} size={10} />
+                            </div>
+                          )}
+                          {isPinned && (
+                            <div className="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
+                              <Pin className="h-2.5 w-2.5 text-white" />
+                            </div>
                           )}
                         </div>
 
-                        {convo.company && (
-                          <p className="text-2xs text-text-tertiary truncate flex items-center gap-1">
-                            <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
-                            {convo.company}
-                          </p>
-                        )}
-
-                        {convo.lastMessage && (
-                          <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
-                            {convo.lastMessage.direction === 'OUTBOUND' && (
-                              <span className="text-text-tertiary">
-                                <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
+                                {convo.contactName || 'Unknown Contact'}
+                              </span>
+                              {/* Score badge */}
+                              {convo.leadScore >= 70 && (
+                                <span className="flex-shrink-0 h-4 w-4 rounded-full bg-amber-100 flex items-center justify-center">
+                                  <Star className="h-2.5 w-2.5 text-amber-600" />
+                                </span>
+                              )}
+                            </div>
+                            {convo.lastMessage && (
+                              <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">
+                                {timeAgo(convo.lastMessage.createdAt)}
                               </span>
                             )}
-                            {convo.lastMessage.body}
-                          </p>
-                        )}
+                          </div>
 
-                        {/* Tags row */}
-                        <div className="flex items-center gap-1.5 mt-1">
-                          {/* Channel pill */}
-                          <span
-                            className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-2xs font-medium"
-                            style={{
-                              backgroundColor: `${PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1'}10`,
-                              color: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1',
-                            }}
-                          >
-                            <PlatformIcon platform={convo.lastMessage?.platform || 'CHAT'} size={8} />
-                            {convo.lastMessage?.platformInfo?.label || convo.lastMessage?.channel}
-                          </span>
-
-                          {/* Status pill */}
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
-                            {getStatusLabel(convo.leadStatus || 'NEW')}
-                          </span>
-
-                          {/* Unread count badge or message count */}
-                          {convo.unreadCount > 0 ? (
-                            <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
-                              {convo.unreadCount}
-                            </span>
-                          ) : (
-                            <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
-                              {convo.messageCount}
-                            </span>
+                          {convo.company && (
+                            <p className="text-2xs text-text-tertiary truncate flex items-center gap-1">
+                              <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
+                              {convo.company}
+                            </p>
                           )}
+
+                          {convo.lastMessage && (
+                            <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
+                              {convo.lastMessage.direction === 'OUTBOUND' && (
+                                <span className="text-text-tertiary">
+                                  <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                                </span>
+                              )}
+                              {convo.lastMessage.metadata?.mediaType === 'image' || convo.lastMessage.metadata?.mediaType === 'sticker' ? (
+                                <span className="italic">📷 Photo{convo.lastMessage.metadata?.attachments?.[0]?.caption ? `: ${convo.lastMessage.metadata.attachments[0].caption}` : ''}</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'video' ? (
+                                <span className="italic">🎬 Video</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'audio' || convo.lastMessage.metadata?.mediaType === 'voice' ? (
+                                <span className="italic">🎤 Voice message</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'document' ? (
+                                <span className="italic">📄 {convo.lastMessage.metadata?.attachments?.[0]?.filename || 'Document'}</span>
+                              ) : convo.lastMessage.body}
+                            </p>
+                          )}
+
+                          {/* Tags row */}
+                          <div className="flex items-center gap-1.5 mt-1">
+                            {/* Channel pill */}
+                            <span
+                              className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-2xs font-medium"
+                              style={{
+                                backgroundColor: `${PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1'}10`,
+                                color: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1',
+                              }}
+                            >
+                              <PlatformIcon platform={convo.lastMessage?.platform || 'CHAT'} size={8} />
+                              {convo.lastMessage?.platformInfo?.label || convo.lastMessage?.channel}
+                            </span>
+
+                            {/* Status pill */}
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
+                              {getStatusLabel(convo.leadStatus || 'NEW')}
+                            </span>
+
+                            {/* Unread count badge or message count */}
+                            {convo.unreadCount > 0 ? (
+                              <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
+                                {convo.unreadCount}
+                              </span>
+                            ) : (
+                              <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
+                                {convo.messageCount}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
-
-                  {/* Hover actions */}
-                  <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); togglePin(convo.leadId); }}
-                      className={`h-6 w-6 rounded flex items-center justify-center transition-colors ${isPinned ? 'bg-amber-100 text-amber-600' : 'bg-white/90 text-text-tertiary hover:text-text-primary shadow-xs'}`}
-                      title={isPinned ? 'Unpin' : 'Pin'}
-                    >
-                      <Pin className="h-3 w-3" />
                     </button>
+
+                    {/* Hover actions */}
+                    <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(convo.leadId); }}
+                        className={`h-6 w-6 rounded flex items-center justify-center transition-colors ${isPinned ? 'bg-amber-100 text-amber-600' : 'bg-white/90 text-text-tertiary hover:text-text-primary shadow-xs'}`}
+                        title={isPinned ? 'Unpin' : 'Pin'}
+                      >
+                        <Pin className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              }}
+            />
           )}
         </div>
 
@@ -1114,9 +1348,9 @@ function InboxContent() {
               </div>
             </div>
 
-            {/* ── Messages area ─────────────────────────────────────── */}
+            {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
             <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
-              {loadingMessages ? (
+              {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
                     <div className="h-8 w-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
@@ -1130,7 +1364,20 @@ function InboxContent() {
                   <p className="text-xs text-text-tertiary mt-1">Send the first message to start the conversation</p>
                 </div>
               ) : (
-                groupMessagesByDate(messages).map((group, gi) => (
+                <>
+                  {threadQuery.hasNextPage ? (
+                    <div className="flex justify-center pb-2">
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-brand-600 hover:text-brand-700 bg-white/90 px-3 py-1.5 rounded-full shadow-sm disabled:opacity-50"
+                        onClick={handleLoadOlderMessages}
+                        disabled={threadQuery.isFetchingNextPage}
+                      >
+                        {threadQuery.isFetchingNextPage ? 'Loading older…' : 'Load older messages'}
+                      </button>
+                    </div>
+                  ) : null}
+                {groupMessagesByDate(messages).map((group, gi) => (
                   <div key={gi}>
                     {/* Date separator */}
                     <div className="flex justify-center my-4">
@@ -1251,36 +1498,73 @@ function InboxContent() {
                                         Re: {msg.subject}
                                       </p>
                                     )}
-                                    {msg.body && <p className="whitespace-pre-wrap break-words">{msg.body}</p>}
-
-                                    {/* Attachments in message */}
+                                    {/* Media attachments (images, audio, video, documents) */}
                                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
-                                      <div className="mt-2 space-y-1.5">
-                                        {msg.metadata.attachments.map((att: any, ai: number) => (
-                                          <a
-                                            key={ai}
-                                            href={`/api${att.url}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
-                                          >
-                                            {isImageFile(att.mimeType) ? (
-                                              <img
-                                                src={`/api${att.url}`}
-                                                alt={att.filename}
-                                                className="h-16 w-16 rounded object-cover flex-shrink-0"
-                                              />
-                                            ) : (
+                                      <div className="space-y-1.5">
+                                        {msg.metadata.attachments.map((att: any, ai: number) => {
+                                          const url = att.url ? `/api${att.url}` : null;
+                                          if (!url) return null;
+
+                                          if (isImageOrSticker(att.mimeType)) {
+                                            return (
+                                              <a key={ai} href={url} target="_blank" rel="noopener noreferrer" className="block">
+                                                <img
+                                                  src={url}
+                                                  alt={att.filename || 'Image'}
+                                                  className="max-w-[280px] max-h-[300px] rounded-lg object-contain cursor-pointer"
+                                                  loading="lazy"
+                                                />
+                                              </a>
+                                            );
+                                          }
+
+                                          if (isAudioFile(att.mimeType)) {
+                                            return (
+                                              <div key={ai} className="flex items-center gap-2 min-w-[200px] max-w-[300px]">
+                                                <audio controls preload="none" className="w-full h-8 [&::-webkit-media-controls-panel]:bg-transparent">
+                                                  <source src={url} type={att.mimeType} />
+                                                </audio>
+                                              </div>
+                                            );
+                                          }
+
+                                          if (isVideoFile(att.mimeType)) {
+                                            return (
+                                              <div key={ai} className="max-w-[300px]">
+                                                <video
+                                                  controls
+                                                  preload="metadata"
+                                                  className="rounded-lg max-w-full max-h-[240px]"
+                                                >
+                                                  <source src={url} type={att.mimeType} />
+                                                </video>
+                                              </div>
+                                            );
+                                          }
+
+                                          return (
+                                            <a
+                                              key={ai}
+                                              href={url}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
+                                            >
                                               <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
-                                            )}
-                                            <div className="min-w-0 flex-1">
-                                              <p className="text-2xs font-medium truncate text-gray-800">{att.filename}</p>
-                                              <p className="text-2xs text-gray-500">{formatFileSize(att.size)}</p>
-                                            </div>
-                                            <Download className="h-3 w-3 flex-shrink-0 text-gray-400" />
-                                          </a>
-                                        ))}
+                                              <div className="min-w-0 flex-1">
+                                                <p className="text-2xs font-medium truncate text-gray-800">{att.filename}</p>
+                                                <p className="text-2xs text-gray-500">{formatFileSize(att.size)}</p>
+                                              </div>
+                                              <Download className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                                            </a>
+                                          );
+                                        })}
                                       </div>
+                                    )}
+
+                                    {/* Text body — hide placeholder labels when media is present */}
+                                    {msg.body && !(msg.metadata?.attachments?.length > 0 && isMediaPlaceholderBody(msg.body)) && (
+                                      <p className={`whitespace-pre-wrap break-words ${msg.metadata?.attachments?.length > 0 ? 'mt-1' : ''}`}>{msg.body}</p>
                                     )}
                                   </>
                                 )}
@@ -1294,11 +1578,27 @@ function InboxContent() {
                                     <span className="text-[10px] text-gray-400">
                                       {formatTime(msg.createdAt)}
                                     </span>
-                                    {isOutbound && !msg._optimistic && (
-                                      <CheckCheck className="h-3 w-3 text-blue-500" />
-                                    )}
-                                    {msg._optimistic && (
-                                      <Check className="h-3 w-3 text-gray-400" />
+                                    {isOutbound && (
+                                      <>
+                                        {msg._optimistic ? (
+                                          <Check className="h-3 w-3 text-gray-400" />
+                                        ) : msg.channel === 'WHATSAPP' ? (
+                                          (() => {
+                                            const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                            const waStatus =
+                                              typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+
+                                            if (waStatus === 'READ') return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                            if (waStatus === 'DELIVERED')
+                                              return <CheckCheck className="h-3 w-3 text-gray-400" />;
+                                            if (waStatus === 'SENT') return <Check className="h-3 w-3 text-gray-400" />;
+                                            if (waStatus === 'FAILED') return <AlertCircle className="h-3 w-3 text-red-500" />;
+                                            return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                          })()
+                                        ) : (
+                                          <CheckCheck className="h-3 w-3 text-blue-500" />
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 )}
@@ -1322,7 +1622,8 @@ function InboxContent() {
                       );
                     })}
                   </div>
-                ))
+                ))}
+              </>
               )}
               <div ref={messagesEndRef} />
             </div>
@@ -1451,42 +1752,79 @@ function InboxContent() {
 
               {/* Input area */}
               <div className="flex items-end gap-2 px-3 sm:px-4 pb-3">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-all"
-                  title="Attach file"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-                <textarea
-                  ref={inputRef}
-                  value={messageText}
-                  onChange={(e) => setMessageText(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={`Message via ${PLATFORM_LABELS[sendChannel]?.split(' ')[0] || sendChannel}...`}
-                  rows={1}
-                  className="flex-1 resize-none rounded-xl border border-border bg-surface-secondary/50 px-3.5 py-2.5 text-sm
-                    placeholder:text-text-tertiary focus:bg-white focus:border-brand-400 focus:ring-2 focus:ring-brand-500/15
-                    focus:outline-none transition-all max-h-28 min-h-[40px]"
-                  onInput={(e) => {
-                    const el = e.target as HTMLTextAreaElement;
-                    el.style.height = 'auto';
-                    el.style.height = Math.min(el.scrollHeight, 112) + 'px';
-                  }}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
-                  className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
-                  style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
-                  title="Send"
-                >
-                  {sending ? (
-                    <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4 text-white" />
-                  )}
-                </button>
+                {isRecording ? (
+                  <>
+                    <button
+                      onClick={cancelRecording}
+                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-red-50 hover:bg-red-100 text-red-500 transition-all"
+                      title="Cancel recording"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                    <div className="flex-1 flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-red-200 bg-red-50/50 min-h-[40px]">
+                      <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                      <span className="text-sm text-red-600 font-medium tabular-nums">{formatRecordingTime(recordingTime)}</span>
+                      <span className="text-xs text-red-400">Recording...</span>
+                    </div>
+                    <button
+                      onClick={stopAndSendRecording}
+                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-green-500 hover:bg-green-600 text-white transition-all"
+                      title="Send voice note"
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-all"
+                      title="Attach file"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </button>
+                    <textarea
+                      ref={inputRef}
+                      value={messageText}
+                      onChange={(e) => setMessageText(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={`Message via ${PLATFORM_LABELS[sendChannel]?.split(' ')[0] || sendChannel}...`}
+                      rows={1}
+                      className="flex-1 resize-none rounded-xl border border-border bg-surface-secondary/50 px-3.5 py-2.5 text-sm
+                        placeholder:text-text-tertiary focus:bg-white focus:border-brand-400 focus:ring-2 focus:ring-brand-500/15
+                        focus:outline-none transition-all max-h-28 min-h-[40px]"
+                      onInput={(e) => {
+                        const el = e.target as HTMLTextAreaElement;
+                        el.style.height = 'auto';
+                        el.style.height = Math.min(el.scrollHeight, 112) + 'px';
+                      }}
+                    />
+                    {!messageText.trim() && attachedFiles.length === 0 ? (
+                      <button
+                        onClick={startRecording}
+                        disabled={sending}
+                        className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-green-50 text-text-tertiary hover:text-green-600 transition-all disabled:opacity-40"
+                        title="Record voice note"
+                      >
+                        <Mic className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSend}
+                        disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
+                        className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
+                        style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
+                        title="Send"
+                      >
+                        {sending ? (
+                          <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4 text-white" />
+                        )}
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </>

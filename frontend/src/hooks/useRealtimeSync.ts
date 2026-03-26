@@ -13,7 +13,12 @@ import { useNotificationStore } from '@/store/notificationStore';
  */
 export function useRealtimeSync(
   entities: string[],
-  onDataChanged: (event: { entity: string; action: string; entityId?: string }) => void,
+  onDataChanged: (event: {
+    entity: string;
+    action: string;
+    entityId?: string;
+    message?: unknown;
+  }) => void,
 ) {
   const subscribe = useNotificationStore((s) => s.subscribeDataChange);
   const unsubscribe = useNotificationStore((s) => s.unsubscribeDataChange);

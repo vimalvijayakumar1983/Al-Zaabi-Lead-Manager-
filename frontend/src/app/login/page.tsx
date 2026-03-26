@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
-import { Sparkles, ArrowRight, Eye, EyeOff, CheckCircle2, Zap, Shield, BarChart3 } from 'lucide-react';
+import { Sparkles, ArrowRight, Eye, EyeOff, Zap, Shield, BarChart3 } from 'lucide-react';
+
+const REMEMBER_EMAIL_KEY = 'alzaabi_remember_email';
 
 const features = [
   { icon: Zap, title: 'AI Smart Automation', description: 'AI-driven follow-ups, assignments, and lead prioritization' },
@@ -13,7 +15,6 @@ const features = [
 ];
 
 export default function LoginPage() {
-  const router = useRouter();
   const { login, register } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,6 +25,19 @@ export default function LoginPage() {
   const [lastName, setLastName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(REMEMBER_EMAIL_KEY);
+      if (saved) {
+        setEmail(saved);
+        setRememberMe(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,6 +48,11 @@ export default function LoginPage() {
       if (isRegister) {
         await register({ email, password, firstName, lastName, organizationName: orgName });
       } else {
+        if (rememberMe) {
+          localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+        } else {
+          localStorage.removeItem(REMEMBER_EMAIL_KEY);
+        }
         const response = await login(email, password);
         // Store division data for SUPER_ADMIN users
         if (response && typeof response === 'object') {
@@ -48,7 +67,10 @@ export default function LoginPage() {
           }
         }
       }
-      router.push('/dashboard');
+      // Full page redirect so dashboard loads with token in localStorage and avoids
+      // race with layout's loadUser() which could clear auth on client-side nav
+      window.location.href = '/dashboard';
+      return;
     } catch (err: any) {
       setError(err.message || 'Authentication failed');
     } finally {
@@ -207,7 +229,7 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-sm font-medium text-text-primary">Password</label>
                 {!isRegister && (
-                  <Link href="/forgot-password" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
+                  <Link href="/forgot-password" tabIndex={-1} className="text-xs text-brand-600 hover:text-brand-700 font-medium">
                     Forgot password?
                   </Link>
                 )}
@@ -231,6 +253,18 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+
+            {!isRegister && (
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="rounded border-border-subtle text-brand-600 focus:ring-brand-500"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                />
+                <span className="text-sm text-text-secondary">Remember me on this device</span>
+              </label>
+            )}
 
             <button
               type="submit"

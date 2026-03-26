@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
@@ -121,6 +124,23 @@ const activityIcons: Record<string, typeof Activity> = {
   LEAD_ASSIGNED: Users, SLA_ESCALATED: AlertTriangle,
 };
 
+const KPI_COLOR_MAP: Record<string, { iconBg: string; iconText: string }> = {
+  brand: { iconBg: 'bg-brand-100', iconText: 'text-brand-600' },
+  indigo: { iconBg: 'bg-indigo-100', iconText: 'text-indigo-600' },
+  emerald: { iconBg: 'bg-emerald-100', iconText: 'text-emerald-600' },
+  red: { iconBg: 'bg-red-100', iconText: 'text-red-600' },
+  cyan: { iconBg: 'bg-cyan-100', iconText: 'text-cyan-600' },
+  amber: { iconBg: 'bg-amber-100', iconText: 'text-amber-600' },
+  purple: { iconBg: 'bg-purple-100', iconText: 'text-purple-600' },
+};
+
+const TASK_PRIORITY_DOT: Record<string, { dot: string }> = {
+  URGENT: { dot: 'bg-red-500' },
+  HIGH: { dot: 'bg-orange-500' },
+  MEDIUM: { dot: 'bg-blue-500' },
+  LOW: { dot: 'bg-gray-400' },
+};
+
 // ─── Utility ────────────────────────────────────────────────────────
 
 function fmt(n: number, type: 'number' | 'currency' | 'percent' = 'number') {
@@ -183,7 +203,7 @@ function getDisplayInitials(first?: string | null, last?: string | null): string
 
 // ─── Components ─────────────────────────────────────────────────────
 
-function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' | 'md' }) {
+const ChangeIndicator = memo(function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' | 'md' }) {
   if (change === 0) return <span className="text-text-tertiary text-xs">—</span>;
   const isUp = change > 0;
   const Icon = isUp ? ArrowUpRight : ArrowDownRight;
@@ -195,9 +215,9 @@ function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' 
       {Math.abs(change)}%
     </span>
   );
-}
+});
 
-function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
+const ScoreRing = memo(function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
   const radius = (size - 6) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - ((score || 0) / 100) * circumference;
@@ -213,9 +233,9 @@ function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
       <span className="absolute inset-0 flex items-center justify-center text-2xs font-bold text-text-primary">{score || 0}</span>
     </div>
   );
-}
+});
 
-function CustomTooltip({ active, payload, label }: any) {
+const CustomTooltip = memo(function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-border bg-white px-3 py-2 shadow-lg">
@@ -231,9 +251,9 @@ function CustomTooltip({ active, payload, label }: any) {
       ))}
     </div>
   );
-}
+});
 
-function PieTooltip({ active, payload }: any) {
+const PieTooltip = memo(function PieTooltip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0];
   return (
@@ -242,7 +262,7 @@ function PieTooltip({ active, payload }: any) {
       <p className="text-xs text-text-secondary">{d.value} leads ({d.payload.pct}%)</p>
     </div>
   );
-}
+});
 
 // ─── Skeleton ───────────────────────────────────────────────────────
 
@@ -271,9 +291,7 @@ function DashboardSkeleton() {
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
-  const [data, setData] = useState<DashboardFullData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [period, setPeriod] = useState<Period>('30d');
   const [activeDivisionId, setActiveDivisionId] = useState<string | undefined>(undefined);
   const [teamMembers, setTeamMembers] = useState<TeamFilterUser[]>([]);
@@ -281,130 +299,64 @@ export default function DashboardPage() {
   const [customFrom, setCustomFrom] = useState<string>('');
   const [customTo, setCustomTo] = useState<string>('');
   const [customApplied, setCustomApplied] = useState<boolean>(false);
+  const [divisionFilter, setDivisionFilter] = useState<string>('all');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const divisionKey = divisionFilter === 'all' ? 'all' : divisionFilter;
 
-  const dashboardFetchSeq = useRef(0);
+  const divisionsQuery = useQuery({
+    queryKey: ['divisions', 'list'],
+    queryFn: () => api.getDivisions() as Promise<Organization[]>,
+    enabled: !!user && isSuperAdmin,
+    staleTime: 5 * 60_000,
+  });
+  const divisions = divisionsQuery.data ?? [];
 
-  // Read division from localStorage before paint so the first /users request is scoped (avoids race with unscoped fetch)
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return;
-    const stored = localStorage.getItem('activeDivisionId') || undefined;
-    setActiveDivisionId(stored);
-  }, []);
+  const dashboardQuery = useQuery({
+    queryKey: queryKeys.analytics.dashboardFull(period, divisionKey),
+    queryFn: async () => {
+      const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
+      const d = await api.getDashboardFull(period, divId);
+      if (d && typeof d === 'object' && d.kpis) return d as DashboardFullData;
+      throw new Error('Unexpected response format');
+    },
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+  });
 
-  // Same-tab + cross-tab division changes
+  const data = dashboardQuery.data ?? null;
+  const loading = dashboardQuery.isPending && !data;
+  const error = dashboardQuery.isError
+    ? (dashboardQuery.error as Error)?.message || 'Failed to load dashboard'
+    : null;
+
+  // Fetch custom status labels (same as before; cached via long staleTime)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const readStored = () => localStorage.getItem('activeDivisionId') || undefined;
-
-    const onDivisionChanged = (e: Event) => {
-      const d = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
-      if (d && 'divisionId' in d) {
-        setActiveDivisionId(d.divisionId || undefined);
-      } else {
-        setActiveDivisionId(readStored());
-      }
-    };
-
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== 'activeDivisionId') return;
-      setActiveDivisionId(e.newValue || undefined);
-    };
-
-    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, []);
-
-  // Load team members: division API when a division is selected (strict scope); org-wide list only when none selected
-  useEffect(() => {
-    let cancelled = false;
-    const divId = activeDivisionId;
-
-    (async () => {
-      try {
-        const rows = divId
-          ? await api.getDivisionUsers(divId)
-          : await api.getUsers(undefined);
-        if (!cancelled) setTeamMembers(Array.isArray(rows) ? rows : []);
-      } catch {
-        if (!cancelled) setTeamMembers([]);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeDivisionId]);
-
-  // Reset invalid team filter when division changes (or member no longer in scope)
-  useEffect(() => {
-    if (teamMemberFilter === 'all') return;
-    const stillExists = teamMembers.some((member) => member.id === teamMemberFilter);
-    if (!stillExists) {
-      setTeamMemberFilter('all');
-    }
-  }, [teamMembers, teamMemberFilter]);
-
-  // Fetch consolidated dashboard data
-  const fetchData = useCallback(async () => {
-    const seq = ++dashboardFetchSeq.current;
-    try {
-      setLoading(true);
-      setError(null);
-      const divId = activeDivisionId;
-      const d = await api.getDashboardFull(period, divId, {
-        teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
-        dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
-        dateTo: period === 'custom' && customApplied ? (customTo || undefined) : undefined,
-      });
-      if (seq !== dashboardFetchSeq.current) return;
-      if (d && typeof d === 'object' && d.kpis) {
-        setData(d);
-      } else {
-        setError('Unexpected response format');
-      }
-    } catch (err: any) {
-      if (seq !== dashboardFetchSeq.current) return;
-      console.error('Dashboard fetch error:', err);
-      setError(err.message || 'Failed to load dashboard');
-    } finally {
-      if (seq === dashboardFetchSeq.current) setLoading(false);
-    }
-  }, [period, activeDivisionId, teamMemberFilter, customApplied, customFrom, customTo]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  // Fetch custom status labels when division scope changes
-  useEffect(() => {
-    api.getFieldConfig(activeDivisionId)
-      .then((data) => {
-        if (data.statusLabels) setStatusLabels(data.statusLabels);
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getFieldConfig(activeDivisionId || undefined)
+      .then((cfg) => {
+        if (cfg.statusLabels) setStatusLabels(cfg.statusLabels);
       })
       .catch(() => {});
   }, [activeDivisionId]);
 
-  // Real-time refresh
+  // Debounced real-time refresh — avoids hammering /dashboard-full on websocket bursts
   useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
-    const divId = activeDivisionId;
-    api.getDashboardFull(period, divId, {
-      teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
-      dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
-      dateTo: period === 'custom' && customApplied ? (customTo || undefined) : undefined,
-    }).then((d) => {
-      if (d?.kpis) setData(d);
-    }).catch(() => {});
+    if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+    realtimeDebounceRef.current = setTimeout(() => {
+      realtimeDebounceRef.current = null;
+      queryClient.invalidateQueries({ queryKey: ['analytics', 'dashboard-full'] });
+    }, 500);
   });
 
-  const periodDaysFromPreset = PERIODS.find((p) => p.value === period)?.days || 30;
+  useEffect(() => () => {
+    if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+  }, []);
 
-  const canApplyCustomRange = period === 'custom' && !!customFrom && !!customTo;
+  const periodDays = PERIODS.find((p) => p.value === period)?.days || 30;
 
   // Computed data
   const trendData = useMemo(() => {
@@ -426,6 +378,63 @@ export default function DashboardPage() {
     }));
   }, [data?.leadsBySource]);
 
+  const getStatusLabel = useCallback(
+    (status: string): string =>
+      statusLabels[status] ||
+      status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\B\w+/g, (m) => m.toLowerCase()),
+    [statusLabels]
+  );
+
+  const divisionBreakdown = data?.divisionBreakdown ?? [];
+
+  const { groupTotalLeads, groupTotalPipeline, groupTotalWon, groupConvRate, groupNewLeadsSum } = useMemo(() => {
+    const groupTotalLeads = divisionBreakdown.reduce((s, d) => s + (d.totalLeads || 0), 0);
+    const groupTotalPipeline = divisionBreakdown.reduce((s, d) => s + (d.pipelineValue || 0), 0);
+    const groupTotalWon = divisionBreakdown.reduce((s, d) => s + (d.wonLeads || 0), 0);
+    const groupNewLeadsSum = divisionBreakdown.reduce((s, d) => s + (d.newLeads || 0), 0);
+    const groupConvRate =
+      groupTotalLeads > 0 ? Number(((groupTotalWon / groupTotalLeads) * 100).toFixed(1)) : 0;
+    return { groupTotalLeads, groupTotalPipeline, groupTotalWon, groupConvRate, groupNewLeadsSum };
+  }, [divisionBreakdown]);
+
+  const kpiCards = useMemo(() => {
+    const kpis = data?.kpis;
+    if (!kpis) return [] as Array<{
+      label: string;
+      value: string;
+      icon: typeof Users;
+      color: string;
+      change: number | null;
+    }>;
+    return [
+      { label: 'Total Leads', value: fmt(kpis.totalLeads), icon: Users, color: 'brand', change: null as number | null },
+      { label: `${getStatusLabel('NEW')} Leads`, value: fmt(kpis.newLeads), icon: UserPlus, color: 'indigo', change: kpis.newLeadsChange },
+      { label: `${getStatusLabel('WON')} Deals`, value: fmt(kpis.wonLeads), icon: Trophy, color: 'emerald', change: kpis.wonLeadsChange },
+      { label: `${getStatusLabel('LOST')} Deals`, value: fmt(kpis.lostLeads), icon: XCircle, color: 'red', change: kpis.lostLeadsChange },
+      { label: 'Conversion', value: `${kpis.conversionRate}%`, icon: Target, color: 'cyan', change: kpis.conversionRateChange },
+      { label: 'Pipeline', value: fmt(kpis.pipelineValue, 'currency'), icon: Banknote, color: 'amber', change: kpis.pipelineValueChange },
+      { label: 'Won Revenue', value: fmt(kpis.wonRevenue, 'currency'), icon: DollarSign, color: 'emerald', change: null as number | null },
+      { label: 'Activities', value: fmt(kpis.activities), icon: Activity, color: 'purple', change: kpis.activitiesChange },
+      {
+        label: 'Reachability',
+        value: kpis.totalCalls > 0 ? `${kpis.reachabilityRatio}%` : 'N/A',
+        icon: PhoneCall,
+        color: kpis.reachabilityRatio >= 75 ? 'emerald' : kpis.reachabilityRatio >= 50 ? 'amber' : 'red',
+        change: null as number | null,
+      },
+    ];
+  }, [data?.kpis, getStatusLabel]);
+
+  const funnel = data?.funnel ?? [];
+  const funnelStagesNonLost = useMemo(
+    () => (funnel.length ? funnel.filter((f) => !f.isLostStage) : []),
+    [funnel]
+  );
+  const funnelMaxCount = useMemo(
+    () => (funnelStagesNonLost.length ? Math.max(...funnelStagesNonLost.map((f) => f.count), 1) : 1),
+    [funnelStagesNonLost]
+  );
+
   if (loading) return <DashboardSkeleton />;
 
   if (!data) return (
@@ -433,7 +442,9 @@ export default function DashboardPage() {
       <div className="empty-state-icon"><XCircle className="h-6 w-6" /></div>
       <p className="text-sm font-medium text-text-primary">{error || 'Failed to load dashboard'}</p>
       <p className="text-xs text-text-tertiary mt-1">Please try refreshing the page</p>
-      <button onClick={() => window.location.reload()} className="mt-3 btn-primary text-sm">Refresh</button>
+      <button type="button" onClick={() => dashboardQuery.refetch()} className="mt-3 btn-primary text-sm">
+        Retry
+      </button>
     </div>
   );
 
@@ -441,7 +452,6 @@ export default function DashboardPage() {
   const leadsByStatus = data.leadsByStatus || [];
   const recentLeads = data.recentLeads || [];
   const upcomingTasks = data.upcomingTasks || [];
-  const funnel = data.funnel || [];
   const scoreDistribution = data.scoreDistribution || [];
   const teamLeaderboard = data.teamLeaderboard || [];
   const recentActivities = data.recentActivities || [];
@@ -559,6 +569,11 @@ export default function DashboardPage() {
             </>
           )}
           <RefreshButton onRefresh={fetchData} />
+          <RefreshButton
+            onRefresh={async () => {
+              await dashboardQuery.refetch();
+            }}
+          />
         </div>
       </div>
 
@@ -589,11 +604,122 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ─── SUPER_ADMIN: Group Overview ────────────────────────────── */}
+      {isSuperAdmin && divisionFilter === 'all' && divisionBreakdown.length > 0 && (
+        <>
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="h-7 w-7 rounded-lg bg-purple-100 flex items-center justify-center">
+                <Building2 className="h-4 w-4 text-purple-600" />
+              </div>
+              <h2 className="text-sm font-semibold text-text-primary">Group Overview</h2>
+              <span className="badge bg-purple-50 text-purple-700 ring-1 ring-purple-200 text-2xs">
+                {divisionBreakdown.length} Divisions
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {[
+                { label: 'Total Leads (All)', value: groupTotalLeads.toLocaleString(), icon: Users, iconBg: 'bg-brand-100', iconText: 'text-brand-600' },
+                { label: 'Total Pipeline', value: fmt(groupTotalPipeline, 'currency'), icon: Banknote, iconBg: 'bg-amber-100', iconText: 'text-amber-600' },
+                { label: 'Total Won', value: groupTotalWon.toLocaleString(), icon: Trophy, iconBg: 'bg-emerald-100', iconText: 'text-emerald-600' },
+                { label: 'Conversion Rate', value: `${groupConvRate}%`, icon: TrendingUp, iconBg: 'bg-cyan-100', iconText: 'text-cyan-600' },
+              ].map((card, i) => {
+                const Icon = card.icon;
+                return (
+                  <div key={card.label}
+                    className={`card p-5 animate-fade-in-up stagger-${i + 1} hover:shadow-card-hover transition-all duration-200 border-l-4 border-l-purple-400`}>
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={`h-9 w-9 rounded-lg ${card.iconBg} flex items-center justify-center`}>
+                        <Icon className={`h-[18px] w-[18px] ${card.iconText}`} />
+                      </div>
+                    </div>
+                    <p className="text-2xl font-bold text-text-primary tracking-tight">{card.value}</p>
+                    <p className="text-xs text-text-tertiary mt-0.5">{card.label}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Division Performance Table */}
+          <div className="card overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface-secondary">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-text-tertiary" />
+                <h2 className="text-sm font-semibold text-text-primary">Division Performance</h2>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="table-header">
+                    <th className="table-cell text-left">Division</th>
+                    <th className="table-cell text-right">Total Leads</th>
+                    <th className="table-cell text-right hidden md:table-cell">New Leads</th>
+                    <th className="table-cell text-right hidden md:table-cell">Won Leads</th>
+                    <th className="table-cell text-right">Conversion</th>
+                    <th className="table-cell text-right">Pipeline (AED)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-subtle">
+                  {divisionBreakdown.map((div, idx) => (
+                    <tr key={div.divisionId} className="table-row hover:bg-surface-secondary transition-colors">
+                      <td className="table-cell">
+                        <button onClick={() => setDivisionFilter(div.divisionId)}
+                          className="flex items-center gap-2.5 text-sm font-medium text-text-primary hover:text-brand-600 transition-colors">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-semibold ${divisionColors[idx % divisionColors.length]}`}>
+                            {(div.divisionName || '?').charAt(0)}
+                          </span>
+                          {div.divisionName || 'Unknown'}
+                        </button>
+                      </td>
+                      <td className="table-cell text-right font-semibold">{(div.totalLeads || 0).toLocaleString()}</td>
+                      <td className="table-cell text-right hidden md:table-cell text-text-secondary">{(div.newLeads || 0).toLocaleString()}</td>
+                      <td className="table-cell text-right hidden md:table-cell text-emerald-600 font-medium">{(div.wonLeads || 0).toLocaleString()}</td>
+                      <td className="table-cell text-right">
+                        <span className={`font-medium ${(div.conversionRate || 0) >= 20 ? 'text-emerald-600' : (div.conversionRate || 0) >= 10 ? 'text-amber-600' : 'text-red-600'}`}>
+                          {div.conversionRate || 0}%
+                        </span>
+                      </td>
+                      <td className="table-cell text-right font-semibold">AED {Number(div.pipelineValue || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-surface-secondary border-t-2 border-border">
+                    <td className="table-cell font-bold">Total (Group)</td>
+                    <td className="table-cell text-right font-bold">{groupTotalLeads.toLocaleString()}</td>
+                    <td className="table-cell text-right hidden md:table-cell font-bold">{groupNewLeadsSum.toLocaleString()}</td>
+                    <td className="table-cell text-right hidden md:table-cell font-bold text-emerald-600">{groupTotalWon.toLocaleString()}</td>
+                    <td className="table-cell text-right font-bold">{groupConvRate}%</td>
+                    <td className="table-cell text-right font-bold">AED {groupTotalPipeline.toLocaleString()}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Division-filtered indicator */}
+      {isSuperAdmin && divisionFilter !== 'all' && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-brand-50 ring-1 ring-brand-200">
+          <Building2 className="h-4 w-4 text-brand-600" />
+          <span className="text-sm text-brand-700 font-medium">
+            Viewing: {divisions.find(d => d.id === divisionFilter)?.name || 'Selected Division'}
+          </span>
+          <button onClick={() => setDivisionFilter('all')}
+            className="ml-auto text-xs font-medium text-brand-600 hover:text-brand-800 transition-colors">
+            &larr; Back to Group Overview
+          </button>
+        </div>
+      )}
+
       {/* ─── KPI Cards ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         {kpiCards.map((kpi, i) => {
           const Icon = kpi.icon;
-          const colors = colorMap[kpi.color] || colorMap.brand;
+          const colors = KPI_COLOR_MAP[kpi.color] || KPI_COLOR_MAP.brand;
           return (
             <div key={kpi.label}
               className={`card p-4 animate-fade-in-up stagger-${Math.min(i + 1, 6)} group hover:shadow-card-hover transition-all duration-200`}>
@@ -644,9 +770,9 @@ export default function DashboardPage() {
                   interval={Math.max(Math.floor(trendData.length / 7) - 1, 0)} />
                 <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} allowDecimals={false} />
                 <RechartsTooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="total" stroke="#6366f1" strokeWidth={2} fill="url(#gradTotal)" />
-                <Area type="monotone" dataKey="won" stroke="#10b981" strokeWidth={2} fill="url(#gradWon)" />
-                <Area type="monotone" dataKey="lost" stroke="#f87171" strokeWidth={1.5} fill="none" strokeDasharray="4 4" />
+                <Area type="monotone" dataKey="total" stroke="#6366f1" strokeWidth={2} fill="url(#gradTotal)" isAnimationActive={false} />
+                <Area type="monotone" dataKey="won" stroke="#10b981" strokeWidth={2} fill="url(#gradWon)" isAnimationActive={false} />
+                <Area type="monotone" dataKey="lost" stroke="#f87171" strokeWidth={1.5} fill="none" strokeDasharray="4 4" isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -667,7 +793,7 @@ export default function DashboardPage() {
               <ResponsiveContainer width="100%" height={180}>
                 <PieChart>
                   <Pie data={sourceChartData} cx="50%" cy="50%" innerRadius={50} outerRadius={75}
-                    paddingAngle={2} dataKey="value" stroke="none">
+                    paddingAngle={2} dataKey="value" stroke="none" isAnimationActive={false}>
                     {sourceChartData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} />
                     ))}
@@ -711,9 +837,8 @@ export default function DashboardPage() {
           </div>
           {funnel.length > 0 ? (
             <div className="space-y-3">
-              {funnel.filter(f => !f.isLostStage).map((stage, i) => {
-                const maxCount = Math.max(...funnel.filter(f => !f.isLostStage).map(f => f.count), 1);
-                const pct = (stage.count / maxCount) * 100;
+              {funnelStagesNonLost.map((stage, i) => {
+                const pct = (stage.count / funnelMaxCount) * 100;
                 return (
                   <div key={i} className="group">
                     <div className="flex items-center justify-between mb-1">
@@ -780,8 +905,8 @@ export default function DashboardPage() {
                       );
                     }}
                   />
-                  <Bar dataKey="total" fill="#e0e7ff" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="won" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total" fill="#e0e7ff" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                  <Bar dataKey="won" fill="#6366f1" radius={[4, 4, 0, 0]} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
               <div className="grid grid-cols-5 gap-2">
@@ -943,11 +1068,7 @@ export default function DashboardPage() {
           </div>
           <div className="divide-y divide-border-subtle">
             {upcomingTasks.map((task: any) => {
-              const priorityMap: Record<string, { dot: string }> = {
-                URGENT: { dot: 'bg-red-500' }, HIGH: { dot: 'bg-orange-500' },
-                MEDIUM: { dot: 'bg-blue-500' }, LOW: { dot: 'bg-gray-400' },
-              };
-              const priority = priorityMap[task.priority] || priorityMap.MEDIUM;
+              const priority = TASK_PRIORITY_DOT[task.priority] || TASK_PRIORITY_DOT.MEDIUM;
               const dueDate = task.dueAt ? new Date(task.dueAt) : null;
               const isOverdue = dueDate ? dueDate < new Date() : false;
               return (
