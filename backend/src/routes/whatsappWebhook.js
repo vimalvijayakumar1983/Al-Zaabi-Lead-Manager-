@@ -264,6 +264,7 @@ router.post('/', (req, res) => {
 
         let bodyText = '';
         let mediaInfo = null;
+        const extraMeta = {};
 
         if (msg.type === 'text' && msg.text) {
           bodyText = msg.text.body || '';
@@ -286,6 +287,30 @@ router.post('/', (req, res) => {
             filename: media.filename || null,
           };
           bodyText = media.caption || '';
+        } else if (msg.type === 'location' && msg.location) {
+          const location = msg.location || {};
+          extraMeta.location = {
+            latitude: location.latitude,
+            longitude: location.longitude,
+            name: location.name || null,
+            address: location.address || null,
+          };
+          mediaInfo = { type: 'location' };
+          bodyText = location.name || location.address || '[Location]';
+        }
+
+        if (msg.referral && typeof msg.referral === 'object') {
+          extraMeta.referral = msg.referral;
+          extraMeta.adReferral = {
+            sourceType: msg.referral.source_type || null,
+            sourceId: msg.referral.source_id || null,
+            sourceUrl: msg.referral.source_url || null,
+            headline: msg.referral.headline || null,
+            body: msg.referral.body || null,
+          };
+        }
+        if (msg.context && typeof msg.context === 'object') {
+          extraMeta.context = msg.context;
         }
 
         const contactName = resolveContactProfileName(value, from);
@@ -323,6 +348,7 @@ router.post('/', (req, res) => {
             bodyText,
             contactName,
             mediaInfo,
+            extraMeta,
           }).catch((err) => {
             logger.error('[WhatsApp Webhook] Inbound processing failed', {
               err: err.message,

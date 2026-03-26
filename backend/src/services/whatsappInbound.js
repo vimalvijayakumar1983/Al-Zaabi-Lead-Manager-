@@ -237,6 +237,7 @@ const MEDIA_TYPE_LABELS = {
   voice: 'Voice message',
   document: 'Document',
   sticker: 'Sticker',
+  location: 'Location',
 };
 
 function mediaExtension(mimeType) {
@@ -261,6 +262,7 @@ async function processInboundWhatsAppMessage({
   bodyText,
   contactName,
   mediaInfo,
+  extraMeta,
 }) {
   const organizationId = await resolveOrganizationId(phoneNumberId, displayPhoneNumber);
   if (!organizationId) {
@@ -372,6 +374,7 @@ async function processInboundWhatsAppMessage({
   const commMetadata = {
     messageId: messageId || undefined,
     from: `+${phoneCanon}`,
+    ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
   };
   if (mediaInfo) {
     commMetadata.mediaType = mediaInfo.type;

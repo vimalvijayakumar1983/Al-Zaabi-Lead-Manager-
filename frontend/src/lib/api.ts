@@ -485,6 +485,9 @@ class ApiClient {
     defaultStatus?: string;
     defaultSource?: string;
     defaultCampaignIds?: string[];
+    broadcastListName?: string;
+    broadcastListSlug?: string;
+    divisionId?: string | null;
   }) {
     const formData = new FormData();
     formData.append('file', file);
@@ -498,6 +501,10 @@ class ApiClient {
     if (options.defaultCampaignIds && options.defaultCampaignIds.length > 0) {
       formData.append('defaultCampaignIds', JSON.stringify(options.defaultCampaignIds));
     }
+    if (options.broadcastListName) formData.append('broadcastListName', options.broadcastListName);
+    if (options.broadcastListSlug) formData.append('broadcastListSlug', options.broadcastListSlug);
+    const div = options.divisionId ?? (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null);
+    if (div) formData.append('divisionId', div);
     const token = this.getToken();
     const res = await fetch(`${API_URL}/import/execute`, {
       method: 'POST',
@@ -536,6 +543,135 @@ class ApiClient {
 
   async undoImport(id: string) {
     return this.request<any>(`/import/undo/${id}`, { method: 'POST' });
+  }
+
+  /** WhatsApp broadcast audience lists (per division via activeDivisionId for super admins). */
+  async listBroadcastLists(divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      lists: Array<{
+        id: string;
+        name: string;
+        slug: string | null;
+        memberCount: number;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }>(`/broadcast-lists${q}`);
+  }
+
+  async getBroadcastList(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      list: {
+        id: string;
+        name: string;
+        slug: string | null;
+        memberCount: number;
+        createdAt: string;
+        updatedAt: string;
+        members: Array<{
+          id: string;
+          phone: string;
+          phoneRaw: string | null;
+          displayName: string | null;
+          leadId: string | null;
+          lead: { id: string; firstName: string; lastName: string; phone: string | null; email: string | null } | null;
+        }>;
+      };
+    }>(`/broadcast-lists/${id}${q}`);
+  }
+
+  async deleteBroadcastList(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean }>(`/broadcast-lists/${id}${q}`, { method: 'DELETE' });
+  }
+
+  async sendBroadcastTemplate(
+    listId: string,
+    payload: {
+      templateId: string;
+      variables?: Record<string, string>;
+      mode?: 'now' | 'later';
+      scheduledAt?: string | null;
+    },
+    divisionId?: string | null,
+  ) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      ok: boolean;
+      mode: 'now' | 'later';
+      runId?: string;
+      total?: number;
+      sent?: number;
+      failed?: number;
+      failures?: Array<{ memberId: string; phone: string; error: string }>;
+      message?: string;
+    }>(`/broadcast-lists/${listId}/send-template${q}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listBroadcastRuns(divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      runs: Array<{
+        id: string;
+        mode: 'NOW' | 'LATER';
+        status: 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+        templateName: string;
+        templateLanguage: string;
+        list: { id: string; name: string };
+        scheduledAt: string | null;
+        totalRecipients: number;
+        sentCount: number;
+        failedCount: number;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }>(`/broadcast-lists/runs${q}`);
+  }
+
+  async getBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      run: {
+        id: string;
+        mode: 'NOW' | 'LATER';
+        status: 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+        templateName: string;
+        templateLanguage: string;
+        list: { id: string; name: string; slug: string | null };
+        scheduledAt: string | null;
+        totalRecipients: number;
+        sentCount: number;
+        failedCount: number;
+        startedAt: string | null;
+        completedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        recipients: Array<{
+          id: string;
+          leadId: string;
+          phone: string;
+          status: 'PENDING' | 'SENT' | 'FAILED';
+          waMessageId: string | null;
+          error: string | null;
+          attemptCount: number;
+          sentAt: string | null;
+          createdAt: string;
+          updatedAt: string;
+          lead: {
+            id: string;
+            firstName: string;
+            lastName: string;
+            phone: string | null;
+            email: string | null;
+          } | null;
+        }>;
+      };
+    }>(`/broadcast-lists/runs/${encodeURIComponent(id)}${q}`);
   }
 
   private async authenticatedDownload(path: string, fallbackFilename: string) {

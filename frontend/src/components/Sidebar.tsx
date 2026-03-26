@@ -32,6 +32,8 @@ import {
   Shield,
   Archive,
   LayoutTemplate,
+  Radio,
+  Clock3,
 } from 'lucide-react';
 
 const navItems = [
@@ -40,6 +42,8 @@ const navItems = [
   { href: '/contacts', label: 'Contacts', icon: UserCircle, shortcut: 'C', permission: 'contacts' },
   { href: '/inbox', label: 'Inbox', icon: Inbox, shortcut: 'I', permission: 'inbox' },
   { href: '/whatsapp-templates', label: 'WA Templates', icon: LayoutTemplate, permission: 'inbox' },
+  { href: '/broadcast-lists', label: 'WA Broadcast lists', icon: Radio, permission: 'import' },
+  { href: '/scheduled-broadcasts', label: 'Scheduled broadcasts', icon: Clock3, permission: 'campaigns' },
   { href: '/pipeline', label: 'Pipeline', icon: Kanban, shortcut: '3', permission: 'pipeline' },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare, shortcut: '4', permission: 'tasks' },
   { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },

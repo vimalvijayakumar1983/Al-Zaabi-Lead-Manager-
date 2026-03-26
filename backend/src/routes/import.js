@@ -7,6 +7,11 @@ const { prisma } = require('../config/database');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { calculateLeadScore, predictConversion } = require('../utils/leadScoring');
 const { createNotification, notifyTeamMembers, notifyOrgAdmins, notifyLeadOwner, NOTIFICATION_TYPES } = require('../services/notificationService');
+const {
+  canonicalPhoneDigitsForWhatsApp,
+  digitsOnly,
+  buildWhatsAppPhoneLookupVariants,
+} = require('../utils/phoneWhatsApp');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -241,11 +246,69 @@ const CAMPAIGN_FIELDS = [
   { key: 'endDate', label: 'End Date', required: false, type: 'date' },
 ];
 
+/** WhatsApp broadcast audience — phone required; display name optional for UI */
+const WHATSAPP_BROADCAST_FIELDS = [
+  { key: 'phone', label: 'Phone', required: true, type: 'string' },
+  { key: 'displayName', label: 'Display name', required: false, type: 'string' },
+];
+
 const MODULE_FIELDS = {
   leads: LEAD_FIELDS,
   contacts: CONTACT_FIELDS,
   campaigns: CAMPAIGN_FIELDS,
+  whatsapp_broadcast: WHATSAPP_BROADCAST_FIELDS,
 };
+
+function sanitizeBroadcastListSlug(value) {
+  const s = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  return s || null;
+}
+
+function normalizeBroadcastImportPhone(raw) {
+  const d = canonicalPhoneDigitsForWhatsApp(digitsOnly(raw));
+  if (!d || d.length < 8) return null;
+  return d;
+}
+
+async function findLeadIdByPhoneForOrg(organizationId, canonicalPhone) {
+  const variants = buildWhatsAppPhoneLookupVariants(canonicalPhone);
+  if (variants.length === 0) return null;
+  const lead = await prisma.lead.findFirst({
+    where: {
+      organizationId,
+      isArchived: false,
+      phone: { in: variants },
+    },
+    select: { id: true },
+  });
+  return lead?.id || null;
+}
+
+async function findOrCreateLeadForBroadcastImport(organizationId, canonicalPhone, displayName) {
+  const existingId = await findLeadIdByPhoneForOrg(organizationId, canonicalPhone);
+  if (existingId) return existingId;
+
+  const full = String(displayName || '').trim();
+  const firstName = full ? full.split(/\s+/)[0] : 'WhatsApp';
+  const lastName = full.includes(' ') ? full.split(/\s+/).slice(1).join(' ') : 'Lead';
+  const created = await prisma.lead.create({
+    data: {
+      firstName,
+      lastName,
+      phone: `+${canonicalPhone}`,
+      source: 'WHATSAPP',
+      sourceDetail: 'BROADCAST_IMPORT',
+      organizationId,
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
 
 // ─── Helper: Parse file to rows ─────────────────────────────────
 async function parseFileToRows(file) {
@@ -311,6 +374,7 @@ function autoDetectMapping(csvColumns, moduleFields) {
     type: ['type', 'campaign type', 'campaigntype', 'contact type', 'contacttype'],
     startDate: ['start date', 'startdate', 'start', 'begin date'],
     endDate: ['end date', 'enddate', 'end', 'finish date'],
+    displayName: ['display name', 'displayname', 'contact name', 'customer name', 'member name', 'full name'],
   };
 
   for (const col of csvColumns) {
@@ -448,6 +512,8 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
       defaultSource,
       defaultCampaignIds: defaultCampaignIdsStr,
       divisionId,
+      broadcastListName,
+      broadcastListSlug,
     } = req.body;
     // Support multi-owner assignment: parse assignToIds JSON array, fall back to single assignToId
     let assignToIdsList = [];
@@ -979,6 +1045,118 @@ router.post('/execute', authorize('ADMIN', 'MANAGER'), upload.single('file'), as
           skipped++;
         }
       }
+    } else if (module === 'whatsapp_broadcast') {
+      const rawListName = String(broadcastListName || '').trim();
+      if (!rawListName) {
+        return res.status(400).json({ error: 'Broadcast list name is required. Set it in Import options before running the import.' });
+      }
+      const slug = sanitizeBroadcastListSlug(broadcastListSlug);
+      if (slug) {
+        const clash = await prisma.whatsAppBroadcastList.findFirst({
+          where: { organizationId: targetOrgId, slug },
+        });
+        if (clash) {
+          return res.status(400).json({
+            error: `A broadcast list with identifier "${slug}" already exists. Choose a different slug or clear the slug field.`,
+          });
+        }
+      }
+
+      const list = await prisma.whatsAppBroadcastList.create({
+        data: {
+          organizationId: targetOrgId,
+          name: rawListName,
+          slug,
+          memberCount: 0,
+        },
+      });
+      importedIds.push(list.id);
+
+      const seenInFile = new Set();
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          const mapped = {};
+          for (const [csvCol, crmField] of Object.entries(fieldMapping)) {
+            if (crmField && row[csvCol] !== undefined && row[csvCol] !== '') {
+              mapped[crmField] = row[csvCol];
+            }
+          }
+
+          if (!mapped.phone) {
+            errors.push({ row: i + 2, error: 'Missing required field: phone', data: row });
+            skipped++;
+            continue;
+          }
+
+          const phone = normalizeBroadcastImportPhone(mapped.phone);
+          if (!phone) {
+            errors.push({ row: i + 2, error: 'Invalid or too short phone number', data: row });
+            skipped++;
+            continue;
+          }
+
+          if (seenInFile.has(phone)) {
+            duplicates++;
+            skipped++;
+            continue;
+          }
+
+          seenInFile.add(phone);
+          const displayName = mapped.displayName ? String(mapped.displayName).trim() : '';
+          const leadId = await findOrCreateLeadForBroadcastImport(targetOrgId, phone, displayName);
+
+          const existingInList = await prisma.whatsAppBroadcastListLead.findUnique({
+            where: { listId_leadId: { listId: list.id, leadId } },
+          });
+
+          if (existingInList) {
+            if (duplicateAction === 'skip') {
+              duplicates++;
+              skipped++;
+              continue;
+            }
+            if (duplicateAction === 'overwrite') {
+              // Keep overwrite semantics: ensure lead profile gets refreshed from import row.
+              if (displayName) {
+                const firstName = displayName.split(/\s+/)[0] || 'WhatsApp';
+                const lastName = displayName.split(/\s+/).slice(1).join(' ');
+                await prisma.lead.update({
+                  where: { id: leadId },
+                  data: {
+                    firstName,
+                    lastName: lastName || 'Lead',
+                    phone: `+${phone}`,
+                  },
+                });
+              }
+              updated++;
+              continue;
+            }
+            duplicates++;
+            skipped++;
+            continue;
+          }
+
+          await prisma.whatsAppBroadcastListLead.create({
+            data: { listId: list.id, leadId },
+          });
+          imported++;
+        } catch (err) {
+          errors.push({ row: i + 2, error: err.message, data: row });
+          skipped++;
+        }
+      }
+
+      const countRows = await prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::int AS cnt FROM "whatsapp_broadcast_list_leads" WHERE "listId" = $1`,
+        list.id,
+      );
+      const memberTotal = Number(countRows?.[0]?.cnt || 0);
+      await prisma.whatsAppBroadcastList.update({
+        where: { id: list.id },
+        data: { memberCount: memberTotal },
+      });
     }
 
     // Update import history (if tracking is available)
@@ -1158,6 +1336,18 @@ router.post('/undo/:id', authorize('ADMIN'), async (req, res, next) => {
         },
       });
       deleted = result.count;
+    } else if (record.module === 'whatsapp_broadcast') {
+      const listId = ids[0];
+      if (!listId) {
+        return res.status(400).json({ error: 'No broadcast list to undo' });
+      }
+      const result = await prisma.whatsAppBroadcastList.deleteMany({
+        where: {
+          id: listId,
+          organizationId: { in: req.orgIds },
+        },
+      });
+      deleted = result.count;
     }
 
     await prisma.importHistory.update({
@@ -1216,6 +1406,7 @@ router.get('/template/:module', async (req, res, next) => {
       if (f.key === 'type') return 'EMAIL';
       if (f.key === 'startDate') return '2025-06-01';
       if (f.key === 'endDate') return '2025-08-31';
+      if (f.key === 'displayName') return 'Ahmed Al-Zaabi';
       return '';
     });
 
@@ -1264,6 +1455,8 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
     let validCount = 0;
     let duplicateCount = 0;
 
+    const broadcastFilePhones = module === 'whatsapp_broadcast' ? new Set() : null;
+
     // Use all org IDs for duplicate checking across divisions
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -1292,8 +1485,41 @@ router.post('/validate', upload.single('file'), async (req, res, next) => {
         continue;
       }
 
+      if (module === 'whatsapp_broadcast') {
+        const p = normalizeBroadcastImportPhone(mapped.phone);
+        if (!p) {
+          errors.push({
+            row: i + 2,
+            type: 'invalid_phone',
+            message: 'Invalid or too short phone number',
+          });
+          continue;
+        }
+        if (broadcastFilePhones.has(p)) {
+          duplicateCount++;
+          const duplicateEntry = {
+            row: i + 2,
+            type: 'duplicate',
+            message: `Duplicate phone in file: ${p}`,
+          };
+          warnings.push(duplicateEntry);
+          duplicateRows.push(duplicateEntry);
+          if (duplicateAction === 'skip') {
+            skippedRows.push({
+              row: i + 2,
+              type: 'will_skip_duplicate',
+              message: 'Will be skipped (duplicate phone in file)',
+            });
+          }
+          continue;
+        }
+        broadcastFilePhones.add(p);
+        validCount++;
+        continue;
+      }
+
       // Check for duplicates in DB
-      if (duplicateField && mapped[duplicateField]) {
+      if (duplicateField && mapped[duplicateField] && module !== 'whatsapp_broadcast') {
         const model = module === 'contacts' ? prisma.contact : prisma.lead;
         const existing = await model.findFirst({
           where: { organizationId: { in: req.orgIds }, [duplicateField]: mapped[duplicateField], isArchived: false },

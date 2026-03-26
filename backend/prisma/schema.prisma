@@ -60,6 +60,8 @@ model Organization {
   savedViews          SavedView[]
   reportDefinitions   ReportDefinition[]
   whatsAppMessageTemplates WhatsAppMessageTemplate[]
+  whatsAppBroadcastLists   WhatsAppBroadcastList[]
+  whatsAppBroadcastRuns    WhatsAppBroadcastRun[]
 
   @@index([parentId])
   @@map("organizations")
@@ -91,6 +93,93 @@ model WhatsAppMessageTemplate {
   @@unique([organizationId, waTemplateId])
   @@index([organizationId, name])
   @@map("whatsapp_message_templates")
+}
+
+/// Audience list for WhatsApp broadcasts (members imported via Import Center).
+model WhatsAppBroadcastList {
+  id             String   @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  /// Optional stable key for integrations / filters (unique per org when set).
+  slug           String?
+  memberCount    Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  leads WhatsAppBroadcastListLead[]
+  broadcasts WhatsAppBroadcastRun[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, createdAt])
+  @@map("whatsapp_broadcast_lists")
+}
+
+model WhatsAppBroadcastRun {
+  id               String   @id @default(uuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  listId           String
+  list             WhatsAppBroadcastList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  requestedById    String?
+  requestedBy      User?    @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+  mode             String   @default("NOW") // NOW | LATER
+  status           String   @default("SCHEDULED") // SCHEDULED | RUNNING | COMPLETED | FAILED | CANCELLED
+  templateId       String?
+  templateName     String
+  templateLanguage String
+  variables        Json     @default("{}")
+  scheduledAt      DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  totalRecipients  Int      @default(0)
+  sentCount        Int      @default(0)
+  failedCount      Int      @default(0)
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  recipients WhatsAppBroadcastRecipient[]
+
+  @@index([organizationId, status, scheduledAt])
+  @@index([listId, createdAt])
+  @@map("whatsapp_broadcast_runs")
+}
+
+model WhatsAppBroadcastRecipient {
+  id           String   @id @default(uuid())
+  broadcastId  String
+  broadcast    WhatsAppBroadcastRun @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  phone        String
+  status       String   @default("PENDING") // PENDING | SENT | FAILED
+  waMessageId  String?
+  error        String?
+  attemptCount Int      @default(0)
+  sentAt       DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([broadcastId, leadId])
+  @@index([broadcastId, status])
+  @@index([leadId])
+  @@map("whatsapp_broadcast_recipients")
+}
+
+/// Join table: broadcast list recipients are leads only (single source of truth).
+model WhatsAppBroadcastListLead {
+  id        String   @id @default(uuid())
+  listId    String
+  list      WhatsAppBroadcastList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([listId, leadId])
+  @@index([listId])
+  @@index([leadId])
+  @@map("whatsapp_broadcast_list_leads")
 }
 
 // ─── Users & Access Control ──────────────────────────────────────
@@ -141,6 +230,7 @@ model User {
   createdViews         SavedView[]    @relation("ViewCreator")
   createdReports       ReportDefinition[] @relation("ReportCreator")
   erpDataAccessLogs    ErpDataAccessLog[] @relation("ErpDataAccessLogAccessor")
+  requestedBroadcastRuns WhatsAppBroadcastRun[]
 
   @@index([organizationId])
   @@map("users")
@@ -216,6 +306,8 @@ model Lead {
   tags            LeadTag[]
   attachments     Attachment[]
   convertedContact Contact? @relation("ConvertedContact")
+  broadcastListLinks WhatsAppBroadcastListLead[]
+  broadcastRecipients WhatsAppBroadcastRecipient[]
 
   @@index([organizationId, status])
   @@index([organizationId, source])

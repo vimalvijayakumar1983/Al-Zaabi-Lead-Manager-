@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import { RefreshCw, AlertCircle, LayoutTemplate, Plus, Pencil, Trash2, X, ChevronRight, ChevronLeft } from 'lucide-react';
+import { RefreshCw, AlertCircle, LayoutTemplate, Plus, Pencil, Trash2, X, ChevronRight, ChevronLeft, Search, SlidersHorizontal } from 'lucide-react';
 
 function useEffectiveDivisionId() {
   const { user } = useAuthStore();
@@ -95,20 +95,24 @@ function toNameSlug(value: string) {
 }
 
 function extractVarIndexes(text: string) {
-  const matches = [...String(text || '').matchAll(/\{\{(\d+)\}\}/g)];
   const set = new Set<number>();
-  for (const m of matches) {
+  const regex = /\{\{(\d+)\}\}/g;
+  const source = String(text || '');
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(source)) !== null) {
     const n = Number(m[1]);
     if (Number.isFinite(n) && n > 0) set.add(n);
   }
-  return [...set].sort((a, b) => a - b);
+  return Array.from(set).sort((a, b) => a - b);
 }
 
 function extractPlaceholderTokens(text: string) {
-  const matches = [...String(text || '').matchAll(/\{\{([^}]+)\}\}/g)];
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const m of matches) {
+  const regex = /\{\{([^}]+)\}\}/g;
+  const source = String(text || '');
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(source)) !== null) {
     const token = String(m[1] || '').trim();
     if (!token) continue;
     if (!seen.has(token)) {
@@ -325,7 +329,7 @@ export default function WhatsAppTemplatesPage() {
   const superAdminBlocked = isSuperAdmin && !divisionId;
   const allVariableTokens = useMemo(() => {
     const merged = [...extractPlaceholderTokens(draft.bodyText), ...extractPlaceholderTokens(draft.headerText)];
-    return [...new Set(merged)];
+    return Array.from(new Set(merged));
   }, [draft.bodyText, draft.headerText]);
   const maxButtons = draft.category === 'AUTHENTICATION' ? 0 : 3;
 
@@ -472,120 +476,246 @@ export default function WhatsAppTemplatesPage() {
     });
   }
 
+  // ── Template table search/filter state ──────────────────────────────
+  const [tplSearch, setTplSearch] = useState('');
+  const [tplStatusFilter, setTplStatusFilter] = useState('ALL');
+  const [tplCategoryFilter, setTplCategoryFilter] = useState('ALL');
+  const [hoveredTpl, setHoveredTpl] = useState<{ id: string; top: number; right: number } | null>(null);
+
+  const allTemplates = listQuery.data?.templates ?? [];
+  const filteredTemplates = useMemo(() => {
+    return allTemplates.filter((t) => {
+      const q = tplSearch.toLowerCase();
+      const matchSearch = !q || t.name.toLowerCase().includes(q);
+      const matchStatus = tplStatusFilter === 'ALL' || (t.status || '').toUpperCase() === tplStatusFilter;
+      const matchCat    = tplCategoryFilter === 'ALL' || (t.category || '').toUpperCase() === tplCategoryFilter;
+      return matchSearch && matchStatus && matchCat;
+    });
+  }, [allTemplates, tplSearch, tplStatusFilter, tplCategoryFilter]);
+
+  function getPreviewText(t: any) {
+    const comps: any[] = t.components || [];
+    const body = comps.find((c: any) => c.type === 'BODY');
+    const text = body?.text || '';
+    return text.slice(0, 60) + (text.length > 60 ? '…' : '');
+  }
+  function getHeaderText(t: any) {
+    const comps: any[] = t.components || [];
+    const h = comps.find((c: any) => c.type === 'HEADER');
+    if (!h) return '';
+    if (h.format === 'TEXT') return h.text || '';
+    if (h.format === 'IMAGE') return '🖼 Image';
+    if (h.format === 'VIDEO') return '🎬 Video';
+    if (h.format === 'DOCUMENT') return '📄 Document';
+    return '';
+  }
+  function getFooterText(t: any) {
+    const comps: any[] = t.components || [];
+    return comps.find((c: any) => c.type === 'FOOTER')?.text || '';
+  }
+  function getButtonsList(t: any) {
+    const comps: any[] = t.components || [];
+    return (comps.find((c: any) => c.type === 'BUTTONS')?.buttons || []) as Array<{ text: string; type: string }>;
+  }
+  function fmtDate(iso?: string) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('en-AE', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6 animate-fade-in p-4 md:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="max-w-7xl mx-auto space-y-4 animate-fade-in p-4 md:p-6">
+
+      {/* ── Page header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-text-primary">
-            <LayoutTemplate className="h-7 w-7 text-brand-600" />
-            <h1 className="text-xl font-bold">WhatsApp templates</h1>
+            <LayoutTemplate className="h-6 w-6 text-brand-600" />
+            <h1 className="text-xl font-bold">Templates</h1>
           </div>
-          <p className="text-sm text-text-secondary mt-1">
-            Templates are stored in Meta. Sync pulls the latest list for your WhatsApp Business Account (WABA).
-          </p>
+          {listQuery.data?.lastSyncedAt && (
+            <p className="text-xs text-text-tertiary mt-0.5">
+              Last synced: {new Date(listQuery.data.lastSyncedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+            </p>
+          )}
         </div>
-        {canSync && (
-          <div className="flex items-center gap-2">
-            {canManage && (
-              <button
-                type="button"
-                className="btn-secondary inline-flex items-center gap-2 self-start"
-                disabled={superAdminBlocked || !ready}
-                onClick={openCreateWizard}
-              >
-                <Plus className="h-4 w-4" />
-                Create template
-              </button>
-            )}
+        <div className="flex items-center gap-2">
+          {canSync && (
             <button
               type="button"
-              className="btn-primary inline-flex items-center gap-2 self-start"
+              className="btn-secondary inline-flex items-center gap-2"
               disabled={superAdminBlocked || syncMutation.isPending || !ready}
               onClick={() => syncMutation.mutate()}
+              title="Sync from Meta"
             >
               <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
-              Sync from Meta
+              <span className="hidden sm:inline">Sync from Meta</span>
             </button>
-          </div>
-        )}
+          )}
+          {canManage && (
+            <button
+              type="button"
+              className="btn-primary inline-flex items-center gap-2"
+              disabled={superAdminBlocked || !ready}
+              onClick={openCreateWizard}
+            >
+              <Plus className="h-4 w-4" />
+              New Template
+            </button>
+          )}
+        </div>
       </div>
 
       {superAdminBlocked && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-          <span>
-            Select a <strong>division</strong> in the header switcher so we know which organization&apos;s WABA to use, then sync again.
-          </span>
+          <span>Select a <strong>division</strong> in the header switcher to load templates.</span>
         </div>
       )}
-
       {listQuery.isError && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {listQuery.error instanceof Error ? listQuery.error.message : 'Failed to load templates'}
         </div>
       )}
-
       {syncMutation.isError && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {syncMutation.error instanceof Error ? syncMutation.error.message : 'Sync failed'}
         </div>
       )}
 
-      {listQuery.data?.lastSyncedAt && (
-        <p className="text-xs text-text-tertiary">
-          Last synced:{' '}
-          {new Date(listQuery.data.lastSyncedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
-        </p>
-      )}
+      {/* ── Filter bar ── */}
+      <div className="card overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 border-b border-border-subtle">
+          {/* Search */}
+          <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
+            <Search className="h-3.5 w-3.5 text-text-tertiary shrink-0" />
+            <input
+              className="bg-transparent outline-none text-sm w-full placeholder:text-text-tertiary"
+              placeholder="Search template…"
+              value={tplSearch}
+              onChange={(e) => setTplSearch(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              className="input input-sm text-xs py-1 h-7"
+              value={tplStatusFilter}
+              onChange={(e) => setTplStatusFilter(e.target.value)}
+            >
+              <option value="ALL">All status</option>
+              <option value="APPROVED">Approved</option>
+              <option value="PENDING">Pending</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="PAUSED">Paused</option>
+            </select>
+            <select
+              className="input input-sm text-xs py-1 h-7"
+              value={tplCategoryFilter}
+              onChange={(e) => setTplCategoryFilter(e.target.value)}
+            >
+              <option value="ALL">All categories</option>
+              <option value="MARKETING">Marketing</option>
+              <option value="UTILITY">Utility</option>
+              <option value="AUTHENTICATION">Authentication</option>
+            </select>
+            <span className="text-xs text-text-tertiary ml-1 whitespace-nowrap">
+              {filteredTemplates.length} template{filteredTemplates.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
 
-      <div className="card overflow-hidden border border-border-subtle">
+        {/* ── Table ── */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border bg-surface-secondary text-left text-2xs uppercase tracking-wide text-text-tertiary">
-                <th className="px-4 py-3 font-semibold">Name</th>
-                <th className="px-4 py-3 font-semibold">Language</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold">Category</th>
-                <th className="px-4 py-3 font-semibold hidden lg:table-cell">Meta ID</th>
-                <th className="px-4 py-3 font-semibold hidden xl:table-cell">Note</th>
-                {canManage && <th className="px-4 py-3 font-semibold">Actions</th>}
+              <tr className="border-b border-border bg-surface-secondary text-left text-[11px] uppercase tracking-wide text-text-tertiary">
+                <th className="px-4 py-2.5 font-semibold">Template name</th>
+                <th className="px-4 py-2.5 font-semibold w-56">Preview</th>
+                <th className="px-4 py-2.5 font-semibold">Status</th>
+                <th className="px-4 py-2.5 font-semibold hidden md:table-cell">Category</th>
+                <th className="px-4 py-2.5 font-semibold hidden lg:table-cell">Created on</th>
+                <th className="px-4 py-2.5 font-semibold hidden lg:table-cell">Last updated</th>
+                {canManage && <th className="px-4 py-2.5 font-semibold text-right">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {listQuery.isLoading && (
                 <tr>
-                  <td colSpan={canManage ? 7 : 6} className="px-4 py-8 text-center text-text-tertiary">
+                  <td colSpan={canManage ? 7 : 6} className="px-4 py-10 text-center text-text-tertiary">
                     Loading…
                   </td>
                 </tr>
               )}
-              {!listQuery.isLoading && (!listQuery.data?.templates || listQuery.data.templates.length === 0) && (
+              {!listQuery.isLoading && filteredTemplates.length === 0 && (
                 <tr>
-                  <td colSpan={canManage ? 7 : 6} className="px-4 py-8 text-center text-text-tertiary">
+                  <td colSpan={canManage ? 7 : 6} className="px-4 py-10 text-center text-text-tertiary">
                     {superAdminBlocked
                       ? 'Select a division to load templates.'
-                      : 'No templates cached yet. Add WABA ID in Settings → WhatsApp, then sync from Meta.'}
+                      : tplSearch || tplStatusFilter !== 'ALL' || tplCategoryFilter !== 'ALL'
+                        ? 'No templates match your filters.'
+                        : 'No templates cached yet — sync from Meta to get started.'}
                   </td>
                 </tr>
               )}
-              {listQuery.data?.templates?.map((t) => (
-                <tr key={t.id} className="border-b border-border last:border-0 hover:bg-surface-secondary/50">
-                  <td className="px-4 py-3 font-medium text-text-primary">{t.name}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-text-secondary">{t.language}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-2xs font-semibold ${statusClass(t.status)}`}>
-                      {t.status || '—'}
+              {filteredTemplates.map((t) => (
+                <tr
+                  key={t.id}
+                  className="border-b border-border last:border-0 hover:bg-surface-secondary/50 relative group"
+                >
+                  {/* Template name + pills */}
+                  <td className="px-4 py-3 max-w-[200px]">
+                    <p className="font-semibold text-text-primary truncate text-sm">{t.name}</p>
+                    <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                      {t.category && (
+                        <span className="text-[10px] font-semibold uppercase bg-surface-tertiary text-text-tertiary rounded px-1.5 py-0.5">
+                          {t.category}
+                        </span>
+                      )}
+                      {t.language && (
+                        <span className="text-[10px] text-text-tertiary">{t.language}</span>
+                      )}
+                    </div>
+                  </td>
+
+                  {/* Preview text — hover triggers the fixed popover */}
+                  <td
+                    className="px-4 py-3 w-56 cursor-default"
+                    onMouseEnter={(e) => {
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setHoveredTpl({ id: t.id, top: rect.top, right: window.innerWidth - rect.right + rect.width });
+                    }}
+                    onMouseLeave={() => setHoveredTpl(null)}
+                  >
+                    <span className="text-xs text-text-secondary truncate block max-w-[200px] underline decoration-dotted underline-offset-2 decoration-text-tertiary">
+                      {getPreviewText(t) || <em className="text-text-tertiary">No body text</em>}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-text-secondary">{t.category || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-2xs text-text-tertiary hidden lg:table-cell">{t.waTemplateId}</td>
-                  <td className="px-4 py-3 text-2xs text-red-700 max-w-[200px] truncate hidden xl:table-cell" title={t.rejectedReason || ''}>
-                    {t.rejectedReason || '—'}
+
+                  {/* Status */}
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusClass(t.status)}`}>
+                      {t.status === 'APPROVED' && <span className="mr-1">✓</span>}
+                      {t.status || '—'}
+                    </span>
+                    {t.rejectedReason && (
+                      <p className="text-[10px] text-red-600 mt-0.5 max-w-[140px] truncate" title={t.rejectedReason}>
+                        {t.rejectedReason}
+                      </p>
+                    )}
                   </td>
+
+                  {/* Category */}
+                  <td className="px-4 py-3 text-xs text-text-secondary hidden md:table-cell">{t.category || '—'}</td>
+
+                  {/* Created on */}
+                  <td className="px-4 py-3 text-xs text-text-tertiary hidden lg:table-cell whitespace-nowrap">{fmtDate((t as any).createdAt)}</td>
+
+                  {/* Last updated */}
+                  <td className="px-4 py-3 text-xs text-text-tertiary hidden lg:table-cell whitespace-nowrap">{fmtDate((t as any).updatedAt)}</td>
+
+                  {/* Actions */}
                   {canManage && (
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
                           className="btn-icon"
@@ -616,6 +746,66 @@ export default function WhatsAppTemplatesPage() {
           </table>
         </div>
       </div>
+
+      {/* ── Fixed-position hover preview — outside table so no scroll bleed ── */}
+      {hoveredTpl && (() => {
+        const t = filteredTemplates.find((x) => x.id === hoveredTpl.id);
+        if (!t) return null;
+        const POPOVER_W = 280;
+        const MARGIN = 12;
+        // Position to the LEFT of the table row (so it never overflows right edge)
+        const leftPos = Math.max(8, window.innerWidth - hoveredTpl.right - POPOVER_W - MARGIN);
+        // Clamp vertically so it doesn't fall off screen bottom
+        const topPos = Math.min(hoveredTpl.top, window.innerHeight - 420);
+        return (
+          <div
+            className="fixed z-[9999] w-[280px] bg-white rounded-xl shadow-2xl border border-border overflow-hidden pointer-events-none"
+            style={{ top: topPos, left: leftPos }}
+          >
+            <div className="bg-[#e5ddd5] p-3">
+              <div className="bg-[#d9fdd3] rounded-xl rounded-tl-none shadow-sm overflow-hidden">
+                <div className="px-3 pt-2.5 pb-2 space-y-1.5">
+                  {getHeaderText(t) && (
+                    <p className="text-[13px] font-bold text-gray-900">{getHeaderText(t)}</p>
+                  )}
+                  {getPreviewText(t) ? (
+                    <p className="text-[12.5px] text-gray-800 leading-relaxed whitespace-pre-wrap line-clamp-6">
+                      {(t.components || []).find((c: any) => c.type === 'BODY')?.text || ''}
+                    </p>
+                  ) : (
+                    <p className="text-[12px] italic text-gray-400">No body text</p>
+                  )}
+                  {getFooterText(t) && (
+                    <p className="text-[11px] text-gray-500">{getFooterText(t)}</p>
+                  )}
+                  <div className="flex justify-end pt-0.5">
+                    <span className="text-[10px] text-gray-400">Preview</span>
+                  </div>
+                </div>
+                {getButtonsList(t).length > 0 && (
+                  <div className="border-t border-black/10 flex flex-col">
+                    {getButtonsList(t).map((b: any, i: number) => (
+                      <div key={i} className="px-3 py-2 text-center text-[12px] font-medium text-sky-600 border-b border-black/[0.05] last:border-0">
+                        {b.text}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="px-3 py-2 bg-surface-secondary border-t border-border-subtle flex items-center gap-2 flex-wrap">
+              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusClass(t.status)}`}>
+                {t.status || '—'}
+              </span>
+              {(t as any).rejectedReason && (
+                <span className="text-[10px] text-red-600 truncate max-w-[160px]" title={(t as any).rejectedReason}>
+                  {(t as any).rejectedReason}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {wizardOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 p-2 md:p-4 flex items-center justify-center overflow-auto">

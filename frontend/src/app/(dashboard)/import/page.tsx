@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import { useImportHistoryQuery } from '@/features/import/hooks/useImportQueries';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { useNotificationStore } from '@/store/notificationStore';
@@ -14,7 +14,7 @@ import {
   AlertTriangle, CheckCircle2, XCircle, Download, Clock,
   RotateCcw, ChevronDown, Eye, Trash2, FileText, Table2,
   Zap, Shield, Users, Megaphone, MapPin, Link2, Search,
-  BarChart3, Info, Contact,
+  BarChart3, Info, Contact, Radio,
 } from 'lucide-react';
 
 type WizardStep = 'upload' | 'mapping' | 'options' | 'review' | 'result';
@@ -92,7 +92,16 @@ const MODULES = [
   { key: 'leads', label: 'Leads', icon: Users, description: 'Import sales leads and prospects', color: 'brand' },
   { key: 'contacts', label: 'Contacts', icon: Contact, description: 'Import contacts and relationships', color: 'emerald' },
   { key: 'campaigns', label: 'Campaigns', icon: Megaphone, description: 'Import marketing campaigns', color: 'purple' },
+  {
+    key: 'whatsapp_broadcast',
+    label: 'WhatsApp Broadcast',
+    icon: Radio,
+    description: 'Upload phone numbers into a named broadcast list',
+    color: 'emerald',
+  },
 ];
+
+const EXPORT_MODULES = MODULES.filter((m) => m.key !== 'whatsapp_broadcast');
 
 const FALLBACK_IMPORT_SOURCES: ManagedLeadSourceOption[] = [
   { key: 'WEBSITE_FORM', label: 'Website Form', source: 'WEBSITE_FORM', isActive: true },
@@ -161,7 +170,15 @@ export default function ImportPage() {
         </button>
       </div>
 
-      {tab === 'import' ? <ImportWizard /> : tab === 'export' ? <ExportTab /> : <ImportHistoryTab />}
+      {tab === 'import' ? (
+        <Suspense fallback={<div className="card p-8 text-center text-text-secondary text-sm">Loading import…</div>}>
+          <ImportWizard />
+        </Suspense>
+      ) : tab === 'export' ? (
+        <ExportTab />
+      ) : (
+        <ImportHistoryTab />
+      )}
     </div>
   );
 }
@@ -170,6 +187,7 @@ export default function ImportPage() {
 function ImportWizard() {
   const { user } = useAuthStore();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const addToast = useNotificationStore((s) => s.addToast);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -196,6 +214,8 @@ function ImportWizard() {
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [defaultCampaignIds, setDefaultCampaignIds] = useState<string[]>([]);
   const [leadSourceOptions, setLeadSourceOptions] = useState<ManagedLeadSourceOption[]>(FALLBACK_IMPORT_SOURCES);
+  const [broadcastListName, setBroadcastListName] = useState('');
+  const [broadcastListSlug, setBroadcastListSlug] = useState('');
   const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
@@ -221,6 +241,20 @@ function ImportWizard() {
       })
       .catch(() => setLeadSourceOptions(FALLBACK_IMPORT_SOURCES));
   }, []);
+
+  useEffect(() => {
+    const m = searchParams.get('module');
+    if (m === 'whatsapp_broadcast') {
+      setSelectedModule('whatsapp_broadcast');
+      setDuplicateField('phone');
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (selectedModule === 'whatsapp_broadcast') {
+      setDuplicateField('phone');
+    }
+  }, [selectedModule]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -328,11 +362,14 @@ function ImportWizard() {
         module: selectedModule,
         fieldMapping,
         duplicateAction,
-        duplicateField: duplicateField || undefined,
+        duplicateField:
+          selectedModule === 'whatsapp_broadcast' ? 'phone' : duplicateField || undefined,
         assignToIds: assignToIds.length > 0 ? assignToIds : undefined,
         defaultStatus: defaultStatus || undefined,
         defaultSource: defaultSource || undefined,
         defaultCampaignIds: selectedModule === 'leads' && defaultCampaignIds.length > 0 ? defaultCampaignIds : undefined,
+        broadcastListName: selectedModule === 'whatsapp_broadcast' ? broadcastListName.trim() : undefined,
+        broadcastListSlug: selectedModule === 'whatsapp_broadcast' ? broadcastListSlug.trim() : undefined,
       });
       setResult(data);
       setStep('result');
@@ -358,6 +395,8 @@ function ImportWizard() {
     setDefaultCampaignIds([]);
     setDefaultStatus('');
     setDefaultSource('');
+    setBroadcastListName('');
+    setBroadcastListSlug('');
   };
 
   const steps: { key: WizardStep; label: string; num: number }[] = [
@@ -410,13 +449,16 @@ function ImportWizard() {
           {/* Module Selection */}
           <div className="card p-6">
             <h3 className="text-sm font-semibold text-text-primary mb-4">Select Module</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {MODULES.map((mod) => {
                 const Icon = mod.icon;
                 return (
                   <button
                     key={mod.key}
-                    onClick={() => setSelectedModule(mod.key)}
+                    onClick={() => {
+                      setSelectedModule(mod.key);
+                      if (mod.key === 'whatsapp_broadcast') setDuplicateField('phone');
+                    }}
                     className={`p-4 rounded-lg border text-left transition-all duration-150 ${
                       selectedModule === mod.key
                         ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500'
@@ -651,23 +693,63 @@ function ImportWizard() {
 
       {step === 'options' && preview && (
         <div className="space-y-6">
+          {selectedModule === 'whatsapp_broadcast' && (
+            <div className="card p-6">
+              <h3 className="text-sm font-semibold text-text-primary mb-1">Broadcast list</h3>
+              <p className="text-2xs text-text-tertiary mb-4">
+                This list appears under <strong className="font-medium text-text-secondary">Broadcast lists</strong>. Use a clear name; optional slug must be unique per division if set.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="label">List name *</label>
+                  <input
+                    className="input"
+                    value={broadcastListName}
+                    onChange={(e) => setBroadcastListName(e.target.value)}
+                    placeholder="e.g. Valentine promo — Dubai"
+                  />
+                </div>
+                <div>
+                  <label className="label">List slug / external ID (optional)</label>
+                  <input
+                    className="input font-mono text-sm"
+                    value={broadcastListSlug}
+                    onChange={(e) => setBroadcastListSlug(e.target.value)}
+                    placeholder="e.g. valentine_dubai_2026"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Duplicate Handling */}
           <div className="card p-6">
             <h3 className="text-sm font-semibold text-text-primary mb-1">Duplicate Handling</h3>
-            <p className="text-2xs text-text-tertiary mb-4">Choose how to handle records that already exist in your CRM</p>
+            <p className="text-2xs text-text-tertiary mb-4">
+              {selectedModule === 'whatsapp_broadcast'
+                ? 'Phone numbers are normalized (digits). Duplicates within the file are skipped. For re-imports to the same list, choose whether to skip or update existing members by phone.'
+                : 'Choose how to handle records that already exist in your CRM'}
+            </p>
 
             <div className="space-y-4">
               <div>
                 <label className="label">Check duplicates by</label>
                 <select
-                  value={duplicateField}
+                  value={selectedModule === 'whatsapp_broadcast' ? 'phone' : duplicateField}
                   onChange={(e) => setDuplicateField(e.target.value)}
+                  disabled={selectedModule === 'whatsapp_broadcast'}
                   className="input max-w-xs"
                 >
-                  <option value="">Don&apos;t check for duplicates</option>
-                  <option value="email">Email</option>
-                  <option value="phone">Phone</option>
-                  {selectedModule === 'contacts' && <option value="mobile">Mobile</option>}
+                  {selectedModule === 'whatsapp_broadcast' ? (
+                    <option value="phone">Phone (required for broadcast lists)</option>
+                  ) : (
+                    <>
+                      <option value="">Don&apos;t check for duplicates</option>
+                      <option value="email">Email</option>
+                      <option value="phone">Phone</option>
+                      {selectedModule === 'contacts' && <option value="mobile">Mobile</option>}
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -935,7 +1017,18 @@ function ImportWizard() {
             <button onClick={() => setStep('mapping')} className="btn-secondary">
               <ArrowLeft className="h-3.5 w-3.5" /> Back
             </button>
-            <button onClick={() => { setStep('review'); handleValidate(); }} className="btn-primary">
+            <button
+              onClick={() => {
+                if (selectedModule === 'whatsapp_broadcast' && !broadcastListName.trim()) {
+                  setError('Enter a broadcast list name.');
+                  return;
+                }
+                setError('');
+                setStep('review');
+                handleValidate();
+              }}
+              className="btn-primary"
+            >
               Next: Review <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -962,9 +1055,24 @@ function ImportWizard() {
               </div>
               <div className="p-4 rounded-lg bg-surface-secondary">
                 <p className="text-2xs text-text-tertiary">Duplicate Action</p>
-                <p className="text-sm font-semibold text-text-primary mt-1 capitalize">{duplicateField ? duplicateAction : 'None'}</p>
+                <p className="text-sm font-semibold text-text-primary mt-1 capitalize">
+                  {selectedModule === 'whatsapp_broadcast'
+                    ? `${duplicateAction} (phone)`
+                    : duplicateField
+                      ? duplicateAction
+                      : 'None'}
+                </p>
               </div>
             </div>
+            {selectedModule === 'whatsapp_broadcast' && (
+              <div className="mt-4 p-4 rounded-lg bg-brand-50 ring-1 ring-brand-100">
+                <p className="text-2xs text-text-tertiary">Broadcast list name</p>
+                <p className="text-sm font-semibold text-text-primary">{broadcastListName || '—'}</p>
+                {broadcastListSlug.trim() ? (
+                  <p className="text-2xs text-text-tertiary mt-1">Slug: {broadcastListSlug.trim()}</p>
+                ) : null}
+              </div>
+            )}
           </div>
 
           {/* Mapped Fields */}
@@ -1183,8 +1291,16 @@ function ImportWizard() {
               <Upload className="h-3.5 w-3.5" />
               Import More Data
             </button>
-            <button onClick={() => router.push(`/${selectedModule}`)} className="btn-secondary">
-              View {selectedModule === 'leads' ? 'Leads' : selectedModule === 'contacts' ? 'Contacts' : 'Campaigns'}
+            <button
+              onClick={() => {
+                if (selectedModule === 'whatsapp_broadcast') router.push('/broadcast-lists');
+                else router.push(`/${selectedModule}`);
+              }}
+              className="btn-secondary"
+            >
+              {selectedModule === 'whatsapp_broadcast'
+                ? 'Open broadcast lists'
+                : `View ${selectedModule === 'leads' ? 'Leads' : selectedModule === 'contacts' ? 'Contacts' : 'Campaigns'}`}
             </button>
           </div>
         </div>
@@ -1223,7 +1339,7 @@ function ExportTab() {
       <div className="card p-6">
         <h3 className="text-sm font-semibold text-text-primary mb-4">Select Module to Export</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {MODULES.map((mod) => {
+          {EXPORT_MODULES.map((mod) => {
             const Icon = mod.icon;
             return (
               <button

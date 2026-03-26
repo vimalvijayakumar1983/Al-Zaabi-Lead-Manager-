@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Virtuoso } from 'react-virtuoso';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
@@ -243,6 +243,10 @@ export default function InboxPage() {
   );
 }
 
+// Large virtual offset — same technique as ChatWindow.js.
+// When older messages are prepended, firstItemIndex shrinks to preserve scroll position automatically.
+const INITIAL_FIRST_ITEM_INDEX = 100_000;
+
 function InboxContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -325,9 +329,14 @@ function InboxContent() {
   const [editingBody, setEditingBody] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const threadScrollRestore = useRef<{ prevHeight: number; prevTop: number } | null>(null);
-  const lastThreadMsgIdRef = useRef<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const threadVirtuosoRef = useRef<VirtuosoHandle>(null);
+  // Scroll tracking refs — mirrors ChatWindow.js pattern exactly.
+  const firstGroupKeyRef = useRef<string | null>(null);
+  const lastGroupKeyRef = useRef<string | null>(null);
+  const prevGroupsLengthRef = useRef(0);
+  const firstPageSizeRef = useRef<number | null>(null);
+  const shouldScrollToBottomRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
@@ -383,6 +392,15 @@ function InboxContent() {
       .flatMap((p) => (p.messages || []) as Message[]);
   }, [threadQuery.data?.pages]);
   const groupedMessages = useMemo(() => groupMessagesByDate(messages), [messages]);
+
+  // Derived firstItemIndex — same technique as ChatWindow.js.
+  // On first render, record the page size. As older groups are prepended, firstItemIndex
+  // decreases so Virtuoso holds scroll position without any manual restoration.
+  if (groupedMessages.length > 0 && firstPageSizeRef.current === null) {
+    firstPageSizeRef.current = groupedMessages.length;
+  }
+  const threadFirstItemIndex = INITIAL_FIRST_ITEM_INDEX - Math.max(0, groupedMessages.length - (firstPageSizeRef.current ?? groupedMessages.length));
+
   const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
   const notes = (notesQuery.data || []) as any[];
   const stats = statsQuery.data ?? null;
@@ -406,7 +424,7 @@ function InboxContent() {
       const matches = [...text.matchAll(/\{\{(\d+)\}\}/g)];
       for (const m of matches) indexes.add(Number(m[1]));
     }
-    return [...indexes].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).map((n) => String(n));
+    return Array.from(indexes).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).map((n) => String(n));
   }, [selectedTemplate]);
 
   const loadingConversations = conversationsQuery.isLoading;
@@ -433,8 +451,13 @@ function InboxContent() {
     }
   }, [searchParams, selectedLeadId]);
 
+  // Reset all scroll refs when switching conversations.
   useEffect(() => {
-    lastThreadMsgIdRef.current = null;
+    firstGroupKeyRef.current = null;
+    lastGroupKeyRef.current = null;
+    prevGroupsLengthRef.current = 0;
+    firstPageSizeRef.current = null;
+    shouldScrollToBottomRef.current = false;
   }, [selectedLeadId]);
 
   // Map pipeline stage names to lead statuses for auto-sync
@@ -476,35 +499,49 @@ function InboxContent() {
     if (selectedLeadId) setAttachedFiles([]);
   }, [selectedLeadId]);
 
-  const handleLoadOlderMessages = useCallback(async () => {
-    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
-    const el = messagesContainerRef.current;
-    if (el) {
-      threadScrollRestore.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
-    }
-    await threadQuery.fetchNextPage();
-  }, [threadQuery]);
-
-  useLayoutEffect(() => {
-    const el = messagesContainerRef.current;
-    const snap = threadScrollRestore.current;
-    if (!el || !snap) return;
-    el.scrollTop = snap.prevTop + (el.scrollHeight - snap.prevHeight);
-    threadScrollRestore.current = null;
-  }, [threadQuery.data?.pages]);
-
-  // Auto-scroll to latest when a new message lands (skip prepend / "load older")
+  // ChatWindow.js-style single scroll effect — mirrors the exact logic from ChatWindow.js.
+  // We track the FIRST and LAST message IDs (not group dates) so same-day messages
+  // are detected correctly as "new message at bottom".
   useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el || threadScrollRestore.current) return;
-    const nearBottom = el.scrollHeight - (el.scrollTop + el.clientHeight) < 64;
-    const lastId = messages.length ? messages[messages.length - 1]?.id : null;
-    const prevLast = lastThreadMsgIdRef.current;
-    lastThreadMsgIdRef.current = lastId;
-    if (prevLast !== null && lastId === prevLast) return;
-    if (!nearBottom && prevLast !== null) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    if (!groupedMessages.length || !threadVirtuosoRef.current) return;
+
+    const currentLen = groupedMessages.length;
+    const prevLen = prevGroupsLengthRef.current;
+
+    // Use actual message IDs, not date keys, to detect append vs prepend.
+    const firstGroup = groupedMessages[0];
+    const lastGroup = groupedMessages[currentLen - 1];
+    const firstId = firstGroup.messages?.[0]?.id ?? firstGroup.date;
+    const lastId = lastGroup.messages?.[lastGroup.messages.length - 1]?.id ?? lastGroup.date;
+    const prevLastId = lastGroupKeyRef.current;
+    const prevFirstId = firstGroupKeyRef.current;
+
+    const isInitialLoad = prevLen === 0;
+    // New message appended = last message changed AND first message unchanged (not a prepend).
+    const isNewMessageAtBottom = lastId !== prevLastId && firstId === prevFirstId;
+    const shouldForceScroll = shouldScrollToBottomRef.current;
+
+    prevGroupsLengthRef.current = currentLen;
+    firstGroupKeyRef.current = firstId;
+    lastGroupKeyRef.current = lastId;
+
+    if (isInitialLoad || isNewMessageAtBottom || shouldForceScroll) {
+      if (shouldForceScroll) shouldScrollToBottomRef.current = false;
+      requestAnimationFrame(() => {
+        threadVirtuosoRef.current?.scrollToIndex({
+          index: currentLen - 1,
+          align: 'end',
+          behavior: (isInitialLoad || shouldForceScroll) ? 'auto' : 'smooth',
+        });
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupedMessages]);
+
+  const handleLoadOlderMessages = useCallback(() => {
+    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
+    threadQuery.fetchNextPage();
+  }, [threadQuery]);
 
   useRealtimeSync(['communication'], useCallback((event) => {
     onCommunicationChanged({
@@ -542,6 +579,14 @@ function InboxContent() {
     conversationsQuery.refetch();
   }, [conversationsQuery]);
 
+  const scrollThreadToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
+    threadVirtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior });
+  }, []);
+
+  const scrollThreadToBottomSoon = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
+    requestAnimationFrame(() => scrollThreadToBottom(behavior));
+  }, [scrollThreadToBottom]);
+
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
     if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId) return;
@@ -556,39 +601,55 @@ function InboxContent() {
       platform = sendChannel.toLowerCase();
     }
 
-    if (attachedFiles.length === 0) {
-      const optimisticMsg: Message = {
-        id: tempId,
-        direction: 'OUTBOUND',
-        channel,
-        body,
-        subject: null,
-        platform: (platform || sendChannel).toUpperCase(),
-        platformInfo: { label: PLATFORM_LABELS[sendChannel] || sendChannel, color: PLATFORM_COLORS[sendChannel] || '#6366f1', icon: '' },
-        metadata: platform ? { platform } : {},
-        createdAt: new Date().toISOString(),
-        user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
-        _optimistic: true,
-      };
-      queryClient.setQueryData(msgKey, (old: any) => {
-        if (!old?.pages?.length) {
-          return {
-            pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
-            pageParams: [1],
-          };
-        }
-        const pages = [...old.pages];
-        const newest = 0;
-        pages[newest] = {
-          ...pages[newest],
-          messages: [...(pages[newest].messages || []), optimisticMsg],
+    const optimisticAttachments =
+      attachedFiles.length > 0
+        ? attachedFiles.map((f) => ({
+            url: null,
+            filename: f.name,
+            mimeType: f.type || 'application/octet-stream',
+            size: f.size || 0,
+            _uploading: true,
+          }))
+        : [];
+    const optimisticMsg: Message = {
+      id: tempId,
+      direction: 'OUTBOUND',
+      channel,
+      body: body || (optimisticAttachments.length > 0 ? '(no text)' : ''),
+      subject: null,
+      platform: (platform || sendChannel).toUpperCase(),
+      platformInfo: {
+        label: PLATFORM_LABELS[sendChannel] || sendChannel,
+        color: PLATFORM_COLORS[sendChannel] || '#6366f1',
+        icon: '',
+      },
+      metadata: {
+        ...(platform ? { platform } : {}),
+        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+      },
+      createdAt: new Date().toISOString(),
+      user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
+      _optimistic: true,
+    };
+    queryClient.setQueryData(msgKey, (old: any) => {
+      if (!old?.pages?.length) {
+        return {
+          pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
+          pageParams: [1],
         };
-        return { ...old, pages };
-      });
-    }
+      }
+      const pages = [...old.pages];
+      const newest = 0;
+      pages[newest] = {
+        ...pages[newest],
+        messages: [...(pages[newest].messages || []), optimisticMsg],
+      };
+      return { ...old, pages };
+    });
 
     setMessageText('');
     setSendingCount((v) => v + 1);
+    shouldScrollToBottomRef.current = true;
 
     try {
       const threadParams = threadCacheParams as Record<string, unknown>;
@@ -600,7 +661,10 @@ function InboxContent() {
           platform,
           files: attachedFiles,
         });
-        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, { message: sent });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, {
+          tempId,
+          message: sent,
+        });
         setAttachedFiles([]);
       } else {
         const sent = await inboxMutations.sendMessage.mutateAsync({
@@ -614,6 +678,7 @@ function InboxContent() {
           message: sent,
         });
       }
+      shouldScrollToBottomRef.current = true;
       inputRef.current?.focus();
     } catch (err: any) {
       queryClient.setQueryData(msgKey, (old: any) => {
@@ -781,7 +846,19 @@ function InboxContent() {
 
   function isMediaPlaceholderBody(body: string) {
     if (!body) return false;
-    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio)\]$/.test(body.trim()) || body.trim() === '(no text)';
+    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio|Location)\]$/.test(body.trim()) || body.trim() === '(no text)';
+  }
+
+  function isLocationMessage(msg: Message) {
+    return msg?.metadata?.mediaType === 'location' || !!msg?.metadata?.location;
+  }
+
+  function getGoogleMapsLink(location: any) {
+    if (!location) return '';
+    const lat = Number(location.latitude);
+    const lng = Number(location.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+    return `https://maps.google.com/?q=${lat},${lng}`;
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -834,7 +911,7 @@ function InboxContent() {
         const ext = (recorder.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
         const file = new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type });
 
-        setSending(true);
+        setSendingCount((v) => v + 1);
         try {
           let channel = sendChannel;
           let platform: string | undefined;
@@ -855,7 +932,7 @@ function InboxContent() {
         } catch (err) {
           console.error('Failed to send voice note:', err);
         } finally {
-          setSending(false);
+          setSendingCount((v) => Math.max(0, v - 1));
         }
         resolve();
       };
@@ -1445,31 +1522,31 @@ function InboxContent() {
                 </div>
               ) : (
                 <>
-                  {threadQuery.hasNextPage ? (
-                    <div className="flex justify-center pb-2">
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-brand-600 hover:text-brand-700 bg-white/90 px-3 py-1.5 rounded-full shadow-sm disabled:opacity-50"
-                        onClick={handleLoadOlderMessages}
-                        disabled={threadQuery.isFetchingNextPage}
-                      >
-                        {threadQuery.isFetchingNextPage ? 'Loading older…' : 'Load older messages'}
-                      </button>
-                    </div>
-                  ) : null}
                 <Virtuoso
+                  ref={threadVirtuosoRef}
                   style={{ height: '100%' }}
                   data={groupedMessages}
+                  firstItemIndex={threadFirstItemIndex}
+                  initialTopMostItemIndex={INITIAL_FIRST_ITEM_INDEX + groupedMessages.length - 1}
+                  followOutput={false}
                   computeItemKey={(idx, group) => `${group.date}-${group.messages?.[0]?.id || idx}`}
-                  overscan={360}
-                  increaseViewportBy={{ top: 280, bottom: 520 }}
+                  overscan={400}
+                  increaseViewportBy={{ top: 300, bottom: 300 }}
+                  atTopThreshold={150}
                   startReached={() => {
-                    if (threadQuery.hasNextPage && !threadQuery.isFetchingNextPage) {
-                      handleLoadOlderMessages();
-                    }
+                    handleLoadOlderMessages();
                   }}
                   scrollerRef={(el) => {
                     messagesContainerRef.current = (el as HTMLDivElement | null);
+                  }}
+                  components={{
+                    Header: () =>
+                      threadQuery.isFetchingNextPage ? (
+                        <div className="py-3 text-center text-xs text-text-tertiary">
+                          Loading older messages…
+                        </div>
+                      ) : null,
+                    Footer: () => <div className="h-4" />,
                   }}
                   itemContent={(gi, group) => (
                   <div className="px-3 sm:px-5">
@@ -1560,6 +1637,13 @@ function InboxContent() {
                                   </p>
                                 )}
 
+                                {(msg.metadata?.referral || msg.metadata?.adReferral) && (
+                                  <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[10px] font-semibold">
+                                    <Zap className="h-3 w-3" />
+                                    Ad Message
+                                  </div>
+                                )}
+
                                 {/* Deleted message */}
                                 {msg.isDeleted ? (
                                   <p className="text-sm italic text-gray-400 flex items-center gap-1">
@@ -1597,7 +1681,24 @@ function InboxContent() {
                                       <div className="space-y-1.5">
                                         {msg.metadata.attachments.map((att: any, ai: number) => {
                                           const url = att.url ? `/api${att.url}` : null;
-                                          if (!url) return null;
+                                          if (!url) {
+                                            return (
+                                              <div
+                                                key={ai}
+                                                className="flex items-center gap-2 p-2 rounded-lg bg-black/5 border border-black/10 min-w-[220px] max-w-[320px]"
+                                              >
+                                                <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                                <div className="min-w-0 flex-1">
+                                                  <p className="text-2xs font-medium truncate text-gray-800">
+                                                    {att.filename || 'Attachment'}
+                                                  </p>
+                                                  <p className="text-2xs text-gray-500">
+                                                    {att.size ? formatFileSize(att.size) : ''} {att._uploading ? 'Uploading…' : ''}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
 
                                           if (isImageOrSticker(att.mimeType)) {
                                             return (
@@ -1653,6 +1754,33 @@ function InboxContent() {
                                             </a>
                                           );
                                         })}
+                                      </div>
+                                    )}
+
+                                    {/* Location card */}
+                                    {isLocationMessage(msg) && (
+                                      <div className="mt-1 rounded-lg border border-black/10 bg-black/5 p-2 min-w-[220px]">
+                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                                          <MapPin className="h-3.5 w-3.5" />
+                                          Location
+                                        </div>
+                                        {msg.metadata?.location?.name ? (
+                                          <p className="text-xs text-gray-700 mt-1">{msg.metadata.location.name}</p>
+                                        ) : null}
+                                        {msg.metadata?.location?.address ? (
+                                          <p className="text-2xs text-gray-500 mt-0.5">{msg.metadata.location.address}</p>
+                                        ) : null}
+                                        {getGoogleMapsLink(msg.metadata?.location) ? (
+                                          <a
+                                            href={getGoogleMapsLink(msg.metadata?.location)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 text-2xs text-brand-600 hover:text-brand-700 mt-1"
+                                          >
+                                            <ExternalLink className="h-3 w-3" />
+                                            Open in Maps
+                                          </a>
+                                        ) : null}
                                       </div>
                                     )}
 
