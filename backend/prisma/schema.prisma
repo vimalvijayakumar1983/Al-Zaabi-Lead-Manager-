@@ -134,6 +134,9 @@ model WhatsAppBroadcastRun {
   completedAt      DateTime?
   totalRecipients  Int      @default(0)
   sentCount        Int      @default(0)
+  deliveredCount   Int      @default(0)
+  readCount        Int      @default(0)
+  repliedCount     Int      @default(0)
   failedCount      Int      @default(0)
   lastError        String?
   createdAt        DateTime @default(now())
@@ -153,16 +156,19 @@ model WhatsAppBroadcastRecipient {
   leadId       String
   lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
   phone        String
-  status       String   @default("PENDING") // PENDING | SENT | FAILED
-  waMessageId  String?
-  error        String?
-  attemptCount Int      @default(0)
-  sentAt       DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  status        String    @default("PENDING") // PENDING | SENT | DELIVERED | READ | FAILED
+  waMessageId   String?
+  error         String?
+  attemptCount  Int       @default(0)
+  sentAt        DateTime?
+  deliveredAt   DateTime?
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@unique([broadcastId, leadId])
   @@index([broadcastId, status])
+  @@index([waMessageId])
   @@index([leadId])
   @@map("whatsapp_broadcast_recipients")
 }
@@ -273,6 +279,11 @@ model Lead {
   doNotCall       Boolean   @default(false)
   doNotCallAt     DateTime?
   doNotCallById   String?
+
+  // ── WhatsApp Broadcast Opt-out ──
+  whatsappOptOut    Boolean   @default(false)
+  whatsappOptOutAt  DateTime?
+  whatsappOptOutById String?
 
   // ── SLA Tracking ──
   firstRespondedAt  DateTime?            // When the assigned user first interacted with this lead

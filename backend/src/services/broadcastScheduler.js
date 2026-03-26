@@ -3,8 +3,12 @@ const { logger } = require('../config/logger');
 const { sendTemplate: sendWhatsAppTemplate } = require('./whatsappService');
 
 const BROADCAST_SCHEDULER_INTERVAL_MS = 30 * 1000;
+// Keep well below Meta's ~80 msg/s soft limit. 50ms gives ~20 msg/s — safe for large lists.
+const SEND_THROTTLE_MS = 50;
 let intervalRef = null;
 let isRunning = false;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function buildTemplateComponentsFromVariables(variables) {
   if (!variables || typeof variables !== 'object') return [];
@@ -44,7 +48,8 @@ async function runBroadcastNow(broadcastId) {
   let sent = 0;
   let failed = 0;
 
-  for (const r of recipients) {
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
     try {
       const out = await sendWhatsAppTemplate(
         r.phone,
@@ -74,6 +79,10 @@ async function runBroadcastNow(broadcastId) {
           error: err?.message || 'Send failed',
         },
       });
+    }
+    // Rate throttle — avoid hammering Meta API; skip delay after last recipient
+    if (i < recipients.length - 1) {
+      await sleep(SEND_THROTTLE_MS);
     }
   }
 

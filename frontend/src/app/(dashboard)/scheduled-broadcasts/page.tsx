@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import {
   Loader2, Clock3, CheckCircle2, AlertCircle, PlayCircle,
-  Radio, Search, ChevronRight, Calendar, Users,
+  Radio, Search, ChevronRight, Calendar, Users, XCircle, RefreshCw,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -20,6 +20,9 @@ type BroadcastRun = {
   scheduledAt: string | null;
   totalRecipients: number;
   sentCount: number;
+  deliveredCount: number;
+  readCount: number;
+  repliedCount: number;
   failedCount: number;
   createdAt: string;
   updatedAt: string;
@@ -29,12 +32,18 @@ type BroadcastRecipient = {
   id: string;
   leadId: string;
   phone: string;
-  status: 'PENDING' | 'SENT' | 'FAILED';
+  status: 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
   waMessageId: string | null;
   error: string | null;
   attemptCount: number;
   sentAt: string | null;
-  lead: { id: string; firstName: string; lastName: string; phone: string | null; email: string | null } | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  lead: {
+    id: string; firstName: string; lastName: string;
+    phone: string | null; email: string | null;
+    whatsappOptOut?: boolean; whatsappOptOutAt?: string | null;
+  } | null;
 };
 
 const UAE_TZ = 'Asia/Dubai';
@@ -67,21 +76,28 @@ function StatusChip({ status }: { status: BroadcastRun['status'] }) {
 }
 
 // ─── Progress bar ─────────────────────────────────────────────────────
-function ProgressBar({ sent, failed, total }: { sent: number; failed: number; total: number }) {
+function ProgressBar({ sent, delivered, read, failed, total }: {
+  sent: number; delivered: number; read: number; failed: number; total: number;
+}) {
   if (!total) return <span className="text-xs text-text-tertiary">—</span>;
-  const sp = Math.min(100, (sent / total) * 100);
+  const sp = Math.min(100, (sent      / total) * 100);
+  const dp = Math.min(sp,  (delivered / total) * 100);
+  const rp = Math.min(dp,  (read      / total) * 100);
   const fp = Math.min(100 - sp, (failed / total) * 100);
   return (
     <div>
       <div className="flex items-center gap-1.5 mb-0.5">
-        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden flex">
-          <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${sp}%` }} />
-          <div className="h-full bg-red-400 rounded-full transition-all" style={{ width: `${fp}%` }} />
+        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden flex">
+          <div className="h-full bg-emerald-400 transition-all" style={{ width: `${sp}%` }} />
+          <div className="h-full bg-red-400 transition-all"     style={{ width: `${fp}%` }} />
         </div>
-        <span className="text-[10px] text-text-tertiary tabular-nums">{sent}/{total}</span>
+        <span className="text-[10px] text-text-tertiary tabular-nums shrink-0">{sent}/{total}</span>
       </div>
-      <p className="text-[10px] text-text-tertiary">
-        {pct(sent, total)} sent · {failed > 0 ? <span className="text-red-500">{failed} failed</span> : '0 failed'}
+      <p className="text-[10px] text-text-tertiary space-x-1">
+        <span className="text-emerald-600">{pct(sent, total)} sent</span>
+        {delivered > 0 && <span className="text-sky-600">· {pct(delivered, total)} delivered</span>}
+        {read > 0      && <span className="text-blue-600">· {pct(read, total)} read</span>}
+        {failed > 0    && <span className="text-red-500">· {failed} failed</span>}
       </p>
     </div>
   );
@@ -89,8 +105,20 @@ function ProgressBar({ sent, failed, total }: { sent: number; failed: number; to
 
 // ─── Recipient status badge ───────────────────────────────────────────
 function RecipientBadge({ status }: { status: BroadcastRecipient['status'] }) {
-  const cfg = { SENT: 'bg-emerald-100 text-emerald-700', FAILED: 'bg-red-100 text-red-700', PENDING: 'bg-gray-100 text-gray-600' };
-  return <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${cfg[status]}`}>{status}</span>;
+  const cfg: Record<string, string> = {
+    SENT:      'bg-emerald-100 text-emerald-700',
+    DELIVERED: 'bg-sky-100 text-sky-700',
+    READ:      'bg-blue-100 text-blue-700',
+    FAILED:    'bg-red-100 text-red-700',
+    PENDING:   'bg-gray-100 text-gray-600',
+  };
+  const icons: Record<string, string> = { SENT: '✓', DELIVERED: '✓✓', READ: '✓✓', FAILED: '✕', PENDING: '…' };
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium inline-flex items-center gap-1 ${cfg[status] || cfg.PENDING}`}>
+      <span>{icons[status] || status}</span>
+      {status}
+    </span>
+  );
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────
@@ -110,6 +138,8 @@ export default function ScheduledBroadcastsPage() {
   const [recipients, setRecipients] = useState<BroadcastRecipient[]>([]);
   const [recipientFilter, setRecipientFilter] = useState<'ALL' | 'FAILED' | 'SENT' | 'PENDING'>('ALL');
   const [recipientSearch, setRecipientSearch] = useState('');
+  const [actionBusy, setActionBusy] = useState<string | null>(null); // runId being actioned
+  const [actionNote, setActionNote] = useState('');
 
   // ── Load runs ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -160,6 +190,40 @@ export default function ScheduledBroadcastsPage() {
 
   const selectedRun = rows.find((r) => r.id === selectedRunId) || null;
 
+  const reloadRuns = useCallback(async () => {
+    const out = await api.listBroadcastRuns(divisionId || undefined);
+    setRows(out.runs || []);
+  }, [divisionId]);
+
+  const handleCancel = async (runId: string) => {
+    if (!confirm('Cancel this scheduled broadcast? Recipients will not receive the message.')) return;
+    setActionBusy(runId); setActionNote('');
+    try {
+      await api.cancelBroadcastRun(runId, divisionId || undefined);
+      setActionNote('Broadcast cancelled.');
+      await reloadRuns();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to cancel broadcast');
+    } finally { setActionBusy(null); }
+  };
+
+  const handleRetry = async (runId: string) => {
+    if (!confirm('Retry all failed recipients for this broadcast?')) return;
+    setActionBusy(runId); setActionNote('');
+    try {
+      const out = await api.retryBroadcastRun(runId, divisionId || undefined);
+      setActionNote(out.message || 'Retry started.');
+      await reloadRuns();
+      // Reload recipient details
+      if (selectedRunId === runId) {
+        const detail = await api.getBroadcastRun(runId, divisionId || undefined);
+        setRecipients(detail.run.recipients || []);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to retry broadcast');
+    } finally { setActionBusy(null); }
+  };
+
   const shownRecipients = recipients.filter((r) => {
     if (recipientFilter !== 'ALL' && r.status !== recipientFilter) return false;
     if (!recipientSearch.trim()) return true;
@@ -184,6 +248,7 @@ export default function ScheduledBroadcastsPage() {
       </div>
 
       {error && <div className="card p-3 text-sm text-red-700 bg-red-50 ring-1 ring-red-200">{error}</div>}
+      {actionNote && <div className="card p-3 text-sm text-emerald-700 bg-emerald-50 ring-1 ring-emerald-200">{actionNote}</div>}
 
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b border-border-subtle">
@@ -273,15 +338,41 @@ export default function ScheduledBroadcastsPage() {
                     </div>
                   </div>
 
-                  {/* Right: progress */}
-                  <div className="shrink-0 w-40">
-                    {row.status === 'SCHEDULED' ? (
-                      <p className="text-xs text-amber-600 flex items-center gap-1 justify-end">
-                        <Calendar className="h-3.5 w-3.5" /> Scheduled
-                      </p>
-                    ) : (
-                      <ProgressBar sent={row.sentCount} failed={row.failedCount} total={row.totalRecipients} />
-                    )}
+                  {/* Right: progress + actions */}
+                  <div className="shrink-0 flex flex-col items-end gap-2">
+                    <div className="w-36">
+                      {row.status === 'SCHEDULED' ? (
+                        <p className="text-xs text-amber-600 flex items-center gap-1 justify-end">
+                          <Calendar className="h-3.5 w-3.5" /> Scheduled
+                        </p>
+                      ) : (
+                        <ProgressBar sent={row.sentCount} delivered={row.deliveredCount} read={row.readCount} failed={row.failedCount} total={row.totalRecipients} />
+                      )}
+                    </div>
+
+                    {/* Action buttons — stop click propagating to row selection */}
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      {row.status === 'SCHEDULED' && (
+                        <button
+                          className="flex items-center gap-1 text-[11px] font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2 py-0.5 rounded-full transition-colors disabled:opacity-50"
+                          disabled={actionBusy === row.id}
+                          onClick={() => handleCancel(row.id)}
+                        >
+                          {actionBusy === row.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                          Cancel
+                        </button>
+                      )}
+                      {(row.status === 'COMPLETED' || row.status === 'FAILED') && row.failedCount > 0 && (
+                        <button
+                          className="flex items-center gap-1 text-[11px] font-medium text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-full transition-colors disabled:opacity-50"
+                          disabled={actionBusy === row.id}
+                          onClick={() => handleRetry(row.id)}
+                        >
+                          {actionBusy === row.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                          Retry {row.failedCount} failed
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <ChevronRight className={`h-4 w-4 shrink-0 mt-1 transition-colors ${selectedRunId === row.id ? 'text-brand-500' : 'text-text-tertiary'}`} />
@@ -303,7 +394,7 @@ export default function ScheduledBroadcastsPage() {
               </h2>
               <p className="text-xs text-text-tertiary mt-0.5">
                 Template: {selectedRun.templateName} · {selectedRun.totalRecipients} total ·{' '}
-                {selectedRun.sentCount} sent · {selectedRun.failedCount} failed
+                {selectedRun.sentCount} sent · {selectedRun.deliveredCount} delivered · {selectedRun.readCount} read · {selectedRun.failedCount} failed
                 {selectedRun.scheduledAt && (
                   <> · Scheduled: {fmtUAE(selectedRun.scheduledAt)}</>
                 )}
@@ -342,23 +433,35 @@ export default function ScheduledBroadcastsPage() {
                     <th className="text-left px-4 py-2 font-medium">Phone</th>
                     <th className="text-left px-4 py-2 font-medium">Status</th>
                     <th className="text-left px-4 py-2 font-medium">Sent at</th>
-                    <th className="text-left px-4 py-2 font-medium">WA Message ID</th>
+                    <th className="text-left px-4 py-2 font-medium hidden lg:table-cell">Delivered at</th>
+                    <th className="text-left px-4 py-2 font-medium hidden lg:table-cell">Read at</th>
                     <th className="text-left px-4 py-2 font-medium">Error</th>
-                    <th className="text-left px-4 py-2 font-medium">Attempts</th>
+                    <th className="text-left px-4 py-2 font-medium">Tries</th>
                   </tr>
                 </thead>
                 <tbody>
                   {shownRecipients.map((r) => (
                     <tr key={r.id} className="border-t border-border-subtle hover:bg-surface-secondary/40">
-                      <td className="px-4 py-2 font-medium text-text-primary">
-                        {`${r.lead?.firstName || ''} ${r.lead?.lastName || ''}`.trim() || '—'}
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-text-primary">
+                            {`${r.lead?.firstName || ''} ${r.lead?.lastName || ''}`.trim() || '—'}
+                          </span>
+                          {r.lead?.whatsappOptOut && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-orange-100 text-orange-700 border border-orange-200 shrink-0">
+                              <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
+                              WA opt-out
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-2 text-text-secondary">{r.phone}</td>
                       <td className="px-4 py-2"><RecipientBadge status={r.status} /></td>
-                      <td className="px-4 py-2 text-text-tertiary text-xs">{r.sentAt ? fmtUAE(r.sentAt) : '—'}</td>
-                      <td className="px-4 py-2 text-text-tertiary text-xs truncate max-w-[160px]">{r.waMessageId || '—'}</td>
+                      <td className="px-4 py-2 text-text-tertiary text-xs whitespace-nowrap">{r.sentAt ? fmtUAE(r.sentAt) : '—'}</td>
+                      <td className="px-4 py-2 text-text-tertiary text-xs whitespace-nowrap hidden lg:table-cell">{r.deliveredAt ? fmtUAE(r.deliveredAt) : '—'}</td>
+                      <td className="px-4 py-2 text-text-tertiary text-xs whitespace-nowrap hidden lg:table-cell">{r.readAt ? fmtUAE(r.readAt) : '—'}</td>
                       <td className="px-4 py-2 text-xs text-red-600 max-w-[200px] truncate">{r.error || '—'}</td>
-                      <td className="px-4 py-2 text-center">{r.attemptCount}</td>
+                      <td className="px-4 py-2 text-center text-xs">{r.attemptCount}</td>
                     </tr>
                   ))}
                 </tbody>

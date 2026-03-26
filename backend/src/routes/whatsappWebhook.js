@@ -78,6 +78,7 @@ async function processStatusUpdates({ phoneNumberId, displayPhoneNumber, statuse
       const mappedStatus = normalizeWaStatus(s?.status);
       const statusAt = parseWaStatusTimestamp(s) ?? new Date();
 
+      // ── 1. Update inbox Communication record ─────────────────────
       const comm = await prisma.communication.findFirst({
         where: {
           channel: 'WHATSAPP',
@@ -93,39 +94,84 @@ async function processStatusUpdates({ phoneNumberId, displayPhoneNumber, statuse
         },
       });
 
-      if (!comm || !comm.lead) return;
+      if (comm?.lead) {
+        const nextMeta = {
+          ...(comm.metadata || {}),
+          waStatus: mappedStatus,
+          waStatusRaw: s?.status,
+          waStatusUpdatedAt: statusAt.toISOString(),
+          ...(mappedStatus === 'READ' ? { waRecipientReadAt: statusAt.toISOString() } : {}),
+        };
 
-      const nextMeta = {
-        ...(comm.metadata || {}),
-        waStatus: mappedStatus,
-        waStatusRaw: s?.status,
-        waStatusUpdatedAt: statusAt.toISOString(),
-        ...(mappedStatus === 'READ' ? { waRecipientReadAt: statusAt.toISOString() } : {}),
-      };
+        const updated = await prisma.communication
+          .update({
+            where: { id: comm.id },
+            data: { metadata: nextMeta },
+            include: { user: { select: { id: true, firstName: true, lastName: true } } },
+          })
+          .catch(() => null);
 
-      const updated = await prisma.communication
-        .update({
-          where: { id: comm.id },
-          data: { metadata: nextMeta },
-          include: {
-            user: { select: { id: true, firstName: true, lastName: true } },
-          },
-        })
-        .catch(() => null);
-
-      if (!updated) return;
-
-      let payload;
-      try {
-        payload = await enrichCommunicationForClient(updated, comm.leadId);
-      } catch {
-        payload = updated;
+        if (updated) {
+          let payload;
+          try { payload = await enrichCommunicationForClient(updated, comm.leadId); }
+          catch { payload = updated; }
+          broadcastDataChange(comm.lead.organizationId, 'communication', 'updated', null, {
+            entityId: comm.leadId,
+            message: payload,
+          }).catch(() => {});
+        }
       }
 
-      broadcastDataChange(comm.lead.organizationId, 'communication', 'updated', null, {
-        entityId: comm.leadId,
-        message: payload,
-      }).catch(() => {});
+      // ── 2. Update BroadcastRecipient by waMessageId ──────────────
+      if (!mappedStatus || mappedStatus === 'SENT') return; // SENT is already recorded at send time
+
+      try {
+        const recipient = await prisma.whatsAppBroadcastRecipient.findFirst({
+          where: { waMessageId },
+          select: { id: true, broadcastId: true, status: true, deliveredAt: true, readAt: true },
+        });
+
+        if (!recipient) return;
+
+        // Only advance status (SENT → DELIVERED → READ), never go backwards
+        const statusRank = { PENDING: 0, SENT: 1, DELIVERED: 2, READ: 3 };
+        const currentRank = statusRank[recipient.status] ?? 0;
+        const newRank     = mappedStatus === 'DELIVERED' ? 2 : mappedStatus === 'READ' ? 3 : 0;
+        if (newRank <= currentRank) return; // already at same or higher state
+
+        const recipientUpdate = {
+          status: mappedStatus === 'DELIVERED' ? 'DELIVERED' : 'READ',
+          ...(mappedStatus === 'DELIVERED' && !recipient.deliveredAt ? { deliveredAt: statusAt } : {}),
+          ...(mappedStatus === 'READ'       && !recipient.readAt      ? { readAt:       statusAt } : {}),
+          ...(mappedStatus === 'READ'       && !recipient.deliveredAt ? { deliveredAt: statusAt } : {}), // read implies delivered
+        };
+
+        await prisma.whatsAppBroadcastRecipient.update({
+          where: { id: recipient.id },
+          data: recipientUpdate,
+        });
+
+        // Increment the matching counter on the run (use raw SQL increment to avoid race conditions)
+        const runUpdate = {};
+        if (mappedStatus === 'DELIVERED') {
+          runUpdate.deliveredCount = { increment: 1 };
+          if (!recipient.deliveredAt) {} // only first delivery
+        }
+        if (mappedStatus === 'READ') {
+          runUpdate.readCount = { increment: 1 };
+          if (!recipient.deliveredAt) {
+            runUpdate.deliveredCount = { increment: 1 }; // read implies delivered
+          }
+        }
+        if (Object.keys(runUpdate).length > 0) {
+          await prisma.whatsAppBroadcastRun.update({
+            where: { id: recipient.broadcastId },
+            data: runUpdate,
+          }).catch(() => {}); // non-critical
+        }
+      } catch (err) {
+        logger.warn('[Webhook] BroadcastRecipient status update failed', { waMessageId, err: err?.message });
+      }
     })
   );
 }

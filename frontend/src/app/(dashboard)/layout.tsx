@@ -2,10 +2,12 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissionsStore } from '@/lib/permissions';
 import { useNotificationStore } from '@/store/notificationStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import { api } from '@/lib/api';
 import Sidebar from '@/components/Sidebar';
 import CommandPalette from '@/components/CommandPalette';
 import NotificationCenter from '@/components/NotificationCenter';
@@ -13,7 +15,7 @@ import ToastProvider from '@/components/ToastProvider';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { GlobalSearch } from './components/global-search';
 import { ACTIVE_DIVISION_CHANGED } from '@/lib/activeDivisionEvents';
-import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu } from 'lucide-react';
+import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu, AlertTriangle, X } from 'lucide-react';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
@@ -208,6 +210,38 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => document.removeEventListener('click', handleClick);
   }, [showDivisionDropdown]);
 
+  // ── WhatsApp token health banner ──────────────────────────────────────
+  const [waTokenBanner, setWaTokenBanner] = useState<{ error: string; checkedAt: string | null } | null>(null);
+  const [waTokenBannerDismissed, setWaTokenBannerDismissed] = useState(false);
+  const isAdminUser = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
+
+  const checkWaTokenHealth = useCallback(async () => {
+    try {
+      const divisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const settings = await api.getWhatsAppSettings(divisionId || undefined);
+      const status = settings.whatsappTokenStatus;
+      if (status && !status.ok && status.error) {
+        setWaTokenBanner({ error: status.error, checkedAt: status.checkedAt });
+        setWaTokenBannerDismissed(false); // re-show if token still broken after save
+      } else {
+        setWaTokenBanner(null);
+        setWaTokenBannerDismissed(false);
+      }
+    } catch {
+      // Non-critical
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !isAdminUser) return;
+    checkWaTokenHealth();
+    const t = setInterval(checkWaTokenHealth, 10 * 60 * 1000);
+    // Re-check immediately whenever WhatsApp settings are saved
+    const onSaved = () => checkWaTokenHealth();
+    window.addEventListener('whatsapp-settings-saved', onSaved);
+    return () => { clearInterval(t); window.removeEventListener('whatsapp-settings-saved', onSaved); };
+  }, [isAuthenticated, isAdminUser, checkWaTokenHealth]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-surface-secondary">
@@ -363,6 +397,37 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </button>
           </div>
         </header>
+
+        {/* WhatsApp token expiry banner — fixed floating, doesn't affect layout */}
+        {waTokenBanner && !waTokenBannerDismissed && (
+          <div className="fixed bottom-5 right-5 z-50 max-w-sm w-full shadow-lg rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3 animate-fade-in">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-900">WhatsApp token expired</p>
+              <p className="text-xs text-amber-700 mt-0.5 line-clamp-2">
+                {waTokenBanner.error}
+              </p>
+              {waTokenBanner.checkedAt && (
+                <p className="text-[10px] text-amber-500 mt-0.5">
+                  Detected {new Date(waTokenBanner.checkedAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                </p>
+              )}
+              <Link
+                href="/settings?tab=whatsapp"
+                className="mt-1.5 inline-block text-xs font-semibold text-amber-800 hover:text-amber-900 underline underline-offset-2"
+              >
+                Update token in Settings →
+              </Link>
+            </div>
+            <button
+              onClick={() => setWaTokenBannerDismissed(true)}
+              className="p-0.5 rounded hover:bg-amber-100 transition-colors shrink-0"
+              title="Dismiss"
+            >
+              <X className="h-3.5 w-3.5 text-amber-600" />
+            </button>
+          </div>
+        )}
 
         {/* Page content wrapped in error boundary */}
         <ErrorBoundary>

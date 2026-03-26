@@ -2126,6 +2126,80 @@ router.post('/:id/unblock', async (req, res, next) => {
   }
 });
 
+// ─── WhatsApp Opt-Out ───────────────────────────────────────────
+router.post('/:id/whatsapp-opt-out', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (lead.whatsappOptOut) return res.json({ success: true, message: 'Lead is already opted out of WhatsApp broadcasts' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        whatsappOptOut: true,
+        whatsappOptOutAt: new Date(),
+        whatsappOptOutById: req.user.id,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead opted out of WhatsApp broadcasts by ${getDisplayName(req.user)}`,
+        metadata: { trigger: 'whatsapp_opt_out' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead opted out of WhatsApp broadcasts' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── WhatsApp Opt-In ────────────────────────────────────────────
+router.post('/:id/whatsapp-opt-in', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (!lead.whatsappOptOut) return res.json({ success: true, message: 'Lead is already opted in to WhatsApp broadcasts' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        whatsappOptOut: false,
+        whatsappOptOutAt: null,
+        whatsappOptOutById: null,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead opted back in to WhatsApp broadcasts by ${getDisplayName(req.user)}`,
+        metadata: { trigger: 'whatsapp_opt_in' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead opted back in to WhatsApp broadcasts' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── Rescore a single lead (GET score breakdown) ─────────────────
 router.get('/:id/score', async (req, res, next) => {
   try {

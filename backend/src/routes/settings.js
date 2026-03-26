@@ -1219,6 +1219,7 @@ router.get('/sla/dashboard', async (req, res, next) => {
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
 const { resolveSendConfig } = require('../services/whatsappService');
+const { recordTokenOk, recordTokenError, isTokenError } = require('../utils/whatsappTokenHealth');
 
 // Helper: resolve target organization for division-scoped settings (email, WhatsApp, etc.)
 // SUPER_ADMIN must pass ?divisionId=<uuid>; ADMIN uses their own org (division)
@@ -1306,6 +1307,14 @@ function sanitizeWhatsAppSettingsForClient(settings, revealSecrets = false) {
     whatsappApiUrl: trimSettingStr(s.whatsappApiUrl) || '',
     whatsappBusinessAccountId: trimSettingStr(s.whatsappBusinessAccountId) || '',
     whatsappMetaAppId: trimSettingStr(s.whatsappMetaAppId) || '',
+    // Token health status — set passively by send/sync operations
+    whatsappTokenStatus: s.whatsappTokenStatus
+      ? {
+          ok: !!s.whatsappTokenStatus.ok,
+          checkedAt: s.whatsappTokenStatus.checkedAt || null,
+          error: s.whatsappTokenStatus.error || null,
+        }
+      : null,
   };
 }
 
@@ -1541,6 +1550,10 @@ router.post('/whatsapp/test', authorize('ADMIN'), validate(whatsAppTestSchema), 
 
     if (!resp.ok) {
       const mapped = mapWhatsAppTestError(resp.status, data);
+      // Persist token health if this is an auth error
+      if (isTokenError(resp.status, data)) {
+        recordTokenError(targetOrgId, data.error?.message || mapped.userMessage).catch(() => {});
+      }
       diagnostics.token = {
         ok: mapped.reasonCode !== 'TOKEN_EXPIRED',
         reasonCode: mapped.reasonCode === 'TOKEN_EXPIRED' ? mapped.reasonCode : null,
@@ -1593,6 +1606,9 @@ router.post('/whatsapp/test', authorize('ADMIN'), validate(whatsAppTestSchema), 
         };
       }
     }
+
+    // Test succeeded — clear any previous token error
+    recordTokenOk(targetOrgId).catch(() => {});
 
     return res.json({
       success: true,

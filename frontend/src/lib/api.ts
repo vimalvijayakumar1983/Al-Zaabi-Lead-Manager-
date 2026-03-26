@@ -257,6 +257,14 @@ class ApiClient {
     return this.request<any>(`/leads/${id}/unblock`, { method: 'POST' });
   }
 
+  async whatsappOptOutLead(id: string) {
+    return this.request<{ success: boolean; message: string }>(`/leads/${id}/whatsapp-opt-out`, { method: 'POST' });
+  }
+
+  async whatsappOptInLead(id: string) {
+    return this.request<{ success: boolean; message: string }>(`/leads/${id}/whatsapp-opt-in`, { method: 'POST' });
+  }
+
   async bulkUpdateLeads(leadIds: string[], data: any) {
     return this.request<any>('/leads/bulk', {
       method: 'PATCH',
@@ -643,6 +651,11 @@ class ApiClient {
         totalRecipients: number;
         sentCount: number;
         failedCount: number;
+        deliveredCount: number;
+        readCount: number;
+        repliedCount: number;
+        startedAt: string | null;
+        completedAt: string | null;
         createdAt: string;
         updatedAt: string;
       }>;
@@ -663,6 +676,9 @@ class ApiClient {
         totalRecipients: number;
         sentCount: number;
         failedCount: number;
+        deliveredCount: number;
+        readCount: number;
+        repliedCount: number;
         startedAt: string | null;
         completedAt: string | null;
         createdAt: string;
@@ -671,11 +687,13 @@ class ApiClient {
           id: string;
           leadId: string;
           phone: string;
-          status: 'PENDING' | 'SENT' | 'FAILED';
+          status: 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
           waMessageId: string | null;
           error: string | null;
           attemptCount: number;
           sentAt: string | null;
+          deliveredAt: string | null;
+          readAt: string | null;
           createdAt: string;
           updatedAt: string;
           lead: {
@@ -684,10 +702,28 @@ class ApiClient {
             lastName: string;
             phone: string | null;
             email: string | null;
+            whatsappOptOut?: boolean;
+            whatsappOptOutAt?: string | null;
           } | null;
         }>;
       };
     }>(`/broadcast-lists/runs/${encodeURIComponent(id)}${q}`);
+  }
+
+  async cancelBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean; run: { id: string; status: string } }>(
+      `/broadcast-lists/runs/${encodeURIComponent(id)}/cancel${q}`,
+      { method: 'PATCH' },
+    );
+  }
+
+  async retryBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean; runId: string; retrying: number; message: string }>(
+      `/broadcast-lists/runs/${encodeURIComponent(id)}/retry${q}`,
+      { method: 'POST' },
+    );
   }
 
   private async authenticatedDownload(path: string, fallbackFilename: string) {
@@ -1173,6 +1209,7 @@ class ApiClient {
       whatsappApiUrl: string;
       whatsappBusinessAccountId?: string;
       whatsappMetaAppId?: string;
+      whatsappTokenStatus?: { ok: boolean; checkedAt: string | null; error: string | null } | null;
     }>(`/settings/whatsapp${qs}`);
   }
 

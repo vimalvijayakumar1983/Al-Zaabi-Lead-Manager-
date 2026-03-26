@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
-import { RefreshCw, AlertCircle, LayoutTemplate, Plus, Pencil, Trash2, X, ChevronRight, ChevronLeft, Search, SlidersHorizontal } from 'lucide-react';
+import { RefreshCw, AlertCircle, LayoutTemplate, Plus, Pencil, Trash2, X, ChevronRight, ChevronLeft, Search, SlidersHorizontal, Loader2 } from 'lucide-react';
 
 function useEffectiveDivisionId() {
   const { user } = useAuthStore();
@@ -292,6 +292,12 @@ export default function WhatsAppTemplatesPage() {
     queryKey: ['whatsapp-templates', divisionId],
     queryFn: () => api.listWhatsAppTemplates(divisionId),
     enabled: ready && (!isSuperAdmin || !!divisionId),
+    // Auto-refresh every 60s while any template is in a non-terminal state
+    refetchInterval: (query) => {
+      const templates: Array<{ status?: string | null }> = query.state.data?.templates ?? [];
+      const hasPending = templates.some((t) => ['PENDING', 'PAUSED', 'IN_APPEAL'].includes((t.status ?? '').toUpperCase()));
+      return hasPending ? 60_000 : false;
+    },
   });
 
   const syncMutation = useMutation({
@@ -481,6 +487,15 @@ export default function WhatsAppTemplatesPage() {
   const [tplStatusFilter, setTplStatusFilter] = useState('ALL');
   const [tplCategoryFilter, setTplCategoryFilter] = useState('ALL');
   const [hoveredTpl, setHoveredTpl] = useState<{ id: string; top: number; right: number } | null>(null);
+  const [previewTpl, setPreviewTpl] = useState<any | null>(null);
+
+  // Close preview modal on Escape
+  useEffect(() => {
+    if (!previewTpl) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewTpl(null); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [previewTpl]);
 
   const allTemplates = listQuery.data?.templates ?? [];
   const filteredTemplates = useMemo(() => {
@@ -565,6 +580,14 @@ export default function WhatsAppTemplatesPage() {
         </div>
       </div>
 
+      {/* Auto-refresh notice when templates are pending review */}
+      {!superAdminBlocked && allTemplates.some((t) => ['PENDING', 'PAUSED', 'IN_APPEAL'].includes((t.status ?? '').toUpperCase())) && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+          <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 opacity-70" />
+          <span>Some templates are pending Meta review — status will auto-refresh every 60 seconds.</span>
+        </div>
+      )}
+
       {superAdminBlocked && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
@@ -584,7 +607,7 @@ export default function WhatsAppTemplatesPage() {
 
       {/* ── Filter bar ── */}
       <div className="card overflow-hidden">
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 border-b border-border-subtle">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 border-b border-border-subtle justify-between">
           {/* Search */}
           <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
             <Search className="h-3.5 w-3.5 text-text-tertiary shrink-0" />
@@ -595,9 +618,9 @@ export default function WhatsAppTemplatesPage() {
               onChange={(e) => setTplSearch(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-end">
             <select
-              className="input input-sm text-xs py-1 h-7"
+              className="input input-sm text-xs py-1 h-7 min-w-[100px]"
               value={tplStatusFilter}
               onChange={(e) => setTplStatusFilter(e.target.value)}
             >
@@ -608,7 +631,7 @@ export default function WhatsAppTemplatesPage() {
               <option value="PAUSED">Paused</option>
             </select>
             <select
-              className="input input-sm text-xs py-1 h-7"
+              className="input input-sm text-xs py-1 h-7 min-w-[120px]"
               value={tplCategoryFilter}
               onChange={(e) => setTplCategoryFilter(e.target.value)}
             >
@@ -661,32 +684,33 @@ export default function WhatsAppTemplatesPage() {
                   key={t.id}
                   className="border-b border-border last:border-0 hover:bg-surface-secondary/50 relative group"
                 >
-                  {/* Template name + pills */}
-                  <td className="px-4 py-3 max-w-[200px]">
-                    <p className="font-semibold text-text-primary truncate text-sm">{t.name}</p>
-                    <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                  {/* Template name + pills — single inline row */}
+                  <td className="px-4 py-3 max-w-[240px]">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-semibold text-text-primary truncate text-sm">{t.name}</p>
                       {t.category && (
-                        <span className="text-[10px] font-semibold uppercase bg-surface-tertiary text-text-tertiary rounded px-1.5 py-0.5">
+                        <span className="text-[10px] font-semibold uppercase bg-surface-tertiary text-text-tertiary rounded px-1.5 py-0.5 shrink-0">
                           {t.category}
                         </span>
                       )}
                       {t.language && (
-                        <span className="text-[10px] text-text-tertiary">{t.language}</span>
+                        <span className="text-[10px] text-text-tertiary shrink-0">{t.language}</span>
                       )}
                     </div>
                   </td>
 
-                  {/* Preview text — hover triggers the fixed popover */}
+                  {/* Preview cell — hover shows popover, click opens full modal */}
                   <td
-                    className="px-4 py-3 w-56 cursor-default"
+                    className="px-4 py-3 w-56 cursor-pointer"
                     onMouseEnter={(e) => {
                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                       setHoveredTpl({ id: t.id, top: rect.top, right: window.innerWidth - rect.right + rect.width });
                     }}
                     onMouseLeave={() => setHoveredTpl(null)}
+                    onClick={() => { setHoveredTpl(null); setPreviewTpl(t); }}
                   >
-                    <span className="text-xs text-text-secondary truncate block max-w-[200px] underline decoration-dotted underline-offset-2 decoration-text-tertiary">
-                      {getPreviewText(t) || <em className="text-text-tertiary">No body text</em>}
+                    <span className="text-xs text-brand-600 hover:text-brand-700 truncate block max-w-[200px] underline decoration-dotted underline-offset-2">
+                      {getPreviewText(t) || <em className="text-text-tertiary italic">No body text</em>}
                     </span>
                   </td>
 
@@ -698,7 +722,7 @@ export default function WhatsAppTemplatesPage() {
                     </span>
                     {t.rejectedReason && (
                       <p className="text-[10px] text-red-600 mt-0.5 max-w-[140px] truncate" title={t.rejectedReason}>
-                        {t.rejectedReason}
+                       Rejection: {t.rejectedReason}
                       </p>
                     )}
                   </td>
@@ -715,7 +739,7 @@ export default function WhatsAppTemplatesPage() {
                   {/* Actions */}
                   {canManage && (
                     <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
                           className="btn-icon"
@@ -806,6 +830,105 @@ export default function WhatsAppTemplatesPage() {
           </div>
         );
       })()}
+
+      {/* ── Click-to-open template preview modal ── */}
+      {previewTpl && (
+        <div
+          className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => setPreviewTpl(null)}
+        >
+          <div
+            className="relative bg-[#e5ddd5] rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header bar */}
+            <div className="flex items-center justify-between px-4 py-3 bg-[#075e54] text-white">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center text-[11px] font-bold uppercase">
+                  {previewTpl.name?.[0] || 'T'}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold leading-tight">{previewTpl.name?.replace(/_/g, ' ')}</p>
+                  <p className="text-[10px] text-white/70 leading-tight">{previewTpl.category} · {previewTpl.language}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPreviewTpl(null)}
+                className="h-7 w-7 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Chat bubble area */}
+            <div className="p-4 overflow-y-auto max-h-[70vh]">
+              <div className="flex justify-end">
+                <div className="max-w-[90%] bg-[#d9fdd3] rounded-xl rounded-tr-none shadow-sm overflow-hidden">
+                  {/* Header component */}
+                  {getHeaderText(previewTpl) && (
+                    <div className="px-3 pt-3 pb-1">
+                      {(previewTpl.components || []).find((c: any) => c.type === 'HEADER')?.format === 'TEXT' ? (
+                        <p className="text-[14px] font-bold text-gray-900">{getHeaderText(previewTpl)}</p>
+                      ) : (
+                        <div className="flex items-center gap-2 text-[12px] text-gray-500">
+                          <span>{getHeaderText(previewTpl)}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Body */}
+                  <div className="px-3 py-2">
+                    {(previewTpl.components || []).find((c: any) => c.type === 'BODY')?.text ? (
+                      <p className="text-[13.5px] text-gray-800 leading-relaxed whitespace-pre-wrap">
+                        {(previewTpl.components || []).find((c: any) => c.type === 'BODY')?.text}
+                      </p>
+                    ) : (
+                      <p className="text-[13px] italic text-gray-400">No body text</p>
+                    )}
+                  </div>
+
+                  {/* Footer */}
+                  {getFooterText(previewTpl) && (
+                    <div className="px-3 pb-2">
+                      <p className="text-[11px] text-gray-500">{getFooterText(previewTpl)}</p>
+                    </div>
+                  )}
+
+                  {/* Timestamp */}
+                  <div className="px-3 pb-2 flex justify-end">
+                    <span className="text-[10px] text-gray-400">Preview</span>
+                  </div>
+
+                  {/* Buttons */}
+                  {getButtonsList(previewTpl).length > 0 && (
+                    <div className="border-t border-black/10 flex flex-col">
+                      {getButtonsList(previewTpl).map((b: any, i: number) => (
+                        <div key={i} className="px-3 py-2.5 text-center text-[13px] font-medium text-sky-600 border-b border-black/[0.06] last:border-0">
+                          {b.text}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Status bar */}
+            <div className="px-4 py-2.5 bg-white/80 border-t border-black/10 flex items-center justify-between gap-3">
+              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusClass(previewTpl.status)}`}>
+                {previewTpl.status === 'APPROVED' && '✓ '}{previewTpl.status || '—'}
+              </span>
+              {previewTpl.rejectedReason && (
+                <p className="text-[11px] text-red-600 flex-1 truncate" title={previewTpl.rejectedReason}>
+                  {previewTpl.rejectedReason}
+                </p>
+              )}
+              <p className="text-[11px] text-text-tertiary ml-auto">Press Esc to close</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {wizardOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 p-2 md:p-4 flex items-center justify-center overflow-auto">
@@ -969,7 +1092,35 @@ export default function WhatsAppTemplatesPage() {
                                 : 'Document types allowed: PDF, DOC, DOCX. File size limit: 100 MB.'}
                             </p>
                             {draft.headerMediaMode === 'upload' ? (
-                              <div>
+                              <div className="space-y-1.5">
+                                {/* Accepted-type pills */}
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {draft.headerFormat === 'IMAGE' && (
+                                    <>
+                                      {['.jpg', '.jpeg', '.png'].map((ext) => (
+                                        <span key={ext} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-sky-50 text-sky-700 border border-sky-200">{ext}</span>
+                                      ))}
+                                      <span className="text-[10px] text-text-tertiary ml-1">Max 5 MB</span>
+                                    </>
+                                  )}
+                                  {draft.headerFormat === 'VIDEO' && (
+                                    <>
+                                      {['.mp4', '.3gpp'].map((ext) => (
+                                        <span key={ext} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-purple-50 text-purple-700 border border-purple-200">{ext}</span>
+                                      ))}
+                                      <span className="text-[10px] text-text-tertiary ml-1">Max 16 MB</span>
+                                    </>
+                                  )}
+                                  {draft.headerFormat === 'DOCUMENT' && (
+                                    <>
+                                      {['.pdf', '.doc', '.docx'].map((ext) => (
+                                        <span key={ext} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-amber-50 text-amber-700 border border-amber-200">{ext}</span>
+                                      ))}
+                                      <span className="text-[10px] text-text-tertiary ml-1">Max 100 MB</span>
+                                    </>
+                                  )}
+                                </div>
+
                                 <input
                                   type="file"
                                   className="input"
@@ -977,7 +1128,7 @@ export default function WhatsAppTemplatesPage() {
                                     draft.headerFormat === 'IMAGE'
                                       ? 'image/jpeg,image/png,image/jpg'
                                       : draft.headerFormat === 'VIDEO'
-                                      ? 'video/mp4'
+                                      ? 'video/mp4,video/3gpp'
                                       : '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
                                   }
                                   onChange={(e) => {
@@ -1007,8 +1158,8 @@ export default function WhatsAppTemplatesPage() {
                                   }}
                                 />
                                 {draft.headerMediaFileName && (
-                                  <p className="text-2xs text-text-tertiary mt-1">
-                                    Selected: {draft.headerMediaFileName}
+                                  <p className="text-2xs text-emerald-700 font-medium flex items-center gap-1 mt-0.5">
+                                    <span>✓</span> {draft.headerMediaFileName}
                                   </p>
                                 )}
                               </div>

@@ -29,6 +29,10 @@ const {
   startBroadcastScheduler,
   stopBroadcastScheduler,
 } = require('./services/broadcastScheduler');
+const {
+  startTemplateSyncScheduler,
+  stopTemplateSyncScheduler,
+} = require('./services/templateSyncScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -200,6 +204,7 @@ server.listen(PORT, () => {
     { name: 'TaskReminder', fn: () => startTaskReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 50000 }) },
     { name: 'WillCallAgainSafetyNet', fn: () => startWillCallAgainSafetyNetScheduler(undefined, { runOnStart: true, initialDelayMs: 65000 }) },
     { name: 'Broadcast', fn: () => startBroadcastScheduler(undefined, { runOnStart: true, initialDelayMs: 80000 }) },
+    { name: 'TemplateSync', fn: () => startTemplateSyncScheduler(undefined, { runOnStart: true, initialDelayMs: 95000 }) },
   ];
   for (const scheduler of schedulerStarts) {
     try {
@@ -244,6 +249,7 @@ const shutdown = async () => {
   stopNotificationEscalationScheduler();
   stopRecycleBinPurgeScheduler();
   stopBroadcastScheduler();
+  stopTemplateSyncScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

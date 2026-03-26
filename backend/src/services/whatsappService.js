@@ -2,6 +2,7 @@ const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
 const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
+const { recordTokenOk, recordTokenError, isTokenError } = require('../utils/whatsappTokenHealth');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
@@ -109,6 +110,9 @@ async function sendText(to, body, organizationId = null) {
 
   if (!response.ok) {
     logger.error('WhatsApp send failed', { status: response.status, data, to: normalizedTo });
+    if (organizationId && isTokenError(response.status, data)) {
+      recordTokenError(organizationId, data.error?.message || `Token error (HTTP ${response.status})`).catch(() => {});
+    }
     const err = new Error(data.error?.message || `WhatsApp API error: ${response.status}`);
     err.statusCode = response.status;
     err.details = data;
@@ -118,6 +122,7 @@ async function sendText(to, body, organizationId = null) {
   const messageId = data.messages?.[0]?.id;
   if (messageId) {
     logger.info('WhatsApp message sent', { messageId, to: normalizedTo });
+    if (organizationId) recordTokenOk(organizationId).catch(() => {});
   }
   return { messageId: messageId || null, ...data };
 }
@@ -167,6 +172,9 @@ async function sendTemplate(to, templateName, languageCode, organizationId = nul
 
   if (!response.ok) {
     logger.error('WhatsApp template send failed', { status: response.status, data, to: normalizedTo });
+    if (organizationId && isTokenError(response.status, data)) {
+      recordTokenError(organizationId, data.error?.message || `Token error (HTTP ${response.status})`).catch(() => {});
+    }
     const err = new Error(data.error?.message || `WhatsApp API error: ${response.status}`);
     err.statusCode = response.status;
     err.details = data;
@@ -176,6 +184,7 @@ async function sendTemplate(to, templateName, languageCode, organizationId = nul
   const messageId = data.messages?.[0]?.id;
   if (messageId) {
     logger.info('WhatsApp template sent', { messageId, to: normalizedTo });
+    if (organizationId) recordTokenOk(organizationId).catch(() => {});
   }
   return { messageId: messageId || null, ...data };
 }

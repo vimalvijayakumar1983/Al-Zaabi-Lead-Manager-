@@ -25,6 +25,9 @@ type BroadcastRun = {
   scheduledAt: string | null;
   totalRecipients: number;
   sentCount: number;
+  deliveredCount: number;
+  readCount: number;
+  repliedCount: number;
   failedCount: number;
   createdAt: string;
   updatedAt: string;
@@ -136,10 +139,14 @@ function RunBubble({ run, tplMap }: { run: BroadcastRun; tplMap: Record<string, 
   const fText = tpl ? footerText(tpl.components)  : '';
   const btns  = tpl ? buttons(tpl.components)     : [];
 
-  const total   = run.totalRecipients || 0;
-  const sent    = run.sentCount || 0;
-  const failed  = run.failedCount || 0;
-  const pending = Math.max(0, total - sent - failed);
+  const total     = run.totalRecipients || 0;
+  const sent      = run.sentCount || 0;
+  const delivered = run.deliveredCount || 0;
+  const read      = run.readCount || 0;
+  const replied   = run.repliedCount || 0;
+  const failed    = run.failedCount || 0;
+  const pending   = Math.max(0, total - sent - failed);
+  const noResponse = Math.max(0, sent - read);
 
   return (
     <div className="mb-4 flex flex-col items-end">
@@ -188,13 +195,12 @@ function RunBubble({ run, tplMap }: { run: BroadcastRun; tplMap: Record<string, 
 
         {/* ── Stats (same bubble, slightly lighter bg) ── */}
         <div className="bg-[#c8f0c0]/60 border-t border-black/[0.07]">
-          <InlineStatRow icon={<CheckCheck className="h-3.5 w-3.5 text-emerald-600" />} label="Sent to"        count={sent}   total={total} />
-          <InlineStatRow icon={<Check       className="h-3.5 w-3.5 text-sky-500"    />} label="Delivered to"  count={sent}   total={total} />
-          <InlineStatRow icon={<MessageCircle className="h-3.5 w-3.5 text-gray-400" />} label="Unread by"     count={Math.max(0, sent - Math.floor(sent * 0.68))} total={total} />
-          <InlineStatRow icon={<CheckCheck  className="h-3.5 w-3.5 text-blue-500"   />} label="Read by"       count={Math.floor(sent * 0.68)} total={total} />
-          <InlineStatRow icon={<Send        className="h-3.5 w-3.5 text-purple-500" />} label="Replied by"    count={0}      total={total} />
-          <InlineStatRow icon={<Users       className="h-3.5 w-3.5 text-gray-400"   />} label="No response by" count={sent}  total={total} />
-          <InlineStatRow icon={<Clock       className="h-3.5 w-3.5 text-amber-500"  />} label="Pending"       count={pending} total={total} />
+          <InlineStatRow icon={<CheckCheck    className="h-3.5 w-3.5 text-emerald-600" />} label="Sent to"         count={sent}       total={total} />
+          <InlineStatRow icon={<Check         className="h-3.5 w-3.5 text-sky-500"     />} label="Delivered to"    count={delivered}  total={total} />
+          <InlineStatRow icon={<CheckCheck    className="h-3.5 w-3.5 text-blue-500"    />} label="Read by"         count={read}       total={total} />
+          <InlineStatRow icon={<Send          className="h-3.5 w-3.5 text-purple-500"  />} label="Replied by"      count={replied}    total={total} />
+          <InlineStatRow icon={<MessageCircle className="h-3.5 w-3.5 text-gray-400"    />} label="No response by"  count={noResponse} total={total} />
+          <InlineStatRow icon={<Clock         className="h-3.5 w-3.5 text-amber-500"   />} label="Pending"         count={pending}    total={total} />
           {failed > 0 && (
             <InlineStatRow icon={<AlertCircle className="h-3.5 w-3.5 text-red-500" />} label="Failed" count={failed} total={total} danger viewLink="/scheduled-broadcasts" />
           )}
@@ -382,11 +388,13 @@ export default function BroadcastListsPage() {
         { templateId: selectedTemplateId, variables: templateVars, mode: sendMode, scheduledAt: scheduledAt ?? null },
         divisionId || undefined
       );
+      const skipped = (out as any).skippedDoNotCall ?? 0;
+      const skippedNote = skipped > 0 ? ` · ${skipped} opted-out leads skipped.` : '';
       if (sendMode === 'now') {
         const s = out.sent ?? 0, f = out.failed ?? 0;
-        setResultNote(f > 0 ? `Sent ${s}, failed ${f}.` : `Broadcast sent to ${s} leads.`);
+        setResultNote(f > 0 ? `Sent ${s}, failed ${f}.${skippedNote}` : `Broadcast sent to ${s} leads.${skippedNote}`);
       } else {
-        setResultNote(`Broadcast scheduled for ${fmtUAE(scheduledAt!)}.`);
+        setResultNote(`Broadcast scheduled for ${fmtUAE(scheduledAt!)}.${skippedNote}`);
       }
       setShowConfirmDialog(false); setShowSendDialog(false); setShowTemplatePicker(false);
       loadRuns();

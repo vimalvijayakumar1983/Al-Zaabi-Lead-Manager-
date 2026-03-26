@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { prisma } = require('../config/database');
+const { logger } = require('../config/logger');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
 const { runBroadcastNow } = require('../services/broadcastScheduler');
 
@@ -89,6 +90,8 @@ router.get('/runs/:runId', authorize('ADMIN', 'MANAGER'), async (req, res, next)
             lastName: true,
             phone: true,
             email: true,
+            whatsappOptOut: true,
+            whatsappOptOutAt: true,
           },
         },
       },
@@ -107,6 +110,8 @@ router.get('/runs/:runId', authorize('ADMIN', 'MANAGER'), async (req, res, next)
           error: r.error,
           attemptCount: r.attemptCount,
           sentAt: r.sentAt,
+          deliveredAt: r.deliveredAt,
+          readAt: r.readAt,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
           lead: r.lead,
@@ -215,23 +220,59 @@ router.post('/:id/send-template', authorize('ADMIN', 'MANAGER'), async (req, res
       return res.status(400).json({ error: `Template status is ${template.status}. Only APPROVED templates can be broadcast.` });
     }
 
-    const targets = (await prisma.$queryRawUnsafe(
+    // ── Idempotency guard: block if an identical run is already active ────
+    // "Identical" = same list + template, started within last 10 minutes, not yet failed/cancelled
+    const recentRun = await prisma.whatsAppBroadcastRun.findFirst({
+      where: {
+        organizationId: orgId,
+        listId: list.id,
+        templateId: template.id,
+        status: { in: ['SCHEDULED', 'RUNNING', 'COMPLETED'] },
+        createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) },
+      },
+      select: { id: true, status: true, createdAt: true },
+    });
+    if (recentRun) {
+      return res.status(409).json({
+        error: `A broadcast for this list + template is already ${recentRun.status.toLowerCase()} (run ID: ${recentRun.id}). Wait 10 minutes or use a different template.`,
+        code: 'DUPLICATE_BROADCAST_RUN',
+        existingRunId: recentRun.id,
+      });
+    }
+
+    // ── Fetch eligible recipients: skip doNotCall and WhatsApp opted-out leads ──
+    const allTargets = (await prisma.$queryRawUnsafe(
       `
-      SELECT bll.id AS "memberId", bll."leadId", COALESCE(l.phone, '') AS phone
+      SELECT bll.id AS "memberId", bll."leadId", COALESCE(l.phone, '') AS phone,
+             l."doNotCall", COALESCE(l."whatsappOptOut", false) AS "whatsappOptOut"
       FROM "whatsapp_broadcast_list_leads" bll
       JOIN "leads" l ON l.id = bll."leadId"
       WHERE bll."listId" = $1
     `,
       list.id,
-    ))
+    ));
+
+    const skippedDoNotCall = allTargets.filter((m) => m.doNotCall).length;
+    const skippedWhatsappOptOut = allTargets.filter((m) => !m.doNotCall && m.whatsappOptOut).length;
+    const totalSkipped = skippedDoNotCall + skippedWhatsappOptOut;
+
+    const targets = allTargets
+      .filter((m) => !m.doNotCall && !m.whatsappOptOut)
       .map((m) => ({
         memberId: m.memberId,
         leadId: m.leadId,
         phone: String(m.phone || '').trim(),
       }))
       .filter((m) => !!m.phone);
+
     if (targets.length === 0) {
-      return res.status(400).json({ error: 'This broadcast list has no members.' });
+      return res.status(400).json({
+        error: totalSkipped > 0
+          ? `All ${totalSkipped} members are opted out. No messages sent.`
+          : 'This broadcast list has no members with valid phone numbers.',
+        skippedDoNotCall,
+        skippedWhatsappOptOut,
+      });
     }
 
     const scheduleAtDate =
@@ -277,7 +318,9 @@ router.post('/:id/send-template', authorize('ADMIN', 'MANAGER'), async (req, res
         mode: 'later',
         runId: run.id,
         scheduledAt: run.scheduledAt,
-        message: 'Broadcast scheduled successfully.',
+        skippedDoNotCall,
+        skippedWhatsappOptOut,
+        message: `Broadcast scheduled for ${targets.length} recipients${totalSkipped > 0 ? ` (${totalSkipped} opted-out leads skipped)` : ''}.`,
       });
     }
 
@@ -291,6 +334,106 @@ router.post('/:id/send-template', authorize('ADMIN', 'MANAGER'), async (req, res
       total: completed.totalRecipients,
       sent: completed.sentCount,
       failed: completed.failedCount,
+      skippedDoNotCall,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Cancel a SCHEDULED run ────────────────────────────────────────────
+router.patch('/runs/:runId/cancel', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const orgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp broadcast runs');
+    if (!orgId) return;
+
+    const run = await prisma.whatsAppBroadcastRun.findFirst({
+      where: { id: req.params.runId, organizationId: orgId },
+      select: { id: true, status: true },
+    });
+    if (!run) return res.status(404).json({ error: 'Broadcast run not found' });
+    if (run.status !== 'SCHEDULED') {
+      return res.status(409).json({
+        error: `Cannot cancel a run that is ${run.status.toLowerCase()}. Only SCHEDULED runs can be cancelled.`,
+      });
+    }
+
+    const cancelled = await prisma.whatsAppBroadcastRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'CANCELLED',
+        completedAt: new Date(),
+        lastError: 'Cancelled by user',
+      },
+    });
+
+    // Mark all pending recipients as failed (they were never sent)
+    await prisma.whatsAppBroadcastRecipient.updateMany({
+      where: { broadcastId: run.id, status: 'PENDING' },
+      data: { status: 'FAILED', error: 'Broadcast cancelled' },
+    });
+
+    logger.info('[BroadcastRun] Cancelled by user', { runId: run.id, orgId });
+    res.json({ ok: true, run: { id: cancelled.id, status: cancelled.status } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Retry FAILED recipients in a completed/failed run ─────────────────
+router.post('/runs/:runId/retry', authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const orgId = await resolveDivisionScopedOrgId(req, res, 'WhatsApp broadcast runs');
+    if (!orgId) return;
+
+    const run = await prisma.whatsAppBroadcastRun.findFirst({
+      where: { id: req.params.runId, organizationId: orgId },
+      select: { id: true, status: true, failedCount: true },
+    });
+    if (!run) return res.status(404).json({ error: 'Broadcast run not found' });
+    if (!['COMPLETED', 'FAILED'].includes(run.status)) {
+      return res.status(409).json({
+        error: `Can only retry COMPLETED or FAILED runs (current status: ${run.status}).`,
+      });
+    }
+    if (run.failedCount === 0) {
+      return res.status(400).json({ error: 'No failed recipients to retry.' });
+    }
+
+    // Reset failed recipients back to PENDING so runBroadcastNow picks them up
+    const resetResult = await prisma.whatsAppBroadcastRecipient.updateMany({
+      where: { broadcastId: run.id, status: 'FAILED' },
+      data: { status: 'PENDING', error: null },
+    });
+
+    if (resetResult.count === 0) {
+      return res.status(400).json({ error: 'No failed recipients found to retry.' });
+    }
+
+    // Reset run status back to RUNNING
+    await prisma.whatsAppBroadcastRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'RUNNING',
+        startedAt: new Date(),
+        completedAt: null,
+        lastError: null,
+        failedCount: 0,
+      },
+    });
+
+    logger.info('[BroadcastRun] Retrying failed recipients', { runId: run.id, count: resetResult.count, orgId });
+
+    // Execute immediately in background — don't await so response is instant
+    runBroadcastNow(run.id).catch((err) => {
+      logger.error('[BroadcastRun] Retry execution failed', { runId: run.id, err: err?.message });
+    });
+
+    res.json({
+      ok: true,
+      runId: run.id,
+      retrying: resetResult.count,
+      message: `Retrying ${resetResult.count} failed recipient${resetResult.count !== 1 ? 's' : ''}.`,
     });
   } catch (err) {
     next(err);

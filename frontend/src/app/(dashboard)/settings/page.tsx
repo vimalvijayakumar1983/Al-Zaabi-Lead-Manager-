@@ -777,6 +777,8 @@ function WhatsAppSection() {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
       await loadWhatsAppSettings();
+      // Notify the global layout to re-check token health immediately
+      window.dispatchEvent(new CustomEvent('whatsapp-settings-saved'));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
