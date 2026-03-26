@@ -21,7 +21,13 @@ type ErpDataRow = {
   updatedAt: string;
 };
 
-const ENTITY_OPTIONS = [
+const KNOWN_FIELDS_BY_ENTITY: Record<string, string[]> = {
+  customer: ['externalCustomerId', 'customerId', 'id', 'code', 'firstName', 'lastName', 'fullName', 'name', 'email', 'phone', 'mobile', 'company', 'companyName'],
+  sale: ['externalSaleId', 'saleId', 'salesId', 'id', 'externalCustomerId', 'customerId', 'amount', 'currency', 'status', 'date'],
+  doctor_availability: ['externalAvailabilityId', 'availabilityId', 'doctorId', 'providerId', 'id', 'date', 'slots'],
+};
+
+const BASE_ENTITY_OPTIONS = [
   { value: 'all', label: 'All' },
   { value: 'customer', label: 'Customers' },
   { value: 'sale', label: 'Sales' },
@@ -41,6 +47,9 @@ export default function ErpDataPage() {
   const [limit, setLimit] = useState(25);
   const [editingRow, setEditingRow] = useState<ErpDataRow | null>(null);
   const [editPayloadText, setEditPayloadText] = useState('');
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [configuredCustomEntities, setConfiguredCustomEntities] = useState<string[]>([]);
 
   const divisionsQuery = useQuery({
     queryKey: ['erp-data-divisions'],
@@ -95,12 +104,54 @@ export default function ErpDataPage() {
 
   const titleStats = useMemo(() => {
     return {
-      total: rows.length,
+      total,
       customers: counts.customer || 0,
       sales: counts.sale || 0,
       availability: counts.doctor_availability || 0,
     };
-  }, [rows, counts]);
+  }, [total, counts]);
+
+  const entityOptions = useMemo(() => {
+    const fromCounts = Object.keys(counts || {})
+      .filter((k) => k.startsWith('custom_'))
+      .map((k) => ({ value: k, label: `Custom: ${k.slice('custom_'.length)}` }));
+    const fromConfig = configuredCustomEntities.map((k) => ({
+      value: k,
+      label: `Custom: ${k.slice('custom_'.length)}`,
+    }));
+    const byValue = new Map<string, { value: string; label: string }>();
+    [...fromCounts, ...fromConfig].forEach((opt) => byValue.set(opt.value, opt));
+    const dynamic = Array.from(byValue.values());
+    const selectedMissing =
+      selectedEntity !== 'all' &&
+      ![...BASE_ENTITY_OPTIONS.map((o) => o.value), ...dynamic.map((o) => o.value)].includes(selectedEntity)
+        ? [{ value: selectedEntity, label: selectedEntity }]
+        : [];
+    return [...BASE_ENTITY_OPTIONS, ...dynamic, ...selectedMissing];
+  }, [counts, configuredCustomEntities, selectedEntity]);
+
+  const getCustomFieldEntries = (row: ErpDataRow): Array<[string, unknown]> => {
+    const payload = row.payload || {};
+    const allEntries = Object.entries(payload);
+    if (allEntries.length === 0) return [];
+
+    // For custom tables, treat all top-level keys as table-specific fields.
+    if (row.entityType.startsWith('custom_')) return allEntries;
+
+    const known = new Set(KNOWN_FIELDS_BY_ENTITY[row.entityType] || []);
+    return allEntries.filter(([k]) => !known.has(k));
+  };
+
+  const getPayloadEntries = (row: ErpDataRow): Array<[string, unknown]> =>
+    Object.entries(row.payload || {});
+
+  const formatCellValue = (value: unknown): string => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'string') return value || '-';
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return value.length ? `${value.length} item(s)` : '[]';
+    return 'Object';
+  };
 
   const openEditModal = (row: ErpDataRow) => {
     setEditingRow(row);
@@ -168,7 +219,7 @@ export default function ErpDataPage() {
               onChange={(e) => setSelectedEntity(e.target.value)}
               className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
             >
-              {ENTITY_OPTIONS.map((opt) => (
+              {entityOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>
@@ -178,22 +229,14 @@ export default function ErpDataPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Total</p>
-          <p className="text-xl font-semibold text-text-primary">{total || titleStats.total}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-4 text-sm shadow-sm">
+          <p className="text-blue-700/80 font-medium">Customers</p>
+          <p className="text-2xl font-bold text-blue-900 mt-1">{titleStats.customers}</p>
         </div>
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Customers</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.customers}</p>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Sales</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.sales}</p>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Availability</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.availability}</p>
+        <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-4 text-sm shadow-sm">
+          <p className="text-emerald-700/80 font-medium">Sales</p>
+          <p className="text-2xl font-bold text-emerald-900 mt-1">{titleStats.sales}</p>
         </div>
       </div>
 
@@ -206,6 +249,7 @@ export default function ErpDataPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Entity</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">External ID</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">CRM ID</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Custom Fields</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Payload</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Updated</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Actions</th>
@@ -235,9 +279,48 @@ export default function ErpDataPage() {
                     <td className="px-4 py-3 font-mono text-xs">{row.externalId}</td>
                     <td className="px-4 py-3 font-mono text-xs">{row.crmEntityId}</td>
                     <td className="px-4 py-3">
-                      <pre className="text-[11px] bg-gray-50 border border-gray-100 rounded-md px-2 py-1 max-w-[520px] overflow-x-auto">
-                        {JSON.stringify(row.payload || {}, null, 2)}
-                      </pre>
+                      {getCustomFieldEntries(row).length === 0 ? (
+                        <span className="text-xs text-text-tertiary">-</span>
+                      ) : (
+                        <div className="max-w-[280px] space-y-1">
+                          {getCustomFieldEntries(row).slice(0, 6).map(([k, v]) => (
+                            <div key={`${row.id}-${k}`} className="text-[11px]">
+                              <span className="font-mono text-text-secondary">{k}</span>
+                              <span className="text-text-tertiary">: </span>
+                              <span className="text-text-primary">
+                                {typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+                                  ? String(v)
+                                  : JSON.stringify(v)}
+                              </span>
+                            </div>
+                          ))}
+                          {getCustomFieldEntries(row).length > 6 && (
+                            <div className="text-[11px] text-text-tertiary">
+                              +{getCustomFieldEntries(row).length - 6} more
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="max-w-[520px] space-y-1.5">
+                        {getPayloadEntries(row).length === 0 ? (
+                          <span className="text-xs text-text-tertiary">-</span>
+                        ) : (
+                          getPayloadEntries(row).slice(0, 8).map(([k, v]) => (
+                            <div
+                              key={`${row.id}-payload-${k}`}
+                              className="grid grid-cols-[140px_1fr] gap-2 text-[11px] rounded-md border border-gray-100 bg-gray-50 px-2 py-1"
+                            >
+                              <span className="font-mono text-text-secondary truncate">{k}</span>
+                              <span className="text-text-primary break-all">{formatCellValue(v)}</span>
+                            </div>
+                          ))
+                        )}
+                        {getPayloadEntries(row).length > 8 && (
+                          <div className="text-[11px] text-text-tertiary">+{getPayloadEntries(row).length - 8} more fields</div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-xs text-text-secondary">
                       {new Date(row.updatedAt).toLocaleString('en-AE')}

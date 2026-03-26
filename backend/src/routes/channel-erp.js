@@ -4,6 +4,34 @@ const { prisma } = require('../config/database');
 
 const router = Router();
 const ERP_PROVIDERS = ['facts', 'focus', 'cortex', 'uniqorn'];
+const RESERVED_ERP_TABLE_SLUGS = new Set(['create-customer', 'customer-sales', 'doctor-availability']);
+const ERP_CUSTOM_TABLE_SLUG_RE = /^[a-z][a-z0-9_]{1,50}$/;
+
+/** Canonical CRM targets for create-customer (config.erpFieldMapping.customer maps target -> ERP payload key). */
+const ERP_CUSTOMER_MAP_TARGETS = new Set([
+  'externalCustomerId',
+  'firstName',
+  'lastName',
+  'fullName',
+  'email',
+  'phone',
+  'company',
+]);
+
+/** Canonical targets for customer-sales payload resolution. */
+const ERP_SALE_MAP_TARGETS = new Set(['externalSaleId', 'externalCustomerId', 'customerId']);
+
+/** Canonical targets for doctor-availability payload resolution. */
+const ERP_AVAILABILITY_MAP_TARGETS = new Set([
+  'externalAvailabilityId',
+  'availabilityId',
+  'doctorId',
+  'providerId',
+  'id',
+]);
+
+/** Allowed custom target keys for erpFieldMappingCustom (not canonical/reserved names). */
+const ERP_CUSTOM_MAP_TARGET_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
 function getBearerToken(value) {
   if (!value || typeof value !== 'string') return null;
@@ -36,6 +64,273 @@ function buildStableExternalId(prefix, payload) {
     .digest('hex')
     .slice(0, 16);
   return `${prefix}_${digest}`;
+}
+
+/**
+ * Normalize config.erpFieldMapping: only string values, only allowed targets per section.
+ * Shape: { customer: { email: "erp_key" }, sale: {...}, doctor_availability: {...} }
+ */
+function sanitizeErpFieldMapping(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  const sections = [
+    ['customer', ERP_CUSTOMER_MAP_TARGETS],
+    ['sale', ERP_SALE_MAP_TARGETS],
+    ['doctor_availability', ERP_AVAILABILITY_MAP_TARGETS],
+  ];
+  for (const [section, allowed] of sections) {
+    const src = raw[section];
+    if (!src || typeof src !== 'object' || Array.isArray(src)) continue;
+    const cleaned = {};
+    for (const [crmTarget, erpKey] of Object.entries(src)) {
+      if (!allowed.has(crmTarget)) {
+        console.warn(`[erp] Ignoring unknown erpFieldMapping.${section} target: ${crmTarget}`);
+        continue;
+      }
+      if (typeof erpKey !== 'string' || !erpKey.trim()) {
+        console.warn(`[erp] Ignoring invalid erpFieldMapping.${section}.${crmTarget} (non-string key)`);
+        continue;
+      }
+      cleaned[crmTarget] = erpKey.trim();
+    }
+    if (Object.keys(cleaned).length) out[section] = cleaned;
+  }
+  return out;
+}
+
+/**
+ * Normalize config.erpFieldMappingCustom: arbitrary safe target keys -> ERP payload key.
+ * Reserved canonical names per section are rejected (use erpFieldMapping instead).
+ */
+function sanitizeErpFieldMappingCustom(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const reservedBySection = {
+    customer: ERP_CUSTOMER_MAP_TARGETS,
+    sale: ERP_SALE_MAP_TARGETS,
+    doctor_availability: ERP_AVAILABILITY_MAP_TARGETS,
+  };
+  const sectionNames = ['customer', 'sale', 'doctor_availability'];
+  const out = {};
+  for (const section of sectionNames) {
+    const src = raw[section];
+    if (!src || typeof src !== 'object' || Array.isArray(src)) continue;
+    const cleaned = {};
+    for (const [targetKey, erpKey] of Object.entries(src)) {
+      if (typeof targetKey !== 'string' || !ERP_CUSTOM_MAP_TARGET_RE.test(targetKey.trim())) {
+        console.warn(`[erp] Ignoring invalid erpFieldMappingCustom.${section} target: ${String(targetKey)}`);
+        continue;
+      }
+      const tk = targetKey.trim();
+      if (reservedBySection[section].has(tk)) {
+        console.warn(
+          `[erp] Ignoring erpFieldMappingCustom.${section}.${tk} — reserved; use erpFieldMapping for canonical fields`
+        );
+        continue;
+      }
+      if (typeof erpKey !== 'string' || !erpKey.trim()) {
+        console.warn(`[erp] Ignoring invalid erpFieldMappingCustom.${section}.${tk} (empty ERP key)`);
+        continue;
+      }
+      cleaned[tk] = erpKey.trim();
+    }
+    if (Object.keys(cleaned).length) out[section] = cleaned;
+  }
+  return out;
+}
+
+/**
+ * Apply customer-only custom mappings: copy payload[erpKey] into mappedFields[targetKey].
+ * Skips ERP keys already consumed by canonical resolution.
+ */
+function resolveCustomerCustomMappedFields(payload, customCustomerMap, usedKeys) {
+  const mappedFields = {};
+  if (!customCustomerMap || typeof customCustomerMap !== 'object') return mappedFields;
+  for (const [targetKey, erpKey] of Object.entries(customCustomerMap)) {
+    if (usedKeys.has(erpKey)) {
+      console.warn(
+        `[erp] Skipping custom mapped field "${targetKey}"; ERP key "${erpKey}" already used by canonical mapping`
+      );
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(payload, erpKey)) continue;
+    const v = payload[erpKey];
+    if (v === undefined || v === null) continue;
+    usedKeys.add(erpKey);
+    mappedFields[targetKey] = v;
+  }
+  return mappedFields;
+}
+
+function getPayloadValue(payload, key) {
+  if (!key || !payload || typeof payload !== 'object') return undefined;
+  const v = payload[key];
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'string') return v.trim() || undefined;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  return undefined;
+}
+
+/**
+ * Resolve one logical field: mapped ERP key first, then alias keys on payload.
+ * Records which payload key produced the value in usedKeys.
+ */
+function resolveMappedField(payload, sectionMap, fieldName, aliasKeys, usedKeys) {
+  const mappedKey = sectionMap && sectionMap[fieldName];
+  if (mappedKey) {
+    const v = getPayloadValue(payload, mappedKey);
+    if (v) {
+      usedKeys.add(mappedKey);
+      return v;
+    }
+  }
+  for (const k of aliasKeys) {
+    const v = getPayloadValue(payload, k);
+    if (v) {
+      usedKeys.add(k);
+      return v;
+    }
+  }
+  return null;
+}
+
+/**
+ * Top-level keys not used to populate core fields — stored on contact.customData.erp.extra.
+ * If config.erpExtraFieldKeys is a non-empty string array, only those keys (when present) are copied to extra; otherwise all unused top-level keys.
+ */
+function buildExtraPayload(payload, usedKeys, explicitExtraKeys) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  const keys = Object.keys(payload);
+  const allowList =
+    Array.isArray(explicitExtraKeys) && explicitExtraKeys.length
+      ? new Set(explicitExtraKeys.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim()))
+      : null;
+  const extra = {};
+  for (const k of keys) {
+    if (usedKeys.has(k)) continue;
+    if (allowList && !allowList.has(k)) continue;
+    extra[k] = payload[k];
+  }
+  return extra;
+}
+
+/**
+ * Parse inbound create-customer body using erpFieldMapping.customer + default aliases.
+ */
+function parseCustomerInbound(integrationConfig, payload) {
+  const mapping = sanitizeErpFieldMapping(integrationConfig?.erpFieldMapping);
+  const customerMap = mapping.customer || {};
+  const usedKeys = new Set();
+
+  const externalCustomerId = resolveMappedField(payload, customerMap, 'externalCustomerId', [
+    'externalCustomerId',
+    'customerId',
+    'id',
+    'code',
+  ], usedKeys);
+
+  const email = resolveMappedField(payload, customerMap, 'email', ['email', 'customerEmail'], usedKeys);
+  const phone = resolveMappedField(payload, customerMap, 'phone', ['phone', 'mobile', 'customerPhone'], usedKeys);
+
+  const mappedFull = resolveMappedField(payload, customerMap, 'fullName', ['name', 'fullName', 'customerName'], usedKeys);
+  const firstMapped = resolveMappedField(payload, customerMap, 'firstName', ['firstName'], usedKeys);
+  const lastMapped = resolveMappedField(payload, customerMap, 'lastName', ['lastName'], usedKeys);
+
+  let firstName = firstMapped;
+  let lastName = lastMapped;
+  if (mappedFull) {
+    const names = splitName(mappedFull);
+    if (!firstName) firstName = names.firstName;
+    if (!lastName) lastName = names.lastName;
+  }
+
+  const company = resolveMappedField(payload, customerMap, 'company', ['company', 'companyName'], usedKeys);
+
+  const customAll = sanitizeErpFieldMappingCustom(integrationConfig?.erpFieldMappingCustom);
+  const customCustomerMap = customAll.customer || {};
+  const mappedFields = resolveCustomerCustomMappedFields(payload, customCustomerMap, usedKeys);
+
+  const explicitExtra = integrationConfig?.erpExtraFieldKeys;
+  const extra = buildExtraPayload(payload, usedKeys, explicitExtra);
+
+  return {
+    externalCustomerId,
+    email,
+    phone,
+    firstName,
+    lastName,
+    company,
+    usedKeys,
+    extra,
+    mappedFields,
+  };
+}
+
+function parseSaleInbound(integrationConfig, payload) {
+  const mapping = sanitizeErpFieldMapping(integrationConfig?.erpFieldMapping);
+  const saleMap = mapping.sale || {};
+  const usedKeys = new Set();
+
+  let externalSaleId = resolveMappedField(payload, saleMap, 'externalSaleId', [
+    'externalSaleId',
+    'saleId',
+    'salesId',
+    'id',
+  ], usedKeys);
+
+  if (!externalSaleId) {
+    externalSaleId = buildStableExternalId('sale', payload);
+  }
+
+  const externalCustomerId = resolveMappedField(payload, saleMap, 'externalCustomerId', ['externalCustomerId'], usedKeys);
+  const customerId = resolveMappedField(payload, saleMap, 'customerId', ['customerId'], usedKeys);
+
+  return { externalSaleId, externalCustomerId, customerId, usedKeys };
+}
+
+function parseAvailabilityInbound(integrationConfig, payload) {
+  const mapping = sanitizeErpFieldMapping(integrationConfig?.erpFieldMapping);
+  const avMap = mapping.doctor_availability || {};
+  const usedKeys = new Set();
+
+  let externalAvailabilityId = resolveMappedField(payload, avMap, 'externalAvailabilityId', [
+    'externalAvailabilityId',
+    'availabilityId',
+    'doctorId',
+    'id',
+  ], usedKeys);
+
+  if (!externalAvailabilityId) {
+    externalAvailabilityId = buildStableExternalId('availability', payload);
+  }
+
+  const doctorId = resolveMappedField(payload, avMap, 'doctorId', ['doctorId'], usedKeys);
+  const providerId = resolveMappedField(payload, avMap, 'providerId', ['providerId'], usedKeys);
+
+  return { externalAvailabilityId, doctorId, providerId, usedKeys };
+}
+
+function parseErpCustomTables(config) {
+  const src = config?.erpCustomTables;
+  if (!Array.isArray(src)) return [];
+  const cleaned = [];
+  for (const row of src) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const slug = String(row.slug || '').trim().toLowerCase();
+    if (!ERP_CUSTOM_TABLE_SLUG_RE.test(slug)) continue;
+    if (RESERVED_ERP_TABLE_SLUGS.has(slug)) continue;
+    const label = String(row.label || slug).trim();
+    const externalIdKeys = Array.isArray(row.externalIdKeys)
+      ? row.externalIdKeys.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim())
+      : [];
+    cleaned.push({
+      slug,
+      label: label || slug,
+      externalIdKeys,
+      fieldMapping: row.fieldMapping && typeof row.fieldMapping === 'object' ? row.fieldMapping : {},
+      fieldMappingCustom: row.fieldMappingCustom && typeof row.fieldMappingCustom === 'object' ? row.fieldMappingCustom : {},
+    });
+  }
+  return cleaned;
 }
 
 function getErpModels(db) {
@@ -123,20 +418,18 @@ router.post('/erp/:organizationId/:divisionId/create-customer', async (req, res)
   const { integration, provider } = auth;
   const { organizationId } = req.params;
   const payload = req.body || {};
-  const externalCustomerId = pickFirstNonEmpty(payload.externalCustomerId, payload.customerId, payload.id, payload.code);
+  const cfg = integration.config && typeof integration.config === 'object' ? integration.config : {};
+  const parsed = parseCustomerInbound(cfg, payload);
+  const { externalCustomerId, email, phone, firstName: fnRaw, lastName: lnRaw, company, extra, mappedFields } = parsed;
+
   if (!externalCustomerId) {
     const body = { error: 'externalCustomerId (or customerId/id/code) is required' };
     await auditInboundRequest(integration.id, organizationId, 'erp_create_customer', payload, body, 400, body.error);
     return res.status(400).json(body);
   }
 
-  const email = pickFirstNonEmpty(payload.email, payload.customerEmail);
-  const phone = pickFirstNonEmpty(payload.phone, payload.mobile, payload.customerPhone);
-  const fullName = pickFirstNonEmpty(payload.name, payload.fullName, payload.customerName);
-  const names = splitName(fullName);
-  const firstName = pickFirstNonEmpty(payload.firstName) || names.firstName;
-  const lastName = pickFirstNonEmpty(payload.lastName) || names.lastName;
-  const company = pickFirstNonEmpty(payload.company, payload.companyName);
+  const firstName = fnRaw || 'Unknown';
+  const lastName = lnRaw || '';
 
   try {
     const contact = await prisma.$transaction(async (tx) => {
@@ -179,9 +472,39 @@ router.post('/erp/:organizationId/:divisionId/create-customer', async (req, res)
         });
       }
 
+      const prevCustom =
+        matchedContact?.customData && typeof matchedContact.customData === 'object' && !Array.isArray(matchedContact.customData)
+          ? { ...matchedContact.customData }
+          : {};
+      const prevErp =
+        typeof prevCustom.erp === 'object' && prevCustom.erp && !Array.isArray(prevCustom.erp) ? prevCustom.erp : {};
+      const prevMappedFields =
+        prevErp.mappedFields && typeof prevErp.mappedFields === 'object' && !Array.isArray(prevErp.mappedFields)
+          ? { ...prevErp.mappedFields }
+          : {};
+      const mergedMappedFields =
+        mappedFields && typeof mappedFields === 'object' && Object.keys(mappedFields).length > 0
+          ? { ...prevMappedFields, ...mappedFields }
+          : prevMappedFields;
+
+      const erpBlock = {
+        ...prevErp,
+        provider,
+        externalCustomerId,
+        lastInboundAction: 'create-customer',
+      };
+      if (Object.keys(mergedMappedFields).length > 0) {
+        erpBlock.mappedFields = mergedMappedFields;
+      } else {
+        delete erpBlock.mappedFields;
+      }
+      if (extra && typeof extra === 'object' && Object.keys(extra).length > 0) {
+        erpBlock.extra = extra;
+      }
+
       const contactData = {
-        firstName: firstName || 'Unknown',
-        lastName: lastName || '',
+        firstName,
+        lastName,
         email: email || null,
         phone: phone || null,
         mobile: phone || null,
@@ -189,7 +512,7 @@ router.post('/erp/:organizationId/:divisionId/create-customer', async (req, res)
         source: 'API',
         lifecycle: 'CUSTOMER',
         type: 'CUSTOMER',
-        customData: { erp: { provider, externalCustomerId, lastInboundAction: 'create-customer' } },
+        customData: { ...prevCustom, erp: erpBlock },
         organizationId,
       };
 
@@ -261,7 +584,10 @@ router.post('/erp/:organizationId/:divisionId/customer-sales', async (req, res) 
   const { integration } = auth;
   const { organizationId } = req.params;
   const payload = req.body || {};
-  const externalSaleId = pickFirstNonEmpty(payload.externalSaleId, payload.saleId, payload.salesId, payload.id) || buildStableExternalId('sale', payload);
+  const cfg = integration.config && typeof integration.config === 'object' ? integration.config : {};
+  const saleParsed = parseSaleInbound(cfg, payload);
+  const { externalSaleId } = saleParsed;
+  const crmCustomerRef = pickFirstNonEmpty(saleParsed.externalCustomerId, saleParsed.customerId) || 'N/A';
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -271,7 +597,7 @@ router.post('/erp/:organizationId/:divisionId/customer-sales', async (req, res) 
         await erpExternalRefModel.upsert({
           where: { integrationId_entityType_externalId: { integrationId: integration.id, entityType: 'sale', externalId: externalSaleId } },
           update: {
-            crmEntityId: pickFirstNonEmpty(payload.externalCustomerId, payload.customerId) || 'N/A',
+            crmEntityId: crmCustomerRef,
             externalPayload: payload,
             organizationId,
           },
@@ -279,7 +605,7 @@ router.post('/erp/:organizationId/:divisionId/customer-sales', async (req, res) 
             integrationId: integration.id,
             organizationId,
             entityType: 'sale',
-            crmEntityId: pickFirstNonEmpty(payload.externalCustomerId, payload.customerId) || 'N/A',
+            crmEntityId: crmCustomerRef,
             externalId: externalSaleId,
             externalPayload: payload,
           },
@@ -322,8 +648,10 @@ router.post('/erp/:organizationId/:divisionId/doctor-availability', async (req, 
     return res.status(400).json(body);
   }
 
-  const externalAvailabilityId = pickFirstNonEmpty(payload.externalAvailabilityId, payload.availabilityId, payload.doctorId, payload.id)
-    || buildStableExternalId('availability', payload);
+  const cfg = integration.config && typeof integration.config === 'object' ? integration.config : {};
+  const avParsed = parseAvailabilityInbound(cfg, payload);
+  const { externalAvailabilityId } = avParsed;
+  const crmDoctorRef = pickFirstNonEmpty(avParsed.doctorId, avParsed.providerId) || 'N/A';
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -333,7 +661,7 @@ router.post('/erp/:organizationId/:divisionId/doctor-availability', async (req, 
         await erpExternalRefModel.upsert({
           where: { integrationId_entityType_externalId: { integrationId: integration.id, entityType: 'doctor_availability', externalId: externalAvailabilityId } },
           update: {
-            crmEntityId: pickFirstNonEmpty(payload.doctorId, payload.providerId) || 'N/A',
+            crmEntityId: crmDoctorRef,
             externalPayload: payload,
             organizationId,
           },
@@ -341,7 +669,7 @@ router.post('/erp/:organizationId/:divisionId/doctor-availability', async (req, 
             integrationId: integration.id,
             organizationId,
             entityType: 'doctor_availability',
-            crmEntityId: pickFirstNonEmpty(payload.doctorId, payload.providerId) || 'N/A',
+            crmEntityId: crmDoctorRef,
             externalId: externalAvailabilityId,
             externalPayload: payload,
           },
@@ -372,6 +700,86 @@ router.post('/erp/:organizationId/:divisionId/doctor-availability', async (req, 
     const body = { error: message };
     await logIntegrationEvent(integration.id, 'erp_doctor_availability', 'error', payload, message);
     await auditInboundRequest(integration.id, organizationId, 'erp_doctor_availability', payload, body, 500, message);
+    return res.status(500).json(body);
+  }
+});
+
+router.post('/erp/:organizationId/:divisionId/:tableSlug', async (req, res) => {
+  const auth = await verifyInboundAuth(req, res, 'erp_custom_table');
+  if (!auth) return;
+
+  const { integration } = auth;
+  const { organizationId } = req.params;
+  const payload = req.body || {};
+  const tableSlug = String(req.params.tableSlug || '').trim().toLowerCase();
+
+  if (RESERVED_ERP_TABLE_SLUGS.has(tableSlug)) {
+    const body = { error: `"${tableSlug}" is a reserved ERP endpoint` };
+    await auditInboundRequest(integration.id, organizationId, `erp_custom_${tableSlug}`, payload, body, 400, body.error);
+    return res.status(400).json(body);
+  }
+  if (!ERP_CUSTOM_TABLE_SLUG_RE.test(tableSlug)) {
+    const body = { error: 'Invalid custom table slug' };
+    await auditInboundRequest(integration.id, organizationId, 'erp_custom_table', payload, body, 400, body.error);
+    return res.status(400).json(body);
+  }
+
+  const cfg = integration.config && typeof integration.config === 'object' ? integration.config : {};
+  const customTables = parseErpCustomTables(cfg);
+  const tableDef = customTables.find((t) => t.slug === tableSlug);
+  if (!tableDef) {
+    const body = { error: `Custom ERP table "${tableSlug}" is not configured` };
+    await auditInboundRequest(integration.id, organizationId, `erp_custom_${tableSlug}`, payload, body, 404, body.error);
+    return res.status(404).json(body);
+  }
+
+  const externalId =
+    pickFirstNonEmpty(...tableDef.externalIdKeys.map((k) => getPayloadValue(payload, k))) ||
+    buildStableExternalId(`custom_${tableSlug}`, payload);
+  const entityType = `custom_${tableSlug}`;
+  const action = `erp_custom_${tableSlug}`;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const { erpExternalRef: erpExternalRefModel, erpSyncState: erpSyncStateModel } = getErpModels(tx);
+
+      if (erpExternalRefModel) {
+        await erpExternalRefModel.upsert({
+          where: { integrationId_entityType_externalId: { integrationId: integration.id, entityType, externalId } },
+          update: {
+            crmEntityId: 'N/A',
+            externalPayload: payload,
+            organizationId,
+          },
+          create: {
+            integrationId: integration.id,
+            organizationId,
+            entityType,
+            crmEntityId: 'N/A',
+            externalId,
+            externalPayload: payload,
+          },
+        });
+      }
+
+      if (erpSyncStateModel) {
+        await erpSyncStateModel.upsert({
+          where: { organizationId_integrationId_entityType: { organizationId, integrationId: integration.id, entityType } },
+          update: { lastSyncedAt: new Date(), status: 'success', lastError: null },
+          create: { organizationId, integrationId: integration.id, entityType, status: 'success', lastSyncedAt: new Date() },
+        });
+      }
+    });
+
+    const body = { success: true, tableSlug, entityType, externalId };
+    await logIntegrationEvent(integration.id, action, 'success', payload, null);
+    await auditInboundRequest(integration.id, organizationId, action, payload, body, 200, null);
+    return res.status(200).json(body);
+  } catch (err) {
+    const message = err?.message || `Failed to process ${tableSlug} request`;
+    const body = { error: message };
+    await logIntegrationEvent(integration.id, action, 'error', payload, message);
+    await auditInboundRequest(integration.id, organizationId, action, payload, body, 500, message);
     return res.status(500).json(body);
   }
 });
