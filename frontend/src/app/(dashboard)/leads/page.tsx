@@ -1,6 +1,7 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
+
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import { createPortal } from 'react-dom';
@@ -13,6 +14,7 @@ import {
   useLeadSourcesQuery,
   useLeadsCustomFieldsQuery,
   useLeadsDashboardQuery,
+  useLeadsStatsQuery,
   useLeadsFieldConfigQuery,
   useLeadsInvalidate,
   useLeadsListQuery,
@@ -36,6 +38,7 @@ import { WorkloadDashboard } from './components/WorkloadDashboard';
 import { RefreshButton } from '@/components/RefreshButton';
 import { useNotificationStore } from '@/store/notificationStore';
 import { premiumConfirm } from '@/lib/premiumDialogs';
+import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -102,7 +105,7 @@ type ViewMode = 'table' | 'cards' | 'kanban';
 const DRILLDOWN_FILTER_KEYS: (keyof FilterState)[] = [
   'status', 'source', 'assignedToId', 'stageId', 'campaign',
   'minScore', 'maxScore', 'search', 'company', 'location',
-  'callOutcome', 'callOutcomeReason', 'callOutcomeMode', 'divisionId',
+  'callOutcome', 'callOutcomeReason', 'callOutcomeMode', 'lastCallFrom', 'lastCallTo', 'divisionId',
 ];
 
 // ─── Phone formatting - auto-add UAE country code if missing ────
@@ -268,6 +271,7 @@ function LeadsContent() {
     }
     return { total: 0, page: 1, limit: 20, totalPages: 1 };
   });
+  const [exporting, setExporting] = useState(false);
   // ─── Restore view state from sessionStorage (survives lead detail navigation) ──
   const restoredViewState = useRef<{
     filters?: FilterState; sortBy?: string; sortOrder?: 'asc' | 'desc';
@@ -314,7 +318,6 @@ function LeadsContent() {
   const usersQuery = useLeadsUsersQuery(null);
   const users = (usersQuery.data || []) as User[];
   const dashboardQuery = useLeadsDashboardQuery(divisionScope);
-  const stats = dashboardQuery.data ?? null;
   const customFieldsQuery = useLeadsCustomFieldsQuery(divisionScope);
   const customFields = (customFieldsQuery.data || []) as CustomField[];
   const leadSourcesQuery = useLeadSourcesQuery(divisionScope);
@@ -347,6 +350,8 @@ function LeadsContent() {
   );
 
   const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
+  const statsQuery = useLeadsStatsQuery(listParams, { enabled: meReady });
+  const stats = statsQuery.data ?? (dashboardQuery.data as any) ?? null;
   const leadsRes = leadsQuery.data as any;
   const leads: Lead[] = Array.isArray(leadsRes?.data)
     ? leadsRes.data
@@ -820,71 +825,104 @@ function LeadsContent() {
     return base + rowIndex + 1;
   };
 
-  const exportCSV = () => {
+  /** Backend GET /leads allows at most this page size (see paginationSchema). */
+  const LEADS_API_MAX_LIMIT = 100;
+
+  const exportCSV = async () => {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
-    const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
-    const rows = leads.map((l, rowIndex) =>
-      visibleCols.map((c) => {
-        switch (c.id) {
-          case 'name': return getDisplayName(l);
-          case 'email': return l.email || '';
-          case 'phone': return formatPhone(l.phone) || '';
-          case 'company': return l.company || '';
-          case 'jobTitle': return l.jobTitle || '';
-          case 'status': return (l as any).stage?.name || l.status;
-          case 'source': return getLeadSourceLabel(l);
-          case 'score': return (l.score ?? 0).toString();
-          case 'budget': return l.budget?.toString() || '';
-          case 'location': return l.location || '';
-          case 'productInterest': return l.productInterest || '';
-          case 'campaign': return l.campaign || '';
-          case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
-          case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
-          case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
-          case 'callCount': return String(l._count?.callLogs || 0);
-          case 'lastCallOutcome': {
-            const lco = (l as any).lastCallOutcome;
-            if (!lco) return '';
-            const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
-            const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
-            return dt ? `${label} (${dt})` : label;
-          }
-          case 'channels': {
-            const ucc = l.unreadChannelCounts || {};
-            return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
-          }
-          case 'sla': {
-            const sla = (l as any).slaInfo;
-            if (!sla || !sla.enabled) return '';
-            if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
-            return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
-          }
-          case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-          case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-          default:
-            if (c.id.startsWith('cf_')) {
-              if (isAutoSerialCustomField(c)) {
-                return String(getDisplaySerialForRow(rowIndex));
-              }
-              const fn = c.id.slice(3);
-              const cd = (l.customData || {}) as Record<string, unknown>;
-              const v = cd[fn];
-              if (v === undefined || v === null) return '';
-              if (Array.isArray(v)) return v.join(', ');
-              return String(v);
+    setExporting(true);
+    try {
+      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope);
+      const allLeads: Lead[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const res = await api.getLeads({
+          ...base,
+          page,
+          limit: LEADS_API_MAX_LIMIT,
+        }) as any;
+        const batch = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+        allLeads.push(...batch);
+        totalPages = Math.max(1, Number(res?.pagination?.totalPages) || 1);
+        if (batch.length === 0) break;
+        page += 1;
+      } while (page <= totalPages);
+
+      const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
+      const rows = allLeads.map((l, rowIndex) =>
+        visibleCols.map((c) => {
+          switch (c.id) {
+            case 'name': return getDisplayName(l);
+            case 'email': return l.email || '';
+            case 'phone': return formatPhone(l.phone) || '';
+            case 'company': return l.company || '';
+            case 'jobTitle': return l.jobTitle || '';
+            case 'status': return (l as any).stage?.name || l.status;
+            case 'source': return getLeadSourceLabel(l);
+            case 'score': return (l.score ?? 0).toString();
+            case 'budget': return l.budget?.toString() || '';
+            case 'location': return l.location || '';
+            case 'productInterest': return l.productInterest || '';
+            case 'campaign': return l.campaign || '';
+            case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
+            case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
+            case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
+            case 'callCount': return String(l._count?.callLogs || 0);
+            case 'lastCallOutcome': {
+              const lco = (l as any).lastCallOutcome;
+              if (!lco) return '';
+              const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
+              const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+              return dt ? `${label} (${dt})` : label;
             }
-            return '';
-        }
-      })
-    );
-    const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+            case 'channels': {
+              const ucc = l.unreadChannelCounts || {};
+              return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
+            }
+            case 'sla': {
+              const sla = (l as any).slaInfo;
+              if (!sla || !sla.enabled) return '';
+              if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
+              return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
+            }
+            case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            default:
+              if (c.id.startsWith('cf_')) {
+                if (isAutoSerialCustomField(c)) {
+                  return String(rowIndex + 1);
+                }
+                const fn = c.id.slice(3);
+                const cd = (l.customData || {}) as Record<string, unknown>;
+                const v = cd[fn];
+                if (v === undefined || v === null) return '';
+                if (Array.isArray(v)) return v.join(', ');
+                return String(v);
+              }
+              return '';
+          }
+        })
+      );
+      const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast({
+        type: 'success',
+        title: 'Export ready',
+        message: `${allLeads.length} lead${allLeads.length !== 1 ? 's' : ''} exported (current filters).`,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not export leads';
+      addToast({ type: 'error', title: 'Export failed', message });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const activeFilterCount = Object.values(filters).filter((v) => v !== '').length - (filters.search ? 1 : 0); // exclude search
@@ -1294,7 +1332,7 @@ function LeadsContent() {
           <RefreshButton onRefresh={() => { invalidateListAndDashboard(); }} />
           <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            Export
+            {exporting ? 'Exporting…' : 'Export'}
           </button>
           <button onClick={() => setShowForm(true)} className="btn-primary gap-1.5">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
@@ -1305,13 +1343,27 @@ function LeadsContent() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 flex-shrink-0">
           <StatCard label="Total" value={alignedTotalLeads} color="brand" />
           <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
           <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
           <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="green" />
           <StatCard label={getStatusLabel('LOST')} value={stats.overview.lostLeads} color="red" />
           <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
+          {(() => {
+            const r = stats.reachability;
+            const tc = r?.totalCalls ?? 0;
+            const rr = r?.reachabilityRatio ?? 0;
+            const reachColor = tc === 0 ? 'brand' : rr >= 75 ? 'emerald' : rr >= 50 ? 'amber' : 'red';
+            return (
+              <StatCard
+                label="Reachability"
+                value={tc > 0 ? `${rr}%` : 'N/A'}
+                color={reachColor}
+                subtitle={tc > 0 ? `${r.reachedCalls}/${tc} calls reached` : 'No calls on filtered leads'}
+              />
+            );
+          })()}
           <div className="col-span-full flex gap-2 mt-1">
             <button onClick={() => setShowWorkload(!showWorkload)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
               <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
@@ -1820,7 +1872,7 @@ function LeadsContent() {
 
 // ─── Sub Components ───────────────────────────────────────────────
 
-function StatCard({ label, value, color }: { label: string; value: string | number; color: string }) {
+function StatCard({ label, value, color, subtitle }: { label: string; value: string | number; color: string; subtitle?: string }) {
   const colorMap: Record<string, string> = {
     brand: 'bg-brand-50 text-brand-700',
     indigo: 'bg-indigo-50 text-indigo-700',
@@ -1828,11 +1880,13 @@ function StatCard({ label, value, color }: { label: string; value: string | numb
     green: 'bg-green-50 text-green-700',
     red: 'bg-red-50 text-red-700',
     amber: 'bg-amber-50 text-amber-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
   };
   return (
     <div className={`card p-3 border-transparent ${colorMap[color] || colorMap.brand}`}>
       <p className="text-[10px] font-semibold uppercase tracking-wider opacity-70">{label}</p>
       <p className="text-lg font-bold mt-0.5">{value}</p>
+      {subtitle ? <p className="text-[10px] mt-1 opacity-80 leading-snug">{subtitle}</p> : null}
     </div>
   );
 }

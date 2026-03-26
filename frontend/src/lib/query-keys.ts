@@ -34,6 +34,7 @@ export const queryKeys = {
     pipelineStages: (divisionId?: string | null) => ['leads', 'pipeline-stages', divisionId || 'all'] as const,
     fieldConfig: (divisionId?: string | null) => ['leads', 'field-config', divisionId || 'all'] as const,
     callLogs: (leadId: string) => ['leads', 'call-logs', leadId] as const,
+    stats: (params: Record<string, string | number>) => ['leads', 'stats', params] as const,
   },
   /** Custom roles & module visibility (settings/roles UI) */
   roles: {

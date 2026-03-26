@@ -1,8 +1,9 @@
 const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
+const { authenticate, orgScope, resolveDivisionScope } = require('../middleware/auth');
 const { logger } = require('../config/logger');
-const { authenticate, orgScope } = require('../middleware/auth');
+
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { calculateLeadScore, predictConversion, calculateFullScore, rescoreAndPersist } = require('../utils/leadScoring');
@@ -175,6 +176,8 @@ const leadFilterSchema = paginationSchema.extend({
   maxScore: z.coerce.number().optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
+  updatedFrom: z.string().optional(),
+  updatedTo: z.string().optional(),
   company: z.string().optional(),
   jobTitle: z.string().optional(),
   location: z.string().optional(),
@@ -193,6 +196,8 @@ const leadFilterSchema = paginationSchema.extend({
   callOutcome: z.string().optional(), // comma-separated CallDisposition values
   callOutcomeReason: z.string().optional(), // comma-separated reason labels/keys for latest call
   callOutcomeMode: z.enum(['latest', 'any']).optional(), // default latest; any is for analytics drill-down
+  lastCallFrom: z.string().optional(), // date (YYYY-MM-DD): latest call createdAt >= start of day
+  lastCallTo: z.string().optional(), // date: latest call createdAt <= end of day
   minCallCount: z.coerce.number().int().min(0).optional(),
   maxCallCount: z.coerce.number().int().min(0).optional(),
   showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
@@ -202,10 +207,15 @@ const aiSummaryRequestSchema = z.object({
   force: z.boolean().optional(),
 });
 
-// ─── List Leads ──────────────────────────────────────────────────
-router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
-  try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, callOutcomeReason, callOutcomeMode, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
+
+/** Shared Prisma `where` for GET /leads and GET /leads/stats (same filters + division). */
+async function buildLeadWhereClause(req, q) {
+    const {
+      search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, updatedFrom, updatedTo,
+      company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget,
+      hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, callOutcomeReason,
+      callOutcomeMode, lastCallFrom, lastCallTo, minCallCount, maxCallCount, showBlocked,
+    } = q;
 
     const where = {
       organizationId: { in: req.orgIds },
@@ -217,7 +227,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     // showBlocked=true shows ONLY DNC leads (admin Blocked tab)
     if (showBlocked === 'true') {
       if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
-        return res.status(403).json({ error: 'Only admins can view blocked leads' });
+        return { forbidden: true };
       }
       where.doNotCall = true;
     } else {
@@ -229,9 +239,10 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       where.assignedToId = req.user.id;
     }
 
-    // Optional: filter to specific division
-    if (divisionId && req.isSuperAdmin) {
-      where.organizationId = divisionId;
+    // Optional: sidebar / filter division (same access rule as analytics)
+    const scopedDivisionId = resolveDivisionScope(req, divisionId);
+    if (scopedDivisionId) {
+      where.organizationId = scopedDivisionId;
     }
 
     if (status) {
@@ -340,6 +351,11 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       where.createdAt = {};
       if (resolvedFrom) where.createdAt.gte = new Date(resolvedFrom);
       if (resolvedTo) where.createdAt.lte = new Date(resolvedTo + 'T23:59:59.999Z');
+    }
+    if (updatedFrom || updatedTo) {
+      where.updatedAt = {};
+      if (updatedFrom) where.updatedAt.gte = new Date(updatedFrom);
+      if (updatedTo) where.updatedAt.lte = new Date(updatedTo + 'T23:59:59.999Z');
     }
     // Text field filters
     if (company) where.company = { contains: company, mode: 'insensitive' };
@@ -484,6 +500,35 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         ];
       }
     }
+
+    // Last call date — latest call per lead (same basis as "Last Call Outcome" column)
+    if (lastCallFrom || lastCallTo) {
+      let scopedOrgIds = req.orgIds;
+      if (typeof where.organizationId === 'string') {
+        scopedOrgIds = [where.organizationId];
+      } else if (where.organizationId && Array.isArray(where.organizationId.in)) {
+        scopedOrgIds = where.organizationId.in;
+      }
+      const lastCalls = await getLatestCallsByLead({
+        orgIds: scopedOrgIds,
+        assignedToId: req.isRestrictedRole ? req.user.id : undefined,
+      });
+      const fromBound = lastCallFrom ? new Date(lastCallFrom) : null;
+      const toBound = lastCallTo ? new Date(`${lastCallTo}T23:59:59.999Z`) : null;
+      const dateMatchedLeadIds = lastCalls
+        .filter((row) => {
+          const t = new Date(row.createdAt).getTime();
+          if (fromBound && t < fromBound.getTime()) return false;
+          if (toBound && t > toBound.getTime()) return false;
+          return true;
+        })
+        .map((row) => row.leadId);
+      where.AND = [
+        ...(where.AND || []),
+        { id: { in: dateMatchedLeadIds.length > 0 ? dateMatchedLeadIds : ['__none__'] } },
+      ];
+    }
+
     // Custom field filtering (JSON encoded)
     if (customField) {
       try {
@@ -533,6 +578,16 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         }
       }
     }
+
+    return { where };
+  }
+// ─── List Leads ──────────────────────────────────────────────────
+router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
+  try {
+    const { page, limit, sortBy, sortOrder } = req.validatedQuery;
+    const built = await buildLeadWhereClause(req, req.validatedQuery);
+    if (built.forbidden) return res.status(403).json({ error: 'Only admins can view blocked leads' });
+    const { where } = built;
 
     const [leads, total] = await Promise.all([
       prisma.lead.findMany({
@@ -673,6 +728,59 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         data: { score: 0, conversionProb: 0 },
       }).catch(() => {});
     }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Leads stats (overview + reachability), same filters as list ──
+router.get('/stats', validateQuery(leadFilterSchema), async (req, res, next) => {
+  try {
+    const built = await buildLeadWhereClause(req, req.validatedQuery);
+    if (built.forbidden) return res.status(403).json({ error: 'Only admins can view blocked leads' });
+    const { where } = built;
+
+    const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
+    const callWhere = { lead: where };
+
+    const [
+      totalLeads, newLeads, qualifiedLeads, wonLeads, lostLeads,
+      pipelineAgg, totalCalls, notReachedCalls,
+    ] = await Promise.all([
+      prisma.lead.count({ where }),
+      prisma.lead.count({ where: { ...where, status: 'NEW' } }),
+      prisma.lead.count({ where: { ...where, status: 'QUALIFIED' } }),
+      prisma.lead.count({ where: { ...where, status: 'WON' } }),
+      prisma.lead.count({ where: { ...where, status: 'LOST' } }),
+      prisma.lead.aggregate({
+        where: { ...where, status: { notIn: ['LOST'] }, budget: { not: null } },
+        _sum: { budget: true },
+      }),
+      prisma.callLog.count({ where: callWhere }),
+      prisma.callLog.count({ where: { ...callWhere, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+    ]);
+
+    const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
+    const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
+    const conversionRate = totalLeads > 0 ? Math.round((wonLeads / totalLeads) * 10000) / 100 : 0;
+
+    res.json({
+      overview: {
+        totalLeads,
+        newLeads,
+        qualifiedLeads,
+        wonLeads,
+        lostLeads,
+        conversionRate,
+        pipelineValue: Number(pipelineAgg._sum.budget || 0),
+      },
+      reachability: {
+        totalCalls,
+        reachedCalls,
+        notReachedCalls,
+        reachabilityRatio,
+      },
+    });
   } catch (err) {
     next(err);
   }

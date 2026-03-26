@@ -58,8 +58,12 @@ export function buildLeadsListParams(
   if (filters.callOutcome) params.callOutcome = filters.callOutcome;
   if (filters.callOutcomeReason) params.callOutcomeReason = filters.callOutcomeReason;
   if (filters.callOutcomeMode) params.callOutcomeMode = filters.callOutcomeMode;
+  if (filters.lastCallFrom) params.lastCallFrom = filters.lastCallFrom;
+  if (filters.lastCallTo) params.lastCallTo = filters.lastCallTo;
   if (filters.minCallCount) params.minCallCount = filters.minCallCount;
   if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
+  if (filters.updatedFrom) params.updatedFrom = filters.updatedFrom;
+  if (filters.updatedTo) params.updatedTo = filters.updatedTo;
   if (filters.divisionId) params.divisionId = filters.divisionId;
   if (filters.showBlocked) params.showBlocked = filters.showBlocked;
   return params;
@@ -138,6 +142,19 @@ export function useLeadsDashboardQuery(divisionId?: string | null) {
   });
 }
 
+export function useLeadsStatsQuery(
+  params: Record<string, string | number>,
+  options?: { enabled?: boolean }
+) {
+  return useQuery({
+    queryKey: queryKeys.leads.stats(params),
+    queryFn: () => api.getLeadsStats(params),
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    enabled: options?.enabled ?? true,
+  });
+}
+
 export function useLeadsCustomFieldsQuery(divisionId?: string | null, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.leads.customFields(divisionId),
@@ -211,10 +228,11 @@ export function useLeadsInvalidate() {
     [queryClient]
   );
 
-  /** Keeps list + dashboard cards in sync after lead field/stage/assignment changes. */
+  /** Keeps list + dashboard + stats cards in sync after lead field/stage/assignment changes. */
   const invalidateListAndDashboard = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: queryKeys.leads.listRoot });
     queryClient.invalidateQueries({ queryKey: ['leads', 'dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['leads', 'stats'] });
   }, [queryClient]);
 
   const invalidateAllLeadsData = useCallback(() => {
