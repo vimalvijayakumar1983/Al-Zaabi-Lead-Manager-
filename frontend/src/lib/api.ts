@@ -905,6 +905,27 @@ class ApiClient {
     }>(`/integrations/erp-data${query}`);
   }
 
+  async updateErpDataRow(id: string, payload: Record<string, unknown>) {
+    return this.request<{
+      id: string;
+      integrationId: string;
+      entityType: string;
+      externalId: string;
+      crmEntityId: string;
+      payload: Record<string, unknown>;
+      updatedAt: string;
+    }>(`/integrations/erp-data/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ payload }),
+    });
+  }
+
+  async deleteErpDataRow(id: string) {
+    return this.request<{ success: boolean; id: string }>(`/integrations/erp-data/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // ─── Widget & API Keys ─────────────────────────────────────────
 
   async generateWidget(config: string | WidgetConfig) {

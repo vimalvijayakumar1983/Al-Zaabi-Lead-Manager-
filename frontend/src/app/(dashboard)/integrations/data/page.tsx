@@ -2,7 +2,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Database, Filter, Loader2 } from 'lucide-react';
+import { Database, Filter, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import type { Organization, User } from '@/types';
@@ -28,61 +29,69 @@ const ENTITY_OPTIONS = [
 ];
 
 export default function ErpDataPage() {
+  const queryClient = useQueryClient();
   const { user } = useAuthStore() as { user: User | null };
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
   const searchParams = useSearchParams();
   const initialDivision = searchParams.get('divisionId') || 'all';
 
-  const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState<ErpDataRow[]>([]);
-  const [counts, setCounts] = useState<Record<string, number>>({});
-  const [divisions, setDivisions] = useState<Organization[]>([]);
   const [selectedDivision, setSelectedDivision] = useState(initialDivision);
   const [selectedEntity, setSelectedEntity] = useState('all');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
+  const [editingRow, setEditingRow] = useState<ErpDataRow | null>(null);
+  const [editPayloadText, setEditPayloadText] = useState('');
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const divs = await api.getDivisions();
-        if (Array.isArray(divs)) setDivisions(divs);
-      } catch {
-        setDivisions([]);
-      }
-    })();
-  }, []);
+  const divisionsQuery = useQuery({
+    queryKey: ['erp-data-divisions'],
+    queryFn: () => api.getDivisions() as Promise<Organization[]>,
+    staleTime: 60_000,
+  });
 
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const response = await api.getErpData({
-          divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
-          entityType: selectedEntity !== 'all' ? selectedEntity : undefined,
-          page,
-          limit,
-        });
-        setRows(response.data || []);
-        setCounts(response.countsByEntity || {});
-        setTotal(response.total || 0);
-        setTotalPages(response.pagination?.totalPages || 1);
-      } catch {
-        setRows([]);
-        setCounts({});
-        setTotal(0);
-        setTotalPages(1);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [selectedDivision, selectedEntity, page, limit]);
+  const erpDataQuery = useQuery({
+    queryKey: ['erp-data', selectedDivision, selectedEntity, page, limit],
+    queryFn: () =>
+      api.getErpData({
+        divisionId: selectedDivision !== 'all' ? selectedDivision : undefined,
+        entityType: selectedEntity !== 'all' ? selectedEntity : undefined,
+        page,
+        limit,
+      }) as Promise<{
+        data: ErpDataRow[];
+        countsByEntity: Record<string, number>;
+        total: number;
+        pagination?: { totalPages?: number };
+      }>,
+    staleTime: 15_000,
+  });
 
   useEffect(() => {
     setPage(1);
   }, [selectedDivision, selectedEntity, limit]);
+
+  const divisions = Array.isArray(divisionsQuery.data) ? divisionsQuery.data : [];
+  const rows = erpDataQuery.data?.data || [];
+  const counts = erpDataQuery.data?.countsByEntity || {};
+  const total = erpDataQuery.data?.total || 0;
+  const totalPages = erpDataQuery.data?.pagination?.totalPages || 1;
+  const loading = erpDataQuery.isLoading || erpDataQuery.isFetching;
+
+  const updateRowMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Record<string, unknown> }) =>
+      api.updateErpDataRow(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['erp-data'] });
+      setEditingRow(null);
+      setEditPayloadText('');
+    },
+  });
+
+  const deleteRowMutation = useMutation({
+    mutationFn: (id: string) => api.deleteErpDataRow(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['erp-data'] });
+    },
+  });
 
   const titleStats = useMemo(() => {
     return {
@@ -92,6 +101,38 @@ export default function ErpDataPage() {
       availability: counts.doctor_availability || 0,
     };
   }, [rows, counts]);
+
+  const openEditModal = (row: ErpDataRow) => {
+    setEditingRow(row);
+    setEditPayloadText(JSON.stringify(row.payload || {}, null, 2));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingRow) return;
+    try {
+      const parsed = JSON.parse(editPayloadText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        window.alert('Payload must be a JSON object.');
+        return;
+      }
+      await updateRowMutation.mutateAsync({
+        id: editingRow.id,
+        payload: parsed as Record<string, unknown>,
+      });
+    } catch (err: any) {
+      window.alert(err?.message || 'Invalid JSON or failed to save row.');
+    }
+  };
+
+  const handleDeleteRow = async (row: ErpDataRow) => {
+    const ok = window.confirm(`Delete this row (${row.entityType} / ${row.externalId})?`);
+    if (!ok) return;
+    try {
+      await deleteRowMutation.mutateAsync(row.id);
+    } catch (err: any) {
+      window.alert(err?.message || 'Failed to delete row.');
+    }
+  };
 
   return (
     <div className="space-y-6 pb-8">
@@ -167,12 +208,13 @@ export default function ErpDataPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">CRM ID</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Payload</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Updated</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-text-secondary">
+                  <td colSpan={7} className="px-4 py-10 text-center text-text-secondary">
                     <div className="inline-flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
                       Loading ERP data...
@@ -181,7 +223,7 @@ export default function ErpDataPage() {
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-text-secondary">
+                  <td colSpan={7} className="px-4 py-10 text-center text-text-secondary">
                     No ERP records found.
                   </td>
                 </tr>
@@ -199,6 +241,25 @@ export default function ErpDataPage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-text-secondary">
                       {new Date(row.updatedAt).toLocaleString('en-AE')}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openEditModal(row)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-blue-200 text-blue-700 hover:bg-blue-50"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => void handleDeleteRow(row)}
+                          disabled={deleteRowMutation.isPending}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        >
+                          {deleteRowMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -238,6 +299,57 @@ export default function ErpDataPage() {
           </div>
         </div>
       </div>
+
+      {editingRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-gray-100">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">Edit ERP Payload</h3>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  {editingRow.entityType} / {editingRow.externalId}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setEditingRow(null);
+                  setEditPayloadText('');
+                }}
+                className="p-1.5 rounded-md hover:bg-gray-100"
+              >
+                <X className="w-4 h-4 text-text-secondary" />
+              </button>
+            </div>
+            <div className="p-4 flex-1 overflow-auto">
+              <textarea
+                value={editPayloadText}
+                onChange={(e) => setEditPayloadText(e.target.value)}
+                rows={16}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+            </div>
+            <div className="p-4 border-t border-gray-100 flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setEditingRow(null);
+                  setEditPayloadText('');
+                }}
+                className="btn-secondary text-xs px-3 py-1.5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleSaveEdit()}
+                disabled={updateRowMutation.isPending}
+                className="btn-primary text-xs px-3 py-1.5 inline-flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {updateRowMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

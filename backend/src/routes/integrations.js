@@ -129,6 +129,10 @@ const erpDataQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional().default(300),
 });
 
+const updateErpDataRowSchema = z.object({
+  payload: z.record(z.unknown()),
+});
+
 const generateApiKeySchema = z.object({
   name: z.string().min(1).max(100).optional().default('Default API Key'),
   organizationId: z.string().uuid().optional(),
@@ -415,6 +419,83 @@ router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next
         totalPages,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── PUT /erp-data/:id — Update one ERP payload row ─────────────────────────────
+router.put('/erp-data/:id', validate(updateErpDataRowSchema), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { payload } = req.validated;
+    const erpExternalRefModel = prisma.erpExternalRef || prisma.erpExternalRefs;
+    if (!erpExternalRefModel || typeof erpExternalRefModel.findFirst !== 'function') {
+      return res.status(400).json({ error: 'ERP data rows are unavailable in this deployment' });
+    }
+
+    const existing = await erpExternalRefModel.findFirst({
+      where: {
+        id,
+        organizationId: { in: req.orgIds },
+        integration: { platform: 'erp' },
+      },
+      include: {
+        integration: { select: { id: true } },
+      },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: 'ERP data row not found' });
+    }
+
+    const updated = await erpExternalRefModel.update({
+      where: { id },
+      data: { externalPayload: payload },
+    });
+
+    await logIntegrationAction(existing.integration.id, 'erp_data_row_updated', { rowId: id }, 'success');
+
+    return res.json({
+      id: updated.id,
+      integrationId: updated.integrationId,
+      entityType: updated.entityType,
+      externalId: updated.externalId,
+      crmEntityId: updated.crmEntityId,
+      payload: updated.externalPayload || {},
+      updatedAt: updated.updatedAt,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── DELETE /erp-data/:id — Delete one ERP payload row ──────────────────────────
+router.delete('/erp-data/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const erpExternalRefModel = prisma.erpExternalRef || prisma.erpExternalRefs;
+    if (!erpExternalRefModel || typeof erpExternalRefModel.findFirst !== 'function') {
+      return res.status(400).json({ error: 'ERP data rows are unavailable in this deployment' });
+    }
+
+    const existing = await erpExternalRefModel.findFirst({
+      where: {
+        id,
+        organizationId: { in: req.orgIds },
+        integration: { platform: 'erp' },
+      },
+      include: {
+        integration: { select: { id: true } },
+      },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: 'ERP data row not found' });
+    }
+
+    await erpExternalRefModel.delete({ where: { id } });
+    await logIntegrationAction(existing.integration.id, 'erp_data_row_deleted', { rowId: id }, 'success');
+
+    return res.json({ success: true, id });
   } catch (err) {
     next(err);
   }
