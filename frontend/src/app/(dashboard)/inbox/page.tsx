@@ -337,6 +337,10 @@ function InboxContent() {
   const prevGroupsLengthRef = useRef(0);
   const firstPageSizeRef = useRef<number | null>(null);
   const shouldScrollToBottomRef = useRef(false);
+  // Track previous selectedLeadId so we can reset scroll refs synchronously
+  // in the render body (not in a useEffect) — this guarantees the scroll effect
+  // sees prevLen=0 even when react-query has cached data ready immediately.
+  const prevLeadIdForScrollRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
@@ -391,15 +395,26 @@ function InboxContent() {
       .reverse()
       .flatMap((p) => (p.messages || []) as Message[]);
   }, [threadQuery.data?.pages]);
-  const groupedMessages = useMemo(() => groupMessagesByDate(messages), [messages]);
-
-  // Derived firstItemIndex — same technique as ChatWindow.js.
-  // On first render, record the page size. As older groups are prepended, firstItemIndex
-  // decreases so Virtuoso holds scroll position without any manual restoration.
-  if (groupedMessages.length > 0 && firstPageSizeRef.current === null) {
-    firstPageSizeRef.current = groupedMessages.length;
+  // Synchronously reset scroll-tracking refs when the selected conversation changes.
+  // This MUST run in the render body (not in a useEffect) so the scroll effect always
+  // sees prevLen=0 for the new conversation, even when react-query returns cached data
+  // in the same render cycle as the selectedLeadId change.
+  if (prevLeadIdForScrollRef.current !== selectedLeadId) {
+    prevLeadIdForScrollRef.current = selectedLeadId;
+    prevGroupsLengthRef.current = 0;
+    firstGroupKeyRef.current = null;
+    lastGroupKeyRef.current = null;
+    firstPageSizeRef.current = null;
+    shouldScrollToBottomRef.current = false;
   }
-  const threadFirstItemIndex = INITIAL_FIRST_ITEM_INDEX - Math.max(0, groupedMessages.length - (firstPageSizeRef.current ?? groupedMessages.length));
+
+  // Derive firstItemIndex from flat messages.length — exactly like ChatWindow.js.
+  // When older messages are prepended, firstItemIndex shrinks by the number of new messages,
+  // giving Virtuoso the precise count it needs to lock scroll position.
+  if (messages.length > 0 && firstPageSizeRef.current === null) {
+    firstPageSizeRef.current = messages.length;
+  }
+  const threadFirstItemIndex = INITIAL_FIRST_ITEM_INDEX - Math.max(0, messages.length - (firstPageSizeRef.current ?? messages.length));
 
   const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
   const notes = (notesQuery.data || []) as any[];
@@ -499,44 +514,67 @@ function InboxContent() {
     if (selectedLeadId) setAttachedFiles([]);
   }, [selectedLeadId]);
 
-  // ChatWindow.js-style single scroll effect — mirrors the exact logic from ChatWindow.js.
-  // We track the FIRST and LAST message IDs (not group dates) so same-day messages
-  // are detected correctly as "new message at bottom".
+  // Exact ChatWindow.js scroll pattern — proven production-stable.
+  // initialTopMostItemIndex handles initial scroll-to-bottom natively (no JS needed).
+  // followOutput={true} handles new-message auto-scroll natively.
+  // This effect only fires scrollToIndex for:
+  //   (a) initial load (safety belt over initialTopMostItemIndex)
+  //   (b) new message at bottom
+  //   (c) forced scroll after sending
+  // Prepend (load-more) needs NO manual scroll — Virtuoso's firstItemIndex handles it.
+  // Native DOM scroll to absolute bottom — the only reliable mechanism
+  // for variable-height content that includes images / media.
+  const scrollToAbsoluteBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
   useEffect(() => {
-    if (!groupedMessages.length || !threadVirtuosoRef.current) return;
+    if (!messages?.length) return;
 
-    const currentLen = groupedMessages.length;
+    const currentLen = messages.length;
     const prevLen = prevGroupsLengthRef.current;
-
-    // Use actual message IDs, not date keys, to detect append vs prepend.
-    const firstGroup = groupedMessages[0];
-    const lastGroup = groupedMessages[currentLen - 1];
-    const firstId = firstGroup.messages?.[0]?.id ?? firstGroup.date;
-    const lastId = lastGroup.messages?.[lastGroup.messages.length - 1]?.id ?? lastGroup.date;
-    const prevLastId = lastGroupKeyRef.current;
-    const prevFirstId = firstGroupKeyRef.current;
+    const firstId = messages[0].id;
+    const lastId = messages[currentLen - 1].id;
 
     const isInitialLoad = prevLen === 0;
-    // New message appended = last message changed AND first message unchanged (not a prepend).
-    const isNewMessageAtBottom = lastId !== prevLastId && firstId === prevFirstId;
+    const isNewMessageAtBottom = !isInitialLoad
+      && lastId !== lastGroupKeyRef.current
+      && firstId === firstGroupKeyRef.current;
     const shouldForceScroll = shouldScrollToBottomRef.current;
 
     prevGroupsLengthRef.current = currentLen;
     firstGroupKeyRef.current = firstId;
     lastGroupKeyRef.current = lastId;
 
-    if (isInitialLoad || isNewMessageAtBottom || shouldForceScroll) {
-      if (shouldForceScroll) shouldScrollToBottomRef.current = false;
-      requestAnimationFrame(() => {
-        threadVirtuosoRef.current?.scrollToIndex({
-          index: currentLen - 1,
-          align: 'end',
-          behavior: (isInitialLoad || shouldForceScroll) ? 'auto' : 'smooth',
-        });
-      });
+    // Prepend (load-more): firstItemIndex handles scroll preservation automatically.
+
+    if (isInitialLoad) {
+      // Conversation switch / first load.
+      // First pass: let Virtuoso render items, then native-scroll to bottom.
+      // Second pass: safety net after images/media finish loading.
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('auto'), 100);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 400);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+
+    if (shouldForceScroll) {
+      // After sending — two-pass: immediate then safety net.
+      shouldScrollToBottomRef.current = false;
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('smooth'), 50);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 350);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+
+    if (isNewMessageAtBottom) {
+      // Incoming real-time message — two-pass scroll.
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('smooth'), 60);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 350);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupedMessages]);
+  }, [messages, scrollToAbsoluteBottom]);
 
   const handleLoadOlderMessages = useCallback(() => {
     if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
@@ -579,13 +617,17 @@ function InboxContent() {
     conversationsQuery.refetch();
   }, [conversationsQuery]);
 
-  const scrollThreadToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
-    threadVirtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior });
-  }, []);
-
-  const scrollThreadToBottomSoon = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
-    requestAnimationFrame(() => scrollThreadToBottom(behavior));
-  }, [scrollThreadToBottom]);
+  const scrollThreadToBottomSoon = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (messages.length > 0) {
+        threadVirtuosoRef.current?.scrollToIndex({
+          index: messages.length - 1,
+          align: 'end',
+          behavior: 'smooth',
+        });
+      }
+    });
+  }, [messages.length]);
 
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
@@ -1506,7 +1548,7 @@ function InboxContent() {
             </div>
 
             {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
-            <div className="flex-1 overflow-hidden bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
               {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
@@ -1525,12 +1567,10 @@ function InboxContent() {
                 <Virtuoso
                   ref={threadVirtuosoRef}
                   style={{ height: '100%' }}
-                  data={groupedMessages}
+                  data={messages}
                   firstItemIndex={threadFirstItemIndex}
-                  initialTopMostItemIndex={INITIAL_FIRST_ITEM_INDEX + groupedMessages.length - 1}
-                  followOutput={false}
-                  computeItemKey={(idx, group) => `${group.date}-${group.messages?.[0]?.id || idx}`}
-                  overscan={400}
+                  initialTopMostItemIndex={INITIAL_FIRST_ITEM_INDEX + messages.length - 1}
+                  overscan={600}
                   increaseViewportBy={{ top: 300, bottom: 300 }}
                   atTopThreshold={150}
                   startReached={() => {
@@ -1548,24 +1588,32 @@ function InboxContent() {
                       ) : null,
                     Footer: () => <div className="h-4" />,
                   }}
-                  itemContent={(gi, group) => (
-                  <div className="px-3 sm:px-5">
-                    {/* Date separator */}
-                    <div className="flex justify-center my-4">
-                      <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
-                        {group.date}
-                      </span>
-                    </div>
+                  itemContent={(virtualIdx, msg) => {
+                    // Map virtual index → data array index to find the previous message.
+                    // Use Math.max to guard against any transient mismatch between
+                    // firstItemIndex and virtualIdx during load-more transitions.
+                    const arrayIdx = Math.max(0, virtualIdx - threadFirstItemIndex);
+                    const prevMsg = arrayIdx > 0 && arrayIdx <= messages.length ? messages[arrayIdx - 1] : null;
+                    const msgDateKey = new Date(msg.createdAt).toDateString();
+                    const prevDateKey = prevMsg ? new Date(prevMsg.createdAt).toDateString() : null;
+                    const showDateSeparator = !prevMsg || msgDateKey !== prevDateKey;
+                    // Show platform indicator when platform changes between adjacent messages
+                    const showPlatformIndicator = !prevMsg || prevMsg.platform !== msg.platform;
 
-                    {group.messages.map((msg, mi) => {
-                      const isOutbound = msg.direction === 'OUTBOUND';
-                      const isOwnMessage = isOutbound && msg.user?.id === user?.id;
-                      const isMenuOpen = menuOpenMsgId === msg.id;
-                      const isEditing = editingMsgId === msg.id;
-
-                      return (
+                    const isOutbound = msg.direction === 'OUTBOUND';
+                    const isOwnMessage = isOutbound && msg.user?.id === user?.id;
+                    const isMenuOpen = menuOpenMsgId === msg.id;
+                    const isEditing = editingMsgId === msg.id;
+                    return (
+                      <div className="px-3 sm:px-5">
+                        {showDateSeparator && (
+                          <div className="flex justify-center my-4">
+                            <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
+                              {formatDate(msg.createdAt)}
+                            </span>
+                          </div>
+                        )}
                         <div
-                          key={msg.id}
                           className={`flex mb-1.5 ${isOutbound ? 'justify-end' : 'justify-start'} group/msg relative`}
                         >
                           {/* Action menu for own outbound messages */}
@@ -1602,7 +1650,7 @@ function InboxContent() {
 
                           <div className={`max-w-[75%] sm:max-w-[65%] relative`}>
                             {/* Channel indicator on first msg or channel change */}
-                            {(mi === 0 || group.messages[mi - 1]?.platform !== msg.platform) && (
+                            {showPlatformIndicator && (
                               <div className={`flex items-center gap-1 mb-1 ${isOutbound ? 'justify-end' : ''}`}>
                                 <PlatformIcon platform={msg.platform} size={10} />
                                 <span className="text-2xs text-text-tertiary font-medium">
@@ -1680,7 +1728,11 @@ function InboxContent() {
                                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                                       <div className="space-y-1.5">
                                         {msg.metadata.attachments.map((att: any, ai: number) => {
-                                          const url = att.url ? `/api${att.url}` : null;
+                                          // S3 presigned URLs are already absolute (https://...) — use directly.
+                                          // Proxy-served attachments are relative (/inbox/attachments/...) — prefix with /api.
+                                          const url = att.url
+                                            ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                                            : null;
                                           if (!url) {
                                             return (
                                               <div
@@ -1857,10 +1909,9 @@ function InboxContent() {
                             </div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                  )}
+                      </div>
+                    );
+                  }}
                 />
               </>
               )}
@@ -2416,10 +2467,14 @@ function InboxContent() {
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {leadAttachments.map((att: any) => (
+                    {leadAttachments.map((att: any) => {
+                      const attUrl = att.url
+                        ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                        : '#';
+                      return (
                       <a
                         key={att.id}
-                        href={`/api${att.url}`}
+                        href={attUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border hover:border-brand-300 hover:bg-brand-50/20 transition-all group/att"
@@ -2427,7 +2482,7 @@ function InboxContent() {
                         {isImageFile(att.mimeType) ? (
                           <div className="h-10 w-10 rounded-lg overflow-hidden flex-shrink-0 bg-surface-tertiary">
                             <img
-                              src={`/api${att.url}`}
+                              src={attUrl}
                               alt={att.filename}
                               className="h-full w-full object-cover"
                             />
@@ -2447,7 +2502,8 @@ function InboxContent() {
                         </div>
                         <Download className="h-3.5 w-3.5 text-text-tertiary opacity-0 group-hover/att:opacity-100 transition-opacity flex-shrink-0" />
                       </a>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

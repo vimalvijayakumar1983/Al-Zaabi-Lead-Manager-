@@ -2155,7 +2155,9 @@ export default function LeadDetailPage() {
                                   {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                                     <div className="space-y-1.5">
                                       {msg.metadata.attachments.map((att: any, ai: number) => {
-                                        const url = att.url ? `/api${att.url}` : null;
+                                        const url = att.url
+                                          ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                                          : null;
                                         if (!url) return null;
 
                                         if (att.mimeType?.startsWith('image/')) {
