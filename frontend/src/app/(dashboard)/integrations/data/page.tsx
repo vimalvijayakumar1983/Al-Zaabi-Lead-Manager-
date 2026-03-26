@@ -161,6 +161,17 @@ export default function ErpDataPage() {
     return allEntries.filter(([k]) => !known.has(k));
   };
 
+  const getPayloadEntries = (row: ErpDataRow): Array<[string, unknown]> =>
+    Object.entries(row.payload || {});
+
+  const formatCellValue = (value: unknown): string => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'string') return value || '-';
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return value.length ? `${value.length} item(s)` : '[]';
+    return 'Object';
+  };
+
   return (
     <div className="space-y-6 pb-8">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -205,22 +216,14 @@ export default function ErpDataPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Total</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.total}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-4 text-sm shadow-sm">
+          <p className="text-blue-700/80 font-medium">Customers</p>
+          <p className="text-2xl font-bold text-blue-900 mt-1">{titleStats.customers}</p>
         </div>
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Customers</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.customers}</p>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Sales</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.sales}</p>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-100 p-4 text-sm">
-          <p className="text-text-tertiary">Availability</p>
-          <p className="text-xl font-semibold text-text-primary">{titleStats.availability}</p>
+        <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-4 text-sm shadow-sm">
+          <p className="text-emerald-700/80 font-medium">Sales</p>
+          <p className="text-2xl font-bold text-emerald-900 mt-1">{titleStats.sales}</p>
         </div>
       </div>
 
@@ -286,9 +289,24 @@ export default function ErpDataPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <pre className="text-[11px] bg-gray-50 border border-gray-100 rounded-md px-2 py-1 max-w-[520px] overflow-x-auto">
-                        {JSON.stringify(row.payload || {}, null, 2)}
-                      </pre>
+                      <div className="max-w-[520px] space-y-1.5">
+                        {getPayloadEntries(row).length === 0 ? (
+                          <span className="text-xs text-text-tertiary">-</span>
+                        ) : (
+                          getPayloadEntries(row).slice(0, 8).map(([k, v]) => (
+                            <div
+                              key={`${row.id}-payload-${k}`}
+                              className="grid grid-cols-[140px_1fr] gap-2 text-[11px] rounded-md border border-gray-100 bg-gray-50 px-2 py-1"
+                            >
+                              <span className="font-mono text-text-secondary truncate">{k}</span>
+                              <span className="text-text-primary break-all">{formatCellValue(v)}</span>
+                            </div>
+                          ))
+                        )}
+                        {getPayloadEntries(row).length > 8 && (
+                          <div className="text-[11px] text-text-tertiary">+{getPayloadEntries(row).length - 8} more fields</div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-xs text-text-secondary">
                       {new Date(row.updatedAt).toLocaleString('en-AE')}
