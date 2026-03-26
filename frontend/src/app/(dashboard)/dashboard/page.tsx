@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
 import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
+import type { Organization } from '@/types';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -140,6 +141,13 @@ const TASK_PRIORITY_DOT: Record<string, { dot: string }> = {
   MEDIUM: { dot: 'bg-blue-500' },
   LOW: { dot: 'bg-gray-400' },
 };
+
+const divisionColors = [
+  'bg-brand-100 text-brand-700', 'bg-indigo-100 text-indigo-700',
+  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
+  'bg-cyan-100 text-cyan-700', 'bg-purple-100 text-purple-700',
+  'bg-red-100 text-red-700', 'bg-blue-100 text-blue-700',
+];
 
 // ─── Utility ────────────────────────────────────────────────────────
 
@@ -356,7 +364,8 @@ export default function DashboardPage() {
     if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
   }, []);
 
-  const periodDays = PERIODS.find((p) => p.value === period)?.days || 30;
+  const periodDaysFromPreset = PERIODS.find((p) => p.value === period)?.days || 30;
+  const canApplyCustomRange = period === 'custom' && !!customFrom && !!customTo;
 
   // Computed data
   const trendData = useMemo(() => {
@@ -407,7 +416,7 @@ export default function DashboardPage() {
       change: number | null;
     }>;
     return [
-      { label: 'Total Leads', value: fmt(kpis.totalLeads), icon: Users, color: 'brand', change: null as number | null },
+      { label: 'Leads added', value: fmt(kpis.totalLeads), icon: Users, color: 'brand', change: kpis.totalLeadsChange ?? (null as number | null) },
       { label: `${getStatusLabel('NEW')} Leads`, value: fmt(kpis.newLeads), icon: UserPlus, color: 'indigo', change: kpis.newLeadsChange },
       { label: `${getStatusLabel('WON')} Deals`, value: fmt(kpis.wonLeads), icon: Trophy, color: 'emerald', change: kpis.wonLeadsChange },
       { label: `${getStatusLabel('LOST')} Deals`, value: fmt(kpis.lostLeads), icon: XCircle, color: 'red', change: kpis.lostLeadsChange },
@@ -455,29 +464,7 @@ export default function DashboardPage() {
   const scoreDistribution = data.scoreDistribution || [];
   const teamLeaderboard = data.teamLeaderboard || [];
   const recentActivities = data.recentActivities || [];
-  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
 
-  const kpiCards = [
-    { label: 'Leads added', value: fmt(k.totalLeads), icon: Users, color: 'brand', change: k.totalLeadsChange },
-    { label: `${getStatusLabel('NEW')} Leads`, value: fmt(k.newLeads), icon: UserPlus, color: 'indigo', change: k.newLeadsChange },
-    { label: `${getStatusLabel('WON')} Deals`, value: fmt(k.wonLeads), icon: Trophy, color: 'emerald', change: k.wonLeadsChange },
-    { label: `${getStatusLabel('LOST')} Deals`, value: fmt(k.lostLeads), icon: XCircle, color: 'red', change: k.lostLeadsChange },
-    { label: 'Conversion', value: `${k.conversionRate}%`, icon: Target, color: 'cyan', change: k.conversionRateChange },
-    { label: 'Pipeline', value: fmt(k.pipelineValue, 'currency'), icon: Banknote, color: 'amber', change: k.pipelineValueChange },
-    { label: 'Won Revenue', value: fmt(k.wonRevenue, 'currency'), icon: DollarSign, color: 'emerald', change: null },
-    { label: 'Activities', value: fmt(k.activities), icon: Activity, color: 'purple', change: k.activitiesChange },
-    { label: 'Reachability', value: k.totalCalls > 0 ? `${k.reachabilityRatio}%` : 'N/A', icon: PhoneCall, color: k.reachabilityRatio >= 75 ? 'emerald' : k.reachabilityRatio >= 50 ? 'amber' : 'red', change: null, subtitle: k.totalCalls > 0 ? `${k.reachedCalls}/${k.totalCalls} calls` : 'No calls yet' },
-  ];
-
-  const colorMap: Record<string, { iconBg: string; iconText: string }> = {
-    brand: { iconBg: 'bg-brand-100', iconText: 'text-brand-600' },
-    indigo: { iconBg: 'bg-indigo-100', iconText: 'text-indigo-600' },
-    emerald: { iconBg: 'bg-emerald-100', iconText: 'text-emerald-600' },
-    red: { iconBg: 'bg-red-100', iconText: 'text-red-600' },
-    cyan: { iconBg: 'bg-cyan-100', iconText: 'text-cyan-600' },
-    amber: { iconBg: 'bg-amber-100', iconText: 'text-amber-600' },
-    purple: { iconBg: 'bg-purple-100', iconText: 'text-purple-600' },
-  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -568,7 +555,6 @@ export default function DashboardPage() {
               </button>
             </>
           )}
-          <RefreshButton onRefresh={fetchData} />
           <RefreshButton
             onRefresh={async () => {
               await dashboardQuery.refetch();

@@ -14,6 +14,7 @@ import {
   useLeadSourcesQuery,
   useLeadsCustomFieldsQuery,
   useLeadsDashboardQuery,
+  useLeadsStatsQuery,
   useLeadsFieldConfigQuery,
   useLeadsInvalidate,
   useLeadsListQuery,
@@ -270,9 +271,7 @@ function LeadsContent() {
     }
     return { total: 0, page: 1, limit: 20, totalPages: 1 };
   });
-  const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // ─── Restore view state from sessionStorage (survives lead detail navigation) ──
   const restoredViewState = useRef<{
     filters?: FilterState; sortBy?: string; sortOrder?: 'asc' | 'desc';
@@ -305,9 +304,6 @@ function LeadsContent() {
   const [showForm, setShowForm] = useState(false);
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
-  const [stats, setStats] = useState<any>(null);
-  /** Keeps stats cards in sync with sidebar division (same as list scope) */
-  const [statsDivisionId, setStatsDivisionId] = useState<string | undefined>(undefined);
   const [quickActionId, setQuickActionId] = useState<string | null>(null);
   const [quickActionPosition, setQuickActionPosition] = useState<{ top: number; left: number; openUp: boolean; maxHeight: number } | null>(null);
   const quickActionRef = useRef<HTMLDivElement>(null);
@@ -322,7 +318,6 @@ function LeadsContent() {
   const usersQuery = useLeadsUsersQuery(null);
   const users = (usersQuery.data || []) as User[];
   const dashboardQuery = useLeadsDashboardQuery(divisionScope);
-  const stats = dashboardQuery.data ?? null;
   const customFieldsQuery = useLeadsCustomFieldsQuery(divisionScope);
   const customFields = (customFieldsQuery.data || []) as CustomField[];
   const leadSourcesQuery = useLeadSourcesQuery(divisionScope);
@@ -355,6 +350,8 @@ function LeadsContent() {
   );
 
   const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
+  const statsQuery = useLeadsStatsQuery(listParams, { enabled: meReady });
+  const stats = statsQuery.data ?? (dashboardQuery.data as any) ?? null;
   const leadsRes = leadsQuery.data as any;
   const leads: Lead[] = Array.isArray(leadsRes?.data)
     ? leadsRes.data
@@ -835,7 +832,7 @@ function LeadsContent() {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
     setExporting(true);
     try {
-      const base = buildLeadsListParams();
+      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope);
       const allLeads: Lead[] = [];
       let page = 1;
       let totalPages = 1;
@@ -1346,7 +1343,7 @@ function LeadsContent() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 flex-shrink-0">
           <StatCard label="Total" value={alignedTotalLeads} color="brand" />
           <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
           <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
