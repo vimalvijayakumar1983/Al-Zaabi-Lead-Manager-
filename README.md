@@ -216,6 +216,34 @@ npm install
 npm run dev            # Starts on port 3000
 ```
 
+
+### Automated Production Deployment (GitHub Actions)
+
+This repository includes `.github/workflows/deploy-production.yml` for automated production deployment.
+
+**Trigger**
+- Push to `main`
+- Or run manually from **Actions → Deploy to Production**
+
+**What it does**
+1. Runs backend unit tests (`npm test -- --runInBand`).
+2. Runs frontend production build check (`npm run build`).
+3. Deploys backend to Railway **Production** environment.
+4. Deploys frontend to Vercel **Production** (uses `--prod`, not preview).
+
+**Required GitHub Secrets**
+- Backend (Railway):
+  - `RAILWAY_TOKEN`
+  - `RAILWAY_PROJECT_ID`
+  - `RAILWAY_BACKEND_SERVICE`
+- Frontend (Vercel):
+  - `VERCEL_TOKEN`
+  - `VERCEL_ORG_ID`
+  - `VERCEL_PROJECT_ID`
+
+> In Railway, ensure the service **Production Branch** is `main`.
+> In Vercel, ensure **Production Branch** is `main` and this project is linked to the same GitHub repository.
+
 ### Docker Deployment
 
 ```bash
