@@ -1242,7 +1242,6 @@ export default function LeadDetailPage() {
         </div>
       )}
 
-<<<<<<< HEAD
       {/* Check-in / check-out — who is actively on this lead */}
       <div className="rounded-lg border border-gray-200 bg-gradient-to-r from-slate-50 to-white px-3 py-2.5 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1343,56 +1342,6 @@ export default function LeadDetailPage() {
           </div>
         </div>
       </div>
-=======
-      {/* WhatsApp broadcast opt-out stripe */}
-      {(() => {
-        const canManage = fullUsers.find(u => u.id === currentUserId && ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(u.role));
-        const isOptedOut = !!(lead as any).whatsappOptOut;
-        return (
-          <div className={`flex items-center justify-between px-3 py-2 rounded-lg border ${isOptedOut ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200'}`}>
-            <div className="flex items-center gap-2">
-              <svg className={`h-4 w-4 ${isOptedOut ? 'text-orange-500' : 'text-green-500'}`} viewBox="0 0 24 24" fill="currentColor">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                <path d="M5.655 0C2.527 0 0 2.527 0 5.655c0 3.128 2.527 5.655 5.655 5.655C8.783 11.31 11.31 8.783 11.31 5.655 11.31 2.527 8.783 0 5.655 0zm2.828 7.778L5.655 5.655V2.828h1v2.413l2.414 2.414-.586.586z" transform="translate(13 13) scale(0.7)"/>
-              </svg>
-              <span className={`text-xs font-semibold ${isOptedOut ? 'text-orange-700' : 'text-green-700'}`}>
-                WhatsApp Broadcasts: {isOptedOut ? 'Opted out' : 'Opted in'}
-              </span>
-              {isOptedOut && (lead as any).whatsappOptOutAt && (
-                <span className="text-[11px] text-orange-500">
-                  since {new Date((lead as any).whatsappOptOutAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                </span>
-              )}
-            </div>
-            {canManage && (
-              <button
-                onClick={async () => {
-                  try {
-                    if (isOptedOut) {
-                      await api.whatsappOptInLead(lead.id);
-                      addToast({ type: 'success', title: 'Opted in', message: 'Lead will receive WhatsApp broadcasts.' });
-                    } else {
-                      await api.whatsappOptOutLead(lead.id);
-                      addToast({ type: 'success', title: 'Opted out', message: 'Lead will be excluded from WhatsApp broadcasts.' });
-                    }
-                    await refreshLeadAndSyncLists();
-                  } catch (err: any) {
-                    addToast({ type: 'error', title: 'Failed', message: err.message || 'Unable to update opt-out status.' });
-                  }
-                }}
-                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
-                  isOptedOut
-                    ? 'text-green-700 bg-green-100 hover:bg-green-200'
-                    : 'text-orange-700 bg-orange-100 hover:bg-orange-200'
-                }`}
-              >
-                {isOptedOut ? 'Opt back in' : 'Opt out'}
-              </button>
-            )}
-          </div>
-        );
-      })()}
->>>>>>> 7f1e2cd38b89180a32c790154ad719b8049b7fd0
 
       {/* Stage Progress Bar */}
       {mainStages.length > 0 ? (
