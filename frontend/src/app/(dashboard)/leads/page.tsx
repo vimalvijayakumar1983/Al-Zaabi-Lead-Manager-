@@ -272,10 +272,21 @@ function LeadsContent() {
     [queryClient]
   );
 
-  const divisionScope = useMemo(
-    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
-    []
+  const [divisionScope, setDivisionScope] = useState<string | null>(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null)
   );
+
+  useEffect(() => {
+    const onDivisionChanged = (e: Event) => {
+      const detail = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
+      const newDiv = detail?.divisionId ?? null;
+      setDivisionScope(newDiv);
+      setPagination((p) => ({ ...p, page: 1 }));
+      queryClient.invalidateQueries({ queryKey: queryKeys.leads.root });
+    };
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+    return () => window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+  }, [queryClient]);
 
   // ─── State ──────────────────────────────────────────────────────
   const [pagination, setPagination] = useState(() => {
@@ -364,8 +375,8 @@ function LeadsContent() {
   const callOutcomeOptions = useCallOutcomeOptions(dispositionQuery.data);
 
   const listParams = useMemo(
-    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope),
-    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]
+    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope),
+    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope]
   );
 
   const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
@@ -851,7 +862,7 @@ function LeadsContent() {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
     setExporting(true);
     try {
-      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope);
+      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope);
       const allLeads: Lead[] = [];
       let page = 1;
       let totalPages = 1;
