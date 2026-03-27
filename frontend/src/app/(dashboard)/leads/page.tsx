@@ -1418,16 +1418,16 @@ function LeadsContent() {
     `}</style>
     <div className="flex flex-col h-[calc(100dvh-3.5rem-1.5rem)] sm:h-[calc(100dvh-3.5rem-2rem)] md:h-[calc(100dvh-3.5rem-3rem)] overflow-hidden animate-fade-in">
       {/* Header row: [Title] [─── Team Workload · Allocation Rules ───] [Actions] */}
-      <div className="flex items-center gap-4 flex-shrink-0 pt-4 px-1">
+      <div className="flex items-center gap-3 flex-shrink-0 pt-1.5 px-1">
 
         {/* Section 1 — Title */}
         <div className="flex-shrink-0">
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight leading-none">Leads</h1>
-          <p className="text-text-secondary mt-0.5 text-xs">{alignedTotalLeads.toLocaleString()} leads total</p>
+          <h1 className="text-xl font-bold text-text-primary tracking-tight leading-none">Leads</h1>
+          <p className="text-text-secondary mt-0.5 text-[11px]">{alignedTotalLeads.toLocaleString()} leads total</p>
         </div>
 
         {/* Section 2 — Two action tabs */}
-        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border pl-4">
+        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border pl-3">
           <button
             onClick={() => setShowWorkload(!showWorkload)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
@@ -1500,7 +1500,7 @@ function LeadsContent() {
       {/* Stats Cards */}
       {stats && (
         <div className="flex-shrink-0">
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
             <StatCard label="Total" value={alignedTotalLeads} color="default" delta="+2 this week" />
             <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" highlight subtitle="All active" dot="indigo" />
             <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="default" dot="cyan" />
@@ -1526,7 +1526,7 @@ function LeadsContent() {
       )}
 
       {/* ─── Workload Dashboard (below stats) ─────────────────────── */}
-      <div className="py-1">
+      <div className="pt-0.5">
         <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
       </div>
 
@@ -1546,7 +1546,7 @@ function LeadsContent() {
       )}
 
       {/* Main Layout: Sidebar + Content */}
-      <div className="flex gap-4 flex-1 min-h-0">
+      <div className="flex gap-3 flex-1 min-h-0">
         {/* View Sidebar */}
         {showViewSidebar && (
           <ViewSidebar
@@ -1566,9 +1566,9 @@ function LeadsContent() {
         )}
 
         {/* Content Area */}
-        <div className="flex-1 min-w-0 flex flex-col gap-3">
+        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
           {/* Toolbar */}
-          <div className="card p-3 flex-shrink-0">
+          <div className="card p-2.5 flex-shrink-0">
             <div className="flex flex-wrap items-center gap-2">
               {/* Toggle Sidebar */}
               <button onClick={() => setShowViewSidebar(!showViewSidebar)}
@@ -2049,28 +2049,28 @@ function StatCard({
   };
 
   return (
-    <div className={`relative rounded-xl border p-3 transition-all ${
+    <div className={`relative rounded-xl border p-2.5 transition-all ${
       highlight
         ? 'bg-indigo-50 border-indigo-200 shadow-sm'
         : 'bg-white border-gray-100 shadow-xs hover:border-gray-200'
     }`}>
       {/* Header row */}
-      <div className="flex items-center gap-1.5 mb-1">
+      <div className="flex items-center gap-1.5 mb-0.5">
         {dot && <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${dotColors[dot] || 'bg-gray-400'}`} />}
         <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{label}</p>
       </div>
 
       {/* Value */}
-      <p className={`text-xl font-bold leading-none ${valueColors[color] || valueColors.default}`}>
+      <p className={`text-lg font-bold leading-none ${valueColors[color] || valueColors.default}`}>
         {value}
       </p>
 
       {/* Delta or subtitle */}
       {delta && (
-        <p className="text-[10px] text-emerald-600 font-medium mt-1">{delta}</p>
+        <p className="text-[10px] text-emerald-600 font-medium mt-0.5">{delta}</p>
       )}
       {subtitle && !delta && (
-        <p className="text-[10px] text-gray-400 mt-1 leading-snug">{subtitle}</p>
+        <p className="text-[10px] text-gray-400 mt-0.5 leading-snug">{subtitle}</p>
       )}
     </div>
   );
