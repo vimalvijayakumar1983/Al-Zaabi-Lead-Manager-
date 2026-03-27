@@ -6,6 +6,7 @@ import type {
   AppNotification, NotificationPreferences,
   BuiltInField, CustomField
 } from '@/types';
+import type { ReportBuilderDataset } from '@/types/report-builder';
 
 // Always use same-origin /api path — Next.js API route proxies to backend server-side
 const API_URL = '/api';
@@ -194,8 +195,30 @@ class ApiClient {
     return this.request<any>('/leads/filter-values');
   }
 
-  async getLead(id: string) {
-    return this.request<any>(`/leads/${id}`);
+  /**
+   * @param skipLastOpened — when true, server does not update lastOpenedAt (use for hover prefetch / refetch).
+   */
+  async getLead(id: string, opts?: { skipLastOpened?: boolean }) {
+    const q = opts?.skipLastOpened ? '?skipLastOpened=1' : '';
+    return this.request<any>(`/leads/${id}${q}`);
+  }
+
+  /** Bumps lead.updatedAt for meaningful UI activity (e.g. opened Tasks tab). */
+  async touchLeadActivity(id: string) {
+    return this.request<{ ok: boolean }>(`/leads/${id}/touch`, { method: 'POST' });
+  }
+
+  /** Start a work session on this lead (closes any other open session for the current user). */
+  async checkInLead(id: string, body?: { note?: string | null }) {
+    return this.request<any>(`/leads/${id}/check-in`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    });
+  }
+
+  /** End the current user's session on this lead. */
+  async checkOutLead(id: string) {
+    return this.request<{ ok: boolean }>(`/leads/${id}/check-out`, { method: 'POST' });
   }
 
   async getLeadCampaignOffers(leadId: string) {
@@ -272,10 +295,25 @@ class ApiClient {
     });
   }
 
-  async addLeadNote(leadId: string, content: string) {
+  /**
+   * Add a lead note. Pass `files` to upload attachments (multipart); otherwise JSON body.
+   */
+  async addLeadNote(
+    leadId: string,
+    content: string,
+    opts?: { isPinned?: boolean; files?: File[] }
+  ) {
+    const files = opts?.files?.filter(Boolean) ?? [];
+    if (files.length > 0) {
+      const fd = new FormData();
+      fd.append('content', content);
+      if (opts?.isPinned) fd.append('isPinned', 'true');
+      files.forEach((f) => fd.append('files', f));
+      return this.requestFormData<any>(`/leads/${leadId}/notes`, fd);
+    }
     return this.request<any>(`/leads/${leadId}/notes`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, isPinned: opts?.isPinned }),
     });
   }
 
@@ -1975,12 +2013,12 @@ class ApiClient {
   }
 
   // ─── Report Builder ───────────────────────────────────────────────
-  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines', divisionId?: string) {
+  async getReportCatalog(dataset: ReportBuilderDataset, divisionId?: string) {
     const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/report-builder/catalog?${q.toString()}`);
   }
 
-  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines' }) {
+  async getReportDefinitions(params?: { divisionId?: string; dataset?: ReportBuilderDataset }) {
     const q = new URLSearchParams();
     if (params?.divisionId) q.set('divisionId', params.divisionId);
     if (params?.dataset) q.set('dataset', params.dataset);
@@ -2008,7 +2046,11 @@ class ApiClient {
     });
   }
 
-  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
+  async previewReport(payload: {
+    dataset: ReportBuilderDataset;
+    divisionId?: string;
+    config: any;
+  }) {
     return this.request<any>('/report-builder/preview', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -2018,6 +2060,75 @@ class ApiClient {
   async runReport(id: string) {
     return this.request<any>(`/report-builder/run/${id}`, {
       method: 'POST',
+    });
+  }
+
+  // ─── Incentives ─────────────────────────────────────────────
+  private incentiveQ(divisionId: string) {
+    const q = new URLSearchParams({ divisionId });
+    return `?${q.toString()}`;
+  }
+
+  async getIncentiveMeSummary(divisionId: string) {
+    return this.request<any>(`/incentives/me/summary${this.incentiveQ(divisionId)}`);
+  }
+
+  async getIncentiveStatements(divisionId: string, userId?: string) {
+    const q = new URLSearchParams({ divisionId });
+    if (userId) q.set('userId', userId);
+    return this.request<any>(`/incentives/statements?${q.toString()}`);
+  }
+
+  async getIncentiveStatement(id: string) {
+    return this.request<any>(`/incentives/statements/${id}`);
+  }
+
+  async getIncentivePlans(divisionId: string) {
+    return this.request<any>(`/incentives/plans${this.incentiveQ(divisionId)}`);
+  }
+
+  async getIncentiveEvents(divisionId: string, params?: { page?: number; limit?: number; status?: string }) {
+    const q = new URLSearchParams({ divisionId });
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.status) q.set('status', params.status);
+    return this.request<any>(`/incentives/events?${q.toString()}`);
+  }
+
+  async getIncentiveExceptions(divisionId: string, status?: string) {
+    const q = new URLSearchParams({ divisionId });
+    if (status) q.set('status', status);
+    return this.request<any>(`/incentives/exceptions?${q.toString()}`);
+  }
+
+  async getIncentiveDisputes(divisionId: string) {
+    return this.request<any>(`/incentives/disputes${this.incentiveQ(divisionId)}`);
+  }
+
+  async getIncentiveReportPresets() {
+    return this.request<any>('/incentives/report-presets');
+  }
+
+  async incentiveAttributionPreview(body: any) {
+    return this.request<any>('/incentives/attribution/preview', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async incentiveEarningsSimulate(body: any) {
+    return this.request<any>('/incentives/earnings/simulate', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async ingestIncentiveEvent(body: any) {
+    return this.request<any>('/incentives/events', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async processIncentiveEvents(body: { divisionId: string; eventIds: string[]; dryRun?: boolean }) {
+    return this.request<any>('/incentives/jobs/process-events', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async createIncentiveDispute(statementId: string, reason: string) {
+    return this.request<any>(`/incentives/statements/${statementId}/disputes`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     });
   }
 }

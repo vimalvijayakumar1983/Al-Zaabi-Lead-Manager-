@@ -34,6 +34,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/settings': { title: 'Settings', description: 'Account and organization preferences' },
   '/recycle-bin': { title: 'Recycle Bin', description: 'Restore or permanently remove deleted records' },
   '/import': { title: 'Import Center', description: 'Import data from files' },
+  '/incentives': { title: 'Incentives', description: 'Attribution, earnings, and statements' },
   '/divisions': { title: 'Divisions', description: 'Manage organization divisions' },
   '/roles': { title: 'Roles & Permissions', description: 'Manage roles and access control' },
 };
@@ -309,6 +310,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/recycle-bin': 'recycleBin',
     '/import': 'import',
     '/divisions': 'divisions',
+    '/incentives': 'incentives',
   };
 
   const requiredPermission = routePermissions[basePath];

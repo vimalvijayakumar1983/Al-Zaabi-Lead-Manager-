@@ -64,6 +64,8 @@ export function buildLeadsListParams(
   if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
   if (filters.updatedFrom) params.updatedFrom = filters.updatedFrom;
   if (filters.updatedTo) params.updatedTo = filters.updatedTo;
+  if (filters.lastOpenedFrom) params.lastOpenedFrom = filters.lastOpenedFrom;
+  if (filters.lastOpenedTo) params.lastOpenedTo = filters.lastOpenedTo;
   if (filters.divisionId) params.divisionId = filters.divisionId;
   if (filters.showBlocked) params.showBlocked = filters.showBlocked;
   return params;
@@ -86,9 +88,11 @@ export function useLeadsListQuery(
 export function useLeadDetailQuery(leadId: string | undefined) {
   return useQuery<Lead>({
     queryKey: queryKeys.leads.detail(leadId!),
+    /** Real open must hit the API without skipLastOpened so "last opened" is recorded (list hover prefetch uses skip). */
     queryFn: () => api.getLead(leadId!) as Promise<Lead>,
     enabled: !!leadId,
     staleTime: 5_000,
+    refetchOnMount: 'always',
   });
 }
 

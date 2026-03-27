@@ -10,6 +10,7 @@
     "prisma:generate": "npx prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "npx prisma migrate dev",
     "prisma:seed": "node prisma/seed.js",
+    "prisma:seed-incentives": "node prisma/seed-incentives-demo.js",
     "test": "jest --coverage",
     "lint": "eslint src/"
   },

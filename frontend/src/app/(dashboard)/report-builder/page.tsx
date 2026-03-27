@@ -18,8 +18,8 @@ import {
   Filter,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import type { ReportBuilderDataset as Dataset } from '@/types/report-builder';
 
-type Dataset = 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'campaign_assignments' | 'lead_activities' | 'pipelines';
 type Visualization = 'table' | 'bar' | 'line' | 'pie' | 'kpi' | 'pivot' | 'funnel' | 'cohort';
 type FilterOperator =
   | 'eq' | 'neq' | 'contains' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'is_null' | 'is_not_null';
@@ -146,6 +146,13 @@ const DATASET_OPTIONS: Array<{ value: Dataset; label: string }> = [
   { value: 'pipelines', label: 'Pipelines' },
   { value: 'tasks', label: 'Tasks' },
   { value: 'call_logs', label: 'Call Logs' },
+  { value: 'incentive_events', label: 'Incentive Events' },
+  { value: 'incentive_attributions', label: 'Incentive Attributions' },
+  { value: 'incentive_earnings', label: 'Incentive Earnings' },
+  { value: 'incentive_adjustments', label: 'Incentive Adjustments' },
+  { value: 'incentive_statements', label: 'Incentive Statements' },
+  { value: 'incentive_disputes', label: 'Incentive Disputes' },
+  { value: 'incentive_exceptions', label: 'Incentive Exceptions' },
 ];
 
 const GUIDED_PRESETS: GuidedPreset[] = [
@@ -201,6 +208,13 @@ function titleFromDataset(dataset: Dataset): string {
   if (dataset === 'pipelines') return 'Pipelines';
   if (dataset === 'tasks') return 'Tasks';
   if (dataset === 'call_logs') return 'Call Logs';
+  if (dataset === 'incentive_events') return 'Incentive Events';
+  if (dataset === 'incentive_attributions') return 'Incentive Attributions';
+  if (dataset === 'incentive_earnings') return 'Incentive Earnings';
+  if (dataset === 'incentive_adjustments') return 'Incentive Adjustments';
+  if (dataset === 'incentive_statements') return 'Incentive Statements';
+  if (dataset === 'incentive_disputes') return 'Incentive Disputes';
+  if (dataset === 'incentive_exceptions') return 'Incentive Exceptions';
   return 'Leads';
 }
 

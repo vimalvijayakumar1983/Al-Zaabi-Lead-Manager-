@@ -26,6 +26,16 @@ function getDisplayName(obj) {
 const router = Router();
 router.use(authenticate, orgScope);
 
+async function bumpLeadUpdatedAt(leadId) {
+  if (!leadId) return;
+  try {
+    await prisma.lead.update({
+      where: { id: leadId },
+      data: { updatedAt: new Date() },
+    });
+  } catch { /* ignore */ }
+}
+
 function refreshLeadAISummaryAsync(leadId) {
   if (!leadId) return;
   regenerateLeadSummaryById(leadId).catch(() => {});
@@ -252,6 +262,7 @@ router.post('/', validate(taskSchema), async (req, res, next) => {
     });
 
     if (taskData.leadId) {
+      await bumpLeadUpdatedAt(taskData.leadId);
       await prisma.leadActivity.create({
         data: {
           leadId: taskData.leadId,
@@ -354,10 +365,12 @@ router.put('/:id', validate(taskSchema.partial()), async (req, res, next) => {
         assignee: { select: { id: true, firstName: true, lastName: true } },
       },
     });
+    const leadIdForBump = task.leadId || existing.leadId;
+    if (leadIdForBump) await bumpLeadUpdatedAt(leadIdForBump);
     res.json(task);
 
     broadcastDataChange(targetDivisionId || req.user.organizationId, 'task', 'updated', req.user.id, { entityId: task.id }).catch(() => {});
-    refreshLeadAISummaryAsync(task.leadId || existing.leadId);
+    refreshLeadAISummaryAsync(leadIdForBump);
 
     // Trigger immediate reminder check when due date or reminder is changed
     if (updateData.reminder || updateData.dueAt) {
@@ -383,6 +396,7 @@ router.post('/:id/complete', async (req, res, next) => {
     });
 
     if (task.leadId) {
+      await bumpLeadUpdatedAt(task.leadId);
       await prisma.leadActivity.create({
         data: {
           leadId: task.leadId,
@@ -506,6 +520,7 @@ router.patch('/bulk', validate(z.object({
 
     broadcastDataChange(req.user.organizationId, 'task', 'updated', req.user.id, {}).catch(() => {});
     const affectedLeadIds = [...new Set(accessibleTasks.map((task) => task.leadId).filter(Boolean))];
+    await Promise.all(affectedLeadIds.map((leadId) => bumpLeadUpdatedAt(leadId)));
     affectedLeadIds.forEach((leadId) => refreshLeadAISummaryAsync(leadId));
   } catch (err) {
     next(err);
@@ -553,6 +568,7 @@ router.delete('/:id', async (req, res, next) => {
     });
 
     await prisma.task.delete({ where: { id: req.params.id } });
+    if (existing.leadId) await bumpLeadUpdatedAt(existing.leadId);
     res.json({ message: 'Task moved to recycle bin' });
 
     broadcastDataChange(req.user.organizationId, 'task', 'deleted', req.user.id, { entityId: req.params.id }).catch(() => {});

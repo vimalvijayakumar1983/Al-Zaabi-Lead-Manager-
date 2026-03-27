@@ -12,6 +12,7 @@ import {
   Kanban,
   CheckSquare,
   BarChart3,
+  Gift,
   Zap,
   Megaphone,
   MessageCircle,
