@@ -208,7 +208,6 @@ export function WorkloadDashboard({ isOpen, onToggle }: WorkloadDashboardProps) 
     }
   }, []);
 
-  // Fetch on open (and refresh each time it's toggled open)
   useEffect(() => {
     if (isOpen) {
       fetchStats();
@@ -220,7 +219,7 @@ export function WorkloadDashboard({ isOpen, onToggle }: WorkloadDashboardProps) 
     <button
       type="button"
       onClick={onToggle}
-      className="card flex w-full items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer group"
+      className="card flex w-full items-center justify-between gap-3 px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer group"
     >
       <div className="flex items-center gap-2">
         <span className="text-base">📊</span>
@@ -311,7 +310,7 @@ export function WorkloadDashboard({ isOpen, onToggle }: WorkloadDashboardProps) 
           </div>
 
           {/* User cards grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {stats.users
               .sort((a, b) => b.utilization - a.utilization)
               .map((user) => (

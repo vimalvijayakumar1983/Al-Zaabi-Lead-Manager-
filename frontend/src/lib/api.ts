@@ -6,6 +6,7 @@ import type {
   AppNotification, NotificationPreferences,
   BuiltInField, CustomField
 } from '@/types';
+import type { ReportBuilderDataset } from '@/types/report-builder';
 
 // Always use same-origin /api path — Next.js API route proxies to backend server-side
 const API_URL = '/api';
@@ -58,8 +59,19 @@ class ApiClient {
     const data = await res.json();
 
     if (!res.ok) {
-      const details = data.details?.map((d: any) => `${d.field}: ${d.message}`).join(', ');
-      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Request failed'));
+      const details =
+        Array.isArray(data.details)
+          ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
+          : (typeof data.details === 'string' ? data.details : '');
+      const err = new Error(details ? `${data.error}: ${details}` : (data.error || data.message || 'Request failed')) as Error & {
+        details?: any;
+        reasonCode?: string;
+        diagnostics?: any;
+      };
+      err.details = data;
+      if (typeof data.reasonCode === 'string') err.reasonCode = data.reasonCode;
+      if (data.diagnostics != null) err.diagnostics = data.diagnostics;
+      throw err;
     }
 
     return data;
@@ -88,7 +100,19 @@ class ApiClient {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'Upload failed');
+      const details =
+        Array.isArray(data.details)
+          ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
+          : (typeof data.details === 'string' ? data.details : '');
+      const err = new Error(details ? `${data.error}: ${details}` : (data.error || data.message || 'Upload failed')) as Error & {
+        details?: any;
+        reasonCode?: string;
+        diagnostics?: any;
+      };
+      err.details = data;
+      if (typeof data.reasonCode === 'string') err.reasonCode = data.reasonCode;
+      if (data.diagnostics != null) err.diagnostics = data.diagnostics;
+      throw err;
     }
     return data;
   }
@@ -116,6 +140,12 @@ class ApiClient {
   async getLeads(params?: Record<string, string | number>) {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
     return this.request<any>(`/leads${query}`);
+  }
+
+  /** Overview + reachability for leads toolbar; same query params as getLeads (filters + division). */
+  async getLeadsStats(params?: Record<string, string | number>) {
+    const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+    return this.request<any>(`/leads/stats${query}`);
   }
 
   async globalSearch(q: string) {
@@ -165,8 +195,34 @@ class ApiClient {
     return this.request<any>('/leads/filter-values');
   }
 
-  async getLead(id: string) {
-    return this.request<any>(`/leads/${id}`);
+  /**
+   * @param skipLastOpened — when true, server does not update lastOpenedAt (use for hover prefetch / refetch).
+   */
+  async getLead(id: string, opts?: { skipLastOpened?: boolean }) {
+    const q = opts?.skipLastOpened ? '?skipLastOpened=1' : '';
+    return this.request<any>(`/leads/${id}${q}`);
+  }
+
+  /** Bumps lead.updatedAt for meaningful UI activity (e.g. opened Tasks tab). */
+  async touchLeadActivity(id: string) {
+    return this.request<{ ok: boolean }>(`/leads/${id}/touch`, { method: 'POST' });
+  }
+
+  /** Start a work session on this lead (closes any other open session for the current user). */
+  async checkInLead(id: string, body?: { note?: string | null }) {
+    return this.request<any>(`/leads/${id}/check-in`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    });
+  }
+
+  /** End the current user's session on this lead. */
+  async checkOutLead(id: string) {
+    return this.request<{ ok: boolean }>(`/leads/${id}/check-out`, { method: 'POST' });
+  }
+
+  async getLeadCampaignOffers(leadId: string) {
+    return this.request<any[]>(`/leads/${leadId}/campaign-offers`);
   }
 
   async generateLeadAISummary(id: string, force = false) {
@@ -224,6 +280,14 @@ class ApiClient {
     return this.request<any>(`/leads/${id}/unblock`, { method: 'POST' });
   }
 
+  async whatsappOptOutLead(id: string) {
+    return this.request<{ success: boolean; message: string }>(`/leads/${id}/whatsapp-opt-out`, { method: 'POST' });
+  }
+
+  async whatsappOptInLead(id: string) {
+    return this.request<{ success: boolean; message: string }>(`/leads/${id}/whatsapp-opt-in`, { method: 'POST' });
+  }
+
   async bulkUpdateLeads(leadIds: string[], data: any) {
     return this.request<any>('/leads/bulk', {
       method: 'PATCH',
@@ -231,10 +295,25 @@ class ApiClient {
     });
   }
 
-  async addLeadNote(leadId: string, content: string) {
+  /**
+   * Add a lead note. Pass `files` to upload attachments (multipart); otherwise JSON body.
+   */
+  async addLeadNote(
+    leadId: string,
+    content: string,
+    opts?: { isPinned?: boolean; files?: File[] }
+  ) {
+    const files = opts?.files?.filter(Boolean) ?? [];
+    if (files.length > 0) {
+      const fd = new FormData();
+      fd.append('content', content);
+      if (opts?.isPinned) fd.append('isPinned', 'true');
+      files.forEach((f) => fd.append('files', f));
+      return this.requestFormData<any>(`/leads/${leadId}/notes`, fd);
+    }
     return this.request<any>(`/leads/${leadId}/notes`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, isPinned: opts?.isPinned }),
     });
   }
 
@@ -311,12 +390,22 @@ class ApiClient {
 
   // Analytics
   async getDashboard(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
     return this.request<any>(`/analytics/dashboard${q}`);
   }
 
-  async getDashboardFull(period = '30d', divisionId?: string) {
-    const q = new URLSearchParams({ period, ...(divisionId ? { divisionId } : {}) });
+  async getDashboardFull(
+    period = '30d',
+    divisionId?: string,
+    filters?: { teamMemberId?: string; dateFrom?: string; dateTo?: string }
+  ) {
+    const q = new URLSearchParams({
+      period,
+      ...(divisionId ? { divisionId } : {}),
+      ...(filters?.teamMemberId ? { teamMemberId: filters.teamMemberId } : {}),
+      ...(filters?.dateFrom ? { from: filters.dateFrom } : {}),
+      ...(filters?.dateTo ? { to: filters.dateTo } : {}),
+    });
     return this.request<any>(`/analytics/dashboard-full?${q}`);
   }
 
@@ -386,7 +475,7 @@ class ApiClient {
 
   // Users
   async getUsers(divisionId?: string) {
-    const q = divisionId ? `?divisionId=${divisionId}` : '';
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
     return this.request<any[]>(`/users${q}`);
   }
 
@@ -457,6 +546,10 @@ class ApiClient {
     assignToIds?: string[];
     defaultStatus?: string;
     defaultSource?: string;
+    defaultCampaignIds?: string[];
+    broadcastListName?: string;
+    broadcastListSlug?: string;
+    divisionId?: string | null;
   }) {
     const formData = new FormData();
     formData.append('file', file);
@@ -467,6 +560,13 @@ class ApiClient {
     if (options.assignToIds && options.assignToIds.length > 0) formData.append('assignToIds', JSON.stringify(options.assignToIds));
     if (options.defaultStatus) formData.append('defaultStatus', options.defaultStatus);
     if (options.defaultSource) formData.append('defaultSource', options.defaultSource);
+    if (options.defaultCampaignIds && options.defaultCampaignIds.length > 0) {
+      formData.append('defaultCampaignIds', JSON.stringify(options.defaultCampaignIds));
+    }
+    if (options.broadcastListName) formData.append('broadcastListName', options.broadcastListName);
+    if (options.broadcastListSlug) formData.append('broadcastListSlug', options.broadcastListSlug);
+    const div = options.divisionId ?? (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null);
+    if (div) formData.append('divisionId', div);
     const token = this.getToken();
     const res = await fetch(`${API_URL}/import/execute`, {
       method: 'POST',
@@ -505,6 +605,163 @@ class ApiClient {
 
   async undoImport(id: string) {
     return this.request<any>(`/import/undo/${id}`, { method: 'POST' });
+  }
+
+  /** WhatsApp broadcast audience lists (per division via activeDivisionId for super admins). */
+  async listBroadcastLists(divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      lists: Array<{
+        id: string;
+        name: string;
+        slug: string | null;
+        memberCount: number;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }>(`/broadcast-lists${q}`);
+  }
+
+  async getBroadcastList(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      list: {
+        id: string;
+        name: string;
+        slug: string | null;
+        memberCount: number;
+        createdAt: string;
+        updatedAt: string;
+        members: Array<{
+          id: string;
+          phone: string;
+          phoneRaw: string | null;
+          displayName: string | null;
+          leadId: string | null;
+          lead: { id: string; firstName: string; lastName: string; phone: string | null; email: string | null } | null;
+        }>;
+      };
+    }>(`/broadcast-lists/${id}${q}`);
+  }
+
+  async deleteBroadcastList(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean }>(`/broadcast-lists/${id}${q}`, { method: 'DELETE' });
+  }
+
+  async sendBroadcastTemplate(
+    listId: string,
+    payload: {
+      templateId: string;
+      variables?: Record<string, string>;
+      mode?: 'now' | 'later';
+      scheduledAt?: string | null;
+    },
+    divisionId?: string | null,
+  ) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      ok: boolean;
+      mode: 'now' | 'later';
+      runId?: string;
+      total?: number;
+      sent?: number;
+      failed?: number;
+      failures?: Array<{ memberId: string; phone: string; error: string }>;
+      message?: string;
+    }>(`/broadcast-lists/${listId}/send-template${q}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listBroadcastRuns(divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      runs: Array<{
+        id: string;
+        mode: 'NOW' | 'LATER';
+        status: 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+        templateName: string;
+        templateLanguage: string;
+        list: { id: string; name: string };
+        scheduledAt: string | null;
+        totalRecipients: number;
+        sentCount: number;
+        failedCount: number;
+        deliveredCount: number;
+        readCount: number;
+        repliedCount: number;
+        startedAt: string | null;
+        completedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }>(`/broadcast-lists/runs${q}`);
+  }
+
+  async getBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      run: {
+        id: string;
+        mode: 'NOW' | 'LATER';
+        status: 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+        templateName: string;
+        templateLanguage: string;
+        list: { id: string; name: string; slug: string | null };
+        scheduledAt: string | null;
+        totalRecipients: number;
+        sentCount: number;
+        failedCount: number;
+        deliveredCount: number;
+        readCount: number;
+        repliedCount: number;
+        startedAt: string | null;
+        completedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        recipients: Array<{
+          id: string;
+          leadId: string;
+          phone: string;
+          status: 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
+          waMessageId: string | null;
+          error: string | null;
+          attemptCount: number;
+          sentAt: string | null;
+          deliveredAt: string | null;
+          readAt: string | null;
+          createdAt: string;
+          updatedAt: string;
+          lead: {
+            id: string;
+            firstName: string;
+            lastName: string;
+            phone: string | null;
+            email: string | null;
+            whatsappOptOut?: boolean;
+            whatsappOptOutAt?: string | null;
+          } | null;
+        }>;
+      };
+    }>(`/broadcast-lists/runs/${encodeURIComponent(id)}${q}`);
+  }
+
+  async cancelBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean; run: { id: string; status: string } }>(
+      `/broadcast-lists/runs/${encodeURIComponent(id)}/cancel${q}`,
+      { method: 'PATCH' },
+    );
+  }
+
+  async retryBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean; runId: string; retrying: number; message: string }>(
+      `/broadcast-lists/runs/${encodeURIComponent(id)}/retry${q}`,
+      { method: 'POST' },
+    );
   }
 
   private async authenticatedDownload(path: string, fallbackFilename: string) {
@@ -570,8 +827,9 @@ class ApiClient {
     return this.request<Campaign>(`/campaigns/${id}/duplicate`, { method: 'POST' });
   }
 
-  async getCampaignStats() {
-    return this.request<CampaignDashboardStats>('/campaigns/stats');
+  async getCampaignStats(divisionId?: string) {
+    const query = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<CampaignDashboardStats>(`/campaigns/stats${query}`);
   }
 
   async bulkUpdateCampaigns(ids: string[], data: { status?: string }) {
@@ -586,6 +844,59 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ ids }),
     });
+  }
+
+  async getCampaignTemplates(divisionId?: string) {
+    const query = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any[]>(`/campaigns/templates${query}`);
+  }
+
+  async createCampaignTemplate(data: { name: string; description?: string | null; config?: Record<string, any>; isActive?: boolean; divisionId?: string }) {
+    return this.request<any>('/campaigns/templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateCampaignTemplate(id: string, data: Partial<{ name: string; description: string | null; config: Record<string, any>; isActive: boolean }>) {
+    return this.request<any>(`/campaigns/templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCampaignTemplate(id: string) {
+    return this.request<{ success: boolean }>(`/campaigns/templates/${id}`, { method: 'DELETE' });
+  }
+
+  async previewCampaignAudience(campaignId: string, filters: Record<string, any>) {
+    return this.request<any>(`/campaigns/${campaignId}/assignments/preview`, {
+      method: 'POST',
+      body: JSON.stringify(filters || {}),
+    });
+  }
+
+  async applyCampaignAudience(campaignId: string, payload: Record<string, any>) {
+    return this.request<any>(`/campaigns/${campaignId}/assignments/apply`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getCampaignAssignments(campaignId: string, params?: Record<string, string | number>) {
+    const query = params ? `?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}` : '';
+    return this.request<any>(`/campaigns/${campaignId}/assignments${query}`);
+  }
+
+  async updateCampaignAssignment(assignmentId: string, payload: Record<string, any>) {
+    return this.request<any>(`/campaigns/assignments/${assignmentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getCampaignOfferAnalytics(campaignId: string) {
+    return this.request<any>(`/campaigns/${campaignId}/offer-analytics`);
   }
 
   // ─── Integrations ──────────────────────────────────────────────
@@ -634,6 +945,38 @@ class ApiClient {
 
   async getIntegrationPlatforms() {
     return this.request<IntegrationPlatformInfo[]>('/integrations/platforms');
+  }
+
+  async getErpData(params?: { integrationId?: string; divisionId?: string; entityType?: string; page?: number; limit?: number }) {
+    const query = params
+      ? '?' + new URLSearchParams(
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
+            .map(([k, v]) => [k, String(v)])
+        ).toString()
+      : '';
+    return this.request<{
+      data: Array<{
+        id: string;
+        integrationId: string;
+        provider: string | null;
+        divisionId: string | null;
+        entityType: string;
+        externalId: string;
+        crmEntityId: string;
+        payload: Record<string, unknown>;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      total: number;
+      countsByEntity: Record<string, number>;
+      pagination?: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+      };
+    }>(`/integrations/erp-data${query}`);
   }
 
   // ─── Widget & API Keys ─────────────────────────────────────────
@@ -892,13 +1235,19 @@ class ApiClient {
   }
 
   /** WhatsApp Cloud API credentials — stored per division (SUPER_ADMIN: pass divisionId). */
-  async getWhatsAppSettings(divisionId?: string) {
-    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+  async getWhatsAppSettings(divisionId?: string, revealSecrets?: boolean) {
+    const q = new URLSearchParams();
+    if (divisionId) q.set('divisionId', divisionId);
+    if (revealSecrets) q.set('revealSecrets', 'true');
+    const qs = q.toString() ? `?${q.toString()}` : '';
     return this.request<{
       whatsappNumbers: Array<{ label: string; phoneNumberId: string; displayPhone?: string; token: string; hasToken?: boolean }>;
       whatsappWebhookVerifyToken: string;
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
+      whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
+      whatsappTokenStatus?: { ok: boolean; checkedAt: string | null; error: string | null } | null;
     }>(`/settings/whatsapp${qs}`);
   }
 
@@ -907,6 +1256,8 @@ class ApiClient {
       whatsappNumbers: Array<{ label?: string; phoneNumberId: string; displayPhone?: string; token?: string }>;
       whatsappWebhookVerifyToken?: string;
       whatsappApiUrl?: string;
+      whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     },
     divisionId?: string,
   ) {
@@ -916,7 +1267,90 @@ class ApiClient {
       whatsappWebhookVerifyToken: string;
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
+      whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async listWhatsAppTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      templates: Array<{
+        id: string;
+        waTemplateId: string;
+        name: string;
+        language: string;
+        status: string | null;
+        category: string | null;
+        rejectedReason: string | null;
+        components?: any;
+        lastSyncedAt: string;
+      }>;
+      lastSyncedAt: string | null;
+    }>(`/whatsapp/templates${qs}`);
+  }
+
+  async syncWhatsAppTemplates(divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      success: boolean;
+      syncedCount: number;
+      templates: Array<{
+        id: string;
+        waTemplateId: string;
+        name: string;
+        language: string;
+        status: string | null;
+        category: string | null;
+        rejectedReason: string | null;
+        components?: any;
+        lastSyncedAt: string;
+      }>;
+      lastSyncedAt: string;
+    }>(`/whatsapp/templates/sync${qs}`, { method: 'POST' });
+  }
+
+  async createWhatsAppTemplate(
+    data: { name: string; language: string; category: string; components: Record<string, unknown>[] },
+    divisionId?: string
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates${qs}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateWhatsAppTemplate(
+    id: string,
+    data: { category?: string; components?: Record<string, unknown>[] },
+    divisionId?: string
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates/${id}${qs}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteWhatsAppTemplate(id: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates/${id}${qs}`, { method: 'DELETE' });
+  }
+
+  async testWhatsAppSettings(data?: { phoneNumberId?: string }, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      success: boolean;
+      message: string;
+      reasonCode?: string;
+      phoneNumberId?: string;
+      displayPhoneNumber?: string | null;
+      verifiedName?: string | null;
+      diagnostics?: {
+        token?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+        phoneNumberId?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+        waba?: { checked: boolean; ok: boolean | null; reasonCode?: string | null; message?: string | null };
+      };
+      details?: any;
+    }>(`/settings/whatsapp/test${qs}`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    });
   }
 
   async getNotificationPreferences() {
@@ -1168,7 +1602,8 @@ class ApiClient {
     if (params?.role) queryParams.set('role', params.role);
     if (params?.isActive) queryParams.set('isActive', params.isActive);
     const qs = queryParams.toString();
-    return this.request<DivisionUser[]>(`/divisions/${divisionId}/users${qs ? '?' + qs : ''}`);
+    const enc = encodeURIComponent(divisionId);
+    return this.request<DivisionUser[]>(`/divisions/${enc}/users${qs ? '?' + qs : ''}`);
   }
 
   async getDivisionStats(divisionId: string): Promise<DivisionStats> {
@@ -1457,7 +1892,14 @@ class ApiClient {
 
   async getInboxStats(divisionId?: string) {
     const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<any>(`/inbox/stats${q}`);
+    return this.request<{
+      totalConversations: number;
+      totalMessages: number;
+      unreadMessages: number;
+      unreadConversations: number;
+      recentInbound: number;
+      byChannel: Array<{ channel: string; count: number; label?: string; color?: string; icon?: string }>;
+    }>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {
@@ -1494,6 +1936,22 @@ class ApiClient {
   async deleteInboxMessage(messageId: string) {
     return this.request<any>(`/inbox/messages/${messageId}`, {
       method: 'DELETE',
+    });
+  }
+
+  async retryInboxWhatsAppMessage(messageId: string) {
+    return this.request<any>(`/inbox/messages/${messageId}/retry-whatsapp`, {
+      method: 'POST',
+    });
+  }
+
+  async sendInboxWhatsAppTemplateMessage(
+    leadId: string,
+    data: { templateId?: string; templateName?: string; language?: string; variables?: string[] | Record<string, string> }
+  ) {
+    return this.request<any>(`/inbox/conversations/${leadId}/send-template`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   }
 
@@ -1555,12 +2013,12 @@ class ApiClient {
   }
 
   // ─── Report Builder ───────────────────────────────────────────────
-  async getReportCatalog(dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines', divisionId?: string) {
+  async getReportCatalog(dataset: ReportBuilderDataset, divisionId?: string) {
     const q = new URLSearchParams({ dataset, ...(divisionId ? { divisionId } : {}) });
     return this.request<any>(`/report-builder/catalog?${q.toString()}`);
   }
 
-  async getReportDefinitions(params?: { divisionId?: string; dataset?: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines' }) {
+  async getReportDefinitions(params?: { divisionId?: string; dataset?: ReportBuilderDataset }) {
     const q = new URLSearchParams();
     if (params?.divisionId) q.set('divisionId', params.divisionId);
     if (params?.dataset) q.set('dataset', params.dataset);
@@ -1588,7 +2046,11 @@ class ApiClient {
     });
   }
 
-  async previewReport(payload: { dataset: 'leads' | 'tasks' | 'call_logs' | 'contacts' | 'deals' | 'campaigns' | 'lead_activities' | 'pipelines'; divisionId?: string; config: any }) {
+  async previewReport(payload: {
+    dataset: ReportBuilderDataset;
+    divisionId?: string;
+    config: any;
+  }) {
     return this.request<any>('/report-builder/preview', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -1598,6 +2060,75 @@ class ApiClient {
   async runReport(id: string) {
     return this.request<any>(`/report-builder/run/${id}`, {
       method: 'POST',
+    });
+  }
+
+  // ─── Incentives ─────────────────────────────────────────────
+  private incentiveQ(divisionId: string) {
+    const q = new URLSearchParams({ divisionId });
+    return `?${q.toString()}`;
+  }
+
+  async getIncentiveMeSummary(divisionId: string) {
+    return this.request<any>(`/incentives/me/summary${this.incentiveQ(divisionId)}`);
+  }
+
+  async getIncentiveStatements(divisionId: string, userId?: string) {
+    const q = new URLSearchParams({ divisionId });
+    if (userId) q.set('userId', userId);
+    return this.request<any>(`/incentives/statements?${q.toString()}`);
+  }
+
+  async getIncentiveStatement(id: string) {
+    return this.request<any>(`/incentives/statements/${id}`);
+  }
+
+  async getIncentivePlans(divisionId: string) {
+    return this.request<any>(`/incentives/plans${this.incentiveQ(divisionId)}`);
+  }
+
+  async getIncentiveEvents(divisionId: string, params?: { page?: number; limit?: number; status?: string }) {
+    const q = new URLSearchParams({ divisionId });
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.status) q.set('status', params.status);
+    return this.request<any>(`/incentives/events?${q.toString()}`);
+  }
+
+  async getIncentiveExceptions(divisionId: string, status?: string) {
+    const q = new URLSearchParams({ divisionId });
+    if (status) q.set('status', status);
+    return this.request<any>(`/incentives/exceptions?${q.toString()}`);
+  }
+
+  async getIncentiveDisputes(divisionId: string) {
+    return this.request<any>(`/incentives/disputes${this.incentiveQ(divisionId)}`);
+  }
+
+  async getIncentiveReportPresets() {
+    return this.request<any>('/incentives/report-presets');
+  }
+
+  async incentiveAttributionPreview(body: any) {
+    return this.request<any>('/incentives/attribution/preview', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async incentiveEarningsSimulate(body: any) {
+    return this.request<any>('/incentives/earnings/simulate', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async ingestIncentiveEvent(body: any) {
+    return this.request<any>('/incentives/events', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async processIncentiveEvents(body: { divisionId: string; eventIds: string[]; dryRun?: boolean }) {
+    return this.request<any>('/incentives/jobs/process-events', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async createIncentiveDispute(statementId: string, reason: string) {
+    return this.request<any>(`/incentives/statements/${statementId}/disputes`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     });
   }
 }

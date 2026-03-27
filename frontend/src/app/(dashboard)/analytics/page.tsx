@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
+import { useAnalyticsBundleQuery } from '@/features/analytics/hooks/useAnalyticsQueries';
 import { useAuthStore } from '@/store/authStore';
 import { useNotificationStore } from '@/store/notificationStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -445,14 +448,13 @@ const ANALYTICS_PREFS_KEY = 'analytics:report-prefs:v1';
 
 export default function AnalyticsPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { user } = useAuthStore();
   const addToast = useNotificationStore((s) => s.addToast);
   const isSuperAdmin = (user as any)?.role === 'SUPER_ADMIN';
 
   const [period, setPeriod] = useState<Period>('30d');
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [periodOpen, setPeriodOpen] = useState(false);
 
   // Division selector for Super Admins
@@ -460,29 +462,7 @@ export default function AnalyticsPage() {
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [divDropdownOpen, setDivDropdownOpen] = useState(false);
 
-  // Data
-  const [overview, setOverview] = useState<any>(null);
-  const [funnel, setFunnel] = useState<any[]>([]);
-  const [trends, setTrends] = useState<any[]>([]);
-  const [team, setTeam] = useState<any[]>([]);
-  const [sources, setSources] = useState<any[]>([]);
-  const [campaigns, setCampaigns] = useState<any[]>([]);
-  const [activities, setActivities] = useState<any>(null);
-  const [scoreDistrib, setScoreDistrib] = useState<any[]>([]);
-  const [divisionComp, setDivisionComp] = useState<any[]>([]);
-  const [taskSlaReport, setTaskSlaReport] = useState<any>(null);
-  const [callDispositionReport, setCallDispositionReport] = useState<any>(null);
-  const [pipelineForecastReport, setPipelineForecastReport] = useState<any>(null);
-  const [phase1Report, setPhase1Report] = useState<any>(null);
-  const [taskSlaUnavailable, setTaskSlaUnavailable] = useState(false);
-  const [callReportUnavailable, setCallReportUnavailable] = useState(false);
-  const [forecastReportUnavailable, setForecastReportUnavailable] = useState(false);
-  const [phase1ReportUnavailable, setPhase1ReportUnavailable] = useState(false);
-  const [callReportLegacyFallback, setCallReportLegacyFallback] = useState(false);
   const [callDrillMode, setCallDrillMode] = useState<'latest' | 'any'>('latest');
-
-  const periodRef = useRef(period);
-  periodRef.current = period;
 
   // Fetch divisions for Super Admin
   useEffect(() => {
@@ -540,116 +520,34 @@ export default function AnalyticsPage() {
       || divisions.find(d => d.id === selectedDivision)?.name
       || 'Division';
 
-  const fetchData = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    else setRefreshing(true);
-    try {
-      const p = periodRef.current;
-      const [ov, fn, tr, tm, src, cam, act, sd, taskSla, callDisp, forecast, phase1] = await Promise.allSettled([
-        api.getAnalyticsOverview(p, divId),
-        api.getFunnel(divId),
-        api.getTrends(p, divId),
-        api.getTeamPerformance(divId),
-        api.getSourcePerformance(p, divId),
-        api.getCampaignPerformance(divId),
-        api.getActivitiesAnalytics(p, divId),
-        api.getScoreDistribution(divId),
-        api.getTaskSLAReport(p, divId),
-        api.getCallDispositionReport(p, divId, callDrillMode),
-        api.getPipelineForecastReport(p, divId),
-        api.getPhase1Report(p, divId),
-      ]);
+  const analyticsQuery = useAnalyticsBundleQuery(period, divId, callDrillMode, isSuperAdmin);
+  const d = analyticsQuery.data;
+  const overview = (d?.overview ?? null) as any;
+  const funnel = (d?.funnel ?? []) as any[];
+  const trends = (d?.trends ?? []) as any[];
+  const team = (d?.team ?? []) as any[];
+  const sources = (d?.sources ?? []) as any[];
+  const campaigns = (d?.campaigns ?? []) as any[];
+  const activities = (d?.activities ?? null) as any;
+  const scoreDistrib = (d?.scoreDistrib ?? []) as any[];
+  const divisionComp = (d?.divisionComp ?? []) as any[];
+  const taskSlaReport = (d?.taskSlaReport ?? null) as any;
+  const callDispositionReport = (d?.callDispositionReport ?? null) as any;
+  const pipelineForecastReport = (d?.pipelineForecastReport ?? null) as any;
+  const phase1Report = (d?.phase1Report ?? null) as any;
+  const taskSlaUnavailable = d?.taskSlaUnavailable ?? true;
+  const callReportUnavailable = d?.callReportUnavailable ?? true;
+  const forecastReportUnavailable = d?.forecastReportUnavailable ?? true;
+  const phase1ReportUnavailable = d?.phase1ReportUnavailable ?? true;
+  const callReportLegacyFallback = d?.callReportLegacyFallback ?? false;
 
-      if (ov.status === 'fulfilled') setOverview(ov.value);
-      if (fn.status === 'fulfilled') setFunnel(Array.isArray(fn.value) ? fn.value : []);
-      if (tr.status === 'fulfilled') setTrends(Array.isArray(tr.value) ? tr.value : []);
-      if (tm.status === 'fulfilled') setTeam(Array.isArray(tm.value) ? tm.value : []);
-      if (src.status === 'fulfilled') setSources(Array.isArray(src.value) ? src.value : []);
-      if (cam.status === 'fulfilled') setCampaigns(Array.isArray(cam.value) ? cam.value : []);
-      if (act.status === 'fulfilled') setActivities(act.value);
-      if (sd.status === 'fulfilled') setScoreDistrib(Array.isArray(sd.value) ? sd.value : []);
-      if (taskSla.status === 'fulfilled') {
-        setTaskSlaReport(taskSla.value || null);
-        setTaskSlaUnavailable(false);
-      } else {
-        setTaskSlaReport(null);
-        setTaskSlaUnavailable(true);
-      }
-      if (callDisp.status === 'fulfilled') {
-        setCallDispositionReport(callDisp.value || null);
-        setCallReportUnavailable(false);
-        setCallReportLegacyFallback(false);
-      } else {
-        // Backward-compatible fallback for deployments where the new
-        // call-disposition endpoint is not available yet.
-        const legacy = await api.getDashboardFull(p, divId).catch(() => null);
-        const k = legacy?.kpis || {};
-        const totalCalls = Number(k.totalCalls || 0);
-        const reachedCalls = Number(k.reachedCalls || 0);
-        const notReachedCalls = Number(k.notReachedCalls || 0);
-        const reachabilityRatio = Number(k.reachabilityRatio || 0);
-        if (legacy) {
-          setCallDispositionReport({
-            summary: {
-              totalCalls,
-              reachedCalls,
-              notReachedCalls,
-              reachabilityRatio,
-              uniqueLeadsTouched: 0,
-              avgDurationSeconds: 0,
-            },
-            byDisposition: [],
-            notInterested: { total: 0, reasons: [] },
-            alreadyCompletedServices: { total: 0, locations: [] },
-            willCallAgain: { total: 0, expectedCallbackWindows: [] },
-            meta: {
-              legacyFallback: true,
-              fallbackReason: 'CALL_DISPOSITION_ENDPOINT_UNAVAILABLE',
-              periodFallback: false,
-            },
-          });
-          setCallReportUnavailable(false);
-          setCallReportLegacyFallback(true);
-        } else {
-          setCallDispositionReport(null);
-          setCallReportUnavailable(true);
-          setCallReportLegacyFallback(false);
-        }
-      }
-
-      if (forecast.status === 'fulfilled') {
-        setPipelineForecastReport(forecast.value || null);
-        setForecastReportUnavailable(false);
-      } else {
-        setPipelineForecastReport(null);
-        setForecastReportUnavailable(true);
-      }
-
-      if (phase1.status === 'fulfilled') {
-        setPhase1Report(phase1.value || null);
-        setPhase1ReportUnavailable(false);
-      } else {
-        setPhase1Report(null);
-        setPhase1ReportUnavailable(true);
-      }
-
-      if (isSuperAdmin && !divId) {
-        api.getDivisionComparison().then(d => setDivisionComp(Array.isArray(d) ? d : [])).catch(() => {});
-      } else {
-        setDivisionComp([]);
-      }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [isSuperAdmin, divId, callDrillMode]);
-
-  useEffect(() => { fetchData(); }, [period, selectedDivision, fetchData]);
+  const loading = analyticsQuery.isPending;
+  const refreshing = analyticsQuery.isFetching && !analyticsQuery.isPending;
 
   // Real-time sync: refresh analytics when underlying data changes
   useRealtimeSync(['lead', 'task', 'contact', 'deal', 'campaign'], useCallback(() => {
-    fetchData(true);
-  }, [fetchData]));
+    void queryClient.invalidateQueries({ queryKey: queryKeys.analytics.root });
+  }, [queryClient]));
 
   const days = { '7d': 7, '30d': 30, '90d': 90, '180d': 180, '365d': 365 }[period];
   const filledTrends = trends.length ? fillDates(trends, days) : [];
@@ -2370,7 +2268,7 @@ export default function AnalyticsPage() {
             PDF
           </button>
 
-          <button onClick={() => fetchData(true)} disabled={refreshing}
+          <button onClick={() => void analyticsQuery.refetch()} disabled={refreshing}
             className="btn-secondary h-9 w-9 flex items-center justify-center p-0">
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-brand-500' : 'text-text-secondary'}`} />
           </button>

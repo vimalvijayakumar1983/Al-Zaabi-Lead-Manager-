@@ -1,5 +1,6 @@
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
+const { setLeadAiSummaryWithoutUpdatedAt } = require('../utils/leadSilentUpdates');
 
 /**
  * AI Service - generates lead summaries, suggestions, and scores
@@ -315,10 +316,7 @@ async function regenerateLeadSummaryById(leadId) {
       callLogs: lead.callLogs,
     });
 
-    await prisma.lead.update({
-      where: { id: lead.id },
-      data: { aiSummary: insights.summary },
-    });
+    await setLeadAiSummaryWithoutUpdatedAt(lead.id, insights.summary);
 
     return insights;
   } catch (error) {

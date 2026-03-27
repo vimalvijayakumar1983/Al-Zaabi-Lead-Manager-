@@ -1,10 +1,25 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Lead, CustomField, User, AssignmentHistoryEntry } from '@/types';
+import { queryKeys } from '@/lib/query-keys';
+import { useInboxMessagesQuery } from '@/features/inbox/hooks/useInboxQueries';
+import {
+  useLeadDetailQuery,
+  usePipelineStagesAllQuery,
+  useLeadAssignmentHistoryQuery,
+  useLeadCallLogsQuery,
+  useLeadsCustomFieldsQuery,
+  useLeadsTagsQuery,
+  useLeadsFieldConfigQuery,
+  useLeadsUsersQuery,
+  useLeadsMeQuery,
+  useLeadsInvalidate,
+} from '@/features/leads/hooks/useLeadsQueries';
+import type { Lead, User } from '@/types';
 import { ReassignmentPanel } from '../components/ReassignmentPanel';
 import { LogCallModalDynamic } from '../components/log-call-modal';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -38,7 +53,59 @@ const activityIcons: Record<string, { icon: string; color: string }> = {
   SLA_ESCALATED: { icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z', color: 'text-red-600 bg-red-100' },
   SLA_REASSIGNED: { icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15', color: 'text-red-700 bg-red-100' },
   SLA_BREACHED: { icon: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-red-600 bg-red-100' },
+  LEAD_CHECK_IN: { icon: 'M5 13l4 4L19 7', color: 'text-emerald-600 bg-emerald-100' },
+  LEAD_CHECK_OUT: { icon: 'M15 12H3m12 0l-4-4m4 4l-4 4', color: 'text-slate-600 bg-slate-100' },
 };
+
+type LeadDetailRightTab = 'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs';
+
+/** Timeline row → tab to open (null = no linked tab, stay on timeline). */
+function getTabForActivityType(type: string): LeadDetailRightTab | null {
+  switch (type) {
+    case 'NOTE_ADDED':
+      return 'notes';
+    case 'TASK_CREATED':
+    case 'TASK_COMPLETED':
+    case 'MEETING_SCHEDULED':
+      return 'tasks';
+    case 'EMAIL_SENT':
+    case 'EMAIL_RECEIVED':
+    case 'WHATSAPP_SENT':
+    case 'WHATSAPP_RECEIVED':
+    case 'ATTACHMENT_ADDED':
+      return 'communications';
+    case 'CALL_MADE':
+    case 'CALL_RECEIVED':
+      return 'call_logs';
+    default:
+      return null;
+  }
+}
+
+function getCallLogIdFromMetadata(metadata: unknown): string | undefined {
+  if (metadata == null) return undefined;
+  let obj: unknown = metadata;
+  if (typeof metadata === 'string') {
+    try {
+      obj = JSON.parse(metadata) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  if (!obj || typeof obj !== 'object') return undefined;
+  const id = (obj as Record<string, unknown>).callLogId;
+  if (typeof id === 'string' && id.length > 0) return id;
+  if (typeof id === 'number' && Number.isFinite(id)) return String(id);
+  return undefined;
+}
+
+/** Avoid caret/selection landing on headings when a focused control unmounts during tab switch. */
+function releaseUiFocusBeforeTabSwitch() {
+  if (typeof window === 'undefined') return;
+  window.getSelection()?.removeAllRanges();
+  const ae = document.activeElement;
+  if (ae instanceof HTMLElement) ae.blur();
+}
 
 const priorityColors: Record<string, string> = {
   LOW: 'bg-gray-100 text-gray-700',
@@ -46,6 +113,18 @@ const priorityColors: Record<string, string> = {
   HIGH: 'bg-orange-100 text-orange-700',
   URGENT: 'bg-red-100 text-red-700',
 };
+
+const offerLifecycleLabel: Record<string, string> = {
+  ELIGIBLE: 'Eligible',
+  CONTACTED: 'Contacted',
+  ACCEPTED: 'Accepted',
+  REDEEMED: 'Redeemed',
+  EXPIRED: 'Expired',
+  REJECTED: 'Rejected',
+};
+
+// Offer lifecycle statuses considered "active" (shown in current offers section)
+const activeOfferStatuses = new Set(['ELIGIBLE', 'CONTACTED', 'ACCEPTED']);
 
 // ─── Smart Name Display (handles duplicate firstName/lastName) ────
 const getLeadDisplayName = (obj: { firstName?: string; lastName?: string }) => {
@@ -68,39 +147,180 @@ function sortCommunicationsByDate(comms: { createdAt?: string | Date }[]) {
   );
 }
 
+/** After realtime lead refetches, wait this long with no further events before syncing list + dashboard. */
+const REFRESH_LEAD_LIST_DEBOUNCE_MS = 20_000;
+
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const dispatchDataChange = useNotificationStore((s) => s.dispatchDataChange);
   const addToast = useNotificationStore((s) => s.addToast);
-  const [lead, setLead] = useState<Lead | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { invalidateListAndDashboard } = useLeadsInvalidate();
+  const leadIdStr = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
+  const leadQuery = useLeadDetailQuery(leadIdStr || undefined);
+  const lead = leadQuery.data ?? null;
+  const pipelineStagesAllQuery = usePipelineStagesAllQuery();
+  const orgId = lead?.organizationId ?? null;
+  const tagsScopeKey = `detail-org-${orgId ?? 'none'}`;
+  const tagsQuery = useLeadsTagsQuery(tagsScopeKey, orgId, { enabled: !!orgId });
+  const customFieldsQuery = useLeadsCustomFieldsQuery(orgId);
+  const fieldConfigQuery = useLeadsFieldConfigQuery(orgId, { enabled: !!orgId });
+  const usersQuery = useLeadsUsersQuery(null);
+  const meQuery = useLeadsMeQuery();
+  const assignmentHistoryQuery = useLeadAssignmentHistoryQuery(lead?.id);
+  const [showOfferHistoryModal, setShowOfferHistoryModal] = useState(false);
+
+  const availableTags = useMemo(() => {
+    const rows = tagsQuery.data;
+    return Array.isArray(rows) ? rows : [];
+  }, [tagsQuery.data]);
+
+  const customFields = useMemo(
+    () => (Array.isArray(customFieldsQuery.data) ? customFieldsQuery.data : []),
+    [customFieldsQuery.data]
+  );
+
+  const fieldConfig = fieldConfigQuery.data?.builtInFields ? fieldConfigQuery.data : null;
+
+  const fullUsers = useMemo(
+    () => (Array.isArray(usersQuery.data) ? usersQuery.data : []),
+    [usersQuery.data]
+  );
+  const currentUserId = meQuery.data?.id ?? '';
+
+  const assignmentHistory = useMemo(
+    () => (Array.isArray(assignmentHistoryQuery.data) ? assignmentHistoryQuery.data : []),
+    [assignmentHistoryQuery.data]
+  );
+
+  const pipelineStages = useMemo(() => {
+    const leadData = leadQuery.data;
+    const stagesData = pipelineStagesAllQuery.data;
+    if (!leadData || !stagesData) return [];
+    const allStages = (stagesData as { stages?: unknown[] }).stages || (stagesData as unknown[]) || [];
+    const stageOrgId = leadData?.stage?.organizationId || leadData?.organizationId;
+    const matchingStages = stageOrgId
+      ? (allStages as { organizationId?: string }[]).filter((s) => s.organizationId === stageOrgId)
+      : [];
+    if (matchingStages.length > 0) return matchingStages as { id: string; name: string; color: string }[];
+    if (allStages.length > 0) {
+      const firstOrgId = (allStages[0] as { organizationId?: string }).organizationId;
+      return (allStages as { organizationId?: string }[]).filter((s) => s.organizationId === firstOrgId) as {
+        id: string;
+        name: string;
+        color: string;
+      }[];
+    }
+    return [];
+  }, [leadQuery.data, pipelineStagesAllQuery.data]);
+
+  const loading = Boolean(leadIdStr) && leadQuery.isPending && !leadQuery.data;
   const [aiSummaryData, setAiSummaryData] = useState<any | null>(null);
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
   const [aiSummaryCopied, setAiSummaryCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
+  const tasksTabActivitySentRef = useRef(false);
+  const [checkinNoteDraft, setCheckinNoteDraft] = useState('');
+  const [checkinBusy, setCheckinBusy] = useState(false);
+
+  useEffect(() => {
+    tasksTabActivitySentRef.current = false;
+  }, [leadIdStr]);
+
+  useEffect(() => {
+    if (activeTab !== 'tasks' || !leadIdStr) return;
+    if (tasksTabActivitySentRef.current) return;
+    tasksTabActivitySentRef.current = true;
+    void (async () => {
+      try {
+        await api.touchLeadActivity(leadIdStr);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.leads.listRoot });
+        const ts = new Date().toISOString();
+        queryClient.setQueryData(queryKeys.leads.detail(leadIdStr), (prev: Lead | undefined) =>
+          prev ? { ...prev, updatedAt: ts } : prev
+        );
+      } catch {
+        tasksTabActivitySentRef.current = false;
+      }
+    })();
+  }, [activeTab, leadIdStr, queryClient]);
+
+  const callLogsQuery = useLeadCallLogsQuery(leadIdStr || undefined, {
+    // Load with lead detail so "View call log" has rows in the DOM immediately after tab switch.
+    enabled: !!leadIdStr,
+  });
+  const callLogs = Array.isArray(callLogsQuery.data) ? callLogsQuery.data : [];
+  const callLogsLoading = callLogsQuery.isLoading && activeTab === 'call_logs';
+
+  /** When set, Call logs tab scrolls to this row and highlights it (from timeline or comm link). */
+  const [focusCallLogId, setFocusCallLogId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFocusCallLogId(null);
+  }, [leadIdStr]);
+
+  const callLogIdsKey = useMemo(
+    () => callLogs.map((l) => String(l.id)).join('\0'),
+    [callLogs]
+  );
+
+  useLayoutEffect(() => {
+    if (activeTab !== 'call_logs' || !focusCallLogId || callLogsLoading) return;
+    if (!callLogs.some((l) => String(l.id) === String(focusCallLogId))) return;
+
+    const targetId = `call-log-row-${focusCallLogId}`;
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    const tryScroll = () => {
+      if (cancelled) return;
+      const el = document.getElementById(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        if (el instanceof HTMLElement) {
+          el.focus({ preventScroll: true });
+        }
+        return;
+      }
+      attempts += 1;
+      if (attempts < maxAttempts) requestAnimationFrame(tryScroll);
+    };
+
+    requestAnimationFrame(tryScroll);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callLogIdsKey tracks call log id set; avoids churn on array identity
+  }, [activeTab, focusCallLogId, callLogsLoading, callLogIdsKey]);
+
+  useEffect(() => {
+    if (!focusCallLogId) return;
+    const t = window.setTimeout(() => setFocusCallLogId(null), 8000);
+    return () => clearTimeout(t);
+  }, [focusCallLogId]);
+
   const [noteContent, setNoteContent] = useState('');
+  const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
+  const noteFileInputRef = useRef<HTMLInputElement>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showCommModal, setShowCommModal] = useState(false);
   const [showCallLogModal, setShowCallLogModal] = useState(false);
-  const [callLogs, setCallLogs] = useState<any[]>([]);
-  const [callLogsLoading, setCallLogsLoading] = useState(false);
+  const [updatingOfferAssignmentId, setUpdatingOfferAssignmentId] = useState<string | null>(null);
   const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
   const [convertingToContact, setConvertingToContact] = useState(false);
+  const [tagInput, setTagInput] = useState('');
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagBusy, setTagBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customEditValues, setCustomEditValues] = useState<Record<string, unknown>>({});
-  const [fullUsers, setFullUsers] = useState<User[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
   // Chat state
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [chatLoading, setChatLoading] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
   const [chatChannel, setChatChannel] = useState<string>('WHATSAPP');
   const [chatPlatform, setChatPlatform] = useState<string>('');
@@ -115,15 +335,36 @@ export default function LeadDetailPage() {
   const editInputRef = useRef<HTMLTextAreaElement>(null);
 
   const [unreadCommsCount, setUnreadCommsCount] = useState(0);
-  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
-
-  const [fieldConfig, setFieldConfig] = useState<{ builtInFields: any[]; customFields: any[] } | null>(null);
 
   // ─── Lead Navigation System ────────────────────────────────────────
   type LeadPreview = { id: string; name: string; status: string; company: string; callCount: number };
   type NavData = { leadIds: string[]; leadPreviews: LeadPreview[]; viewName: string; totalInView: number; currentPage: number; pageSize: number; timestamp: number };
   const [navData, setNavData] = useState<NavData | null>(null);
   const [visitedIds, setVisitedIds] = useState<Set<string>>(new Set());
+
+  const inboxMessagesParams = useMemo(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    const divisionId = lead?.organizationId || activeDivisionId || undefined;
+    return { limit: 100, ...(divisionId ? { divisionId } : {}) };
+  }, [lead?.organizationId]);
+
+  const chatMessagesLeadId =
+    activeTab === 'communications' && lead?.id && leadIdStr ? leadIdStr : null;
+
+  const messagesQuery = useInboxMessagesQuery(chatMessagesLeadId, inboxMessagesParams, {
+    refetchInterval: chatMessagesLeadId ? 10_000 : false,
+  });
+
+  const chatMessages = useMemo(() => {
+    const raw = messagesQuery.data?.messages;
+    if (messagesQuery.isError && lead?.communications?.length) {
+      return sortCommunicationsByDate(lead.communications);
+    }
+    return Array.isArray(raw) ? raw : [];
+  }, [messagesQuery.data, messagesQuery.isError, lead?.communications]);
+
+  const chatLoading = messagesQuery.isLoading && chatMessages.length === 0;
+  const refetchInboxMessages = messagesQuery.refetch;
 
   // Read navigation data from sessionStorage (set by leads list page)
   useEffect(() => {
@@ -145,6 +386,12 @@ export default function LeadDetailPage() {
     } catch (_) { /* sessionStorage unavailable */ }
   }, [id]);
 
+  useEffect(() => {
+    if (lead?.unreadCommunications != null) {
+      setUnreadCommsCount(lead.unreadCommunications);
+    }
+  }, [lead?.id, lead?.unreadCommunications]);
+
   const currentNavIndex = navData ? navData.leadIds.indexOf(id) : -1;
   const hasPrev = navData !== null && currentNavIndex > 0;
   const hasNext = navData !== null && currentNavIndex >= 0 && currentNavIndex < navData.leadIds.length - 1;
@@ -165,6 +412,8 @@ export default function LeadDetailPage() {
 
   // Keyboard shortcuts ref (actual handler defined after handleSaveAndNext)
   const saveAndNextRef = useRef<(() => void) | null>(null);
+  /** Debounced list/dashboard invalidation after realtime `refreshLead` (bursts coalesce into one sync). */
+  const realtimeListSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getFieldLabel = (key: string, defaultLabel: string): string => {
     if (!fieldConfig) return defaultLabel;
@@ -182,83 +431,64 @@ export default function LeadDetailPage() {
     return '+971' + cleaned;
   };
 
-  useEffect(() => {
-    // Scope custom fields to the lead's division when available
-    const divisionId = lead?.organizationId;
-    api.getCustomFields(divisionId || undefined).then(setCustomFields).catch(() => {});
-  }, [lead?.organizationId]);
+  const fetchLeadDetail = useCallback(async () => {
+    if (!id) return;
+    // Mark stale so fetchQuery always hits the API (otherwise fresh cache hides new tasks/notes after mutations).
+    await queryClient.invalidateQueries({ queryKey: queryKeys.leads.detail(id as string) });
+    const data = await queryClient.fetchQuery({
+      queryKey: queryKeys.leads.detail(id as string),
+      queryFn: () => api.getLead(id as string, { skipLastOpened: true }),
+    });
+    setUnreadCommsCount(data?.unreadCommunications || 0);
+  }, [id, queryClient]);
 
-  useEffect(() => {
-    const divisionId = lead?.organizationId;
-    if (!divisionId) return;
-    api.getFieldConfig(divisionId)
-      .then((data: any) => {
-        if (data && data.builtInFields) {
-          setFieldConfig(data);
-        }
-      })
-      .catch(() => {
-        setFieldConfig(null);
-      });
-  }, [lead?.organizationId]);
-
-
-  // Pipeline stages are now fetched alongside the lead in the initial load
-  // effect below to avoid a visible delay (waterfall). This effect only
-  // re-runs if the stage org changes after the initial load (e.g. after edit).
-  const stageOrgRef = useRef<string | null>(null);
-  useEffect(() => {
-    const stageOrgId = lead?.stage?.organizationId || lead?.organizationId;
-    if (!stageOrgId || stageOrgId === stageOrgRef.current) return;
-    stageOrgRef.current = stageOrgId;
-    // Skip if stages were already loaded by the initial fetch
-    if (pipelineStages.length > 0) return;
-    fetchStagesForOrg(stageOrgId);
-  }, [lead?.stage?.organizationId, lead?.organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchStagesForOrg = useCallback(async (orgId: string) => {
-    try {
-      const data: any = await api.getPipelineStages(orgId);
-      const stages = data.stages || data || [];
-      if (stages.length > 0) {
-        setPipelineStages(stages);
-      } else {
-        // Lead may belong to a GROUP org (no stages). Fetch all stages
-        // across divisions so the stepper still renders.
-        const fallback: any = await api.getPipelineStages();
-        const allStages = fallback.stages || fallback || [];
-        if (allStages.length > 0) {
-          const firstOrgId = allStages[0].organizationId;
-          setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
-        }
-      }
-    } catch {
-      setPipelineStages([]);
-    }
-  }, []);
-
-  // Fetch users for assignment panel
-  useEffect(() => {
-    Promise.all([api.getUsers(), api.getMe()]).then(([userList, me]: [any, any]) => {
-      setFullUsers(Array.isArray(userList) ? userList : []);
-      setCurrentUserId(me?.id || '');
-    }).catch(() => {});
-  }, []);
-
-  // Fetch assignment history
-  useEffect(() => {
-    if (lead?.id) {
-      api.getAssignmentHistory(lead.id)
-        .then((data: any) => setAssignmentHistory(Array.isArray(data) ? data : []))
-        .catch(() => setAssignmentHistory([]));
-    }
-  }, [lead?.id]);
-
+  /** Refetch lead detail + unread; schedule list/dashboard sync after quiet period (realtime / websocket). */
   const refreshLead = useCallback(async () => {
-    const data = await api.getLead(id);
-    setLead(data);
-    setUnreadCommsCount(data.unreadCommunications || 0);
-  }, [id]);
+    await fetchLeadDetail();
+    if (realtimeListSyncTimerRef.current) clearTimeout(realtimeListSyncTimerRef.current);
+    realtimeListSyncTimerRef.current = setTimeout(() => {
+      realtimeListSyncTimerRef.current = null;
+      void invalidateListAndDashboard();
+    }, REFRESH_LEAD_LIST_DEBOUNCE_MS);
+  }, [fetchLeadDetail, invalidateListAndDashboard]);
+
+  /** After user-driven mutations: sync immediately and cancel any pending debounced realtime sync. */
+  const refreshLeadAndSyncLists = useCallback(async () => {
+    if (realtimeListSyncTimerRef.current) {
+      clearTimeout(realtimeListSyncTimerRef.current);
+      realtimeListSyncTimerRef.current = null;
+    }
+    await fetchLeadDetail();
+    await invalidateListAndDashboard();
+  }, [fetchLeadDetail, invalidateListAndDashboard]);
+
+  useEffect(() => {
+    return () => {
+      if (realtimeListSyncTimerRef.current) clearTimeout(realtimeListSyncTimerRef.current);
+    };
+  }, []);
+
+  const invalidateInboxSurfaces = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+    await queryClient.invalidateQueries({ queryKey: ['inbox', 'stats'] });
+  }, [queryClient]);
+
+  const handleOfferLifecycleUpdate = useCallback(async (assignmentId: string, status: string) => {
+    setUpdatingOfferAssignmentId(assignmentId);
+    try {
+      await api.updateCampaignAssignment(assignmentId, {
+        status,
+        ...(status === 'CONTACTED' ? { discussedAt: new Date().toISOString() } : {}),
+        ...(status === 'REDEEMED' ? { redeemedAt: new Date().toISOString() } : {}),
+      });
+      await refreshLeadAndSyncLists();
+      addToast({ type: 'success', title: 'Offer Updated', message: `Lifecycle changed to ${offerLifecycleLabel[status] || status}.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Offer Update Failed', message: err?.message || 'Unable to update offer lifecycle.' });
+    } finally {
+      setUpdatingOfferAssignmentId(null);
+    }
+  }, [addToast, refreshLeadAndSyncLists]);
 
   const loadLeadAISummary = useCallback(async (force = false) => {
     setAiSummaryLoading(true);
@@ -268,46 +498,16 @@ export default function LeadDetailPage() {
       const payload = response?.data || null;
       setAiSummaryData(payload);
       if (payload?.summary) {
-        setLead((prev) => (prev ? { ...prev, aiSummary: payload.summary } : prev));
+        queryClient.setQueryData(queryKeys.leads.detail(id), (prev: Lead | undefined) =>
+          prev ? { ...prev, aiSummary: payload.summary } : prev
+        );
       }
     } catch (err: any) {
       setAiSummaryError(err?.message || 'Failed to generate AI summary');
     } finally {
       setAiSummaryLoading(false);
     }
-  }, [id]);
-
-  useEffect(() => {
-    // Fetch lead + pipeline stages in parallel to avoid the stepper
-    // popping in after the rest of the page has rendered.
-    const loadLead = api.getLead(id);
-    const loadStages = api.getPipelineStages(); // all stages for user's orgs
-
-    Promise.all([loadLead, loadStages])
-      .then(([leadData, stagesData]: [any, any]) => {
-        setLead(leadData);
-        setUnreadCommsCount(leadData?.unreadCommunications || 0);
-
-        const allStages = stagesData?.stages || stagesData || [];
-        // Pick stages matching the lead's division
-        const stageOrgId = leadData?.stage?.organizationId || leadData?.organizationId;
-        const matchingStages = stageOrgId
-          ? allStages.filter((s: any) => s.organizationId === stageOrgId)
-          : [];
-
-        if (matchingStages.length > 0) {
-          setPipelineStages(matchingStages);
-          stageOrgRef.current = stageOrgId;
-        } else if (allStages.length > 0) {
-          // Fallback: use stages from the first division found
-          const firstOrgId = allStages[0].organizationId;
-          setPipelineStages(allStages.filter((s: any) => s.organizationId === firstOrgId));
-          stageOrgRef.current = firstOrgId;
-        }
-      })
-      .catch((err) => console.error('Failed to load lead:', err))
-      .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, queryClient]);
 
   useEffect(() => {
     loadLeadAISummary(false).catch(() => {});
@@ -318,7 +518,7 @@ export default function LeadDetailPage() {
     if (stage.id === lead.stageId) return;
     try {
       await api.moveLead(lead.id, stage.id, 0);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${stage.name}` });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Stage Update Failed', message: err.message });
@@ -326,11 +526,23 @@ export default function LeadDetailPage() {
   };
 
   const handleAddNote = async () => {
-    if (!lead || !noteContent.trim()) return;
-    await api.addLeadNote(lead.id, noteContent);
-    setNoteContent('');
-    await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+    if (!lead || (!noteContent.trim() && noteAttachments.length === 0)) return;
+    try {
+      await api.addLeadNote(lead.id, noteContent.trim(), {
+        files: noteAttachments.length > 0 ? noteAttachments : undefined,
+      });
+      setNoteContent('');
+      setNoteAttachments([]);
+      if (noteFileInputRef.current) noteFileInputRef.current.value = '';
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
+      addToast({ type: 'success', title: 'Note saved', message: 'Your note has been added to this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Note failed', message: err?.message || 'Could not save the note.' });
+    }
   };
+
+  const noteAttachmentHref = (url: string) =>
+    url.startsWith('http://') || url.startsWith('https://') ? url : `/api${url.startsWith('/') ? url : `/${url}`}`;
 
   const handleDelete = async () => {
     if (!lead) return;
@@ -414,7 +626,7 @@ export default function LeadDetailPage() {
 
       await api.updateLead(lead.id, data);
       setIsEditing(false);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Lead Saved', message: 'Lead details updated successfully' });
       return true;
     } catch (err: any) {
@@ -462,7 +674,7 @@ export default function LeadDetailPage() {
     try {
       await api.createTask({ ...taskData, leadId: lead!.id });
       setShowTaskModal(false);
-      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Task Created', message: 'New task has been created' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Task Creation Failed', message: err.message });
@@ -473,31 +685,22 @@ export default function LeadDetailPage() {
     try {
       await api.logCommunication({ ...commData, leadId: lead!.id });
       setShowCommModal(false);
-      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Communication Logged', message: 'Communication has been recorded' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Log Communication Failed', message: err.message });
     }
   };
 
-  const loadCallLogs = useCallback(async () => {
-    if (!lead?.id) return;
-    setCallLogsLoading(true);
-    try {
-      const logs = await api.getCallLogs(lead.id);
-      setCallLogs(logs);
-    } catch {
-      setCallLogs([]);
-    } finally {
-      setCallLogsLoading(false);
-    }
-  }, [lead?.id]);
-
   const handleLogCall = async (callData: any) => {
     try {
       await api.logCall({ ...callData, leadId: lead!.id });
       setShowCallLogModal(false);
-      await Promise.all([refreshLead(), loadCallLogs(), loadLeadAISummary(true)]);
+      await Promise.all([
+        refreshLeadAndSyncLists(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.leads.callLogs(lead!.id) }),
+        loadLeadAISummary(true),
+      ]);
       addToast({ type: 'success', title: 'Call Logged', message: 'Call log has been recorded' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Log Call Failed', message: err.message });
@@ -508,7 +711,7 @@ export default function LeadDetailPage() {
     try {
       await api.sendEmail({ leadId: lead!.id, ...emailData });
       setShowEmailComposer(false);
-      await Promise.all([refreshLead(), loadLeadAISummary(true)]);
+      await Promise.all([refreshLeadAndSyncLists(), loadLeadAISummary(true)]);
       addToast({ type: 'success', title: 'Email Sent', message: 'Email has been sent successfully' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Send Email Failed', message: err.message });
@@ -520,7 +723,7 @@ export default function LeadDetailPage() {
     try {
       await api.updateLead(lead.id, { status: 'WON' });
       setShowConvertModal(false);
-      await refreshLead();
+      await refreshLeadAndSyncLists();
       addToast({ type: 'success', title: 'Lead Converted', message: 'Lead has been marked as Won' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Conversion Failed', message: err.message });
@@ -549,51 +752,79 @@ export default function LeadDetailPage() {
     }
   };
 
-  // Load chat messages when Communications tab is active
-  // The backend auto-marks unread messages as read when fetched
-  const loadChatMessages = useCallback(async (backgroundPoll?: boolean) => {
-    const background = backgroundPoll === true;
-    if (!id) return;
-    if (!background) setChatLoading(true);
+  const handleAddExistingTag = useCallback(async (tagId: string) => {
+    if (!lead?.id) return;
+    setTagBusy(true);
     try {
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const divisionId = lead?.organizationId || activeDivisionId || undefined;
-      const data = await api.getInboxMessages(id, { limit: 100, ...(divisionId ? { divisionId } : {}) });
-      setChatMessages(data.messages || []);
-      // Backend marks messages as read on fetch; reset local unread count
-      setUnreadCommsCount(0);
-    } catch {
-      // Fallback to lead's communications if inbox API fails
-      if (lead?.communications) {
-        setChatMessages(sortCommunicationsByDate(lead.communications));
-      }
+      await api.addLeadTags(lead.id, { tagIds: [tagId] });
+      await refreshLeadAndSyncLists();
+      setTagInput('');
+      setTagPickerOpen(false);
+      addToast({ type: 'success', title: 'Tag Added', message: 'Tag has been added to this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Add Tag', message: err?.message || 'Unable to add tag.' });
     } finally {
-      if (!background) setChatLoading(false);
+      setTagBusy(false);
     }
-  }, [id, lead?.organizationId, lead?.communications]);
+  }, [addToast, lead?.id, refreshLeadAndSyncLists]);
+
+  const handleCreateAndAddTag = useCallback(async () => {
+    const name = tagInput.trim();
+    if (!lead?.id || !lead.organizationId || !name) return;
+    setTagBusy(true);
+    try {
+      let createdTag: any = null;
+      try {
+        createdTag = await api.createTag({ name, organizationId: lead.organizationId });
+      } catch (createErr: any) {
+        const msg = String(createErr?.message || '').toLowerCase();
+        if (!msg.includes('already exists')) throw createErr;
+      }
+
+      if (createdTag?.id) {
+        await api.addLeadTags(lead.id, { tagIds: [createdTag.id] });
+      } else {
+        // Fallback path for duplicate tag names: backend will upsert by name.
+        await api.addLeadTags(lead.id, { tagNames: [name] });
+      }
+
+      await Promise.all([
+        refreshLeadAndSyncLists(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.leads.tags(tagsScopeKey) }),
+      ]);
+      setTagInput('');
+      setTagPickerOpen(false);
+      addToast({ type: 'success', title: 'Tag Added', message: `"${name}" has been added.` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Add Tag', message: err?.message || 'Unable to create/add tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, lead?.organizationId, refreshLeadAndSyncLists, tagInput, queryClient, tagsScopeKey]);
+
+  const handleRemoveTag = useCallback(async (tagId: string) => {
+    if (!lead?.id || !tagId) return;
+    setTagBusy(true);
+    try {
+      await api.removeLeadTag(lead.id, tagId);
+      await refreshLeadAndSyncLists();
+      addToast({ type: 'success', title: 'Tag Removed', message: 'Tag has been removed from this lead.' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to Remove Tag', message: err?.message || 'Unable to remove tag.' });
+    } finally {
+      setTagBusy(false);
+    }
+  }, [addToast, lead?.id, refreshLeadAndSyncLists]);
 
   useEffect(() => {
     if (activeTab === 'communications' && lead?.id) {
-      loadChatMessages();
-      // Also explicitly mark as read and notify other components
       api.markConversationRead(lead.id).then(() => {
         setUnreadCommsCount(0);
-        // Notify any mounted list pages to refresh (e.g. lead list channel counts)
         dispatchDataChange({ entity: 'communication', action: 'updated', entityId: lead.id });
       }).catch((err) => console.error('Failed to mark conversation read:', err));
     }
-    if (activeTab === 'call_logs' && lead?.id) {
-      loadCallLogs();
-    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, lead?.id, loadChatMessages, loadCallLogs]);
-
-  // Poll for new messages when Communications tab is active (background refresh, no loading overlay)
-  useEffect(() => {
-    if (activeTab !== 'communications' || !lead?.id) return;
-    const interval = setInterval(() => loadChatMessages(true), 10000);
-    return () => clearInterval(interval);
-  }, [activeTab, lead?.id, loadChatMessages]);
+  }, [activeTab, lead?.id]);
 
   // Real-time sync: refresh lead data when lead or note changes
   useRealtimeSync(['lead', 'note'], useCallback((event) => {
@@ -606,9 +837,9 @@ export default function LeadDetailPage() {
   // Real-time sync: refresh chat messages when communications change (background, no loading overlay)
   useRealtimeSync(['communication'], useCallback((event) => {
     if (event.entityId && event.entityId !== id) return;
-    loadChatMessages();
+    refetchInboxMessages();
     loadLeadAISummary(true).catch(() => {});
-  }, [id, loadChatMessages, loadLeadAISummary]));
+  }, [id, refetchInboxMessages, loadLeadAISummary]));
 
   // Real-time sync: refresh lead when tasks change (tasks are embedded in lead response)
   useRealtimeSync(['task'], useCallback(() => {
@@ -640,7 +871,6 @@ export default function LeadDetailPage() {
     const tempId = `temp-${Date.now()}`;
     const platform = chatPlatform || chatChannel;
 
-    // Optimistic: add message instantly
     const optimisticMsg = {
       id: tempId,
       direction: 'OUTBOUND',
@@ -652,7 +882,11 @@ export default function LeadDetailPage() {
       user: { id: currentUserId, firstName: 'You', lastName: '' },
       _optimistic: true,
     };
-    setChatMessages(prev => [...prev, optimisticMsg]);
+    const msgKey = queryKeys.inbox.messages(lead.id, inboxMessagesParams);
+    queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+      ...(old || {}),
+      messages: [...(old?.messages || []), optimisticMsg],
+    }));
     setChatMessage('');
     setSendingChat(true);
 
@@ -663,11 +897,18 @@ export default function LeadDetailPage() {
         body,
         platform: chatPlatform || undefined,
       });
-      // Replace optimistic message with real one
-      setChatMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: platform.toUpperCase() } : m));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).map((m) =>
+          m.id === tempId ? { ...sent, platform: platform.toUpperCase() } : m
+        ),
+      }));
+      void invalidateInboxSurfaces();
     } catch (err: any) {
-      // Remove optimistic message on failure
-      setChatMessages(prev => prev.filter(m => m.id !== tempId));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).filter((m) => m.id !== tempId),
+      }));
       addToast({ type: 'error', title: 'Message Failed', message: err.message });
     } finally {
       setSendingChat(false);
@@ -676,11 +917,18 @@ export default function LeadDetailPage() {
 
   const handleEditMessage = async (messageId: string) => {
     if (!editingBody.trim()) return;
+    const msgKey = queryKeys.inbox.messages(lead!.id, inboxMessagesParams);
     try {
       const updated = await api.editInboxMessage(messageId, editingBody.trim());
-      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).map((m) =>
+          m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m
+        ),
+      }));
       setEditingMsgId(null);
       setEditingBody('');
+      void invalidateInboxSurfaces();
       addToast({ type: 'success', title: 'Message Edited', message: 'Message has been updated' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Edit Failed', message: err.message });
@@ -696,10 +944,17 @@ export default function LeadDetailPage() {
       variant: 'danger',
     });
     if (!confirmed) return;
+    const msgKey = queryKeys.inbox.messages(lead!.id, inboxMessagesParams);
     try {
       await api.deleteInboxMessage(messageId);
-      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      queryClient.setQueryData(msgKey, (old: { messages?: any[] } | undefined) => ({
+        ...(old || {}),
+        messages: (old?.messages || []).map((m) =>
+          m.id === messageId ? { ...m, isDeleted: true, body: '' } : m
+        ),
+      }));
       setMenuOpenMsgId(null);
+      void invalidateInboxSurfaces();
       addToast({ type: 'success', title: 'Message Deleted', message: 'Message has been deleted' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Delete Failed', message: err.message });
@@ -774,6 +1029,17 @@ export default function LeadDetailPage() {
   }, [aiSummaryData?.summary, lead?.aiSummary, addToast]);
 
 
+  if (!leadIdStr) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 px-4 text-center">
+        <p className="text-gray-600 font-medium">Missing lead id in the URL.</p>
+        <button type="button" onClick={() => router.push('/leads')} className="text-sm text-brand-600 hover:text-brand-700">
+          Back to leads
+        </button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -785,13 +1051,51 @@ export default function LeadDetailPage() {
     );
   }
 
-  if (!lead) return (
-    <div className="flex flex-col items-center justify-center h-64 gap-3">
-      <svg className="h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-      <p className="text-gray-500 font-medium">Lead not found</p>
-      <button onClick={() => router.push('/leads')} className="text-sm text-brand-600 hover:text-brand-700">Back to leads</button>
-    </div>
-  );
+  if (leadQuery.isError) {
+    const errMsg = leadQuery.error instanceof Error ? leadQuery.error.message : 'Something went wrong loading this lead.';
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 px-4 text-center max-w-md mx-auto">
+        <p className="text-gray-800 font-medium">Could not load lead</p>
+        <p className="text-sm text-gray-600">{errMsg}</p>
+        <div className="text-xs text-gray-500 text-left w-full max-w-sm space-y-1.5">
+          <p>Ensure the backend is running.</p>
+          <p>
+            In <code className="bg-gray-100 px-1 rounded">.env.local</code>, set{' '}
+            <code className="bg-gray-100 px-1 rounded">BACKEND_URL</code> to your API base including{' '}
+            <code className="bg-gray-100 px-1 rounded">/api</code>:
+          </p>
+          <pre className="text-[11px] leading-snug bg-gray-100 px-2 py-1.5 rounded overflow-x-auto whitespace-pre font-mono">
+            http://localhost:4000/api
+          </pre>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => leadQuery.refetch()}
+            className="text-sm font-medium text-white bg-brand-600 hover:bg-brand-700 px-3 py-1.5 rounded-md"
+          >
+            Retry
+          </button>
+          <button type="button" onClick={() => router.push('/leads')} className="text-sm text-brand-600 hover:text-brand-700">
+            Back to leads
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!lead) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <svg className="h-12 w-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <p className="text-gray-500 font-medium">Lead not found</p>
+        <p className="text-xs text-gray-500 text-center max-w-sm px-4">
+          The lead may have been removed, moved to recycle bin, or you may not have access (e.g. it is assigned to someone else).
+        </p>
+        <button type="button" onClick={() => router.push('/leads')} className="text-sm text-brand-600 hover:text-brand-700">Back to leads</button>
+      </div>
+    );
+  }
 
   // Build stage flow from division's pipeline stages (excluding lost stage which is shown separately)
   const mainStages = pipelineStages.filter((s: any) => !s.isLostStage).sort((a: any, b: any) => a.order - b.order);
@@ -803,6 +1107,19 @@ export default function LeadDetailPage() {
   const displayConversionProb = typeof aiSignals?.conversionProb === 'number'
     ? aiSignals.conversionProb
     : lead.conversionProb;
+  const allOfferAssignments = (lead.campaignAssignments || [])
+    .slice()
+    .sort((a, b) => new Date(b.assignedAt).getTime() - new Date(a.assignedAt).getTime());
+  const activeOfferAssignments = allOfferAssignments.filter((assignment) =>
+    activeOfferStatuses.has(String(assignment?.status || ''))
+  );
+  const historicalOfferAssignments = allOfferAssignments.filter(
+    (assignment) => !activeOfferStatuses.has(String(assignment?.status || ''))
+  );
+
+  const leadCheckin = lead.leadCheckin;
+  const activeCheckinSessions = leadCheckin?.activeSessions ?? [];
+  const myCheckinSession = leadCheckin?.mySession ?? null;
 
   return (
     <div className="flex flex-col -m-3 sm:-m-4 md:-m-6 overflow-hidden" style={{ height: 'calc(100dvh - 3.5rem)' }}>
@@ -911,8 +1228,8 @@ export default function LeadDetailPage() {
                 if (!confirmed) return;
                 try {
                   await api.unblockLead(lead.id);
+                  await refreshLeadAndSyncLists();
                   addToast({ type: 'success', title: 'Lead Unblocked', message: 'Lead has been unblocked' });
-                  window.location.reload();
                 } catch (err: any) {
                   addToast({ type: 'error', title: 'Unblock Failed', message: err.message || 'Failed to unblock lead' });
                 }
@@ -924,6 +1241,107 @@ export default function LeadDetailPage() {
           )}
         </div>
       )}
+
+      {/* Check-in / check-out — who is actively on this lead */}
+      <div className="rounded-lg border border-gray-200 bg-gradient-to-r from-slate-50 to-white px-3 py-2.5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">On this lead</p>
+            {activeCheckinSessions.length === 0 ? (
+              <p className="text-sm text-gray-600">No one is checked in right now.</p>
+            ) : (
+              <ul className="mt-1 flex flex-wrap gap-2">
+                {activeCheckinSessions.map((s) => {
+                  const isMe = s.userId === currentUserId;
+                  const label = isMe ? 'You' : getLeadDisplayName(s.user);
+                  return (
+                    <li
+                      key={s.id}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-900"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden />
+                      {label}
+                      <span className="text-emerald-700/80 font-normal">
+                        {new Date(s.checkedInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {myCheckinSession && (
+              <p className="mt-1 text-[11px] text-gray-500">
+                Your session started {new Date(myCheckinSession.checkedInAt).toLocaleString()}.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2 sm:items-end sm:min-w-[200px]">
+            {!myCheckinSession ? (
+              <>
+                <input
+                  type="text"
+                  value={checkinNoteDraft}
+                  onChange={(e) => setCheckinNoteDraft(e.target.value)}
+                  placeholder="Optional note with check-in"
+                  maxLength={500}
+                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-800 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+                <button
+                  type="button"
+                  disabled={checkinBusy}
+                  onClick={async () => {
+                    if (!lead?.id) return;
+                    setCheckinBusy(true);
+                    try {
+                      const note = checkinNoteDraft.trim();
+                      await api.checkInLead(lead.id, note ? { note } : {});
+                      setCheckinNoteDraft('');
+                      await refreshLeadAndSyncLists();
+                      addToast({ type: 'success', title: 'Checked in', message: 'You are now checked in on this lead.' });
+                    } catch (err: any) {
+                      addToast({
+                        type: 'error',
+                        title: 'Check-in failed',
+                        message: err?.message || 'Could not check in.',
+                      });
+                    } finally {
+                      setCheckinBusy(false);
+                    }
+                  }}
+                  className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 sm:w-auto"
+                >
+                  {checkinBusy ? 'Checking in…' : 'Check in'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                disabled={checkinBusy}
+                onClick={async () => {
+                  if (!lead?.id) return;
+                  setCheckinBusy(true);
+                  try {
+                    await api.checkOutLead(lead.id);
+                    await refreshLeadAndSyncLists();
+                    addToast({ type: 'success', title: 'Checked out', message: 'Your session on this lead has ended.' });
+                  } catch (err: any) {
+                    addToast({
+                      type: 'error',
+                      title: 'Check-out failed',
+                      message: err?.message || 'Could not check out.',
+                    });
+                  } finally {
+                    setCheckinBusy(false);
+                  }
+                }}
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50 sm:w-auto"
+              >
+                {checkinBusy ? 'Checking out…' : 'Check out'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Stage Progress Bar */}
       {mainStages.length > 0 ? (
@@ -1197,6 +1615,71 @@ export default function LeadDetailPage() {
             )}
           </div>
 
+          {/* Offer Campaigns */}
+          <div className="card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">Offer Campaigns</h3>
+              <span className="text-xs text-gray-500">
+                {(lead.campaignAssignments || []).length} attached
+              </span>
+            </div>
+            {(lead.campaignAssignments || []).length === 0 ? (
+              <p className="text-sm text-gray-500">No active offers are attached to this lead yet.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {(lead.campaignAssignments || []).map((assignment) => {
+                  const status = assignment.status || 'ELIGIBLE';
+                  return (
+                    <div key={assignment.id} className="rounded-lg border border-gray-200 p-3 bg-white">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{assignment.campaign?.name || 'Campaign'}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            Assigned {new Date(assignment.assignedAt).toLocaleDateString()}
+                            {assignment.expiresAt ? ` · Expires ${new Date(assignment.expiresAt).toLocaleDateString()}` : ''}
+                          </p>
+                        </div>
+                        <span className="inline-flex items-center rounded-full bg-brand-50 text-brand-700 border border-brand-100 px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap">
+                          {offerLifecycleLabel[status] || status}
+                        </span>
+                      </div>
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        <div className="relative w-full sm:w-auto sm:min-w-[170px]">
+                          <select
+                            className="w-full appearance-none rounded-md border border-gray-300 bg-white py-1.5 pl-2.5 pr-8 text-xs leading-5 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 disabled:opacity-60"
+                            value={status}
+                            disabled={updatingOfferAssignmentId === assignment.id}
+                            onChange={(e) => handleOfferLifecycleUpdate(assignment.id, e.target.value)}
+                          >
+                            <option value="ELIGIBLE">Eligible</option>
+                            <option value="CONTACTED">Contacted</option>
+                            <option value="ACCEPTED">Accepted</option>
+                            <option value="REDEEMED">Redeemed</option>
+                            <option value="EXPIRED">Expired</option>
+                            <option value="REJECTED">Rejected</option>
+                          </select>
+                          <svg
+                            className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
+                        {assignment.notes && (
+                          <span className="text-xs text-gray-500 truncate max-w-full">
+                            Note: {assignment.notes}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* AI Lead Summary */}
           <div className="card p-4">
             <div className="mb-3 flex items-start justify-between gap-2">
@@ -1370,21 +1853,115 @@ export default function LeadDetailPage() {
           </div>
 
           {/* Tags */}
-          {lead.tags && lead.tags.length > 0 && (
-            <div className="card p-4">
-              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
-                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
-                Tags
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {lead.tags.map((t) => (
-                  <span key={t.tag.id} className="badge px-3 py-1" style={{ backgroundColor: t.tag.color + '20', color: t.tag.color, border: `1px solid ${t.tag.color}40` }}>
-                    {t.tag.name}
+          <div className="card p-4">
+            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-1.5">
+              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>
+              Tags
+            </h3>
+
+            <div className="flex flex-wrap gap-2 mb-3">
+              {(lead.tags || []).length > 0 ? (
+                (lead.tags || []).map((t: any) => (
+                  <span
+                    key={t?.tag?.id || t?.id}
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+                    style={{
+                      backgroundColor: `${t?.tag?.color || '#6366f1'}20`,
+                      color: t?.tag?.color || '#6366f1',
+                      border: `1px solid ${(t?.tag?.color || '#6366f1')}40`,
+                    }}
+                  >
+                    {t?.tag?.name || t?.name || 'Tag'}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(t?.tag?.id || t?.id)}
+                      disabled={tagBusy}
+                      className="rounded-full p-0.5 hover:bg-black/10 disabled:opacity-50"
+                      title="Remove tag"
+                    >
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </span>
-                ))}
-              </div>
+                ))
+              ) : (
+                <span className="text-sm text-gray-500">No tags assigned yet.</span>
+              )}
             </div>
-          )}
+
+            <div className="relative">
+              <div className="flex gap-2">
+                <input
+                  value={tagInput}
+                  onChange={(e) => {
+                    setTagInput(e.target.value);
+                    setTagPickerOpen(true);
+                  }}
+                  onFocus={() => setTagPickerOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const normalized = tagInput.trim().toLowerCase();
+                      const existing = availableTags.find((tag) => tag.name.toLowerCase() === normalized);
+                      if (existing) {
+                        handleAddExistingTag(existing.id);
+                      } else if (normalized) {
+                        handleCreateAndAddTag();
+                      }
+                    }
+                    if (e.key === 'Escape') setTagPickerOpen(false);
+                  }}
+                  placeholder="Add tag: search existing or type new name"
+                  className="input text-sm"
+                  disabled={tagBusy}
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateAndAddTag}
+                  disabled={tagBusy || !tagInput.trim()}
+                  className="btn btn-secondary text-sm whitespace-nowrap disabled:opacity-50"
+                >
+                  {tagBusy ? 'Saving…' : 'Add Tag'}
+                </button>
+              </div>
+
+              {tagPickerOpen && (
+                <div className="absolute z-20 mt-1 max-h-52 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                  {availableTags
+                    .filter((tag) => !(lead.tags || []).some((t: any) => (t?.tag?.id || t?.id) === tag.id))
+                    .filter((tag) => !tagInput.trim() || tag.name.toLowerCase().includes(tagInput.trim().toLowerCase()))
+                    .slice(0, 12)
+                    .map((tag) => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleAddExistingTag(tag.id);
+                        }}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        disabled={tagBusy}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tag.color || '#6366f1' }} />
+                          <span>{tag.name}</span>
+                        </span>
+                        <span className="text-xs text-gray-400">Add</span>
+                      </button>
+                    ))}
+                  {availableTags
+                    .filter((tag) => !(lead.tags || []).some((t: any) => (t?.tag?.id || t?.id) === tag.id))
+                    .filter((tag) => !tagInput.trim() || tag.name.toLowerCase().includes(tagInput.trim().toLowerCase()))
+                    .length === 0 && (
+                    <div className="px-3 py-2 text-sm text-gray-500">
+                      {tagInput.trim() ? 'No matching tags. Click "Add Tag" to create this tag.' : 'No more tags available.'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Assignment Panel */}
           <ReassignmentPanel
@@ -1393,7 +1970,7 @@ export default function LeadDetailPage() {
             currentUserId={currentUserId}
             onReassign={async (leadId: string, assignedToId: string, reason?: string) => {
               await api.reassignLead(leadId, assignedToId, reason);
-              refreshLead();
+              await refreshLeadAndSyncLists();
             }}
             assignmentHistory={assignmentHistory}
           />
@@ -1405,7 +1982,20 @@ export default function LeadDetailPage() {
               Timestamps
             </h3>
             <InfoRow label="Created" value={lead.createdAt ? `${new Date(lead.createdAt).toLocaleString()} (${formatTimeAgo(lead.createdAt)})` : '-'} />
-            <InfoRow label="Updated" value={lead.updatedAt ? `${new Date(lead.updatedAt).toLocaleString()} (${formatTimeAgo(lead.updatedAt)})` : '-'} />
+            <InfoRow
+              label="Last activity"
+              value={lead.updatedAt ? `${new Date(lead.updatedAt).toLocaleString()} (${formatTimeAgo(lead.updatedAt)})` : '-'}
+            />
+            {(lead as Lead).lastOpenedAt ? (
+              <InfoRow
+                label="Last opened"
+                value={`${new Date((lead as Lead).lastOpenedAt!).toLocaleString()} (${formatTimeAgo((lead as Lead).lastOpenedAt!)})${
+                  (lead as Lead).lastOpenedBy
+                    ? ` · ${(lead as Lead).lastOpenedBy!.firstName || ''} ${(lead as Lead).lastOpenedBy!.lastName || ''}`.trim()
+                    : ''
+                }`}
+              />
+            ) : null}
             {(lead as any).firstRespondedAt && (
               <InfoRow label="First Response" value={`${new Date((lead as any).firstRespondedAt).toLocaleString()} (${formatTimeAgo((lead as any).firstRespondedAt)})`} />
             )}
@@ -1436,7 +2026,11 @@ export default function LeadDetailPage() {
             ] as const).map((tab) => (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  if (tab.key !== 'call_logs') setFocusCallLogId(null);
+                }}
                 className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === tab.key ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
@@ -1455,10 +2049,55 @@ export default function LeadDetailPage() {
                 {lead.activities && lead.activities.length > 0 ? (
                   <div className="relative">
                     <div className="absolute left-4 top-2 bottom-2 w-0.5 bg-gray-200" />
-                    {lead.activities.map((activity, i) => {
+                    {lead.activities.map((activity) => {
                       const iconInfo = activityIcons[activity.type] || { icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-gray-500 bg-gray-100' };
+                      const goToTab = getTabForActivityType(activity.type);
+                      const linkedCallLogId =
+                        goToTab === 'call_logs' ? getCallLogIdFromMetadata(activity.metadata) : undefined;
+                      const tabHint =
+                        goToTab === 'notes'
+                          ? 'Open Notes'
+                          : goToTab === 'tasks'
+                            ? 'Open Tasks'
+                            : goToTab === 'communications'
+                              ? 'Open Communications'
+                              : goToTab === 'call_logs'
+                                ? linkedCallLogId
+                                  ? 'View this call in Call logs'
+                                  : 'Open Call logs'
+                                : undefined;
+                      const rowClass = goToTab
+                        ? 'relative flex gap-4 py-3 rounded-lg -mx-2 px-2 cursor-pointer hover:bg-gray-50 transition-colors text-left w-full border-0 bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2'
+                        : 'relative flex gap-4 py-3';
+      const activateRow = () => {
+        if (!goToTab) return;
+        releaseUiFocusBeforeTabSwitch();
+        if (goToTab === 'call_logs') {
+          setFocusCallLogId(linkedCallLogId ?? null);
+        } else {
+          setFocusCallLogId(null);
+        }
+        setActiveTab(goToTab);
+      };
                       return (
-                        <div key={activity.id} className="relative flex gap-4 py-3">
+                        <div
+                          key={activity.id}
+                          className={rowClass}
+                          role={goToTab ? 'button' : undefined}
+                          tabIndex={goToTab ? 0 : undefined}
+                          title={tabHint}
+                          onClick={goToTab ? activateRow : undefined}
+                          onKeyDown={
+                            goToTab
+                              ? (e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    activateRow();
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
                           <div className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${iconInfo.color}`}>
                             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={iconInfo.icon} /></svg>
                           </div>
@@ -1466,6 +2105,12 @@ export default function LeadDetailPage() {
                             <p className="text-sm text-gray-900">{activity.description}</p>
                             <p className="text-xs text-gray-500 mt-0.5">
                               {activity.user ? `${activity.user.firstName} ${activity.user.lastName}` : 'System'} · {formatTimeAgo(activity.createdAt)}
+                              {goToTab ? (
+                                <span className="text-brand-600 font-medium">
+                                  {' '}
+                                  · {linkedCallLogId ? 'View call log' : `Open ${tabHint?.replace(/^Open /, '') || 'tab'}`}
+                                </span>
+                              ) : null}
                             </p>
                           </div>
                         </div>
@@ -1481,17 +2126,66 @@ export default function LeadDetailPage() {
             {/* Notes */}
             {activeTab === 'notes' && (
               <div className="space-y-4">
-                <div className="flex gap-2">
-                  <div className="flex-1">
+                <div className="flex flex-col gap-2 sm:flex-row sm:gap-2">
+                  <div className="flex-1 space-y-2">
                     <textarea
                       className="input w-full"
                       rows={3}
-                      placeholder="Write a note... (e.g. meeting summary, follow-up plan)"
+                      placeholder="Write a note... (e.g. meeting summary, follow-up plan). You can attach files below."
                       value={noteContent}
                       onChange={(e) => setNoteContent(e.target.value)}
                     />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        ref={noteFileInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        id="lead-note-files"
+                        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.jpg,.jpeg,.png,.gif,.webp,.mp4,.webm"
+                        onChange={(e) => {
+                          const list = e.target.files ? Array.from(e.target.files) : [];
+                          setNoteAttachments((prev) => [...prev, ...list]);
+                        }}
+                      />
+                      <label
+                        htmlFor="lead-note-files"
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                        </svg>
+                        Attach files
+                      </label>
+                      {noteAttachments.length > 0 && (
+                        <ul className="flex flex-wrap gap-1.5 text-xs text-gray-600">
+                          {noteAttachments.map((f, i) => (
+                            <li
+                              key={`${f.name}-${f.size}-${i}`}
+                              className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5"
+                            >
+                              <span className="max-w-[140px] truncate">{f.name}</span>
+                              <button
+                                type="button"
+                                className="text-gray-500 hover:text-red-600"
+                                aria-label={`Remove ${f.name}`}
+                                onClick={() =>
+                                  setNoteAttachments((prev) => prev.filter((_, j) => j !== i))
+                                }
+                              >
+                                ×
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   </div>
-                  <button onClick={handleAddNote} disabled={!noteContent.trim()} className="btn-primary self-end disabled:opacity-50">
+                  <button
+                    onClick={handleAddNote}
+                    disabled={!noteContent.trim() && noteAttachments.length === 0}
+                    className="btn-primary self-end shrink-0 disabled:opacity-50"
+                  >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
                   </button>
                 </div>
@@ -1514,6 +2208,28 @@ export default function LeadDetailPage() {
                         )}
                       </div>
                       <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{note.content}</p>
+                      {note.attachments && note.attachments.length > 0 && (
+                        <ul className="mt-3 flex flex-col gap-1.5 border-t border-gray-100 pt-3">
+                          {note.attachments.map((att) => (
+                            <li key={att.id}>
+                              <a
+                                href={noteAttachmentHref(att.url || `/inbox/attachments/file/${att.id}`)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 text-xs font-medium text-brand-600 hover:text-brand-800 hover:underline"
+                              >
+                                <svg className="h-4 w-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <span className="truncate">{att.filename}</span>
+                                <span className="flex-shrink-0 text-gray-400 font-normal">
+                                  ({att.size >= 1024 ? `${(att.size / 1024).toFixed(1)} KB` : `${att.size} B`})
+                                </span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   ))
                 ) : (
@@ -1551,7 +2267,7 @@ export default function LeadDetailPage() {
                         <input
                           type="checkbox"
                           checked={task.status === 'COMPLETED'}
-                          onChange={() => api.completeTask(task.id).then(() => refreshLead())}
+                          onChange={() => api.completeTask(task.id).then(() => refreshLeadAndSyncLists())}
                           className="h-4 w-4 rounded border-gray-300 text-brand-600"
                         />
                         <div className="flex-1 min-w-0">
@@ -1578,7 +2294,7 @@ export default function LeadDetailPage() {
             {activeTab === 'call_logs' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-gray-700">Call History</h3>
+                  <h3 className="text-sm font-semibold text-gray-700 select-none">Call History</h3>
                   <button onClick={() => setShowCallLogModal(true)} className="btn-primary text-xs gap-1.5">
                     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
                     Log Call
@@ -1631,8 +2347,16 @@ export default function LeadDetailPage() {
                         PROPOSAL_REQUESTED: 'Proposal Requested', DO_NOT_CALL: 'Do Not Call',
                         OTHER: 'Other',
                       };
+                      const isFocused = String(focusCallLogId) === String(log.id);
                       return (
-                        <div key={log.id} className={`p-4 rounded-lg border ${style.border} ${style.bg}`}>
+                        <div
+                          key={log.id}
+                          id={`call-log-row-${log.id}`}
+                          tabIndex={-1}
+                          className={`scroll-mt-6 p-4 rounded-lg border outline-none transition-shadow duration-300 ${style.border} ${style.bg} ${
+                            isFocused ? 'ring-[3px] ring-brand-500 ring-offset-2 shadow-md z-[1] relative' : ''
+                          }`}
+                        >
                           <div className="flex items-start justify-between">
                             <div className="flex items-center gap-2">
                               <svg className={`h-5 w-5 ${style.text}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
@@ -1825,7 +2549,9 @@ export default function LeadDetailPage() {
                                   {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                                     <div className="space-y-1.5">
                                       {msg.metadata.attachments.map((att: any, ai: number) => {
-                                        const url = att.url ? `/api${att.url}` : null;
+                                        const url = att.url
+                                          ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                                          : null;
                                         if (!url) return null;
 
                                         if (att.mimeType?.startsWith('image/')) {
@@ -1872,7 +2598,22 @@ export default function LeadDetailPage() {
 
                               {/* Footer: time, channel, edited badge */}
                               {!isEditing && (
-                                <div className="flex items-center gap-1 mt-1 justify-end">
+                                <div className="flex flex-col items-stretch gap-1 mt-1">
+                                  {msg.channel === 'PHONE' && getCallLogIdFromMetadata(msg.metadata) && (
+                                    <button
+                                      type="button"
+                                      className="text-left text-[11px] font-semibold text-brand-700 hover:text-brand-900 hover:underline"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        releaseUiFocusBeforeTabSwitch();
+                                        setFocusCallLogId(getCallLogIdFromMetadata(msg.metadata)!);
+                                        setActiveTab('call_logs');
+                                      }}
+                                    >
+                                      View call log
+                                    </button>
+                                  )}
+                                  <div className="flex items-center gap-1 justify-end">
                                   <ChatChannelBadge channel={platformLabel} isOutbound={false} />
                                   {msg.isEdited && !msg.isDeleted && (
                                     <span className="text-[10px] text-gray-400 italic">edited</span>
@@ -1892,6 +2633,7 @@ export default function LeadDetailPage() {
                                       <path d="M10.91 3.316l-.478-.372a.365.365 0 00-.51.063L4.566 9.88a.32.32 0 01-.484.032L1.892 7.77a.366.366 0 00-.516.005l-.423.433a.364.364 0 00.006.514l3.255 3.185a.32.32 0 00.484-.033l6.272-8.048a.365.365 0 00-.063-.51z" />
                                     </svg>
                                   )}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -2065,6 +2807,69 @@ export default function LeadDetailPage() {
             <div className="flex gap-2">
               <button onClick={() => setShowConvertModal(false)} className="btn-secondary flex-1">Cancel</button>
               <button onClick={handleConvertToWon} className="btn-primary flex-1 bg-green-600 hover:bg-green-700">Convert</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOfferHistoryModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowOfferHistoryModal(false)}
+        >
+          <div className="card w-full max-w-4xl max-h-[84vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Offer History</h2>
+                <p className="text-sm text-gray-500">Historical offers for this lead (read-only)</p>
+              </div>
+              <button
+                type="button"
+                className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+                onClick={() => setShowOfferHistoryModal(false)}
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              {historicalOfferAssignments.length === 0 ? (
+                <p className="text-sm text-gray-500">No historical offers found.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px]">
+                    <thead>
+                      <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3">Campaign</th>
+                        <th className="py-2 pr-3">Status</th>
+                        <th className="py-2 pr-3">Assigned</th>
+                        <th className="py-2 pr-3">Expires</th>
+                        <th className="py-2 pr-3">Lifecycle Dates</th>
+                        <th className="py-2 pr-0">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicalOfferAssignments.map((assignment) => (
+                        <tr key={assignment.id} className="border-b border-gray-50">
+                          <td className="py-2 pr-3">
+                            <div className="font-medium text-gray-900">{assignment.campaign?.name || 'Campaign'}</div>
+                            <div className="text-xs text-gray-500">{assignment.campaign?.type || '—'}</div>
+                          </td>
+                          <td className="py-2 pr-3 text-sm text-gray-600">{offerLifecycleLabel[assignment.status] || assignment.status}</td>
+                          <td className="py-2 pr-3 text-sm text-gray-600">{assignment.assignedAt ? new Date(assignment.assignedAt).toLocaleDateString() : '—'}</td>
+                          <td className="py-2 pr-3 text-sm text-gray-600">{assignment.expiresAt ? new Date(assignment.expiresAt).toLocaleDateString() : '—'}</td>
+                          <td className="py-2 pr-3 text-xs text-gray-500">
+                            {assignment.discussedAt ? `Discussed ${new Date(assignment.discussedAt).toLocaleDateString()}` : '—'}
+                            {assignment.redeemedAt ? ` · Redeemed ${new Date(assignment.redeemedAt).toLocaleDateString()}` : ''}
+                          </td>
+                          <td className="py-2 pr-0 text-sm text-gray-600 max-w-[260px] truncate">{assignment.notes || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

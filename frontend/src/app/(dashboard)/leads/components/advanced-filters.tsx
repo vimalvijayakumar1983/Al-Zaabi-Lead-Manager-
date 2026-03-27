@@ -12,6 +12,12 @@ export interface FilterState {
   maxScore: string;
   dateFrom: string;
   dateTo: string;
+  /** Meaningful activity only (edits, calls, tasks, etc.) — maps to lead.updatedAt; not mere page views. */
+  updatedFrom: string;
+  updatedTo: string;
+  /** When the lead record was last opened in the app (detail view); does not change updatedAt. */
+  lastOpenedFrom: string;
+  lastOpenedTo: string;
   // Extended fields
   company: string;
   jobTitle: string;
@@ -29,6 +35,9 @@ export interface FilterState {
   callOutcome: string;      // comma-separated CallDisposition values
   callOutcomeReason: string; // comma-separated latest-call reason labels/keys
   callOutcomeMode: string;   // latest | any (analytics drill-down)
+  /** Date of the latest call (same log as Last Call Outcome). */
+  lastCallFrom: string;
+  lastCallTo: string;
   minCallCount: string;
   maxCallCount: string;
   divisionId: string;
@@ -44,6 +53,10 @@ export const emptyFilters: FilterState = {
   maxScore: '',
   dateFrom: '',
   dateTo: '',
+  updatedFrom: '',
+  updatedTo: '',
+  lastOpenedFrom: '',
+  lastOpenedTo: '',
   company: '',
   jobTitle: '',
   location: '',
@@ -60,6 +73,8 @@ export const emptyFilters: FilterState = {
   callOutcome: '',
   callOutcomeReason: '',
   callOutcomeMode: '',
+  lastCallFrom: '',
+  lastCallTo: '',
   minCallCount: '',
   maxCallCount: '',
   divisionId: '',
@@ -354,13 +369,14 @@ export function AdvancedFilters({
   // Count active filters per section
   const sectionCounts = {
     statusPipeline: [local.status, local.stageId, local.source, local.divisionId].filter(Boolean).length,
-    callOutcome: local.callOutcome ? parseMulti(local.callOutcome).length : 0,
+    callOutcome: (local.callOutcome ? parseMulti(local.callOutcome).length : 0)
+      + (local.lastCallFrom || local.lastCallTo ? 1 : 0),
     callActivity: [local.minCallCount, local.maxCallCount].filter(Boolean).length,
     assignmentContact: [local.assignedToId, local.hasEmail, local.hasPhone].filter(Boolean).length,
     scoreValue: [local.minScore, local.maxScore, local.budgetMin, local.budgetMax, local.conversionMin, local.conversionMax].filter(Boolean).length,
     textSearch: [local.company, local.jobTitle, local.location, local.campaign, local.productInterest].filter(Boolean).length,
     tags: local.tags ? 1 : 0,
-    dateRange: [local.dateFrom, local.dateTo].filter(Boolean).length,
+    dateRange: [local.dateFrom, local.dateTo, local.updatedFrom, local.updatedTo, local.lastOpenedFrom, local.lastOpenedTo].filter(Boolean).length,
   };
 
   // Tag handling
@@ -418,7 +434,7 @@ export function AdvancedFilters({
   };
 
   const handleApplyView = (view: SavedView) => {
-    setLocal({ ...view.filters });
+    setLocal({ ...emptyFilters, ...view.filters });
   };
 
   const handleDeleteView = (id: string) => {
@@ -757,6 +773,21 @@ export function AdvancedFilters({
                 Clear selection ({selectedCallOutcomes.length})
               </button>
             )}
+
+            <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+              <label className="label">Last call date</label>
+              <p className="text-xs text-gray-500">Uses the same latest call as &quot;Last Call Outcome&quot; (leads with no calls are excluded).</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="label text-2xs text-gray-500">From</label>
+                  <input type="date" className="input" value={local.lastCallFrom} onChange={(e) => setLocal({ ...local, lastCallFrom: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label text-2xs text-gray-500">To</label>
+                  <input type="date" className="input" value={local.lastCallTo} onChange={(e) => setLocal({ ...local, lastCallTo: e.target.value })} />
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1026,9 +1057,10 @@ export function AdvancedFilters({
 
       {/* Section 6: Date Range */}
       <div className="border border-gray-200 rounded-lg overflow-hidden">
-        <SectionHeader title="Date Range" icon={<CalendarIcon />} count={sectionCounts.dateRange} open={openSections.dateRange} onToggle={() => toggleSection('dateRange')} />
+        <SectionHeader title="Dates" icon={<CalendarIcon />} count={sectionCounts.dateRange} open={openSections.dateRange} onToggle={() => toggleSection('dateRange')} />
         {openSections.dateRange && (
-          <div className="p-4 space-y-3">
+          <div className="p-4 space-y-4">
+            <p className="text-2xs font-semibold text-gray-500 uppercase tracking-wide">Created date</p>
             {/* Quick date presets */}
             <div>
               <label className="label mb-1.5">Quick Presets</label>
@@ -1061,6 +1093,36 @@ export function AdvancedFilters({
               <div>
                 <label className="label">Created To</label>
                 <input type="date" className="input" value={local.dateTo} onChange={(e) => setLocal({ ...local, dateTo: e.target.value })} />
+              </div>
+            </div>
+
+            <div className="border-t border-gray-100 pt-4 space-y-3">
+              <p className="text-2xs font-semibold text-gray-500 uppercase tracking-wide">Last updated</p>
+              <p className="text-xs text-gray-500">Filter by when the lead was last modified (same as the Updated column).</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Updated From</label>
+                  <input type="date" className="input" value={local.updatedFrom} onChange={(e) => setLocal({ ...local, updatedFrom: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Updated To</label>
+                  <input type="date" className="input" value={local.updatedTo} onChange={(e) => setLocal({ ...local, updatedTo: e.target.value })} />
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-100 pt-4 space-y-3">
+              <p className="text-2xs font-semibold text-gray-500 uppercase tracking-wide">Last opened</p>
+              <p className="text-xs text-gray-500">Filter by when someone last opened the lead detail page (same as the Last opened column). Leads never opened are excluded when a range is set.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Opened from</label>
+                  <input type="date" className="input" value={local.lastOpenedFrom} onChange={(e) => setLocal({ ...local, lastOpenedFrom: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Opened to</label>
+                  <input type="date" className="input" value={local.lastOpenedTo} onChange={(e) => setLocal({ ...local, lastOpenedTo: e.target.value })} />
+                </div>
               </div>
             </div>
           </div>
@@ -1141,8 +1203,12 @@ export function FilterBadges({
   }
   if (filters.minScore) badges.push({ key: 'minScore', label: `Score >= ${filters.minScore}` });
   if (filters.maxScore) badges.push({ key: 'maxScore', label: `Score <= ${filters.maxScore}` });
-  if (filters.dateFrom) badges.push({ key: 'dateFrom', label: `From: ${filters.dateFrom}` });
-  if (filters.dateTo) badges.push({ key: 'dateTo', label: `To: ${filters.dateTo}` });
+  if (filters.dateFrom) badges.push({ key: 'dateFrom', label: `Created from: ${filters.dateFrom}` });
+  if (filters.dateTo) badges.push({ key: 'dateTo', label: `Created to: ${filters.dateTo}` });
+  if (filters.updatedFrom) badges.push({ key: 'updatedFrom', label: `Updated from: ${filters.updatedFrom}` });
+  if (filters.updatedTo) badges.push({ key: 'updatedTo', label: `Updated to: ${filters.updatedTo}` });
+  if (filters.lastOpenedFrom) badges.push({ key: 'lastOpenedFrom', label: `Last opened from: ${filters.lastOpenedFrom}` });
+  if (filters.lastOpenedTo) badges.push({ key: 'lastOpenedTo', label: `Last opened to: ${filters.lastOpenedTo}` });
   if (filters.company) badges.push({ key: 'company', label: `Company: ${filters.company}` });
   if (filters.jobTitle) badges.push({ key: 'jobTitle', label: `Title: ${filters.jobTitle}` });
   if (filters.location) badges.push({ key: 'location', label: `Location: ${filters.location}` });
@@ -1164,6 +1230,8 @@ export function FilterBadges({
     badges.push({ key: 'callOutcome', label: outcomes.length > 2 ? `Call Outcome: ${outcomes.length} selected` : `Call Outcome: ${outcomeLabels.join(', ')}` });
   }
   if (filters.callOutcomeReason) badges.push({ key: 'callOutcomeReason', label: `Reason: ${filters.callOutcomeReason}` });
+  if (filters.lastCallFrom) badges.push({ key: 'lastCallFrom', label: `Last call from: ${filters.lastCallFrom}` });
+  if (filters.lastCallTo) badges.push({ key: 'lastCallTo', label: `Last call to: ${filters.lastCallTo}` });
   if (filters.divisionId) {
     let divName = filters.divisionId;
     try {

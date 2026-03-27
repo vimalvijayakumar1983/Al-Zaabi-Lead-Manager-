@@ -55,14 +55,32 @@ const SLA_CHECK_INTERVAL = 2 * 60 * 1000;
 let slaInterval = null;
 
 /**
+ * Ensure SLA minute thresholds are positive integers so elapsed / breach never yields NaN/Infinity.
+ */
+function sanitizeSLAThresholds(raw) {
+  const d = DEFAULT_SLA_CONFIG.thresholds;
+  const n = (v, fallback) => {
+    const x = Number(v);
+    return Number.isFinite(x) && x >= 1 ? Math.floor(x) : fallback;
+  };
+  return {
+    warningMinutes: n(raw?.warningMinutes, d.warningMinutes),
+    breachMinutes: n(raw?.breachMinutes, d.breachMinutes),
+    escalationMinutes: n(raw?.escalationMinutes, d.escalationMinutes),
+    reassignMinutes: n(raw?.reassignMinutes, d.reassignMinutes),
+  };
+}
+
+/**
  * Get SLA configuration for an organization, merged with defaults.
  */
 function getSLAConfig(orgSettings) {
   const sla = orgSettings?.sla || {};
+  const mergedThresholds = { ...DEFAULT_SLA_CONFIG.thresholds, ...(sla.thresholds || {}) };
   return {
     ...DEFAULT_SLA_CONFIG,
     ...sla,
-    thresholds: { ...DEFAULT_SLA_CONFIG.thresholds, ...(sla.thresholds || {}) },
+    thresholds: sanitizeSLAThresholds(mergedThresholds),
     actions: { ...DEFAULT_SLA_CONFIG.actions, ...(sla.actions || {}) },
     excludeStatuses: sla.excludeStatuses || DEFAULT_SLA_CONFIG.excludeStatuses,
   };
@@ -80,10 +98,14 @@ function calculateSLAStatus(lead, config) {
   const now = new Date();
   const createdAt = new Date(lead.createdAt);
   const elapsedMs = now.getTime() - createdAt.getTime();
+  if (!Number.isFinite(elapsedMs)) {
+    return { status: 'ON_TIME', elapsedMinutes: 0, percentUsed: 0, tier: 0 };
+  }
   const elapsedMinutes = elapsedMs / (60 * 1000);
 
   const { warningMinutes, breachMinutes, escalationMinutes, reassignMinutes } = config.thresholds;
-  const percentUsed = Math.round((elapsedMinutes / breachMinutes) * 100);
+  const safeBreach = Math.max(1, breachMinutes || DEFAULT_SLA_CONFIG.thresholds.breachMinutes);
+  const percentUsed = Math.min(100, Math.round((elapsedMinutes / safeBreach) * 100));
 
   if (elapsedMinutes >= reassignMinutes) {
     return { status: 'ESCALATED', elapsedMinutes, percentUsed, tier: 3 };
@@ -306,40 +328,46 @@ function stopSLAMonitor() {
  * Get SLA status summary for a single lead (used by API endpoints).
  */
 function getLeadSLAInfo(lead, orgSettings) {
-  const config = getSLAConfig(orgSettings);
+  try {
+    const config = getSLAConfig(orgSettings);
 
-  if (!config.enabled) {
-    return { enabled: false };
-  }
+    if (!config.enabled) {
+      return { enabled: false };
+    }
 
-  if (lead.firstRespondedAt) {
-    const respondedInMs = new Date(lead.firstRespondedAt).getTime() - new Date(lead.createdAt).getTime();
-    const respondedInMinutes = Math.round(respondedInMs / 60000);
-    const withinSLA = respondedInMinutes <= config.thresholds.breachMinutes;
+    if (lead.firstRespondedAt) {
+      const respondedInMs = new Date(lead.firstRespondedAt).getTime() - new Date(lead.createdAt).getTime();
+      const respondedInMinutes = Number.isFinite(respondedInMs) ? Math.round(respondedInMs / 60000) : 0;
+      const withinSLA = respondedInMinutes <= config.thresholds.breachMinutes;
+      return {
+        enabled: true,
+        status: 'RESPONDED',
+        respondedInMinutes,
+        withinSLA,
+        thresholds: config.thresholds,
+        escalationLevel: lead.escalationLevel || 0,
+      };
+    }
+
+    const calc = calculateSLAStatus(lead, config);
+    const breach = config.thresholds.breachMinutes;
+    const timeRemainingMinutes = Math.max(0, breach - calc.elapsedMinutes);
+
     return {
       enabled: true,
-      status: 'RESPONDED',
-      respondedInMinutes,
-      withinSLA,
+      status: calc.status,
+      elapsedMinutes: Math.round(calc.elapsedMinutes),
+      percentUsed: Math.min(Number.isFinite(calc.percentUsed) ? calc.percentUsed : 0, 100),
+      timeRemainingMinutes: Math.round(timeRemainingMinutes),
       thresholds: config.thresholds,
       escalationLevel: lead.escalationLevel || 0,
+      slaBreachedAt: lead.slaBreachedAt,
+      lastEscalatedAt: lead.lastEscalatedAt,
     };
+  } catch (err) {
+    logger.warn('getLeadSLAInfo failed', { leadId: lead?.id, message: err?.message });
+    return { enabled: false };
   }
-
-  const calc = calculateSLAStatus(lead, config);
-  const timeRemainingMinutes = Math.max(0, config.thresholds.breachMinutes - calc.elapsedMinutes);
-
-  return {
-    enabled: true,
-    status: calc.status,
-    elapsedMinutes: Math.round(calc.elapsedMinutes),
-    percentUsed: Math.min(calc.percentUsed, 100),
-    timeRemainingMinutes: Math.round(timeRemainingMinutes),
-    thresholds: config.thresholds,
-    escalationLevel: lead.escalationLevel || 0,
-    slaBreachedAt: lead.slaBreachedAt,
-    lastEscalatedAt: lead.lastEscalatedAt,
-  };
 }
 
 module.exports = {

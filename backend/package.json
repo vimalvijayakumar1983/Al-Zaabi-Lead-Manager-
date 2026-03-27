@@ -5,15 +5,21 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "build": "npx prisma generate && npx prisma migrate deploy",
+    "build": "npx prisma generate --schema prisma/schema.prisma && npx prisma migrate deploy",
     "dev": "nodemon src/index.js",
-    "prisma:generate": "npx prisma generate",
+    "prisma:generate": "npx prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "npx prisma migrate dev",
     "prisma:seed": "node prisma/seed.js",
+    "prisma:seed-incentives": "node prisma/seed-incentives-demo.js",
     "test": "jest --coverage",
     "lint": "eslint src/"
   },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1016.0",
+    "@aws-sdk/s3-request-presigner": "^3.1016.0",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

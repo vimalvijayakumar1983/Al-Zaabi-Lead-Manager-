@@ -1,9 +1,28 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
+
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
+import {
+  buildLeadsListParams,
+  useCallOutcomeOptions,
+  useDispositionStudioQuery,
+  useLeadSourcesQuery,
+  useLeadsCustomFieldsQuery,
+  useLeadsDashboardQuery,
+  useLeadsStatsQuery,
+  useLeadsFieldConfigQuery,
+  useLeadsInvalidate,
+  useLeadsListQuery,
+  useLeadsMeQuery,
+  useLeadsPipelineStagesQuery,
+  useLeadsTagsQuery,
+  useLeadsUsersQuery,
+} from '@/features/leads/hooks/useLeadsQueries';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import Link from 'next/link';
 import type { Lead, PaginatedResponse, User, CustomField } from '@/types';
@@ -19,6 +38,7 @@ import { WorkloadDashboard } from './components/WorkloadDashboard';
 import { RefreshButton } from '@/components/RefreshButton';
 import { useNotificationStore } from '@/store/notificationStore';
 import { premiumConfirm } from '@/lib/premiumDialogs';
+import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -85,7 +105,7 @@ type ViewMode = 'table' | 'cards' | 'kanban';
 const DRILLDOWN_FILTER_KEYS: (keyof FilterState)[] = [
   'status', 'source', 'assignedToId', 'stageId', 'campaign',
   'minScore', 'maxScore', 'search', 'company', 'location',
-  'callOutcome', 'callOutcomeReason', 'callOutcomeMode', 'divisionId',
+  'callOutcome', 'callOutcomeReason', 'callOutcomeMode', 'lastCallFrom', 'lastCallTo', 'divisionId',
 ];
 
 // ─── Phone formatting - auto-add UAE country code if missing ────
@@ -111,6 +131,25 @@ const getInitials = (lead: { firstName?: string; lastName?: string }) => {
   const parts = name.split(/\s+/).filter(Boolean);
   if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
   return (parts[0]?.[0] || '?').toUpperCase();
+};
+
+// Deterministic avatar colour from the lead id so each lead always gets the same colour
+const AVATAR_PALETTE = [
+  'from-violet-400 to-violet-600',
+  'from-blue-400 to-blue-600',
+  'from-cyan-400 to-cyan-600',
+  'from-emerald-400 to-emerald-600',
+  'from-amber-400 to-amber-600',
+  'from-rose-400 to-rose-600',
+  'from-pink-400 to-pink-600',
+  'from-indigo-400 to-indigo-600',
+  'from-teal-400 to-teal-600',
+  'from-orange-400 to-orange-600',
+];
+const getAvatarGradient = (id: string) => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
 };
 
 // ─── Time Formatting ─────────────────────────────────────────────
@@ -217,11 +256,28 @@ function LeadsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const addToast = useNotificationStore((s) => s.addToast);
   const analyticsScope = searchParams.get('analyticsScope');
+  const { invalidateList, invalidateListAndDashboard, invalidateDashboard } = useLeadsInvalidate();
+
+  const prefetchLeadDetail = useCallback(
+    (leadId: string) => {
+      queryClient.prefetchQuery({
+        queryKey: queryKeys.leads.detail(leadId),
+        queryFn: () => api.getLead(leadId, { skipLastOpened: true }),
+        staleTime: 30_000,
+      });
+    },
+    [queryClient]
+  );
+
+  const divisionScope = useMemo(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
+    []
+  );
 
   // ─── State ──────────────────────────────────────────────────────
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [pagination, setPagination] = useState(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -234,8 +290,7 @@ function LeadsContent() {
     }
     return { total: 0, page: 1, limit: 20, totalPages: 1 };
   });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   // ─── Restore view state from sessionStorage (survives lead detail navigation) ──
   const restoredViewState = useRef<{
     filters?: FilterState; sortBy?: string; sortOrder?: 'asc' | 'desc';
@@ -268,62 +323,99 @@ function LeadsContent() {
   const [showForm, setShowForm] = useState(false);
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
-  const [stats, setStats] = useState<any>(null);
   const [quickActionId, setQuickActionId] = useState<string | null>(null);
   const [quickActionPosition, setQuickActionPosition] = useState<{ top: number; left: number; openUp: boolean; maxHeight: number } | null>(null);
   const quickActionRef = useRef<HTMLDivElement>(null);
 
   // Column management
   const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumns());
-  const [customLabels, setCustomLabels] = useState<Record<string, string>>({});
   const [showColumnManager, setShowColumnManager] = useState(false);
 
-  // Status labels (custom per division)
-  const [statusLabelsMap, setStatusLabelsMap] = useState<Record<string, string>>({});
-  const [leadSourceOptions, setLeadSourceOptions] = useState<LeadSourceOption[]>(DEFAULT_LEAD_SOURCE_OPTIONS);
-  const [callOutcomeOptions, setCallOutcomeOptions] = useState<Array<{ value: string; label: string; icon?: string; group?: string; isActive?: boolean }>>([]);
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data.statusLabels) setStatusLabelsMap(data.statusLabels); })
-      .catch(() => {});
-  }, []);
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getLeadSources(activeDivisionId || undefined)
-      .then((data: any) => {
-        const next = Array.isArray(data?.sources) ? data.sources.filter((s: any) => s?.isActive !== false) : [];
-        if (next.length > 0) {
-          setLeadSourceOptions(next);
-        } else {
-          setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS);
-        }
-      })
-      .catch(() => setLeadSourceOptions(DEFAULT_LEAD_SOURCE_OPTIONS));
-  }, []);
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getDispositionStudio(activeDivisionId || undefined)
-      .then((data: any) => {
-        const options = Array.isArray(data?.dispositions)
-          ? [...data.dispositions]
-              .sort((a: any, b: any) => Number(a?.sortOrder || 0) - Number(b?.sortOrder || 0))
-              .map((d: any) => ({
-                value: String(d?.key || ''),
-                label: String(d?.label || d?.key || ''),
-                icon: d?.icon || '📝',
-                group: d?.category || 'Other',
-                isActive: d?.isActive !== false,
-              }))
-              .filter((d: any) => d.value && d.label)
-          : [];
-        setCallOutcomeOptions(options);
-      })
-      .catch(() => setCallOutcomeOptions([]));
-  }, []);
+  const meQuery = useLeadsMeQuery();
+  const meReady = meQuery.isSuccess || meQuery.isError;
+  const currentUser = (meQuery.data ?? null) as User | null;
+  const usersQuery = useLeadsUsersQuery(null);
+  const users = (usersQuery.data || []) as User[];
+  const dashboardQuery = useLeadsDashboardQuery(divisionScope);
+  const customFieldsQuery = useLeadsCustomFieldsQuery(divisionScope);
+  const customFields = (customFieldsQuery.data || []) as CustomField[];
+  const leadSourcesQuery = useLeadSourcesQuery(divisionScope);
+  const dispositionQuery = useDispositionStudioQuery(divisionScope);
+  const fieldConfigQuery = useLeadsFieldConfigQuery(divisionScope);
+  const tagsQuery = useLeadsTagsQuery(divisionScope || 'org', divisionScope);
+  const pipelineStagesQuery = useLeadsPipelineStagesQuery(divisionScope);
+
+  const statusLabelsMap = (fieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
+  const customLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    (fieldConfigQuery.data?.builtInFields || []).forEach((f: { key?: string; customLabel?: string }) => {
+      if (f.customLabel && f.key) labels[f.key] = f.customLabel;
+    });
+    return labels;
+  }, [fieldConfigQuery.data]);
+
+  const leadSourceOptions = useMemo((): LeadSourceOption[] => {
+    const data = leadSourcesQuery.data as { sources?: LeadSourceOption[] } | undefined;
+    const next = Array.isArray(data?.sources) ? data.sources.filter((s: any) => s?.isActive !== false) : [];
+    if (next.length > 0) return next as LeadSourceOption[];
+    return DEFAULT_LEAD_SOURCE_OPTIONS;
+  }, [leadSourcesQuery.data]);
+
+  const callOutcomeOptions = useCallOutcomeOptions(dispositionQuery.data);
+
+  const listParams = useMemo(
+    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope),
+    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]
+  );
+
+  const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
+  const statsQuery = useLeadsStatsQuery(listParams, { enabled: meReady });
+  const stats = statsQuery.data ?? (dashboardQuery.data as any) ?? null;
+  const leadsRes = leadsQuery.data as any;
+  const leads: Lead[] = Array.isArray(leadsRes?.data)
+    ? leadsRes.data
+    : Array.isArray(leadsRes)
+      ? leadsRes
+      : [];
+
+  /** v5: `isLoading` is only `isPending && isFetching`, so there is a gap where the list is still empty
+   *  but `isLoading` is false (pending, fetch not started yet). Keep the table in loading state until
+   *  we have real response data for the current query key (e.g. after pagination/filter changes). */
+  const loading =
+    !meReady ||
+    (!leadsQuery.data && (leadsQuery.isPending || leadsQuery.isFetching));
+  const error = leadsQuery.isError ? (leadsQuery.error as Error)?.message || 'Failed to load leads' : null;
+
+  /** Header + "Total" KPI use the same number: list `pagination.total` when the list response is present (matches filters/scope), else dashboard overview until the list loads. */
+  const alignedTotalLeads = useMemo(() => {
+    const res = leadsQuery.data as { pagination?: { total?: number } } | undefined;
+    if (typeof res?.pagination?.total === 'number') return res.pagination.total;
+    if (stats?.overview?.totalLeads != null) return stats.overview.totalLeads;
+    return pagination.total;
+  }, [leadsQuery.data, stats?.overview?.totalLeads, pagination.total]);
+
+  const allTags = (tagsQuery.data || []) as { id: string; name: string; color: string }[];
+
+  const stages = useMemo(() => {
+    const data = pipelineStagesQuery.data as { stages?: any[] } | undefined;
+    const rawStages = data?.stages || data || [];
+    const arr = Array.isArray(rawStages) ? rawStages : [];
+    const seen = new Set<string>();
+    return arr.filter((stage: any) => {
+      const key = `${stage.id || ''}::${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }) as {
+      id: string;
+      name: string;
+      color?: string;
+      organizationId?: string;
+      isWonStage?: boolean;
+      isLostStage?: boolean;
+    }[];
+  }, [pipelineStagesQuery.data]);
+
   const getStatusLabel = (status: string): string => {
     return statusLabelsMap[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
   };
@@ -345,141 +437,38 @@ function LeadsContent() {
 
   // Advanced filters
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showBulkReassign, setShowBulkReassign] = useState(false);
   const [showAllocationSettings, setShowAllocationSettings] = useState(false);
   const [showWorkload, setShowWorkload] = useState(false);
-  const [users, setUsers] = useState<User[]>([]);
-  const [allTags, setAllTags] = useState<{id: string; name: string; color: string}[]>([]);
-  const [stages, setStages] = useState<{
-    id: string;
-    name: string;
-    color?: string;
-    organizationId?: string;
-    isWonStage?: boolean;
-    isLostStage?: boolean;
-  }[]>([]);
-
-  // Custom fields
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
 
   const visibleColumns = columns.filter((c) => c.visible);
 
-  // ─── Data Fetching ──────────────────────────────────────────────
-
-  const fetchLeads = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params: Record<string, string | number> = {
-        page: pagination.page,
-        limit: pagination.limit,
-        sortBy,
-        sortOrder,
-      };
-      // Scope leads to active division unless analytics drill explicitly
-      // requests an all-division context.
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      if (filters.divisionId && filters.divisionId !== 'all') {
-        params.divisionId = filters.divisionId;
-      } else if (activeDivisionId && analyticsScope !== 'all') {
-        params.divisionId = activeDivisionId;
-      }
-      if (filters.search) params.search = filters.search;
-      if (filters.status) params.status = filters.status;
-      if (filters.source) params.source = filters.source;
-      if (filters.assignedToId === '__unassigned__') {
-        params.assignedToId = 'unassigned';
-      } else if (filters.assignedToId === '__current_user__' && currentUser) {
-        params.assignedToId = currentUser.id;
-      } else if (filters.assignedToId && filters.assignedToId !== '__current_user__') {
-        params.assignedToId = filters.assignedToId;
-      }
-      if (filters.minScore) params.minScore = filters.minScore;
-      if (filters.maxScore) params.maxScore = filters.maxScore;
-      if (filters.dateFrom) params.dateFrom = filters.dateFrom;
-      if (filters.dateTo) params.dateTo = filters.dateTo;
-      if (filters.company) params.company = filters.company;
-      if (filters.jobTitle) params.jobTitle = filters.jobTitle;
-      if (filters.location) params.location = filters.location;
-      if (filters.campaign) params.campaign = filters.campaign;
-      if (filters.productInterest) params.productInterest = filters.productInterest;
-      if (filters.budgetMin) params.budgetMin = filters.budgetMin;
-      if (filters.budgetMax) params.budgetMax = filters.budgetMax;
-      if (filters.tags) params.tags = filters.tags;
-      if (filters.hasEmail) params.hasEmail = filters.hasEmail;
-      if (filters.hasPhone) params.hasPhone = filters.hasPhone;
-      if (filters.conversionMin) params.conversionMin = filters.conversionMin;
-      if (filters.conversionMax) params.conversionMax = filters.conversionMax;
-      if (filters.stageId) params.stageId = filters.stageId;
-      if (filters.callOutcome) params.callOutcome = filters.callOutcome;
-      if (filters.callOutcomeReason) params.callOutcomeReason = filters.callOutcomeReason;
-      if (filters.callOutcomeMode) params.callOutcomeMode = filters.callOutcomeMode;
-      if (filters.minCallCount) params.minCallCount = filters.minCallCount;
-      if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
-      if (filters.divisionId) params.divisionId = filters.divisionId;
-      if (filters.showBlocked) params.showBlocked = filters.showBlocked;
-      const res = await api.getLeads(params) as any;
-      const leadsData = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
-      setLeads(leadsData);
-      if (res?.pagination) {
-        setPagination(prev => ({
-          ...prev,
-          total: res.pagination.total ?? prev.total,
-          page: res.pagination.page ?? prev.page,
-          limit: res.pagination.limit ?? prev.limit,
-          totalPages: res.pagination.totalPages ?? prev.totalPages,
-        }));
-      }
-    } catch (err: any) {
-      console.error('Failed to fetch leads:', err);
-      setError(err.message || 'Failed to load leads. Please check that the backend server is running.');
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    const res = leadsQuery.data as { pagination?: typeof pagination } | undefined;
+    if (res?.pagination) {
+      setPagination((prev) => ({
+        ...prev,
+        total: res.pagination!.total ?? prev.total,
+        page: res.pagination!.page ?? prev.page,
+        limit: res.pagination!.limit ?? prev.limit,
+        totalPages: res.pagination!.totalPages ?? prev.totalPages,
+      }));
     }
-  }, [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]);
+  }, [leadsQuery.data]);
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const data = await api.getDashboard(activeDivisionId || undefined);
-      setStats(data);
-    } catch { /* non-critical */ }
-  }, []);
-
-  const fetchUsers = useCallback(async () => {
-    try {
-      const data = await api.getUsers();
-      setUsers(data as User[]);
-    } catch { /* non-critical */ }
-  }, []);
-
-  const fetchCurrentUser = useCallback(async () => {
-    try {
-      const me = await api.getMe();
-      setCurrentUser(me);
-    } catch { /* non-critical */ }
-  }, []);
-
-  const fetchCustomFields = useCallback(async () => {
-    try {
-      // Scope custom fields to the active division (if super admin has one selected)
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const data = await api.getCustomFields(activeDivisionId || undefined);
-      setCustomFields(data as CustomField[]);
-      // Rebuild columns with custom fields
-      setColumns(prev => {
-        const updated = loadColumns(data as CustomField[]);
-        // Preserve user's visibility/order preferences from existing columns
-        const prevMap = new Map(prev.map(c => [c.id, c]));
-        return updated.map(c => {
-          const existing = prevMap.get(c.id);
-          if (existing) return { ...c, visible: existing.visible };
-          return c;
-        });
+  useEffect(() => {
+    const data = customFieldsQuery.data as CustomField[] | undefined;
+    if (!data) return;
+    setColumns((prev) => {
+      const updated = loadColumns(data);
+      const prevMap = new Map(prev.map((c) => [c.id, c]));
+      return updated.map((c) => {
+        const existing = prevMap.get(c.id);
+        if (existing) return { ...c, visible: existing.visible };
+        return c;
       });
-    } catch { /* non-critical */ }
-  }, []);
+    });
+  }, [customFieldsQuery.data]);
 
   // Load saved views from server + migrate localStorage views
   useEffect(() => {
@@ -534,10 +523,6 @@ function LeadsContent() {
     };
     loadServerViews();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { fetchCurrentUser(); }, [fetchCurrentUser]);
-  useEffect(() => { fetchLeads(); }, [fetchLeads]);
-  useEffect(() => { fetchStats(); fetchUsers(); fetchCustomFields(); }, [fetchStats, fetchUsers, fetchCustomFields]);
 
   // One-time drill-down params should not keep applying by default
   // on subsequent division loads/navigation.
@@ -614,45 +599,11 @@ function LeadsContent() {
     } catch { /* sessionStorage unavailable */ }
   }, [filters, sortBy, sortOrder, viewMode, pagination.page, activeViewId]);
 
-  // Fetch field config to get custom labels for column headers
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const params = new URLSearchParams();
-    if (activeDivisionId) params.append('divisionId', activeDivisionId);
-    fetch(`/api/settings/field-config?${params}`, {
-      headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        const labels: Record<string, string> = {};
-        (data.builtInFields || []).forEach((f: any) => {
-          if (f.customLabel) labels[f.key] = f.customLabel;
-        });
-        setCustomLabels(labels);
-      })
-      .catch(() => {});
-  }, []);
+  const onRealtimeLeads = useCallback(() => {
+    invalidateListAndDashboard();
+  }, [invalidateListAndDashboard]);
 
-  // Auto-refresh when data changes (including the current user marking messages as read)
-  useRealtimeSync(['lead', 'communication'], () => { fetchLeads(); fetchStats(); });
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getTags().then((data: any) => setAllTags(data || [])).catch(() => {});
-    api
-      .getPipelineStages(activeDivisionId || undefined)
-      .then((data: any) => {
-        const rawStages = data.stages || data || [];
-        const seen = new Set<string>();
-        const deduped = rawStages.filter((stage: any) => {
-          const key = `${stage.id || ''}::${stage.organizationId || ''}::${String(stage.name || '').toLowerCase()}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        setStages(deduped);
-      })
-      .catch(() => {});
-  }, []);
+  useRealtimeSync(['lead', 'communication'], onRealtimeLeads);
 
   const getLeadDivisionId = useCallback((lead: Lead): string | null => {
     return (lead as any).organizationId || (lead as any).organization?.id || null;
@@ -713,8 +664,7 @@ function LeadsContent() {
       }
       await api.createLead(data);
       setShowForm(false);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Lead Created', message: 'New lead has been created successfully' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to create lead' });
@@ -752,8 +702,7 @@ function LeadsContent() {
       await api.bulkUpdateLeads(Array.from(selectedLeads), { status });
       setSelectedLeads(new Set());
       setShowBulkActions(false);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Status Updated', message: `${selectedLeads.size} lead(s) updated to ${status}` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update leads' }); }
   };
@@ -763,8 +712,7 @@ function LeadsContent() {
       await api.bulkUpdateLeads(Array.from(selectedLeads), { assignedToId });
       setShowBulkReassign(false);
       setSelectedLeads(new Set());
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Leads Reassigned', message: `${selectedLeads.size} lead(s) reassigned successfully` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to reassign leads' }); }
   };
@@ -785,8 +733,7 @@ function LeadsContent() {
         await api.deleteLead(ids[i]);
       }
       setSelectedLeads(new Set());
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Leads Moved', message: `${ids.length} lead(s) moved to Recycle Bin` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete leads' }); }
   };
@@ -796,8 +743,7 @@ function LeadsContent() {
       await api.updateLead(leadId, { status });
       setQuickActionId(null);
       setQuickActionPosition(null);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Status Updated', message: `Lead status changed to ${status}` });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to update status' }); }
   };
@@ -815,8 +761,7 @@ function LeadsContent() {
       await api.deleteLead(leadId);
       setQuickActionId(null);
       setQuickActionPosition(null);
-      fetchLeads();
-      fetchStats();
+      invalidateListAndDashboard();
       addToast({ type: 'success', title: 'Lead Moved', message: 'Lead moved to Recycle Bin' });
     } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to delete lead' }); }
   };
@@ -829,8 +774,8 @@ function LeadsContent() {
       data[field] = value || null;
     }
     await api.updateLead(leadId, data);
-    fetchLeads();
-    if (field === 'status') fetchStats();
+    invalidateList();
+    if (field === 'status') invalidateDashboard();
   };
 
   const handleSelectView = (view: SavedView) => {
@@ -899,71 +844,111 @@ function LeadsContent() {
     return base + rowIndex + 1;
   };
 
-  const exportCSV = () => {
+  /** Backend GET /leads allows at most this page size (see paginationSchema). */
+  const LEADS_API_MAX_LIMIT = 100;
+
+  const exportCSV = async () => {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
-    const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
-    const rows = leads.map((l, rowIndex) =>
-      visibleCols.map((c) => {
-        switch (c.id) {
-          case 'name': return getDisplayName(l);
-          case 'email': return l.email || '';
-          case 'phone': return formatPhone(l.phone) || '';
-          case 'company': return l.company || '';
-          case 'jobTitle': return l.jobTitle || '';
-          case 'status': return (l as any).stage?.name || l.status;
-          case 'source': return getLeadSourceLabel(l);
-          case 'score': return (l.score ?? 0).toString();
-          case 'budget': return l.budget?.toString() || '';
-          case 'location': return l.location || '';
-          case 'productInterest': return l.productInterest || '';
-          case 'campaign': return l.campaign || '';
-          case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
-          case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
-          case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
-          case 'callCount': return String(l._count?.callLogs || 0);
-          case 'lastCallOutcome': {
-            const lco = (l as any).lastCallOutcome;
-            if (!lco) return '';
-            const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
-            const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
-            return dt ? `${label} (${dt})` : label;
-          }
-          case 'channels': {
-            const ucc = l.unreadChannelCounts || {};
-            return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
-          }
-          case 'sla': {
-            const sla = (l as any).slaInfo;
-            if (!sla || !sla.enabled) return '';
-            if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
-            return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
-          }
-          case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-          case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-          default:
-            if (c.id.startsWith('cf_')) {
-              if (isAutoSerialCustomField(c)) {
-                return String(getDisplaySerialForRow(rowIndex));
-              }
-              const fn = c.id.slice(3);
-              const cd = (l.customData || {}) as Record<string, unknown>;
-              const v = cd[fn];
-              if (v === undefined || v === null) return '';
-              if (Array.isArray(v)) return v.join(', ');
-              return String(v);
+    setExporting(true);
+    try {
+      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope);
+      const allLeads: Lead[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const res = await api.getLeads({
+          ...base,
+          page,
+          limit: LEADS_API_MAX_LIMIT,
+        }) as any;
+        const batch = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+        allLeads.push(...batch);
+        totalPages = Math.max(1, Number(res?.pagination?.totalPages) || 1);
+        if (batch.length === 0) break;
+        page += 1;
+      } while (page <= totalPages);
+
+      const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
+      const rows = allLeads.map((l, rowIndex) =>
+        visibleCols.map((c) => {
+          switch (c.id) {
+            case 'name': return getDisplayName(l);
+            case 'email': return l.email || '';
+            case 'phone': return formatPhone(l.phone) || '';
+            case 'company': return l.company || '';
+            case 'jobTitle': return l.jobTitle || '';
+            case 'status': return (l as any).stage?.name || l.status;
+            case 'source': return getLeadSourceLabel(l);
+            case 'score': return (l.score ?? 0).toString();
+            case 'budget': return l.budget?.toString() || '';
+            case 'location': return l.location || '';
+            case 'productInterest': return l.productInterest || '';
+            case 'campaign': return l.campaign || '';
+            case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
+            case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
+            case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
+            case 'callCount': return String(l._count?.callLogs || 0);
+            case 'lastCallOutcome': {
+              const lco = (l as any).lastCallOutcome;
+              if (!lco) return '';
+              const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
+              const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+              return dt ? `${label} (${dt})` : label;
             }
-            return '';
-        }
-      })
-    );
-    const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+            case 'channels': {
+              const ucc = l.unreadChannelCounts || {};
+              return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
+            }
+            case 'sla': {
+              const sla = (l as any).slaInfo;
+              if (!sla || !sla.enabled) return '';
+              if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
+              return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
+            }
+            case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            case 'lastOpenedAt': {
+              const lo = (l as Lead).lastOpenedAt;
+              const lob = (l as Lead).lastOpenedBy;
+              if (!lo) return '';
+              const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+              return by ? `${new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (${by})` : new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            }
+            default:
+              if (c.id.startsWith('cf_')) {
+                if (isAutoSerialCustomField(c)) {
+                  return String(rowIndex + 1);
+                }
+                const fn = c.id.slice(3);
+                const cd = (l.customData || {}) as Record<string, unknown>;
+                const v = cd[fn];
+                if (v === undefined || v === null) return '';
+                if (Array.isArray(v)) return v.join(', ');
+                return String(v);
+              }
+              return '';
+          }
+        })
+      );
+      const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast({
+        type: 'success',
+        title: 'Export ready',
+        message: `${allLeads.length} lead${allLeads.length !== 1 ? 's' : ''} exported (current filters).`,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not export leads';
+      addToast({ type: 'error', title: 'Export failed', message });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const activeFilterCount = Object.values(filters).filter((v) => v !== '').length - (filters.search ? 1 : 0); // exclude search
@@ -1018,8 +1003,12 @@ function LeadsContent() {
         );
       case 'name':
         return (
-          <Link href={`/leads/${lead.id}`} className="flex items-center gap-2.5 group">
-            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
+          <Link
+            href={`/leads/${lead.id}`}
+            className="flex items-center gap-2.5 group"
+            onMouseEnter={() => prefetchLeadDetail(lead.id)}
+          >
+            <div className={`h-9 w-9 rounded-full bg-gradient-to-br ${getAvatarGradient(lead.id)} flex items-center justify-center text-xs font-bold text-white shadow-sm flex-shrink-0`}>
               {getInitials(lead)}
             </div>
             <div className="min-w-0">
@@ -1066,7 +1055,7 @@ function LeadsContent() {
         return (
           <InlineEdit value={currentVal} onSave={async (v) => {
               if (useStages) {
-                try { await api.moveLead(lead.id, v, 0); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Lead Moved', message: 'Lead stage updated' }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
+                try { await api.moveLead(lead.id, v, 0); invalidateListAndDashboard(); addToast({ type: 'success', title: 'Lead Moved', message: 'Lead stage updated' }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' }); }
               } else {
                 handleInlineUpdate(lead.id, 'status', v);
               }
@@ -1075,8 +1064,23 @@ function LeadsContent() {
             displayClassName={`badge ${(lead as any).doNotCall ? statusColors.DO_NOT_CALL : (statusColors[lead.status] || 'bg-gray-100 text-gray-800')}`} />
         );
       }
-      case 'source':
-        return <span className="text-sm text-gray-700">{getLeadSourceLabel(lead)}</span>;
+      case 'source': {
+        const srcKey = (lead.source || '').toUpperCase();
+        const sourceIcons: Record<string, string> = {
+          WHATSAPP: '💬', FACEBOOK_ADS: '📘', GOOGLE_ADS: '🔍',
+          TIKTOK_ADS: '🎵', WEBSITE_FORM: '🌐', LANDING_PAGE: '📄',
+          LIVE_CHAT: '💭', MANUAL: '✍️', CSV_IMPORT: '📊',
+          API: '🔌', REFERRAL: '🤝', EMAIL: '📧', PHONE: '📞', OTHER: '•',
+        };
+        const icon = sourceIcons[srcKey] || '•';
+        const label = getLeadSourceLabel(lead);
+        return (
+          <span className="flex items-center gap-1.5 text-sm text-gray-700 whitespace-nowrap">
+            <span className="text-base leading-none">{icon}</span>
+            {label}
+          </span>
+        );
+      }
       case 'score':
         const score = lead.score ?? 0;
         return (
@@ -1210,6 +1214,19 @@ function LeadsContent() {
             <span className="text-[10px] text-gray-400">{formatTimeAgo(lead.updatedAt)}</span>
           </div>
         );
+      case 'lastOpenedAt': {
+        const lo = (lead as Lead).lastOpenedAt;
+        const lob = (lead as Lead).lastOpenedBy;
+        if (!lo) return <span className="text-xs text-gray-400">—</span>;
+        const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+        return (
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">{new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+            {by ? <span className="text-[10px] text-gray-400">by {by}</span> : null}
+            <span className="text-[10px] text-gray-400">{formatTimeAgo(lo)}</span>
+          </div>
+        );
+      }
       case 'sla': {
         const sla = (lead as any).slaInfo;
         if (!sla || !sla.enabled) return <span className="text-xs text-gray-400">-</span>;
@@ -1297,7 +1314,7 @@ function LeadsContent() {
                 <InlineEdit value={String(value)} onSave={async (v) => {
                   const newCustomData = { ...customData, [fieldName]: v ? parseFloat(v) : null };
                   await api.updateLead(lead.id, { customData: newCustomData });
-                  fetchLeads();
+                  invalidateList();
                 }} type="number" placeholder="-" displayClassName="text-sm text-gray-700" />
               );
             default:
@@ -1305,7 +1322,7 @@ function LeadsContent() {
                 <InlineEdit value={String(value)} onSave={async (v) => {
                   const newCustomData = { ...customData, [fieldName]: v || null };
                   await api.updateLead(lead.id, { customData: newCustomData });
-                  fetchLeads();
+                  invalidateList();
                 }} placeholder="-" displayClassName="text-sm text-gray-700" />
               );
           }
@@ -1359,17 +1376,46 @@ function LeadsContent() {
       .leads-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
     `}</style>
     <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-shrink-0 pt-4 px-1">
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Leads</h1>
-          <p className="text-text-secondary mt-0.5 text-sm">{pagination.total} leads total</p>
+      {/* Header row: [Title] [─── Team Workload · Allocation Rules ───] [Actions] */}
+      <div className="flex items-center gap-4 flex-shrink-0 pt-4 px-1">
+
+        {/* Section 1 — Title */}
+        <div className="flex-shrink-0">
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight leading-none">Leads</h1>
+          <p className="text-text-secondary mt-0.5 text-xs">{alignedTotalLeads.toLocaleString()} leads total</p>
         </div>
-        <div className="flex items-center gap-2">
-          <RefreshButton onRefresh={() => { fetchLeads(); fetchStats(); }} />
+
+        {/* Section 2 — Two action tabs */}
+        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border pl-4">
+          <button
+            onClick={() => setShowWorkload(!showWorkload)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+              showWorkload
+                ? 'bg-brand-50 border-brand-200 text-brand-700'
+                : 'border-border text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+            }`}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            Team Workload
+          </button>
+          <button
+            onClick={() => setShowAllocationSettings(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-text-secondary hover:bg-surface-tertiary hover:text-text-primary transition-all"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            Allocation Rules
+          </button>
+        </div>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Section 3 — Actions */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <RefreshButton onRefresh={() => { invalidateListAndDashboard(); }} />
           <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            Export
+            {exporting ? 'Exporting…' : 'Export'}
           </button>
           <button onClick={() => setShowForm(true)} className="btn-primary gap-1.5">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
@@ -1380,28 +1426,36 @@ function LeadsContent() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
-          <StatCard label="Total" value={stats.overview.totalLeads} color="brand" />
-          <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
-          <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
-          <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="green" />
-          <StatCard label={getStatusLabel('LOST')} value={stats.overview.lostLeads} color="red" />
-          <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
-          <div className="col-span-full flex gap-2 mt-1">
-            <button onClick={() => setShowWorkload(!showWorkload)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              Team Workload
-            </button>
-            <button onClick={() => setShowAllocationSettings(true)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              Allocation Rules
-            </button>
+        <div className="flex-shrink-0">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+            <StatCard label="Total" value={alignedTotalLeads} color="default" delta="+2 this week" />
+            <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" highlight subtitle="All active" dot="indigo" />
+            <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="default" dot="cyan" />
+            <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="default" dot="green" />
+            <StatCard label={getStatusLabel('LOST')} value={stats.overview.lostLeads} color="default" dot="red" />
+            <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="green" subtitle="Total value" dot="green" />
+            {(() => {
+              const r = stats.reachability;
+              const tc = r?.totalCalls ?? 0;
+              const rr = r?.reachabilityRatio ?? 0;
+              const reachColor = tc === 0 ? 'default' : rr >= 75 ? 'green' : rr >= 50 ? 'amber' : 'red';
+              return (
+                <StatCard
+                  label="Reachability"
+                  value={tc > 0 ? `${rr}%` : 'N/A'}
+                  color={reachColor}
+                  subtitle={tc > 0 ? `${r.reachedCalls}/${tc} reached` : 'No data'}
+                />
+              );
+            })()}
           </div>
         </div>
       )}
 
       {/* ─── Workload Dashboard (below stats) ─────────────────────── */}
-      <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+      <div className="py-1">
+        <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+      </div>
 
       {/* DNC Warning Banner */}
       {filters.showBlocked === 'true' && (
@@ -1538,6 +1592,7 @@ function LeadsContent() {
             >
               <Link
                 href={`/leads/${activeQuickLead.id}`}
+                onMouseEnter={() => prefetchLeadDetail(activeQuickLead.id)}
                 onClick={() => {
                   setQuickActionId(null);
                   setQuickActionPosition(null);
@@ -1556,8 +1611,7 @@ function LeadsContent() {
                         await api.moveLead(activeQuickLead.id, s.id, 0);
                         setQuickActionId(null);
                         setQuickActionPosition(null);
-                        fetchLeads();
-                        fetchStats();
+                        invalidateListAndDashboard();
                         addToast({ type: 'success', title: 'Stage Updated', message: `Lead moved to ${s.name}` });
                       } catch (err: any) {
                         addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move lead' });
@@ -1600,7 +1654,7 @@ function LeadsContent() {
                         {bulkStageOptions.length > 0
                           ? bulkStageOptions.map((s) => (
                               <button key={s.id || `${s.organizationId || ''}:${s.name}`} onClick={async () => {
-                                try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); fetchLeads(); fetchStats(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
+                                try { await Promise.all(Array.from(selectedLeads).map(id => api.moveLead(id, s.id, 0))); setShowBulkActions(false); setSelectedLeads(new Set()); invalidateListAndDashboard(); addToast({ type: 'success', title: 'Leads Moved', message: `${selectedLeads.size} lead(s) moved to ${s.name}` }); } catch (err: any) { addToast({ type: 'error', title: 'Error', message: err.message || 'Failed to move leads' }); }
                               }} className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
                                 <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#6B7280' }} />
                                 {s.name}
@@ -1667,7 +1721,7 @@ function LeadsContent() {
                           </div>
                           <p className="text-sm font-medium text-red-800">Failed to load leads</p>
                           <p className="text-xs text-red-600 max-w-md">{error}</p>
-                          <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-2">Retry</button>
+                          <button onClick={() => leadsQuery.refetch()} className="btn-primary text-sm mt-2">Retry</button>
                         </div>
                       </td></tr>
                     ) : leads.length === 0 ? (
@@ -1684,14 +1738,15 @@ function LeadsContent() {
                     ) : (
                       leads.map((lead, rowIndex) => (
                         <tr key={lead.id}
-                          className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
+                          className={`group/row transition-colors cursor-pointer border-b border-gray-100 last:border-b-0 hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
+                          onMouseEnter={() => prefetchLeadDetail(lead.id)}
                           onClick={(e) => {
                             const target = e.target as HTMLElement;
                             if (target.closest('input, button, a, select, [role="listbox"], [data-inline-edit]')) return;
                             router.push(`/leads/${lead.id}`);
                           }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
+                            <td key={col.id} className={`table-cell py-3 border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
                           ))}
                         </tr>
                       ))
@@ -1714,7 +1769,7 @@ function LeadsContent() {
                 <div className="card p-12 text-center">
                   <p className="text-sm font-medium text-red-800">Failed to load leads</p>
                   <p className="text-xs text-red-600 mt-1">{error}</p>
-                  <button onClick={() => fetchLeads()} className="btn-primary text-sm mt-3">Retry</button>
+                  <button onClick={() => leadsQuery.refetch()} className="btn-primary text-sm mt-3">Retry</button>
                 </div>
               ) : leads.length === 0 ? (
                 <div className="card p-12 text-center">
@@ -1724,10 +1779,15 @@ function LeadsContent() {
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {leads.map((lead) => (
-                      <Link key={lead.id} href={`/leads/${lead.id}`} className="card p-4 hover:shadow-md transition-shadow group">
+                      <Link
+                        key={lead.id}
+                        href={`/leads/${lead.id}`}
+                        className="card p-4 hover:shadow-md transition-shadow group"
+                        onMouseEnter={() => prefetchLeadDetail(lead.id)}
+                      >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
+                            <div className={`h-10 w-10 rounded-full bg-gradient-to-br ${getAvatarGradient(lead.id)} flex items-center justify-center text-sm font-bold text-white shadow-sm`}>
                               {getInitials(lead)}
                             </div>
                             <div>
@@ -1823,16 +1883,28 @@ function LeadsContent() {
           {/* ═══════════════════ KANBAN VIEW ═══════════════════ */}
           {viewMode === 'kanban' && (
             <div>
-              <KanbanView
-                leads={leads}
-                customFields={customFields}
-                onStatusChange={async (leadId, status) => {
-                  await handleQuickStatus(leadId, status);
-                }}
-              />
-              <div className="mt-4">
-                <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
-              </div>
+              {loading ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-16">
+                  <div className="h-8 w-8 rounded-lg bg-brand-100 flex items-center justify-center animate-pulse-soft">
+                    <div className="h-4 w-4 rounded-full border-2 border-brand-600 border-t-transparent animate-spin" />
+                  </div>
+                  <span className="text-sm text-text-tertiary">Loading leads...</span>
+                </div>
+              ) : (
+                <>
+                  <KanbanView
+                    leads={leads}
+                    customFields={customFields}
+                    onLeadHover={prefetchLeadDetail}
+                    onStatusChange={async (leadId, status) => {
+                      await handleQuickStatus(leadId, status);
+                    }}
+                  />
+                  <div className="mt-4">
+                    <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1853,11 +1925,22 @@ function LeadsContent() {
       {showAllocationSettings && (
         <AllocationSettings
           isOpen={showAllocationSettings}
-          onClose={() => { setShowAllocationSettings(false); fetchLeads(); }}
+          onClose={() => { setShowAllocationSettings(false); invalidateList(); }}
           users={users}
         />
       )}
-      {showForm && <CreateLeadModal onClose={() => setShowForm(false)} onSubmit={handleCreateLead} customFields={customFields} users={users} currentUserId={currentUser?.id} userRole={currentUser?.role} sourceOptions={leadSourceOptions} />}
+      {showForm && (
+        <CreateLeadModal
+          onClose={() => setShowForm(false)}
+          onSubmit={handleCreateLead}
+          customFields={customFields}
+          users={users}
+          currentUserId={currentUser?.id}
+          userRole={currentUser?.role}
+          sourceOptions={leadSourceOptions}
+          tagsList={allTags}
+        />
+      )}
       {showColumnManager && <ColumnManager columns={columns} onChange={(c) => { setColumns(c); saveColumns(c); }} onClose={() => setShowColumnManager(false)} />}
     </div>
     </>
@@ -1866,19 +1949,56 @@ function LeadsContent() {
 
 // ─── Sub Components ───────────────────────────────────────────────
 
-function StatCard({ label, value, color }: { label: string; value: string | number; color: string }) {
-  const colorMap: Record<string, string> = {
-    brand: 'bg-brand-50 text-brand-700',
-    indigo: 'bg-indigo-50 text-indigo-700',
-    cyan: 'bg-cyan-50 text-cyan-700',
-    green: 'bg-green-50 text-green-700',
-    red: 'bg-red-50 text-red-700',
-    amber: 'bg-amber-50 text-amber-700',
+function StatCard({
+  label, value, color, subtitle, delta, highlight, dot,
+}: {
+  label: string;
+  value: string | number;
+  color: string;
+  subtitle?: string;
+  delta?: string;
+  highlight?: boolean;
+  dot?: string;
+}) {
+  const dotColors: Record<string, string> = {
+    indigo: 'bg-indigo-500', cyan: 'bg-cyan-500', green: 'bg-green-500',
+    red: 'bg-red-500', amber: 'bg-amber-500', emerald: 'bg-emerald-500',
   };
+  const valueColors: Record<string, string> = {
+    default: 'text-gray-900',
+    indigo: 'text-indigo-700',
+    green: 'text-green-700',
+    red: 'text-red-700',
+    amber: 'text-amber-700',
+    emerald: 'text-emerald-700',
+    cyan: 'text-cyan-700',
+    brand: 'text-brand-700',
+  };
+
   return (
-    <div className={`card p-3 border-transparent ${colorMap[color] || colorMap.brand}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider opacity-70">{label}</p>
-      <p className="text-lg font-bold mt-0.5">{value}</p>
+    <div className={`relative rounded-xl border p-3 transition-all ${
+      highlight
+        ? 'bg-indigo-50 border-indigo-200 shadow-sm'
+        : 'bg-white border-gray-100 shadow-xs hover:border-gray-200'
+    }`}>
+      {/* Header row */}
+      <div className="flex items-center gap-1.5 mb-1">
+        {dot && <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${dotColors[dot] || 'bg-gray-400'}`} />}
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{label}</p>
+      </div>
+
+      {/* Value */}
+      <p className={`text-xl font-bold leading-none ${valueColors[color] || valueColors.default}`}>
+        {value}
+      </p>
+
+      {/* Delta or subtitle */}
+      {delta && (
+        <p className="text-[10px] text-emerald-600 font-medium mt-1">{delta}</p>
+      )}
+      {subtitle && !delta && (
+        <p className="text-[10px] text-gray-400 mt-1 leading-snug">{subtitle}</p>
+      )}
     </div>
   );
 }
@@ -1946,6 +2066,7 @@ interface CreateLeadModalProps {
   currentUserId?: string;
   userRole?: string;
   sourceOptions?: LeadSourceOption[];
+  tagsList?: { id: string; name: string; color: string }[];
 }
 
 function CreateLeadModal({
@@ -1956,6 +2077,7 @@ function CreateLeadModal({
   currentUserId,
   userRole,
   sourceOptions = FALLBACK_SOURCE_OPTIONS,
+  tagsList = [],
 }: CreateLeadModalProps) {
   const [formData, setFormData] = useState<Record<string, unknown>>(() => {
     const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
@@ -1979,45 +2101,27 @@ function CreateLeadModal({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [availableTags, setAvailableTags] = useState<{id: string; name: string; color: string}[]>([]);
+  const availableTags = tagsList;
   const [tagInput, setTagInput] = useState('');
   const [showTagDropdown, setShowTagDropdown] = useState(false);
-  const [fieldConfig, setFieldConfig] = useState<Record<string, { isRequired?: boolean; customLabel?: string }>>({});
-  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const createModalDivisionScope = useMemo(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
+    []
+  );
+  const createModalFieldConfigQuery = useLeadsFieldConfigQuery(createModalDivisionScope);
+  const fieldConfig = useMemo(() => {
+    const config: Record<string, { isRequired?: boolean; customLabel?: string }> = {};
+    (createModalFieldConfigQuery.data?.builtInFields || []).forEach((f: { key?: string; isRequired?: boolean; customLabel?: string }) => {
+      if (!f.key) return;
+      config[f.key] = { isRequired: !!f.isRequired, customLabel: f.customLabel || undefined };
+    });
+    return config;
+  }, [createModalFieldConfigQuery.data]);
+  const statusLabels = (createModalFieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
   const effectiveSourceOptions = useMemo(
     () => (sourceOptions.length > 0 ? sourceOptions.filter((s) => s.isActive !== false) : FALLBACK_SOURCE_OPTIONS),
     [sourceOptions]
   );
-
-  // Fetch available tags for the division
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    if (activeDivisionId) {
-      api.getTags(activeDivisionId).then((data: any) => setAvailableTags(Array.isArray(data) ? data : [])).catch(() => {});
-    } else {
-      api.getTags().then((data: any) => setAvailableTags(Array.isArray(data) ? data : [])).catch(() => {});
-    }
-  }, []);
-
-  // Fetch field config to know which fields are required for this division
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const params = new URLSearchParams();
-    if (activeDivisionId) params.append('divisionId', activeDivisionId);
-    fetch(`/api/settings/field-config?${params}`, {
-      headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        const config: Record<string, { isRequired?: boolean; customLabel?: string }> = {};
-        (data.builtInFields || []).forEach((f: any) => {
-          config[f.key] = { isRequired: f.isRequired || false, customLabel: f.customLabel || undefined };
-        });
-        setFieldConfig(config);
-        if (data.statusLabels) setStatusLabels(data.statusLabels);
-      })
-      .catch(() => {}); // fallback: only name required (hardcoded)
-  }, []);
 
   const getStatusLabel = (status: string): string => {
     return statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());

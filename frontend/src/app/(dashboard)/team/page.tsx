@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { ACTIVE_DIVISION_CHANGED } from '@/lib/activeDivisionEvents';
 import { api } from '@/lib/api';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import { useAuthStore } from '@/store/authStore';
@@ -148,12 +149,28 @@ export default function TeamPage() {
 
   // ─── Fetch ─────────────────────────────────────────────────
   const fetchUsers = useCallback(async () => {
-    const data = await api.getUsers();
-    setUsers(data);
-    setLoading(false);
+    setLoading(true);
+    try {
+      const divId =
+        typeof window !== 'undefined' ? (localStorage.getItem('activeDivisionId')?.trim() || '') : '';
+      const data = divId ? await api.getDivisionUsers(divId) : await api.getUsers();
+      setUsers(data as User[]);
+    } catch {
+      setUsers([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  useEffect(() => {
+    const onDivision = () => fetchUsers();
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivision);
+    return () => window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivision);
+  }, [fetchUsers]);
 
   // Auto-refresh when another user modifies team data
   useRealtimeSync(['user'], () => { fetchUsers(); });

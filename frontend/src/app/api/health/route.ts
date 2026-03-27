@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-
-const BACKEND_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+import { getBackendApiBase } from '@/lib/backend-url';
 
 export async function GET() {
+  const BACKEND_URL = getBackendApiBase();
   const result: Record<string, any> = {
     proxy: 'ok',
     backendUrl: BACKEND_URL,

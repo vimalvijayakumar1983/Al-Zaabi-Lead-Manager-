@@ -8,7 +8,24 @@ const { getFieldCatalog, runReportPreview } = require('../services/reportBuilder
 const router = Router();
 router.use(authenticate, orgScope);
 
-const datasetEnum = z.enum(['leads', 'tasks', 'call_logs', 'contacts', 'deals', 'campaigns', 'lead_activities', 'pipelines']);
+const datasetEnum = z.enum([
+  'leads',
+  'tasks',
+  'call_logs',
+  'contacts',
+  'deals',
+  'campaigns',
+  'campaign_assignments',
+  'lead_activities',
+  'pipelines',
+  'incentive_events',
+  'incentive_attributions',
+  'incentive_earnings',
+  'incentive_adjustments',
+  'incentive_statements',
+  'incentive_disputes',
+  'incentive_exceptions',
+]);
 const visibilityEnum = z.enum(['everyone', 'private', 'specific_users', 'specific_roles']);
 
 const reportFilterSchema = z.object({
@@ -45,7 +62,24 @@ const reportConfigSchema = z.object({
     direction: z.enum(['asc', 'desc']).optional(),
   }).optional(),
   rawSort: z.object({
-    field: z.enum(['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt', 'startDate', 'endDate', 'order']).optional(),
+    field: z.enum([
+      'createdAt',
+      'updatedAt',
+      'dueAt',
+      'closeDate',
+      'lastContactedAt',
+      'startDate',
+      'endDate',
+      'order',
+      'assignedAt',
+      'expiresAt',
+      'discussedAt',
+      'redeemedAt',
+      'occurredAt',
+      'periodStart',
+      'periodEnd',
+      'paidAt',
+    ]).optional(),
     direction: z.enum(['asc', 'desc']).optional(),
   }).optional(),
   options: z.record(z.any()).optional(),

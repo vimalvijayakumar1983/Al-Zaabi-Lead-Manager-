@@ -1,13 +1,18 @@
 const { prisma } = require('../config/database');
 const { config } = require('../config/env');
 const { logger } = require('../config/logger');
-const { broadcastDataChange } = require('../websocket/server');
+const { enrichCommunicationForClient } = require('../utils/inboxCommunication');
+const { emitCommunicationChange } = require('../utils/inboxRealtimeEmit');
 const {
   digitsOnly,
   canonicalPhoneDigitsForWhatsApp,
   buildWhatsAppPhoneLookupVariants,
 } = require('../utils/phoneWhatsApp');
 const { downloadMedia } = require('./whatsappService');
+const {
+  isAttachmentObjectStorageEnabled,
+  uploadInboxAttachmentBuffer,
+} = require('./attachmentStorage');
 
 /**
  * Normalize phone to digits-only (wa_id format). WhatsApp "from" is already digits.
@@ -236,6 +241,7 @@ const MEDIA_TYPE_LABELS = {
   voice: 'Voice message',
   document: 'Document',
   sticker: 'Sticker',
+  location: 'Location',
 };
 
 function mediaExtension(mimeType) {
@@ -260,6 +266,7 @@ async function processInboundWhatsAppMessage({
   bodyText,
   contactName,
   mediaInfo,
+  extraMeta,
 }) {
   const organizationId = await resolveOrganizationId(phoneNumberId, displayPhoneNumber);
   if (!organizationId) {
@@ -321,8 +328,9 @@ async function processInboundWhatsAppMessage({
       const { buffer, mimeType, fileSize } = await downloadMedia(mediaInfo.mediaId, organizationId);
       const ext = mediaExtension(mimeType) || mediaExtension(mediaInfo.mimeType) || '';
       const filename = mediaInfo.filename || `whatsapp-${mediaInfo.type}-${Date.now()}${ext}`;
-      const base64Data = `data:${mimeType};base64,${buffer.toString('base64')}`;
+      const useS3 = isAttachmentObjectStorageEnabled();
 
+      // Create the DB record first so we have a stable UUID for the S3 key
       const attachment = await prisma.attachment.create({
         data: {
           leadId: lead.id,
@@ -330,11 +338,43 @@ async function processInboundWhatsAppMessage({
           mimeType,
           size: fileSize || buffer.length,
           url: '',
-          data: base64Data,
+          data: null,
+          storageKey: null,
         },
       });
+
       const url = `/inbox/attachments/file/${attachment.id}`;
-      await prisma.attachment.update({ where: { id: attachment.id }, data: { url } });
+      let storageKey = null;
+
+      if (useS3) {
+        try {
+          storageKey = await uploadInboxAttachmentBuffer({
+            buffer,
+            mimeType,
+            organizationId,
+            leadId: lead.id,
+            attachmentId: attachment.id,
+            filename,
+          });
+          logger.info('[WhatsApp Inbound] Media uploaded to S3', {
+            attachmentId: attachment.id,
+            storageKey,
+            size: fileSize || buffer.length,
+          });
+        } catch (s3Err) {
+          logger.error('[WhatsApp Inbound] S3 upload failed — falling back to base64 DB storage', {
+            err: s3Err.message,
+            attachmentId: attachment.id,
+          });
+        }
+      }
+
+      await prisma.attachment.update({
+        where: { id: attachment.id },
+        data: storageKey
+          ? { url, storageKey }
+          : { url, data: `data:${mimeType};base64,${buffer.toString('base64')}` },
+      });
 
       attachmentMeta = {
         id: attachment.id,
@@ -371,6 +411,7 @@ async function processInboundWhatsAppMessage({
   const commMetadata = {
     messageId: messageId || undefined,
     from: `+${phoneCanon}`,
+    ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
   };
   if (mediaInfo) {
     commMetadata.mediaType = mediaInfo.type;
@@ -379,7 +420,7 @@ async function processInboundWhatsAppMessage({
     commMetadata.attachments = [attachmentMeta];
   }
 
-  await prisma.communication.create({
+  const communication = await prisma.communication.create({
     data: {
       leadId: lead.id,
       channel: 'WHATSAPP',
@@ -388,6 +429,9 @@ async function processInboundWhatsAppMessage({
       metadata: commMetadata,
       userId: null,
     },
+    include: {
+      user: { select: { id: true, firstName: true, lastName: true } },
+    },
   });
 
   await prisma.lead.update({
@@ -395,7 +439,45 @@ async function processInboundWhatsAppMessage({
     data: { updatedAt: new Date() },
   });
 
-  broadcastDataChange(lead.organizationId, 'communication', 'created', null, { entityId: lead.id }).catch(() => {});
+  const enriched = await enrichCommunicationForClient(communication, lead.id);
+  emitCommunicationChange(lead.organizationId, 'created', null, lead.id, enriched);
+
+  // ── Reply tracking: if this lead has an active broadcast recipient, mark as replied ──
+  setImmediate(async () => {
+    try {
+      // Find the most-recent broadcast recipient for this lead that was sent (not already replied)
+      const recipient = await prisma.whatsAppBroadcastRecipient.findFirst({
+        where: {
+          leadId: lead.id,
+          status: { in: ['SENT', 'DELIVERED', 'READ'] },
+        },
+        orderBy: { sentAt: 'desc' },
+        select: { id: true, broadcastId: true, status: true },
+      });
+
+      if (!recipient) return;
+
+      // Only count the first reply per recipient
+      await prisma.whatsAppBroadcastRecipient.updateMany({
+        where: { id: recipient.id, status: { in: ['SENT', 'DELIVERED', 'READ'] } },
+        data: { status: 'READ' }, // reply implies read
+      });
+
+      // Increment repliedCount on the parent run (use raw increment for safety)
+      await prisma.whatsAppBroadcastRun.update({
+        where: { id: recipient.broadcastId },
+        data: { repliedCount: { increment: 1 } },
+      }).catch(() => {});
+
+      logger.info('[WhatsApp Inbound] Broadcast reply tracked', {
+        leadId: lead.id,
+        recipientId: recipient.id,
+        broadcastId: recipient.broadcastId,
+      });
+    } catch (err) {
+      logger.warn('[WhatsApp Inbound] Reply tracking failed (non-critical)', { err: err?.message });
+    }
+  });
 
   await prisma.leadActivity.create({
     data: {

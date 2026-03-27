@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { useAuthStore } from '@/store/authStore';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
-import type { Organization } from '@/types';
 import Link from 'next/link';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -19,10 +21,12 @@ import {
   Timer, FileText, Phone, PhoneCall, Mail, Eye, Shield,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
+import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
+import type { Organization } from '@/types';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
-type Period = '7d' | '30d' | '90d' | '180d' | '365d';
+type Period = '7d' | '30d' | '90d' | '180d' | '365d' | 'custom';
 
 interface DivisionStats {
   divisionId: string;
@@ -35,8 +39,11 @@ interface DivisionStats {
 }
 
 interface DashboardFullData {
+  /** Calendar span for the selected preset or custom range (trend chart padding). */
+  periodDays?: number;
   kpis: {
     totalLeads: number;
+    totalLeadsChange: number;
     newLeads: number;
     newLeadsChange: number;
     wonLeads: number;
@@ -80,7 +87,14 @@ const PERIODS: { value: Period; label: string; days: number }[] = [
   { value: '90d', label: 'Last 90 days', days: 90 },
   { value: '180d', label: 'Last 6 months', days: 180 },
   { value: '365d', label: 'Last year', days: 365 },
+  { value: 'custom', label: 'Custom Range', days: 30 },
 ];
+
+interface TeamFilterUser {
+  id: string;
+  firstName?: string | null;
+  lastName?: string | null;
+}
 
 const statusColors: Record<string, { bg: string; text: string; ring: string; dot: string }> = {
   NEW: { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-600/10', dot: 'bg-indigo-500' },
@@ -105,17 +119,35 @@ const SOURCE_CHART_COLORS = [
   '#64748b', '#84cc16', '#a855f7', '#e11d48',
 ];
 
-const divisionColors = [
-  'bg-blue-100 text-blue-700', 'bg-purple-100 text-purple-700',
-  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
-  'bg-pink-100 text-pink-700', 'bg-cyan-100 text-cyan-700',
-];
-
 const activityIcons: Record<string, typeof Activity> = {
   STATUS_CHANGE: TrendingUp, STAGE_CHANGE: ArrowRight, NOTE_ADDED: FileText,
   EMAIL_SENT: Mail, CALL_MADE: Phone, LEAD_CREATED: UserPlus,
   LEAD_ASSIGNED: Users, SLA_ESCALATED: AlertTriangle,
 };
+
+const KPI_COLOR_MAP: Record<string, { iconBg: string; iconText: string }> = {
+  brand: { iconBg: 'bg-brand-100', iconText: 'text-brand-600' },
+  indigo: { iconBg: 'bg-indigo-100', iconText: 'text-indigo-600' },
+  emerald: { iconBg: 'bg-emerald-100', iconText: 'text-emerald-600' },
+  red: { iconBg: 'bg-red-100', iconText: 'text-red-600' },
+  cyan: { iconBg: 'bg-cyan-100', iconText: 'text-cyan-600' },
+  amber: { iconBg: 'bg-amber-100', iconText: 'text-amber-600' },
+  purple: { iconBg: 'bg-purple-100', iconText: 'text-purple-600' },
+};
+
+const TASK_PRIORITY_DOT: Record<string, { dot: string }> = {
+  URGENT: { dot: 'bg-red-500' },
+  HIGH: { dot: 'bg-orange-500' },
+  MEDIUM: { dot: 'bg-blue-500' },
+  LOW: { dot: 'bg-gray-400' },
+};
+
+const divisionColors = [
+  'bg-brand-100 text-brand-700', 'bg-indigo-100 text-indigo-700',
+  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
+  'bg-cyan-100 text-cyan-700', 'bg-purple-100 text-purple-700',
+  'bg-red-100 text-red-700', 'bg-blue-100 text-blue-700',
+];
 
 // ─── Utility ────────────────────────────────────────────────────────
 
@@ -179,7 +211,7 @@ function getDisplayInitials(first?: string | null, last?: string | null): string
 
 // ─── Components ─────────────────────────────────────────────────────
 
-function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' | 'md' }) {
+const ChangeIndicator = memo(function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' | 'md' }) {
   if (change === 0) return <span className="text-text-tertiary text-xs">—</span>;
   const isUp = change > 0;
   const Icon = isUp ? ArrowUpRight : ArrowDownRight;
@@ -191,9 +223,9 @@ function ChangeIndicator({ change, size = 'sm' }: { change: number; size?: 'sm' 
       {Math.abs(change)}%
     </span>
   );
-}
+});
 
-function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
+const ScoreRing = memo(function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
   const radius = (size - 6) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - ((score || 0) / 100) * circumference;
@@ -209,9 +241,9 @@ function ScoreRing({ score, size = 32 }: { score: number; size?: number }) {
       <span className="absolute inset-0 flex items-center justify-center text-2xs font-bold text-text-primary">{score || 0}</span>
     </div>
   );
-}
+});
 
-function CustomTooltip({ active, payload, label }: any) {
+const CustomTooltip = memo(function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-border bg-white px-3 py-2 shadow-lg">
@@ -227,9 +259,9 @@ function CustomTooltip({ active, payload, label }: any) {
       ))}
     </div>
   );
-}
+});
 
-function PieTooltip({ active, payload }: any) {
+const PieTooltip = memo(function PieTooltip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0];
   return (
@@ -238,7 +270,7 @@ function PieTooltip({ active, payload }: any) {
       <p className="text-xs text-text-secondary">{d.value} leads ({d.payload.pct}%)</p>
     </div>
   );
-}
+});
 
 // ─── Skeleton ───────────────────────────────────────────────────────
 
@@ -267,69 +299,82 @@ function DashboardSkeleton() {
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
-  const [data, setData] = useState<DashboardFullData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [period, setPeriod] = useState<Period>('30d');
-  const [divisions, setDivisions] = useState<Organization[]>([]);
+  const [activeDivisionId, setActiveDivisionId] = useState<string | undefined>(undefined);
+  const [teamMembers, setTeamMembers] = useState<TeamFilterUser[]>([]);
+  const [teamMemberFilter, setTeamMemberFilter] = useState<string>('all');
+  const [customFrom, setCustomFrom] = useState<string>('');
+  const [customTo, setCustomTo] = useState<string>('');
+  const [customApplied, setCustomApplied] = useState<boolean>(false);
   const [divisionFilter, setDivisionFilter] = useState<string>('all');
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const divisionKey = divisionFilter === 'all' ? 'all' : divisionFilter;
 
-  // Load divisions for SUPER_ADMIN
-  useEffect(() => {
-    if (isSuperAdmin) {
-      api.getDivisions().then((divs) => setDivisions(divs || [])).catch(() => {});
-    }
-  }, [isSuperAdmin]);
+  const divisionsQuery = useQuery({
+    queryKey: ['divisions', 'list'],
+    queryFn: () => api.getDivisions() as Promise<Organization[]>,
+    enabled: !!user && isSuperAdmin,
+    staleTime: 5 * 60_000,
+  });
+  const divisions = divisionsQuery.data ?? [];
 
-  // Fetch consolidated dashboard data
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
+  const dashboardQuery = useQuery({
+    queryKey: queryKeys.analytics.dashboardFull(period, divisionKey),
+    queryFn: async () => {
       const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
       const d = await api.getDashboardFull(period, divId);
-      if (d && typeof d === 'object' && d.kpis) {
-        setData(d);
-      } else {
-        setError('Unexpected response format');
-      }
-    } catch (err: any) {
-      console.error('Dashboard fetch error:', err);
-      setError(err.message || 'Failed to load dashboard');
-    } finally {
-      setLoading(false);
-    }
-  }, [period, divisionFilter]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  // Fetch custom status labels
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    api.getFieldConfig(activeDivisionId || undefined)
-      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
-      .catch(() => {});
-  }, []);
-
-  // Real-time refresh
-  useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
-    const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
-    api.getDashboardFull(period, divId).then((d) => {
-      if (d?.kpis) setData(d);
-    }).catch(() => {});
+      if (d && typeof d === 'object' && d.kpis) return d as DashboardFullData;
+      throw new Error('Unexpected response format');
+    },
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
   });
 
-  const periodDays = PERIODS.find((p) => p.value === period)?.days || 30;
+  const data = dashboardQuery.data ?? null;
+  const loading = dashboardQuery.isPending && !data;
+  const error = dashboardQuery.isError
+    ? (dashboardQuery.error as Error)?.message || 'Failed to load dashboard'
+    : null;
+
+  // Fetch custom status labels (same as before; cached via long staleTime)
+  useEffect(() => {
+    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+    api.getFieldConfig(activeDivisionId || undefined)
+      .then((cfg) => {
+        if (cfg.statusLabels) setStatusLabels(cfg.statusLabels);
+      })
+      .catch(() => {});
+  }, [activeDivisionId]);
+
+  // Debounced real-time refresh — avoids hammering /dashboard-full on websocket bursts
+  useRealtimeSync(['lead', 'contact', 'task', 'deal', 'campaign'], () => {
+    if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+    realtimeDebounceRef.current = setTimeout(() => {
+      realtimeDebounceRef.current = null;
+      queryClient.invalidateQueries({ queryKey: ['analytics', 'dashboard-full'] });
+    }, 500);
+  });
+
+  useEffect(() => () => {
+    if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+  }, []);
+
+  const periodDaysFromPreset = PERIODS.find((p) => p.value === period)?.days || 30;
+  const canApplyCustomRange = period === 'custom' && !!customFrom && !!customTo;
 
   // Computed data
   const trendData = useMemo(() => {
     if (!data?.trends) return [];
-    return fillDates(data.trends, periodDays);
-  }, [data?.trends, periodDays]);
+    const span = typeof data.periodDays === 'number' && data.periodDays > 0
+      ? data.periodDays
+      : periodDaysFromPreset;
+    return fillDates(data.trends, span);
+  }, [data?.trends, data?.periodDays, periodDaysFromPreset]);
 
   const sourceChartData = useMemo(() => {
     if (!data?.leadsBySource) return [];
@@ -342,6 +387,63 @@ export default function DashboardPage() {
     }));
   }, [data?.leadsBySource]);
 
+  const getStatusLabel = useCallback(
+    (status: string): string =>
+      statusLabels[status] ||
+      status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\B\w+/g, (m) => m.toLowerCase()),
+    [statusLabels]
+  );
+
+  const divisionBreakdown = data?.divisionBreakdown ?? [];
+
+  const { groupTotalLeads, groupTotalPipeline, groupTotalWon, groupConvRate, groupNewLeadsSum } = useMemo(() => {
+    const groupTotalLeads = divisionBreakdown.reduce((s, d) => s + (d.totalLeads || 0), 0);
+    const groupTotalPipeline = divisionBreakdown.reduce((s, d) => s + (d.pipelineValue || 0), 0);
+    const groupTotalWon = divisionBreakdown.reduce((s, d) => s + (d.wonLeads || 0), 0);
+    const groupNewLeadsSum = divisionBreakdown.reduce((s, d) => s + (d.newLeads || 0), 0);
+    const groupConvRate =
+      groupTotalLeads > 0 ? Number(((groupTotalWon / groupTotalLeads) * 100).toFixed(1)) : 0;
+    return { groupTotalLeads, groupTotalPipeline, groupTotalWon, groupConvRate, groupNewLeadsSum };
+  }, [divisionBreakdown]);
+
+  const kpiCards = useMemo(() => {
+    const kpis = data?.kpis;
+    if (!kpis) return [] as Array<{
+      label: string;
+      value: string;
+      icon: typeof Users;
+      color: string;
+      change: number | null;
+    }>;
+    return [
+      { label: 'Leads added', value: fmt(kpis.totalLeads), icon: Users, color: 'brand', change: kpis.totalLeadsChange ?? (null as number | null) },
+      { label: `${getStatusLabel('NEW')} Leads`, value: fmt(kpis.newLeads), icon: UserPlus, color: 'indigo', change: kpis.newLeadsChange },
+      { label: `${getStatusLabel('WON')} Deals`, value: fmt(kpis.wonLeads), icon: Trophy, color: 'emerald', change: kpis.wonLeadsChange },
+      { label: `${getStatusLabel('LOST')} Deals`, value: fmt(kpis.lostLeads), icon: XCircle, color: 'red', change: kpis.lostLeadsChange },
+      { label: 'Conversion', value: `${kpis.conversionRate}%`, icon: Target, color: 'cyan', change: kpis.conversionRateChange },
+      { label: 'Pipeline', value: fmt(kpis.pipelineValue, 'currency'), icon: Banknote, color: 'amber', change: kpis.pipelineValueChange },
+      { label: 'Won Revenue', value: fmt(kpis.wonRevenue, 'currency'), icon: DollarSign, color: 'emerald', change: null as number | null },
+      { label: 'Activities', value: fmt(kpis.activities), icon: Activity, color: 'purple', change: kpis.activitiesChange },
+      {
+        label: 'Reachability',
+        value: kpis.totalCalls > 0 ? `${kpis.reachabilityRatio}%` : 'N/A',
+        icon: PhoneCall,
+        color: kpis.reachabilityRatio >= 75 ? 'emerald' : kpis.reachabilityRatio >= 50 ? 'amber' : 'red',
+        change: null as number | null,
+      },
+    ];
+  }, [data?.kpis, getStatusLabel]);
+
+  const funnel = data?.funnel ?? [];
+  const funnelStagesNonLost = useMemo(
+    () => (funnel.length ? funnel.filter((f) => !f.isLostStage) : []),
+    [funnel]
+  );
+  const funnelMaxCount = useMemo(
+    () => (funnelStagesNonLost.length ? Math.max(...funnelStagesNonLost.map((f) => f.count), 1) : 1),
+    [funnelStagesNonLost]
+  );
+
   if (loading) return <DashboardSkeleton />;
 
   if (!data) return (
@@ -349,7 +451,9 @@ export default function DashboardPage() {
       <div className="empty-state-icon"><XCircle className="h-6 w-6" /></div>
       <p className="text-sm font-medium text-text-primary">{error || 'Failed to load dashboard'}</p>
       <p className="text-xs text-text-tertiary mt-1">Please try refreshing the page</p>
-      <button onClick={() => window.location.reload()} className="mt-3 btn-primary text-sm">Refresh</button>
+      <button type="button" onClick={() => dashboardQuery.refetch()} className="mt-3 btn-primary text-sm">
+        Retry
+      </button>
     </div>
   );
 
@@ -357,41 +461,10 @@ export default function DashboardPage() {
   const leadsByStatus = data.leadsByStatus || [];
   const recentLeads = data.recentLeads || [];
   const upcomingTasks = data.upcomingTasks || [];
-  const funnel = data.funnel || [];
   const scoreDistribution = data.scoreDistribution || [];
   const teamLeaderboard = data.teamLeaderboard || [];
   const recentActivities = data.recentActivities || [];
-  const divisionBreakdown = data.divisionBreakdown || [];
 
-  // Group overview stats
-  const groupTotalLeads = divisionBreakdown.reduce((s, d) => s + (d.totalLeads || 0), 0);
-  const groupTotalPipeline = divisionBreakdown.reduce((s, d) => s + (d.pipelineValue || 0), 0);
-  const groupTotalWon = divisionBreakdown.reduce((s, d) => s + (d.wonLeads || 0), 0);
-  const groupConvRate = groupTotalLeads > 0 ? Number(((groupTotalWon / groupTotalLeads) * 100).toFixed(1)) : 0;
-
-  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, m => m.toLowerCase());
-
-  const kpiCards = [
-    { label: 'Total Leads', value: fmt(k.totalLeads), icon: Users, color: 'brand', change: null },
-    { label: `${getStatusLabel('NEW')} Leads`, value: fmt(k.newLeads), icon: UserPlus, color: 'indigo', change: k.newLeadsChange },
-    { label: `${getStatusLabel('WON')} Deals`, value: fmt(k.wonLeads), icon: Trophy, color: 'emerald', change: k.wonLeadsChange },
-    { label: `${getStatusLabel('LOST')} Deals`, value: fmt(k.lostLeads), icon: XCircle, color: 'red', change: k.lostLeadsChange },
-    { label: 'Conversion', value: `${k.conversionRate}%`, icon: Target, color: 'cyan', change: k.conversionRateChange },
-    { label: 'Pipeline', value: fmt(k.pipelineValue, 'currency'), icon: Banknote, color: 'amber', change: k.pipelineValueChange },
-    { label: 'Won Revenue', value: fmt(k.wonRevenue, 'currency'), icon: DollarSign, color: 'emerald', change: null },
-    { label: 'Activities', value: fmt(k.activities), icon: Activity, color: 'purple', change: k.activitiesChange },
-    { label: 'Reachability', value: k.totalCalls > 0 ? `${k.reachabilityRatio}%` : 'N/A', icon: PhoneCall, color: k.reachabilityRatio >= 75 ? 'emerald' : k.reachabilityRatio >= 50 ? 'amber' : 'red', change: null, subtitle: k.totalCalls > 0 ? `${k.reachedCalls}/${k.totalCalls} calls` : 'No calls yet' },
-  ];
-
-  const colorMap: Record<string, { iconBg: string; iconText: string }> = {
-    brand: { iconBg: 'bg-brand-100', iconText: 'text-brand-600' },
-    indigo: { iconBg: 'bg-indigo-100', iconText: 'text-indigo-600' },
-    emerald: { iconBg: 'bg-emerald-100', iconText: 'text-emerald-600' },
-    red: { iconBg: 'bg-red-100', iconText: 'text-red-600' },
-    cyan: { iconBg: 'bg-cyan-100', iconText: 'text-cyan-600' },
-    amber: { iconBg: 'bg-amber-100', iconText: 'text-amber-600' },
-    purple: { iconBg: 'bg-purple-100', iconText: 'text-purple-600' },
-  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -403,18 +476,35 @@ export default function DashboardPage() {
           </h1>
           <p className="text-sm text-text-secondary mt-0.5">
             {isSuperAdmin
-              ? 'Group-wide overview across all divisions.'
+              ? 'Division-scoped overview based on sidebar division selection.'
               : "Here's what's happening with your leads today."}
+            {teamMemberFilter !== 'all' && (
+              <span className="ml-1 text-brand-700">
+                Filtered by team member.
+              </span>
+            )}
+            {period === 'custom' && customApplied && (
+              <span className="ml-1 text-brand-700">
+                Custom: {customFrom} to {customTo}.
+              </span>
+            )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {isSuperAdmin && divisions.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {teamMembers.length > 0 && (
             <div className="relative">
-              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-              <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-                value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)}>
-                <option value="all">All Divisions</option>
-                {divisions.map((div) => <option key={div.id} value={div.id}>{div.name}</option>)}
+              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+              <select
+                className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
+                value={teamMemberFilter}
+                onChange={(e) => setTeamMemberFilter(e.target.value)}
+              >
+                <option value="all">All Team Members</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {getDisplayName(member.firstName, member.lastName)}
+                  </option>
+                ))}
               </select>
               <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
             </div>
@@ -422,12 +512,54 @@ export default function DashboardPage() {
           <div className="relative">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
             <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-              value={period} onChange={(e) => setPeriod(e.target.value as Period)}>
+              value={period}
+              onChange={(e) => {
+                const next = e.target.value as Period;
+                setPeriod(next);
+                if (next !== 'custom') setCustomApplied(false);
+              }}
+            >
               {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
           </div>
-          <RefreshButton onRefresh={fetchData} />
+          {period === 'custom' && (
+            <>
+              <input
+                type="date"
+                className="input py-2 text-xs w-auto"
+                value={customFrom}
+                onChange={(e) => {
+                  setCustomFrom(e.target.value);
+                  setCustomApplied(false);
+                }}
+              />
+              <input
+                type="date"
+                className="input py-2 text-xs w-auto"
+                value={customTo}
+                onChange={(e) => {
+                  setCustomTo(e.target.value);
+                  setCustomApplied(false);
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary text-xs py-2"
+                disabled={!canApplyCustomRange}
+                onClick={() => {
+                  if (canApplyCustomRange) setCustomApplied(true);
+                }}
+              >
+                Apply
+              </button>
+            </>
+          )}
+          <RefreshButton
+            onRefresh={async () => {
+              await dashboardQuery.refetch();
+            }}
+          />
         </div>
       </div>
 
@@ -543,7 +675,7 @@ export default function DashboardPage() {
                   <tr className="bg-surface-secondary border-t-2 border-border">
                     <td className="table-cell font-bold">Total (Group)</td>
                     <td className="table-cell text-right font-bold">{groupTotalLeads.toLocaleString()}</td>
-                    <td className="table-cell text-right hidden md:table-cell font-bold">{divisionBreakdown.reduce((s, d) => s + (d.newLeads || 0), 0).toLocaleString()}</td>
+                    <td className="table-cell text-right hidden md:table-cell font-bold">{groupNewLeadsSum.toLocaleString()}</td>
                     <td className="table-cell text-right hidden md:table-cell font-bold text-emerald-600">{groupTotalWon.toLocaleString()}</td>
                     <td className="table-cell text-right font-bold">{groupConvRate}%</td>
                     <td className="table-cell text-right font-bold">AED {groupTotalPipeline.toLocaleString()}</td>
@@ -573,7 +705,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         {kpiCards.map((kpi, i) => {
           const Icon = kpi.icon;
-          const colors = colorMap[kpi.color] || colorMap.brand;
+          const colors = KPI_COLOR_MAP[kpi.color] || KPI_COLOR_MAP.brand;
           return (
             <div key={kpi.label}
               className={`card p-4 animate-fade-in-up stagger-${Math.min(i + 1, 6)} group hover:shadow-card-hover transition-all duration-200`}>
@@ -624,9 +756,9 @@ export default function DashboardPage() {
                   interval={Math.max(Math.floor(trendData.length / 7) - 1, 0)} />
                 <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} allowDecimals={false} />
                 <RechartsTooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="total" stroke="#6366f1" strokeWidth={2} fill="url(#gradTotal)" />
-                <Area type="monotone" dataKey="won" stroke="#10b981" strokeWidth={2} fill="url(#gradWon)" />
-                <Area type="monotone" dataKey="lost" stroke="#f87171" strokeWidth={1.5} fill="none" strokeDasharray="4 4" />
+                <Area type="monotone" dataKey="total" stroke="#6366f1" strokeWidth={2} fill="url(#gradTotal)" isAnimationActive={false} />
+                <Area type="monotone" dataKey="won" stroke="#10b981" strokeWidth={2} fill="url(#gradWon)" isAnimationActive={false} />
+                <Area type="monotone" dataKey="lost" stroke="#f87171" strokeWidth={1.5} fill="none" strokeDasharray="4 4" isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -647,7 +779,7 @@ export default function DashboardPage() {
               <ResponsiveContainer width="100%" height={180}>
                 <PieChart>
                   <Pie data={sourceChartData} cx="50%" cy="50%" innerRadius={50} outerRadius={75}
-                    paddingAngle={2} dataKey="value" stroke="none">
+                    paddingAngle={2} dataKey="value" stroke="none" isAnimationActive={false}>
                     {sourceChartData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} />
                     ))}
@@ -691,9 +823,8 @@ export default function DashboardPage() {
           </div>
           {funnel.length > 0 ? (
             <div className="space-y-3">
-              {funnel.filter(f => !f.isLostStage).map((stage, i) => {
-                const maxCount = Math.max(...funnel.filter(f => !f.isLostStage).map(f => f.count), 1);
-                const pct = (stage.count / maxCount) * 100;
+              {funnelStagesNonLost.map((stage, i) => {
+                const pct = (stage.count / funnelMaxCount) * 100;
                 return (
                   <div key={i} className="group">
                     <div className="flex items-center justify-between mb-1">
@@ -760,8 +891,8 @@ export default function DashboardPage() {
                       );
                     }}
                   />
-                  <Bar dataKey="total" fill="#e0e7ff" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="won" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="total" fill="#e0e7ff" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                  <Bar dataKey="won" fill="#6366f1" radius={[4, 4, 0, 0]} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
               <div className="grid grid-cols-5 gap-2">
@@ -923,11 +1054,7 @@ export default function DashboardPage() {
           </div>
           <div className="divide-y divide-border-subtle">
             {upcomingTasks.map((task: any) => {
-              const priorityMap: Record<string, { dot: string }> = {
-                URGENT: { dot: 'bg-red-500' }, HIGH: { dot: 'bg-orange-500' },
-                MEDIUM: { dot: 'bg-blue-500' }, LOW: { dot: 'bg-gray-400' },
-              };
-              const priority = priorityMap[task.priority] || priorityMap.MEDIUM;
+              const priority = TASK_PRIORITY_DOT[task.priority] || TASK_PRIORITY_DOT.MEDIUM;
               const dueDate = task.dueAt ? new Date(task.dueAt) : null;
               const isOverdue = dueDate ? dueDate < new Date() : false;
               return (

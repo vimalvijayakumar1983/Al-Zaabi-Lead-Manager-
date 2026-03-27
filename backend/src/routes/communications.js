@@ -231,17 +231,45 @@ router.post('/send-whatsapp', validate(z.object({
     });
 
     try {
-      await sendText(phone, body, req.orgId);
+      const sendResult = await sendText(phone, body, req.orgId);
+      const waMessageId = sendResult?.messageId || null;
+      if (waMessageId) {
+        const now = new Date();
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: {
+            metadata: {
+              ...(communication.metadata || {}),
+              waMessageId,
+              waStatus: 'SENT',
+              waStatusUpdatedAt: now.toISOString(),
+            },
+          },
+        }).catch(() => {});
+      }
       const rawDigits = lead.phone?.replace(/\D/g, '') || '';
       if (rawDigits && rawDigits !== phone) {
         await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
       }
     } catch (sendErr) {
+      const now = new Date();
       await prisma.communication.update({
         where: { id: communication.id },
-        data: { metadata: { ...(communication.metadata || {}), sendError: sendErr.message } },
+        data: {
+          metadata: {
+            ...(communication.metadata || {}),
+            sendError: sendErr?.message || String(sendErr),
+            waStatus: 'FAILED',
+            waStatusUpdatedAt: now.toISOString(),
+          },
+        },
       }).catch(() => {});
-      throw sendErr;
+      communication.metadata = {
+        ...(communication.metadata || {}),
+        sendError: sendErr?.message || String(sendErr),
+        waStatus: 'FAILED',
+        waStatusUpdatedAt: now.toISOString(),
+      };
     }
 
     res.status(201).json(communication);
@@ -269,12 +297,14 @@ router.post('/send-whatsapp-template', validate(z.object({
       return res.status(400).json({ error: 'Lead has no phone number' });
     }
 
-    await sendTemplate(phone, templateName, languageCode, req.orgId);
+    const sendResult = await sendTemplate(phone, templateName, languageCode, req.orgId);
+    const waMessageId = sendResult?.messageId || null;
     const rawDigits = lead.phone?.replace(/\D/g, '') || '';
     if (rawDigits && rawDigits !== phone) {
       await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
     }
 
+    const now = new Date();
     const communication = await prisma.communication.create({
       data: {
         leadId,
@@ -282,7 +312,11 @@ router.post('/send-whatsapp-template', validate(z.object({
         channel: 'WHATSAPP',
         direction: 'OUTBOUND',
         body: `[Template: ${templateName}]`,
-        metadata: { to: lead.phone, template: templateName },
+        metadata: {
+          to: lead.phone,
+          template: templateName,
+          ...(waMessageId ? { waMessageId, waStatus: 'SENT', waStatusUpdatedAt: now.toISOString() } : {}),
+        },
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },

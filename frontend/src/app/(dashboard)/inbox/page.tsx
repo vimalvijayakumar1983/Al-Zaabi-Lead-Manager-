@@ -1,7 +1,23 @@
 'use client';
 
-import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
+import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
+import {
+  useInboxAttachmentsQuery,
+  useInboxBootstrapQuery,
+  useInboxConversationsQuery,
+  useInboxMessageMutations,
+  INBOX_THREAD_LIMIT,
+  patchInboxThreadAfterOutbound,
+  useInboxThreadQuery,
+  useInboxNotesQuery,
+  useInboxRealtimeInvalidation,
+  useInboxStatsQuery,
+} from '@/features/inbox/hooks/useInboxQueries';
 import { useAuthStore } from '@/store/authStore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
@@ -192,28 +208,52 @@ function getDisplayInitials(first?: string | null, last?: string | null): string
 
 // ─── Main Component ─────────────────────────────────────────────────
 
+function InboxLoadingSkeleton() {
+  return (
+    <div className="flex h-[calc(100vh-7.5rem)] sm:h-[calc(100vh-5rem)] -m-3 sm:-m-4 md:-m-6 bg-white overflow-hidden border border-border rounded-xl animate-pulse">
+      <div className="hidden md:flex flex-col w-80 lg:w-[340px] border-r border-border p-3 gap-3">
+        <div className="h-8 bg-surface-tertiary rounded-lg w-2/3" />
+        <div className="h-9 bg-surface-tertiary rounded-lg" />
+        <div className="space-y-2 mt-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex gap-2">
+              <div className="h-11 w-11 rounded-full bg-surface-tertiary shrink-0" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3 bg-surface-tertiary rounded w-3/4" />
+                <div className="h-2 bg-surface-tertiary rounded w-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col min-w-0 p-4 gap-4">
+        <div className="h-10 bg-surface-tertiary rounded-lg w-1/2" />
+        <div className="flex-1 rounded-xl bg-surface-tertiary/60 min-h-[200px]" />
+        <div className="h-12 bg-surface-tertiary rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
 export default function InboxPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" /></div>}>
+    <Suspense fallback={<InboxLoadingSkeleton />}>
       <InboxContent />
     </Suspense>
   );
 }
 
+// Large virtual offset — same technique as ChatWindow.js.
+// When older messages are prepended, firstItemIndex shrinks to preserve scroll position automatically.
+const INITIAL_FIRST_ITEM_INDEX = 100_000;
+
 function InboxContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuthStore();
+  const queryClient = useQueryClient();
 
-  // State
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [leadInfo, setLeadInfo] = useState<LeadInfo | null>(null);
-  const [stats, setStats] = useState<any>(null);
-  const [notes, setNotes] = useState<any[]>([]);
-  const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([]);
-
   const [channelFilter, setChannelFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -221,28 +261,20 @@ function InboxContent() {
   const [messageText, setMessageText] = useState('');
   const [sendChannel, setSendChannel] = useState('WHATSAPP');
   const [showChannelPicker, setShowChannelPicker] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateSending, setTemplateSending] = useState(false);
+  const [templateError, setTemplateError] = useState('');
+  const [templateOptions, setTemplateOptions] = useState<any[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
 
-  const [loadingConversations, setLoadingConversations] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [sendingCount, setSendingCount] = useState(0);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
   // Right panel tabs: info | notes | canned | attachments
   const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
-  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
 
-  // Fetch custom status labels
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') || '' : '';
-    const params = activeDivisionId ? `?divisionId=${activeDivisionId}` : '';
-    fetch(`/api/settings/field-config${params}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data.statusLabels) setStatusLabels(data.statusLabels); })
-      .catch(() => {});
-  }, []);
-
-  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -251,9 +283,36 @@ function InboxContent() {
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
   const [inboxSortBy, setInboxSortBy] = useState<'latest' | 'oldest' | 'unread' | 'name'>('latest');
 
-  // Attachments
+  // Division scope (SUPER_ADMIN switcher writes to localStorage). In production builds,
+  // client-side navigation won't remount this page, so read localStorage into state
+  // and refresh on focus to avoid stale division-scoped inbox data.
+  const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => {
+      try {
+        const v = localStorage.getItem('activeDivisionId');
+        setActiveDivisionId(v && v.trim() ? v : null);
+      } catch {
+        setActiveDivisionId(null);
+      }
+    };
+    read();
+    window.addEventListener('focus', read);
+    const onChanged = () => read();
+    window.addEventListener('active-division-changed', onChanged as any);
+    document.addEventListener('visibilitychange', read);
+    return () => window.removeEventListener('focus', read);
+  }, []);
+
+  // When division changes, force-refresh inbox queries so the menu/list reflects the new scope.
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inbox.messagesRoot });
+    queryClient.invalidateQueries({ queryKey: ['inbox', 'stats'] });
+  }, [activeDivisionId, queryClient]);
+
+  // Attachments (pending uploads — server attachments come from TanStack Query)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [leadAttachments, setLeadAttachments] = useState<any[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -261,8 +320,6 @@ function InboxContent() {
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Pipeline stages for stage editing
-  const [pipelineStages, setPipelineStages] = useState<{ id: string; name: string; color: string }[]>([]);
   const [showStageDropdown, setShowStageDropdown] = useState(false);
   const [updatingStage, setUpdatingStage] = useState(false);
 
@@ -272,7 +329,18 @@ function InboxContent() {
   const [editingBody, setEditingBody] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const threadVirtuosoRef = useRef<VirtuosoHandle>(null);
+  // Scroll tracking refs — mirrors ChatWindow.js pattern exactly.
+  const firstGroupKeyRef = useRef<string | null>(null);
+  const lastGroupKeyRef = useRef<string | null>(null);
+  const prevGroupsLengthRef = useRef(0);
+  const firstPageSizeRef = useRef<number | null>(null);
+  const shouldScrollToBottomRef = useRef(false);
+  // Track previous selectedLeadId so we can reset scroll refs synchronously
+  // in the render body (not in a useEffect) — this guarantees the scroll effect
+  // sees prevLen=0 even when react-query has cached data ready immediately.
+  const prevLeadIdForScrollRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
@@ -285,72 +353,109 @@ function InboxContent() {
     return () => clearTimeout(searchTimeout.current);
   }, [searchQuery]);
 
-  // ─── Load conversations ───────────────────────────────────────────
-  const loadConversations = useCallback(async () => {
-    try {
-      setLoadingConversations(true);
-      const params: any = {};
-      if (channelFilter !== 'ALL') params.channel = channelFilter;
-      if (debouncedSearch) params.search = debouncedSearch;
-      if (statusFilter) params.status = statusFilter;
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      if (activeDivisionId) params.divisionId = activeDivisionId;
+  const conversationQueryParams = useMemo(() => {
+    const params: Record<string, unknown> = {};
+    if (channelFilter !== 'ALL') params.channel = channelFilter;
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (statusFilter) params.status = statusFilter;
+    if (activeDivisionId) params.divisionId = activeDivisionId;
+    return params;
+  }, [channelFilter, debouncedSearch, statusFilter, activeDivisionId]);
 
-      const res = await api.getInboxConversations(params);
-      setConversations(res.conversations || []);
-    } catch (err) {
-      console.error('Failed to load conversations:', err);
-    } finally {
-      setLoadingConversations(false);
+  const messageQueryParams = useMemo(() => {
+    return activeDivisionId ? { divisionId: activeDivisionId } : {};
+  }, [activeDivisionId]);
+
+  const threadCacheParams = useMemo(
+    () => ({ ...messageQueryParams, limit: INBOX_THREAD_LIMIT }),
+    [messageQueryParams]
+  );
+
+  const divisionScope = activeDivisionId;
+
+  const fieldConfigQuery = useLeadsFieldConfigQuery(divisionScope);
+  const statusLabels = (fieldConfigQuery.data?.statusLabels || {}) as Record<string, string>;
+  const getStatusLabel = (status: string): string => statusLabels[status] || status.replace(/_/g, ' ');
+
+  const conversationsQuery = useInboxConversationsQuery(conversationQueryParams as any);
+  const threadQuery = useInboxThreadQuery(selectedLeadId, messageQueryParams as any);
+  const notesQuery = useInboxNotesQuery(selectedLeadId);
+  const attachmentsQuery = useInboxAttachmentsQuery(selectedLeadId);
+  const statsQuery = useInboxStatsQuery(divisionScope);
+  const { cannedResponses: cannedQuery, pipelineStages: pipelineQuery } = useInboxBootstrapQuery();
+  const inboxMutations = useInboxMessageMutations(selectedLeadId);
+  const { onCommunicationChanged, onLeadChanged } = useInboxRealtimeInvalidation(selectedLeadId);
+
+  const conversations = (conversationsQuery.data?.conversations || []) as Conversation[];
+  const messages = useMemo(() => {
+    const pages = threadQuery.data?.pages;
+    if (!pages?.length) return [] as Message[];
+    return pages
+      .slice()
+      .reverse()
+      .flatMap((p) => (p.messages || []) as Message[]);
+  }, [threadQuery.data?.pages]);
+  // Synchronously reset scroll-tracking refs when the selected conversation changes.
+  // This MUST run in the render body (not in a useEffect) so the scroll effect always
+  // sees prevLen=0 for the new conversation, even when react-query returns cached data
+  // in the same render cycle as the selectedLeadId change.
+  if (prevLeadIdForScrollRef.current !== selectedLeadId) {
+    prevLeadIdForScrollRef.current = selectedLeadId;
+    prevGroupsLengthRef.current = 0;
+    firstGroupKeyRef.current = null;
+    lastGroupKeyRef.current = null;
+    firstPageSizeRef.current = null;
+    shouldScrollToBottomRef.current = false;
+  }
+
+  // Derive firstItemIndex from flat messages.length — exactly like ChatWindow.js.
+  // When older messages are prepended, firstItemIndex shrinks by the number of new messages,
+  // giving Virtuoso the precise count it needs to lock scroll position.
+  if (messages.length > 0 && firstPageSizeRef.current === null) {
+    firstPageSizeRef.current = messages.length;
+  }
+  const threadFirstItemIndex = INITIAL_FIRST_ITEM_INDEX - Math.max(0, messages.length - (firstPageSizeRef.current ?? messages.length));
+
+  const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
+  const notes = (notesQuery.data || []) as any[];
+  const stats = statsQuery.data ?? null;
+  const cannedResponses = (cannedQuery.data || []) as CannedResponse[];
+  const rawPipeline = pipelineQuery.data as any;
+  const pipelineStages = (rawPipeline?.stages ?? (Array.isArray(rawPipeline) ? rawPipeline : [])) as {
+    id: string;
+    name: string;
+    color: string;
+  }[];
+  const leadAttachments = (attachmentsQuery.data || []) as any[];
+  const selectedTemplate = useMemo(
+    () => templateOptions.find((t) => t.id === selectedTemplateId) || null,
+    [templateOptions, selectedTemplateId]
+  );
+  const selectedTemplateVarKeys = useMemo(() => {
+    if (!selectedTemplate?.components || !Array.isArray(selectedTemplate.components)) return [] as string[];
+    const indexes = new Set<number>();
+    for (const c of selectedTemplate.components) {
+      const text = typeof c?.text === 'string' ? c.text : '';
+      const matches = [...text.matchAll(/\{\{(\d+)\}\}/g)];
+      for (const m of matches) indexes.add(Number(m[1]));
     }
-  }, [channelFilter, debouncedSearch, statusFilter]);
+    return Array.from(indexes).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).map((n) => String(n));
+  }, [selectedTemplate]);
 
-  // ─── Load messages for selected lead (background = no full loading, feels real-time) ──────────────────────────────
-  const loadMessages = useCallback(async (leadId: string, options?: { background?: boolean }) => {
-    const background = options?.background === true;
-    try {
-      if (!background) setLoadingMessages(true);
-      const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-      const res = await api.getInboxMessages(leadId, activeDivisionId ? { divisionId: activeDivisionId } : undefined);
-      setMessages(res.messages || []);
-      setLeadInfo(res.lead || null);
+  const loadingConversations = conversationsQuery.isLoading;
+  const loadingMessages = !!selectedLeadId && threadQuery.isPending;
 
-      if (res.messages?.length > 0) {
-        const lastMsg = res.messages[res.messages.length - 1];
-        setSendChannel(lastMsg.channel === 'CHAT' ? lastMsg.platform?.toUpperCase() || 'CHAT' : lastMsg.channel);
-      }
-    } catch (err) {
-      console.error('Failed to load messages:', err);
-    } finally {
-      if (!background) setLoadingMessages(false);
-    }
-  }, []);
-
-  // ─── Load notes ───────────────────────────────────────────────────
-  const loadNotes = useCallback(async (leadId: string) => {
-    try {
-      const res = await api.getInternalNotes(leadId);
-      setNotes(res || []);
-    } catch { setNotes([]); }
-  }, []);
-
-  // ─── Load canned responses ────────────────────────────────────────
+  // Default send channel from the latest loaded server message (skip optimistic rows)
   useEffect(() => {
-    api.getCannedResponses()
-      .then((data: any) => setCannedResponses(data || []))
-      .catch(() => setCannedResponses([]));
-    api.getPipelineStages()
-      .then((data: any) => setPipelineStages(data.stages || data || []))
-      .catch(() => setPipelineStages([]));
-  }, []);
-
-  // ─── Load stats ───────────────────────────────────────────────────
-  useEffect(() => {
-    const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
-    api.getInboxStats(activeDivisionId || undefined).then(setStats).catch(() => {});
-  }, []);
-
-  useEffect(() => { loadConversations(); }, [loadConversations]);
+    if (!messages.length) return;
+    const lastServer = [...messages].reverse().find((m) => !m.id?.startsWith('temp-'));
+    if (!lastServer) return;
+    setSendChannel(
+      lastServer.channel === 'CHAT'
+        ? lastServer.platform?.toUpperCase() || 'CHAT'
+        : lastServer.channel
+    );
+  }, [messages, selectedLeadId]);
 
   // Auto-select lead from URL query param (e.g., /inbox?lead=<id>)
   useEffect(() => {
@@ -360,6 +465,15 @@ function InboxContent() {
       setMobileView('chat');
     }
   }, [searchParams, selectedLeadId]);
+
+  // Reset all scroll refs when switching conversations.
+  useEffect(() => {
+    firstGroupKeyRef.current = null;
+    lastGroupKeyRef.current = null;
+    prevGroupsLengthRef.current = 0;
+    firstPageSizeRef.current = null;
+    shouldScrollToBottomRef.current = false;
+  }, [selectedLeadId]);
 
   // Map pipeline stage names to lead statuses for auto-sync
   const STAGE_NAME_TO_STATUS: Record<string, string> = {
@@ -378,7 +492,6 @@ function InboxContent() {
     setUpdatingStage(true);
     try {
       const stage = pipelineStages.find(s => s.id === stageId);
-      // Auto-sync status when stage changes
       const updateData: any = { stageId };
       if (stage) {
         const matchedStatus = STAGE_NAME_TO_STATUS[stage.name.toLowerCase()];
@@ -387,76 +500,141 @@ function InboxContent() {
         }
       }
       await api.updateLead(selectedLeadId, updateData);
-      // Reload lead info in background so conversation doesn't flash loading
-      await loadMessages(selectedLeadId, { background: true });
-      loadConversations();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', 'messages', selectedLeadId] });
     } catch (err) {
       console.error('Failed to update stage:', err);
     } finally {
       setUpdatingStage(false);
       setShowStageDropdown(false);
     }
-  }, [selectedLeadId, leadInfo, pipelineStages, loadConversations, loadMessages]);
+  }, [selectedLeadId, leadInfo, pipelineStages, queryClient]);
 
-  // ─── Load lead attachments ──────────────────────────────────────────
-  const loadAttachments = useCallback(async (leadId: string) => {
-    try {
-      const res = await api.getLeadAttachments(leadId);
-      setLeadAttachments(res || []);
-    } catch { setLeadAttachments([]); }
+  useEffect(() => {
+    if (selectedLeadId) setAttachedFiles([]);
+  }, [selectedLeadId]);
+
+  // Exact ChatWindow.js scroll pattern — proven production-stable.
+  // initialTopMostItemIndex handles initial scroll-to-bottom natively (no JS needed).
+  // followOutput={true} handles new-message auto-scroll natively.
+  // This effect only fires scrollToIndex for:
+  //   (a) initial load (safety belt over initialTopMostItemIndex)
+  //   (b) new message at bottom
+  //   (c) forced scroll after sending
+  // Prepend (load-more) needs NO manual scroll — Virtuoso's firstItemIndex handles it.
+  // Native DOM scroll to absolute bottom — the only reliable mechanism
+  // for variable-height content that includes images / media.
+  const scrollToAbsoluteBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
   }, []);
 
   useEffect(() => {
-    if (selectedLeadId) {
-      loadMessages(selectedLeadId);
-      loadNotes(selectedLeadId);
-      loadAttachments(selectedLeadId);
-      setAttachedFiles([]);
-    }
-  }, [selectedLeadId, loadMessages, loadNotes, loadAttachments]);
+    if (!messages?.length) return;
 
-  // Auto-scroll within the messages container (not the page)
-  useEffect(() => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-    }
-  }, [messages]);
+    const currentLen = messages.length;
+    const prevLen = prevGroupsLengthRef.current;
+    const firstId = messages[0].id;
+    const lastId = messages[currentLen - 1].id;
 
-  // Real-time sync: refresh conversations and messages on communication changes (background, no loading overlay)
+    const isInitialLoad = prevLen === 0;
+    const isNewMessageAtBottom = !isInitialLoad
+      && lastId !== lastGroupKeyRef.current
+      && firstId === firstGroupKeyRef.current;
+    const shouldForceScroll = shouldScrollToBottomRef.current;
+
+    prevGroupsLengthRef.current = currentLen;
+    firstGroupKeyRef.current = firstId;
+    lastGroupKeyRef.current = lastId;
+
+    // Prepend (load-more): firstItemIndex handles scroll preservation automatically.
+
+    if (isInitialLoad) {
+      // Conversation switch / first load.
+      // First pass: let Virtuoso render items, then native-scroll to bottom.
+      // Second pass: safety net after images/media finish loading.
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('auto'), 100);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 400);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+
+    if (shouldForceScroll) {
+      // After sending — two-pass: immediate then safety net.
+      shouldScrollToBottomRef.current = false;
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('smooth'), 50);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 350);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+
+    if (isNewMessageAtBottom) {
+      // Incoming real-time message — two-pass scroll.
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('smooth'), 60);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 350);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, scrollToAbsoluteBottom]);
+
+  const handleLoadOlderMessages = useCallback(() => {
+    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
+    threadQuery.fetchNextPage();
+  }, [threadQuery]);
+
   useRealtimeSync(['communication'], useCallback((event) => {
-    loadConversations();
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId, { background: true });
-    }
-  }, [loadConversations, loadMessages, selectedLeadId]));
+    onCommunicationChanged({
+      entityId: event.entityId,
+      message: event.message != null && typeof event.message === 'object'
+        ? (event.message as Record<string, unknown>)
+        : undefined,
+    });
+  }, [onCommunicationChanged]));
 
-  // Real-time sync: refresh conversations + right panel lead info when leads change (background)
   useRealtimeSync(['lead'], useCallback((event) => {
-    loadConversations();
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadMessages(selectedLeadId, { background: true });
-    }
-  }, [loadConversations, loadMessages, selectedLeadId]));
+    onLeadChanged(event.entityId);
+  }, [onLeadChanged]));
 
-  // Real-time sync: refresh notes panel when notes change
   useRealtimeSync(['note'], useCallback((event) => {
-    if (selectedLeadId && (!event.entityId || event.entityId === selectedLeadId)) {
-      loadNotes(selectedLeadId);
+    if (event.entityId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inbox.notes(event.entityId) });
     }
-  }, [loadNotes, selectedLeadId]));
+  }, [queryClient]));
 
-  // Real-time sync: refresh lead info when tasks change (background)
   useRealtimeSync(['task'], useCallback(() => {
     if (selectedLeadId) {
-      loadMessages(selectedLeadId, { background: true });
+      queryClient.invalidateQueries({
+        predicate: (q) =>
+          Array.isArray(q.queryKey) &&
+          q.queryKey[0] === 'inbox' &&
+          q.queryKey[1] === 'messages' &&
+          q.queryKey[2] === selectedLeadId &&
+          q.queryKey[3] === 'thread',
+      });
     }
-  }, [loadMessages, selectedLeadId]));
+  }, [queryClient, selectedLeadId]));
+
+  const refreshConversationList = useCallback(() => {
+    conversationsQuery.refetch();
+  }, [conversationsQuery]);
+
+  const scrollThreadToBottomSoon = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (messages.length > 0) {
+        threadVirtuosoRef.current?.scrollToIndex({
+          index: messages.length - 1,
+          align: 'end',
+          behavior: 'smooth',
+        });
+      }
+    });
+  }, [messages.length]);
 
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
-    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
+    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId) return;
     const body = messageText.trim();
     const tempId = `temp-${Date.now()}`;
+    const msgKey = queryKeys.inbox.messagesThread(selectedLeadId, threadCacheParams as Record<string, unknown>);
 
     let channel = sendChannel;
     let platform: string | undefined;
@@ -465,49 +643,99 @@ function InboxContent() {
       platform = sendChannel.toLowerCase();
     }
 
-    // Optimistic: add message instantly (only for text-only messages)
-    if (attachedFiles.length === 0) {
-      const optimisticMsg: Message = {
-        id: tempId,
-        direction: 'OUTBOUND',
-        channel,
-        body,
-        subject: null,
-        platform: (platform || sendChannel).toUpperCase(),
-        platformInfo: { label: PLATFORM_LABELS[sendChannel] || sendChannel, color: PLATFORM_COLORS[sendChannel] || '#6366f1', icon: '' },
-        metadata: platform ? { platform } : {},
-        createdAt: new Date().toISOString(),
-        user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
-        _optimistic: true,
+    const optimisticAttachments =
+      attachedFiles.length > 0
+        ? attachedFiles.map((f) => ({
+            url: null,
+            filename: f.name,
+            mimeType: f.type || 'application/octet-stream',
+            size: f.size || 0,
+            _uploading: true,
+          }))
+        : [];
+    const optimisticMsg: Message = {
+      id: tempId,
+      direction: 'OUTBOUND',
+      channel,
+      body: body || (optimisticAttachments.length > 0 ? '(no text)' : ''),
+      subject: null,
+      platform: (platform || sendChannel).toUpperCase(),
+      platformInfo: {
+        label: PLATFORM_LABELS[sendChannel] || sendChannel,
+        color: PLATFORM_COLORS[sendChannel] || '#6366f1',
+        icon: '',
+      },
+      metadata: {
+        ...(platform ? { platform } : {}),
+        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+      },
+      createdAt: new Date().toISOString(),
+      user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
+      _optimistic: true,
+    };
+    queryClient.setQueryData(msgKey, (old: any) => {
+      if (!old?.pages?.length) {
+        return {
+          pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
+          pageParams: [1],
+        };
+      }
+      const pages = [...old.pages];
+      const newest = 0;
+      pages[newest] = {
+        ...pages[newest],
+        messages: [...(pages[newest].messages || []), optimisticMsg],
       };
-      setMessages(prev => [...prev, optimisticMsg]);
-    }
+      return { ...old, pages };
+    });
 
     setMessageText('');
-    setSending(true);
+    setSendingCount((v) => v + 1);
+    shouldScrollToBottomRef.current = true;
 
     try {
+      const threadParams = threadCacheParams as Record<string, unknown>;
       if (attachedFiles.length > 0) {
-        await api.sendInboxMessageWithAttachments({
-          leadId: selectedLeadId, channel, body, platform, files: attachedFiles,
+        const sent = await inboxMutations.sendMessageWithAttachments.mutateAsync({
+          leadId: selectedLeadId,
+          channel,
+          body,
+          platform,
+          files: attachedFiles,
+        });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, {
+          tempId,
+          message: sent,
         });
         setAttachedFiles([]);
-        // Reload messages in background so conversation doesn't flash loading
-        await loadMessages(selectedLeadId, { background: true });
-        loadAttachments(selectedLeadId);
       } else {
-        const sent = await api.sendInboxMessage({ leadId: selectedLeadId, channel, body, platform });
-        // Replace optimistic message with real one
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...sent, platform: (platform || sendChannel).toUpperCase() } : m));
+        const sent = await inboxMutations.sendMessage.mutateAsync({
+          leadId: selectedLeadId,
+          channel,
+          body,
+          platform,
+        });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, {
+          tempId,
+          message: sent,
+        });
       }
-      loadConversations();
+      shouldScrollToBottomRef.current = true;
       inputRef.current?.focus();
     } catch (err: any) {
-      // Remove optimistic message on failure
-      setMessages(prev => prev.filter(m => m.id !== tempId));
+      queryClient.setQueryData(msgKey, (old: any) => {
+        if (!old?.pages?.length) return old;
+        const pages = [...old.pages];
+        const newest = 0;
+        pages[newest] = {
+          ...pages[newest],
+          messages: (pages[newest].messages || []).filter((m: Message) => m.id !== tempId),
+        };
+        return { ...old, pages };
+      });
       console.error('Failed to send:', err);
     } finally {
-      setSending(false);
+      setSendingCount((v) => Math.max(0, v - 1));
     }
   };
 
@@ -515,8 +743,10 @@ function InboxContent() {
   const handleEditMessage = async (messageId: string) => {
     if (!editingBody.trim()) return;
     try {
-      const updated = await api.editInboxMessage(messageId, editingBody.trim());
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, body: updated.body, isEdited: true } : m));
+      await inboxMutations.editMessage.mutateAsync({
+        messageId,
+        body: editingBody.trim(),
+      });
       setEditingMsgId(null);
       setEditingBody('');
     } catch (err: any) {
@@ -535,11 +765,63 @@ function InboxContent() {
     });
     if (!confirmed) return;
     try {
-      await api.deleteInboxMessage(messageId);
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isDeleted: true, body: '' } : m));
+      await inboxMutations.deleteMessage.mutateAsync(messageId);
       setMenuOpenMsgId(null);
     } catch (err: any) {
       console.error('Failed to delete:', err);
+    }
+  };
+
+  const handleRetryWhatsAppMessage = async (messageId: string) => {
+    try {
+      await inboxMutations.retryWhatsAppMessage.mutateAsync(messageId);
+    } catch (err: any) {
+      console.error('Failed to retry WhatsApp message:', err);
+    }
+  };
+
+  const openTemplateModal = async () => {
+    if (!selectedLeadId) return;
+    setShowTemplateModal(true);
+    setTemplateError('');
+    setTemplateSending(false);
+    setTemplateVars({});
+    setTemplateLoading(true);
+    try {
+      const list = await api.listWhatsAppTemplates(activeDivisionId || undefined);
+      const approved = (list?.templates || []).filter((t: any) => String(t.status || '').toUpperCase() === 'APPROVED');
+      setTemplateOptions(approved);
+      setSelectedTemplateId(approved[0]?.id || '');
+    } catch (err: any) {
+      setTemplateError(err?.message || 'Failed to load templates');
+      setTemplateOptions([]);
+      setSelectedTemplateId('');
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
+
+  const sendSelectedTemplate = async () => {
+    if (!selectedLeadId || !selectedTemplateId) return;
+    setTemplateSending(true);
+    setTemplateError('');
+    try {
+      for (const key of selectedTemplateVarKeys) {
+        if (!templateVars[key] || !templateVars[key].trim()) {
+          throw new Error(`Variable ${key} is required`);
+        }
+      }
+      const sent = await api.sendInboxWhatsAppTemplateMessage(selectedLeadId, {
+        templateId: selectedTemplateId,
+        variables: templateVars,
+      });
+      patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadCacheParams as Record<string, unknown>, { message: sent });
+      setShowTemplateModal(false);
+      setTemplateVars({});
+    } catch (err: any) {
+      setTemplateError(err?.message || 'Failed to send template');
+    } finally {
+      setTemplateSending(false);
     }
   };
 
@@ -606,7 +888,19 @@ function InboxContent() {
 
   function isMediaPlaceholderBody(body: string) {
     if (!body) return false;
-    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio)\]$/.test(body.trim()) || body.trim() === '(no text)';
+    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio|Location)\]$/.test(body.trim()) || body.trim() === '(no text)';
+  }
+
+  function isLocationMessage(msg: Message) {
+    return msg?.metadata?.mediaType === 'location' || !!msg?.metadata?.location;
+  }
+
+  function getGoogleMapsLink(location: any) {
+    if (!location) return '';
+    const lat = Number(location.latitude);
+    const lng = Number(location.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+    return `https://maps.google.com/?q=${lat},${lng}`;
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -659,7 +953,7 @@ function InboxContent() {
         const ext = (recorder.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
         const file = new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type });
 
-        setSending(true);
+        setSendingCount((v) => v + 1);
         try {
           let channel = sendChannel;
           let platform: string | undefined;
@@ -667,15 +961,20 @@ function InboxContent() {
             channel = 'CHAT';
             platform = sendChannel.toLowerCase();
           }
-          await api.sendInboxMessageWithAttachments({
-            leadId: selectedLeadId, channel, body: '', platform, files: [file],
+          const sent = await inboxMutations.sendMessageWithAttachments.mutateAsync({
+            leadId: selectedLeadId,
+            channel,
+            body: '',
+            platform,
+            files: [file],
           });
-          await loadMessages(selectedLeadId, { background: true });
-          loadConversations();
+          patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadCacheParams as Record<string, unknown>, {
+            message: sent,
+          });
         } catch (err) {
           console.error('Failed to send voice note:', err);
         } finally {
-          setSending(false);
+          setSendingCount((v) => Math.max(0, v - 1));
         }
         resolve();
       };
@@ -705,9 +1004,8 @@ function InboxContent() {
     if (!noteText.trim() || !selectedLeadId || savingNote) return;
     try {
       setSavingNote(true);
-      await api.addInternalNote(selectedLeadId, noteText.trim());
+      await inboxMutations.addNote.mutateAsync({ leadId: selectedLeadId, body: noteText.trim() });
       setNoteText('');
-      await loadNotes(selectedLeadId);
     } catch (err) {
       console.error('Failed to save note:', err);
     } finally {
@@ -721,8 +1019,8 @@ function InboxContent() {
     try {
       await api.updateConversationStatus(selectedLeadId, status);
       setShowStatusDropdown(false);
-      await loadMessages(selectedLeadId, { background: true });
-      loadConversations();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.conversationsRoot });
+      await queryClient.invalidateQueries({ queryKey: ['inbox', 'messages', selectedLeadId] });
     } catch (err) {
       console.error('Failed to update status:', err);
     }
@@ -743,18 +1041,24 @@ function InboxContent() {
     setMobileView('chat');
     setShowConvoActions(null);
 
-    // Find conversation and mark as read if it has unread messages
     const convo = conversations.find(c => c.leadId === leadId);
     if (convo && convo.unreadCount > 0) {
-      // Optimistically clear the unread count in the UI
-      setConversations(prev =>
-        prev.map(c => c.leadId === leadId ? { ...c, unreadCount: 0 } : c)
+      queryClient.setQueryData(
+        queryKeys.inbox.conversations(conversationQueryParams as Record<string, unknown>),
+        (old: any) => {
+          if (!old?.conversations) return old;
+          return {
+            ...old,
+            conversations: old.conversations.map((c: Conversation) =>
+              c.leadId === leadId ? { ...c, unreadCount: 0 } : c
+            ),
+          };
+        }
       );
-      // Mark as read on the server and refresh global notification count
       api.markConversationRead(leadId).catch(() => {});
       fetchUnreadCount();
     }
-  }, [conversations, fetchUnreadCount]);
+  }, [conversations, conversationQueryParams, fetchUnreadCount, queryClient]);
 
   // ─── Toggle pin ───────────────────────────────────────────────────
   const togglePin = (leadId: string) => {
@@ -860,8 +1164,8 @@ function InboxContent() {
                 <p className="text-2xs text-text-tertiary">{conversations.length} conversations</p>
               </div>
             </div>
-            <button onClick={() => loadConversations()} className="btn-icon" title="Refresh">
-              <RefreshCw className={`h-4 w-4 ${loadingConversations ? 'animate-spin' : ''}`} />
+            <button onClick={() => refreshConversationList()} className="btn-icon" title="Refresh">
+              <RefreshCw className={`h-4 w-4 ${conversationsQuery.isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
 
@@ -944,7 +1248,7 @@ function InboxContent() {
         </div>
 
         {/* ── Conversation list ─────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1">
           {loadingConversations && conversations.length === 0 ? (
             <div className="p-3 space-y-2">
               {[...Array(8)].map((_, i) => (
@@ -969,137 +1273,144 @@ function InboxContent() {
               </p>
             </div>
           ) : (
-            sortedConversations.map(convo => {
-              const isPinned = pinnedConvos.has(convo.leadId);
-              const isSelected = selectedLeadId === convo.leadId;
-              const statusStyle = STATUS_COLORS[convo.leadStatus] || STATUS_COLORS.NEW;
+            <Virtuoso
+              style={{ height: '100%' }}
+              data={sortedConversations}
+              computeItemKey={(_, convo) => convo.leadId}
+              overscan={320}
+              increaseViewportBy={{ top: 240, bottom: 480 }}
+              itemContent={(_, convo) => {
+                const isPinned = pinnedConvos.has(convo.leadId);
+                const isSelected = selectedLeadId === convo.leadId;
+                const statusStyle = STATUS_COLORS[convo.leadStatus] || STATUS_COLORS.NEW;
 
-              return (
-                <div key={convo.leadId} className="relative group">
-                  <button
-                    onClick={() => selectConversation(convo.leadId)}
-                    className={`w-full text-left px-3 py-2.5 border-b border-border-subtle transition-all ${
-                      isSelected
-                        ? 'bg-brand-50 border-l-[3px] border-l-brand-500'
-                        : 'hover:bg-surface-secondary border-l-[3px] border-l-transparent'
-                    } ${isPinned ? 'bg-amber-50/30' : ''}`}
-                  >
-                    <div className="flex gap-2.5">
-                      {/* Avatar with platform badge */}
-                      <div className="relative flex-shrink-0">
-                        <div
-                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm"
-                          style={{ backgroundColor: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
-                        >
-                          {convo.contactName.charAt(0).toUpperCase()}
-                        </div>
-                        {convo.lastMessage && (
-                          <div className="absolute -bottom-0.5 -right-0.5 h-4.5 w-4.5 rounded-full bg-white flex items-center justify-center shadow-xs ring-1 ring-white">
-                            <PlatformIcon platform={convo.lastMessage.platform} size={10} />
-                          </div>
-                        )}
-                        {isPinned && (
-                          <div className="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
-                            <Pin className="h-2.5 w-2.5 text-white" />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
-                              {convo.contactName || 'Unknown Contact'}
-                            </span>
-                            {/* Score badge */}
-                            {convo.leadScore >= 70 && (
-                              <span className="flex-shrink-0 h-4 w-4 rounded-full bg-amber-100 flex items-center justify-center">
-                                <Star className="h-2.5 w-2.5 text-amber-600" />
-                              </span>
-                            )}
+                return (
+                  <div key={convo.leadId} className="relative group">
+                    <button
+                      onClick={() => selectConversation(convo.leadId)}
+                      className={`w-full text-left px-3 py-2.5 border-b border-border-subtle transition-all ${
+                        isSelected
+                          ? 'bg-brand-50 border-l-[3px] border-l-brand-500'
+                          : 'hover:bg-surface-secondary border-l-[3px] border-l-transparent'
+                      } ${isPinned ? 'bg-amber-50/30' : ''}`}
+                    >
+                      <div className="flex gap-2.5">
+                        {/* Avatar with platform badge */}
+                        <div className="relative flex-shrink-0">
+                          <div
+                            className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-sm"
+                            style={{ backgroundColor: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
+                          >
+                            {convo.contactName.charAt(0).toUpperCase()}
                           </div>
                           {convo.lastMessage && (
-                            <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">
-                              {timeAgo(convo.lastMessage.createdAt)}
-                            </span>
+                            <div className="absolute -bottom-0.5 -right-0.5 h-4.5 w-4.5 rounded-full bg-white flex items-center justify-center shadow-xs ring-1 ring-white">
+                              <PlatformIcon platform={convo.lastMessage.platform} size={10} />
+                            </div>
+                          )}
+                          {isPinned && (
+                            <div className="absolute -top-1 -left-1 h-4 w-4 rounded-full bg-amber-400 flex items-center justify-center">
+                              <Pin className="h-2.5 w-2.5 text-white" />
+                            </div>
                           )}
                         </div>
 
-                        {convo.company && (
-                          <p className="text-2xs text-text-tertiary truncate flex items-center gap-1">
-                            <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
-                            {convo.company}
-                          </p>
-                        )}
-
-                        {convo.lastMessage && (
-                          <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
-                            {convo.lastMessage.direction === 'OUTBOUND' && (
-                              <span className="text-text-tertiary">
-                                <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={`text-[13px] truncate ${convo.unreadCount > 0 ? 'font-bold text-text-primary' : 'font-semibold text-text-primary'}`}>
+                                {convo.contactName || 'Unknown Contact'}
+                              </span>
+                              {/* Score badge */}
+                              {convo.leadScore >= 70 && (
+                                <span className="flex-shrink-0 h-4 w-4 rounded-full bg-amber-100 flex items-center justify-center">
+                                  <Star className="h-2.5 w-2.5 text-amber-600" />
+                                </span>
+                              )}
+                            </div>
+                            {convo.lastMessage && (
+                              <span className="text-2xs text-text-tertiary flex-shrink-0 tabular-nums">
+                                {timeAgo(convo.lastMessage.createdAt)}
                               </span>
                             )}
-                            {convo.lastMessage.metadata?.mediaType === 'image' || convo.lastMessage.metadata?.mediaType === 'sticker' ? (
-                              <span className="italic">📷 Photo{convo.lastMessage.metadata?.attachments?.[0]?.caption ? `: ${convo.lastMessage.metadata.attachments[0].caption}` : ''}</span>
-                            ) : convo.lastMessage.metadata?.mediaType === 'video' ? (
-                              <span className="italic">🎬 Video</span>
-                            ) : convo.lastMessage.metadata?.mediaType === 'audio' || convo.lastMessage.metadata?.mediaType === 'voice' ? (
-                              <span className="italic">🎤 Voice message</span>
-                            ) : convo.lastMessage.metadata?.mediaType === 'document' ? (
-                              <span className="italic">📄 {convo.lastMessage.metadata?.attachments?.[0]?.filename || 'Document'}</span>
-                            ) : convo.lastMessage.body}
-                          </p>
-                        )}
+                          </div>
 
-                        {/* Tags row */}
-                        <div className="flex items-center gap-1.5 mt-1">
-                          {/* Channel pill */}
-                          <span
-                            className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-2xs font-medium"
-                            style={{
-                              backgroundColor: `${PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1'}10`,
-                              color: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1',
-                            }}
-                          >
-                            <PlatformIcon platform={convo.lastMessage?.platform || 'CHAT'} size={8} />
-                            {convo.lastMessage?.platformInfo?.label || convo.lastMessage?.channel}
-                          </span>
-
-                          {/* Status pill */}
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
-                            {getStatusLabel(convo.leadStatus || 'NEW')}
-                          </span>
-
-                          {/* Unread count badge or message count */}
-                          {convo.unreadCount > 0 ? (
-                            <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
-                              {convo.unreadCount}
-                            </span>
-                          ) : (
-                            <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
-                              {convo.messageCount}
-                            </span>
+                          {convo.company && (
+                            <p className="text-2xs text-text-tertiary truncate flex items-center gap-1">
+                              <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
+                              {convo.company}
+                            </p>
                           )}
+
+                          {convo.lastMessage && (
+                            <p className={`text-xs truncate mt-0.5 leading-snug ${convo.unreadCount > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}>
+                              {convo.lastMessage.direction === 'OUTBOUND' && (
+                                <span className="text-text-tertiary">
+                                  <CheckCheck className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                                </span>
+                              )}
+                              {convo.lastMessage.metadata?.mediaType === 'image' || convo.lastMessage.metadata?.mediaType === 'sticker' ? (
+                                <span className="italic">📷 Photo{convo.lastMessage.metadata?.attachments?.[0]?.caption ? `: ${convo.lastMessage.metadata.attachments[0].caption}` : ''}</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'video' ? (
+                                <span className="italic">🎬 Video</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'audio' || convo.lastMessage.metadata?.mediaType === 'voice' ? (
+                                <span className="italic">🎤 Voice message</span>
+                              ) : convo.lastMessage.metadata?.mediaType === 'document' ? (
+                                <span className="italic">📄 {convo.lastMessage.metadata?.attachments?.[0]?.filename || 'Document'}</span>
+                              ) : convo.lastMessage.body}
+                            </p>
+                          )}
+
+                          {/* Tags row */}
+                          <div className="flex items-center gap-1.5 mt-1">
+                            {/* Channel pill */}
+                            <span
+                              className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-2xs font-medium"
+                              style={{
+                                backgroundColor: `${PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1'}10`,
+                                color: PLATFORM_COLORS[convo.lastMessage?.platform || 'CHAT'] || '#6366f1',
+                              }}
+                            >
+                              <PlatformIcon platform={convo.lastMessage?.platform || 'CHAT'} size={8} />
+                              {convo.lastMessage?.platformInfo?.label || convo.lastMessage?.channel}
+                            </span>
+
+                            {/* Status pill */}
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-2xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`} />
+                              {getStatusLabel(convo.leadStatus || 'NEW')}
+                            </span>
+
+                            {/* Unread count badge or message count */}
+                            {convo.unreadCount > 0 ? (
+                              <span className="ml-auto inline-flex items-center justify-center h-4.5 min-w-[18px] px-1 rounded-full bg-brand-600 text-white text-2xs font-bold tabular-nums">
+                                {convo.unreadCount}
+                              </span>
+                            ) : (
+                              <span className="text-2xs text-text-tertiary ml-auto tabular-nums">
+                                {convo.messageCount}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
-
-                  {/* Hover actions */}
-                  <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); togglePin(convo.leadId); }}
-                      className={`h-6 w-6 rounded flex items-center justify-center transition-colors ${isPinned ? 'bg-amber-100 text-amber-600' : 'bg-white/90 text-text-tertiary hover:text-text-primary shadow-xs'}`}
-                      title={isPinned ? 'Unpin' : 'Pin'}
-                    >
-                      <Pin className="h-3 w-3" />
                     </button>
+
+                    {/* Hover actions */}
+                    <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(convo.leadId); }}
+                        className={`h-6 w-6 rounded flex items-center justify-center transition-colors ${isPinned ? 'bg-amber-100 text-amber-600' : 'bg-white/90 text-text-tertiary hover:text-text-primary shadow-xs'}`}
+                        title={isPinned ? 'Unpin' : 'Pin'}
+                      >
+                        <Pin className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              }}
+            />
           )}
         </div>
 
@@ -1237,7 +1548,7 @@ function InboxContent() {
             </div>
 
             {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
-            <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
               {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
@@ -1252,24 +1563,57 @@ function InboxContent() {
                   <p className="text-xs text-text-tertiary mt-1">Send the first message to start the conversation</p>
                 </div>
               ) : (
-                groupMessagesByDate(messages).map((group, gi) => (
-                  <div key={gi}>
-                    {/* Date separator */}
-                    <div className="flex justify-center my-4">
-                      <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
-                        {group.date}
-                      </span>
-                    </div>
+                <>
+                <Virtuoso
+                  ref={threadVirtuosoRef}
+                  style={{ height: '100%' }}
+                  data={messages}
+                  firstItemIndex={threadFirstItemIndex}
+                  initialTopMostItemIndex={INITIAL_FIRST_ITEM_INDEX + messages.length - 1}
+                  overscan={600}
+                  increaseViewportBy={{ top: 300, bottom: 300 }}
+                  atTopThreshold={150}
+                  startReached={() => {
+                    handleLoadOlderMessages();
+                  }}
+                  scrollerRef={(el) => {
+                    messagesContainerRef.current = (el as HTMLDivElement | null);
+                  }}
+                  components={{
+                    Header: () =>
+                      threadQuery.isFetchingNextPage ? (
+                        <div className="py-3 text-center text-xs text-text-tertiary">
+                          Loading older messages…
+                        </div>
+                      ) : null,
+                    Footer: () => <div className="h-4" />,
+                  }}
+                  itemContent={(virtualIdx, msg) => {
+                    // Map virtual index → data array index to find the previous message.
+                    // Use Math.max to guard against any transient mismatch between
+                    // firstItemIndex and virtualIdx during load-more transitions.
+                    const arrayIdx = Math.max(0, virtualIdx - threadFirstItemIndex);
+                    const prevMsg = arrayIdx > 0 && arrayIdx <= messages.length ? messages[arrayIdx - 1] : null;
+                    const msgDateKey = new Date(msg.createdAt).toDateString();
+                    const prevDateKey = prevMsg ? new Date(prevMsg.createdAt).toDateString() : null;
+                    const showDateSeparator = !prevMsg || msgDateKey !== prevDateKey;
+                    // Show platform indicator when platform changes between adjacent messages
+                    const showPlatformIndicator = !prevMsg || prevMsg.platform !== msg.platform;
 
-                    {group.messages.map((msg, mi) => {
-                      const isOutbound = msg.direction === 'OUTBOUND';
-                      const isOwnMessage = isOutbound && msg.user?.id === user?.id;
-                      const isMenuOpen = menuOpenMsgId === msg.id;
-                      const isEditing = editingMsgId === msg.id;
-
-                      return (
+                    const isOutbound = msg.direction === 'OUTBOUND';
+                    const isOwnMessage = isOutbound && msg.user?.id === user?.id;
+                    const isMenuOpen = menuOpenMsgId === msg.id;
+                    const isEditing = editingMsgId === msg.id;
+                    return (
+                      <div className="px-3 sm:px-5">
+                        {showDateSeparator && (
+                          <div className="flex justify-center my-4">
+                            <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
+                              {formatDate(msg.createdAt)}
+                            </span>
+                          </div>
+                        )}
                         <div
-                          key={msg.id}
                           className={`flex mb-1.5 ${isOutbound ? 'justify-end' : 'justify-start'} group/msg relative`}
                         >
                           {/* Action menu for own outbound messages */}
@@ -1306,7 +1650,7 @@ function InboxContent() {
 
                           <div className={`max-w-[75%] sm:max-w-[65%] relative`}>
                             {/* Channel indicator on first msg or channel change */}
-                            {(mi === 0 || group.messages[mi - 1]?.platform !== msg.platform) && (
+                            {showPlatformIndicator && (
                               <div className={`flex items-center gap-1 mb-1 ${isOutbound ? 'justify-end' : ''}`}>
                                 <PlatformIcon platform={msg.platform} size={10} />
                                 <span className="text-2xs text-text-tertiary font-medium">
@@ -1339,6 +1683,13 @@ function InboxContent() {
                                   <p className="text-xs font-semibold text-teal-700 mb-0.5">
                                     {getDisplayName(leadInfo?.firstName, leadInfo?.lastName)}
                                   </p>
+                                )}
+
+                                {(msg.metadata?.referral || msg.metadata?.adReferral) && (
+                                  <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[10px] font-semibold">
+                                    <Zap className="h-3 w-3" />
+                                    Ad Message
+                                  </div>
                                 )}
 
                                 {/* Deleted message */}
@@ -1377,8 +1728,29 @@ function InboxContent() {
                                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                                       <div className="space-y-1.5">
                                         {msg.metadata.attachments.map((att: any, ai: number) => {
-                                          const url = att.url ? `/api${att.url}` : null;
-                                          if (!url) return null;
+                                          // S3 presigned URLs are already absolute (https://...) — use directly.
+                                          // Proxy-served attachments are relative (/inbox/attachments/...) — prefix with /api.
+                                          const url = att.url
+                                            ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                                            : null;
+                                          if (!url) {
+                                            return (
+                                              <div
+                                                key={ai}
+                                                className="flex items-center gap-2 p-2 rounded-lg bg-black/5 border border-black/10 min-w-[220px] max-w-[320px]"
+                                              >
+                                                <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                                <div className="min-w-0 flex-1">
+                                                  <p className="text-2xs font-medium truncate text-gray-800">
+                                                    {att.filename || 'Attachment'}
+                                                  </p>
+                                                  <p className="text-2xs text-gray-500">
+                                                    {att.size ? formatFileSize(att.size) : ''} {att._uploading ? 'Uploading…' : ''}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
 
                                           if (isImageOrSticker(att.mimeType)) {
                                             return (
@@ -1437,6 +1809,33 @@ function InboxContent() {
                                       </div>
                                     )}
 
+                                    {/* Location card */}
+                                    {isLocationMessage(msg) && (
+                                      <div className="mt-1 rounded-lg border border-black/10 bg-black/5 p-2 min-w-[220px]">
+                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                                          <MapPin className="h-3.5 w-3.5" />
+                                          Location
+                                        </div>
+                                        {msg.metadata?.location?.name ? (
+                                          <p className="text-xs text-gray-700 mt-1">{msg.metadata.location.name}</p>
+                                        ) : null}
+                                        {msg.metadata?.location?.address ? (
+                                          <p className="text-2xs text-gray-500 mt-0.5">{msg.metadata.location.address}</p>
+                                        ) : null}
+                                        {getGoogleMapsLink(msg.metadata?.location) ? (
+                                          <a
+                                            href={getGoogleMapsLink(msg.metadata?.location)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 text-2xs text-brand-600 hover:text-brand-700 mt-1"
+                                          >
+                                            <ExternalLink className="h-3 w-3" />
+                                            Open in Maps
+                                          </a>
+                                        ) : null}
+                                      </div>
+                                    )}
+
                                     {/* Text body — hide placeholder labels when media is present */}
                                     {msg.body && !(msg.metadata?.attachments?.length > 0 && isMediaPlaceholderBody(msg.body)) && (
                                       <p className={`whitespace-pre-wrap break-words ${msg.metadata?.attachments?.length > 0 ? 'mt-1' : ''}`}>{msg.body}</p>
@@ -1453,12 +1852,44 @@ function InboxContent() {
                                     <span className="text-[10px] text-gray-400">
                                       {formatTime(msg.createdAt)}
                                     </span>
-                                    {isOutbound && !msg._optimistic && (
-                                      <CheckCheck className="h-3 w-3 text-blue-500" />
+                                    {isOutbound && (
+                                      <>
+                                        {msg._optimistic ? (
+                                          <Check className="h-3 w-3 text-gray-400" />
+                                        ) : msg.channel === 'WHATSAPP' ? (
+                                          (() => {
+                                            const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                            const waStatus =
+                                              typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+
+                                            if (waStatus === 'READ') return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                            if (waStatus === 'DELIVERED')
+                                              return <CheckCheck className="h-3 w-3 text-gray-400" />;
+                                            if (waStatus === 'SENT') return <Check className="h-3 w-3 text-gray-400" />;
+                                            if (waStatus === 'FAILED') return <AlertCircle className="h-3 w-3 text-red-500" />;
+                                            return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                          })()
+                                        ) : (
+                                          <CheckCheck className="h-3 w-3 text-blue-500" />
+                                        )}
+                                      </>
                                     )}
-                                    {msg._optimistic && (
-                                      <Check className="h-3 w-3 text-gray-400" />
-                                    )}
+                                    {isOutbound && msg.channel === 'WHATSAPP' && (() => {
+                                      const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                      const waStatus = typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+                                      if (waStatus !== 'FAILED') return null;
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRetryWhatsAppMessage(msg.id)}
+                                          className="text-[10px] text-red-600 hover:text-red-700 underline ml-1"
+                                          disabled={inboxMutations.retryWhatsAppMessage.isPending}
+                                          title="Retry WhatsApp send"
+                                        >
+                                          Retry
+                                        </button>
+                                      );
+                                    })()}
                                   </div>
                                 )}
                               </div>
@@ -1478,10 +1909,11 @@ function InboxContent() {
                             </div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                ))
+                      </div>
+                    );
+                  }}
+                />
+              </>
               )}
               <div ref={messagesEndRef} />
             </div>
@@ -1568,6 +2000,15 @@ function InboxContent() {
                     </>
                   )}
                 </div>
+                {sendChannel === 'WHATSAPP' && (
+                  <button
+                    type="button"
+                    onClick={openTemplateModal}
+                    className="px-2.5 py-1 rounded-lg text-2xs font-semibold bg-surface-tertiary hover:bg-surface-secondary transition-colors text-text-secondary"
+                  >
+                    Template
+                  </button>
+                )}
 
                 <div className="flex-1" />
 
@@ -1660,7 +2101,6 @@ function InboxContent() {
                     {!messageText.trim() && attachedFiles.length === 0 ? (
                       <button
                         onClick={startRecording}
-                        disabled={sending}
                         className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-green-50 text-text-tertiary hover:text-green-600 transition-all disabled:opacity-40"
                         title="Record voice note"
                       >
@@ -1669,12 +2109,12 @@ function InboxContent() {
                     ) : (
                       <button
                         onClick={handleSend}
-                        disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
+                        disabled={(!messageText.trim() && attachedFiles.length === 0)}
                         className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
                         style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
                         title="Send"
                       >
-                        {sending ? (
+                        {sendingCount > 0 ? (
                           <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         ) : (
                           <Send className="h-4 w-4 text-white" />
@@ -1685,6 +2125,80 @@ function InboxContent() {
                 )}
               </div>
             </div>
+            {showTemplateModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-border">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <h3 className="text-sm font-semibold text-text-primary">Send WhatsApp template</h3>
+                    <button type="button" onClick={() => setShowTemplateModal(false)} className="btn-icon">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {templateLoading ? (
+                      <p className="text-sm text-text-tertiary">Loading templates...</p>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="label">Template</label>
+                          <select
+                            className="input"
+                            value={selectedTemplateId}
+                            onChange={(e) => {
+                              setSelectedTemplateId(e.target.value);
+                              setTemplateVars({});
+                            }}
+                          >
+                            <option value="">Select template</option>
+                            {templateOptions.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.language})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {selectedTemplateVarKeys.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-text-tertiary">
+                              Fill template variables:
+                            </p>
+                            {selectedTemplateVarKeys.map((key) => (
+                              <div key={key}>
+                                <label className="label">Variable {key}</label>
+                                <input
+                                  className="input"
+                                  value={templateVars[key] || ''}
+                                  onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
+                                  placeholder={`Value for {{${key}}}`}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {templateError && (
+                          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            {templateError}
+                          </div>
+                        )}
+                        <div className="flex justify-end gap-2 pt-2">
+                          <button type="button" onClick={() => setShowTemplateModal(false)} className="btn-secondary">
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={sendSelectedTemplate}
+                            className="btn-primary"
+                            disabled={!selectedTemplateId || templateSending}
+                          >
+                            {templateSending ? 'Sending...' : 'Send template'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1953,10 +2467,14 @@ function InboxContent() {
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {leadAttachments.map((att: any) => (
+                    {leadAttachments.map((att: any) => {
+                      const attUrl = att.url
+                        ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                        : '#';
+                      return (
                       <a
                         key={att.id}
-                        href={`/api${att.url}`}
+                        href={attUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border hover:border-brand-300 hover:bg-brand-50/20 transition-all group/att"
@@ -1964,7 +2482,7 @@ function InboxContent() {
                         {isImageFile(att.mimeType) ? (
                           <div className="h-10 w-10 rounded-lg overflow-hidden flex-shrink-0 bg-surface-tertiary">
                             <img
-                              src={`/api${att.url}`}
+                              src={attUrl}
                               alt={att.filename}
                               className="h-full w-full object-cover"
                             />
@@ -1984,7 +2502,8 @@ function InboxContent() {
                         </div>
                         <Download className="h-3.5 w-3.5 text-text-tertiary opacity-0 group-hover/att:opacity-100 transition-opacity flex-shrink-0" />
                       </a>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

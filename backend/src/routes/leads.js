@@ -1,7 +1,14 @@
 const { Router } = require('express');
+const multer = require('multer');
 const { z } = require('zod');
 const { prisma } = require('../config/database');
-const { authenticate, orgScope } = require('../middleware/auth');
+const {
+  isAttachmentObjectStorageEnabled,
+  uploadInboxAttachmentBuffer,
+} = require('../services/attachmentStorage');
+const { authenticate, orgScope, resolveDivisionScope } = require('../middleware/auth');
+const { logger } = require('../config/logger');
+
 const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 const { calculateLeadScore, predictConversion, calculateFullScore, rescoreAndPersist } = require('../utils/leadScoring');
@@ -15,10 +22,46 @@ const { getLeadSLAInfo, getSLAConfig } = require('../services/slaMonitor');
 const { upsertRecycleBinItem } = require('../services/recycleBinService');
 const { generateLeadSummaryInsights, regenerateLeadSummaryById } = require('../services/aiService');
 const { findStageForStatus } = require('../utils/statusStageMapping');
+const {
+  syncLeadScoreWithoutUpdatedAt,
+  setLeadAiSummaryWithoutUpdatedAt,
+  setLeadLastOpenedWithoutUpdatedAt,
+} = require('../utils/leadSilentUpdates');
 
 const router = Router();
 router.use(authenticate, orgScope);
 const AUTO_SERIAL_DEFAULT_VALUE = '__AUTO_SERIAL__';
+
+const leadNoteFilesUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = [
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+      'application/pdf',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain', 'text/csv',
+      'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm',
+      'video/mp4', 'video/webm', 'video/quicktime',
+      'application/zip', 'application/x-rar-compressed',
+    ];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('File type not allowed'), false);
+  },
+});
+
+function optionalLeadNoteMultipart(req, res, next) {
+  const ct = req.headers['content-type'] || '';
+  if (!ct.includes('multipart/form-data')) return next();
+  return leadNoteFilesUpload.array('files', 10)(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || 'File upload error' });
+    }
+    next();
+  });
+}
 
 function refreshLeadAISummaryAsync(leadId) {
   if (!leadId) return;
@@ -49,6 +92,75 @@ function getDisplayName(obj) {
   if (fn.toLowerCase().includes(ln.toLowerCase())) return fn;
   if (ln.toLowerCase().includes(fn.toLowerCase())) return ln;
   return `${fn} ${ln}`;
+}
+
+/** Prisma Decimal → JSON-safe number for res.json */
+function toJsonSafeBudget(budget) {
+  if (budget == null) return null;
+  if (typeof budget === 'number' && Number.isFinite(budget)) return budget;
+  if (typeof budget === 'object' && budget !== null && typeof budget.toNumber === 'function') {
+    try {
+      const n = budget.toNumber();
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      /* fall through */
+    }
+  }
+  const n = Number(budget);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Note attachments loaded separately so GET /leads/:id does not depend on a nested Prisma relation
+ * (avoids 500 when DB migration for leadNoteId lags or client is stale).
+ */
+async function mergeLeadNoteAttachments(lead) {
+  const notes = lead?.notes;
+  if (!Array.isArray(notes) || notes.length === 0) return;
+  const noteIds = notes.map((n) => n.id).filter(Boolean);
+  if (noteIds.length === 0) return;
+  try {
+    const att = prisma.attachment;
+    if (!att || typeof att.findMany !== 'function') {
+      lead.notes = notes.map((n) => ({ ...n, attachments: [] }));
+      return;
+    }
+    const rows = await att.findMany({
+      where: { leadNoteId: { in: noteIds } },
+      select: {
+        id: true,
+        leadNoteId: true,
+        filename: true,
+        mimeType: true,
+        size: true,
+        url: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const byNote = {};
+    for (const r of rows) {
+      if (!r.leadNoteId) continue;
+      if (!byNote[r.leadNoteId]) byNote[r.leadNoteId] = [];
+      byNote[r.leadNoteId].push({
+        id: r.id,
+        filename: r.filename,
+        mimeType: r.mimeType,
+        size: r.size,
+        url: r.url || `/inbox/attachments/file/${r.id}`,
+      });
+    }
+    lead.notes = notes.map((n) => ({
+      ...n,
+      attachments: byNote[n.id] || [],
+    }));
+  } catch (e) {
+    logger.warn('GET /leads/:id mergeLeadNoteAttachments skipped', {
+      leadId: lead.id,
+      code: e.code,
+      message: e.message,
+    });
+    lead.notes = notes.map((n) => ({ ...n, attachments: [] }));
+  }
 }
 
 async function getLatestCallsByLead({ orgIds, assignedToId, leadIds } = {}) {
@@ -174,6 +286,10 @@ const leadFilterSchema = paginationSchema.extend({
   maxScore: z.coerce.number().optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
+  updatedFrom: z.string().optional(),
+  updatedTo: z.string().optional(),
+  lastOpenedFrom: z.string().optional(), // YYYY-MM-DD: lastOpenedAt >= start of day
+  lastOpenedTo: z.string().optional(), // YYYY-MM-DD: lastOpenedAt <= end of day
   company: z.string().optional(),
   jobTitle: z.string().optional(),
   location: z.string().optional(),
@@ -192,6 +308,8 @@ const leadFilterSchema = paginationSchema.extend({
   callOutcome: z.string().optional(), // comma-separated CallDisposition values
   callOutcomeReason: z.string().optional(), // comma-separated reason labels/keys for latest call
   callOutcomeMode: z.enum(['latest', 'any']).optional(), // default latest; any is for analytics drill-down
+  lastCallFrom: z.string().optional(), // date (YYYY-MM-DD): latest call createdAt >= start of day
+  lastCallTo: z.string().optional(), // date: latest call createdAt <= end of day
   minCallCount: z.coerce.number().int().min(0).optional(),
   maxCallCount: z.coerce.number().int().min(0).optional(),
   showBlocked: z.string().optional(), // 'true' to show only DNC/blocked leads (admin only)
@@ -201,10 +319,16 @@ const aiSummaryRequestSchema = z.object({
   force: z.boolean().optional(),
 });
 
-// ─── List Leads ──────────────────────────────────────────────────
-router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
-  try {
-    const { page, limit, sortBy, sortOrder, search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget, hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, callOutcomeReason, callOutcomeMode, minCallCount, maxCallCount, showBlocked } = req.validatedQuery;
+
+/** Shared Prisma `where` for GET /leads and GET /leads/stats (same filters + division). */
+async function buildLeadWhereClause(req, q) {
+    const {
+      search, status, source, assignedToId, stageId, tag, tags, minScore, maxScore, dateFrom, dateTo, updatedFrom, updatedTo,
+      lastOpenedFrom, lastOpenedTo,
+      company, jobTitle, location, campaign, productInterest, budgetMin, budgetMax, minBudget, maxBudget,
+      hasEmail, hasPhone, conversionMin, conversionMax, customField, divisionId, callOutcome, callOutcomeReason,
+      callOutcomeMode, lastCallFrom, lastCallTo, minCallCount, maxCallCount, showBlocked,
+    } = q;
 
     const where = {
       organizationId: { in: req.orgIds },
@@ -216,7 +340,7 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
     // showBlocked=true shows ONLY DNC leads (admin Blocked tab)
     if (showBlocked === 'true') {
       if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
-        return res.status(403).json({ error: 'Only admins can view blocked leads' });
+        return { forbidden: true };
       }
       where.doNotCall = true;
     } else {
@@ -228,9 +352,10 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       where.assignedToId = req.user.id;
     }
 
-    // Optional: filter to specific division
-    if (divisionId && req.isSuperAdmin) {
-      where.organizationId = divisionId;
+    // Optional: sidebar / filter division (same access rule as analytics)
+    const scopedDivisionId = resolveDivisionScope(req, divisionId);
+    if (scopedDivisionId) {
+      where.organizationId = scopedDivisionId;
     }
 
     if (status) {
@@ -339,6 +464,16 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       where.createdAt = {};
       if (resolvedFrom) where.createdAt.gte = new Date(resolvedFrom);
       if (resolvedTo) where.createdAt.lte = new Date(resolvedTo + 'T23:59:59.999Z');
+    }
+    if (updatedFrom || updatedTo) {
+      where.updatedAt = {};
+      if (updatedFrom) where.updatedAt.gte = new Date(updatedFrom);
+      if (updatedTo) where.updatedAt.lte = new Date(updatedTo + 'T23:59:59.999Z');
+    }
+    if (lastOpenedFrom || lastOpenedTo) {
+      where.lastOpenedAt = {};
+      if (lastOpenedFrom) where.lastOpenedAt.gte = new Date(lastOpenedFrom);
+      if (lastOpenedTo) where.lastOpenedAt.lte = new Date(lastOpenedTo + 'T23:59:59.999Z');
     }
     // Text field filters
     if (company) where.company = { contains: company, mode: 'insensitive' };
@@ -483,6 +618,35 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         ];
       }
     }
+
+    // Last call date — latest call per lead (same basis as "Last Call Outcome" column)
+    if (lastCallFrom || lastCallTo) {
+      let scopedOrgIds = req.orgIds;
+      if (typeof where.organizationId === 'string') {
+        scopedOrgIds = [where.organizationId];
+      } else if (where.organizationId && Array.isArray(where.organizationId.in)) {
+        scopedOrgIds = where.organizationId.in;
+      }
+      const lastCalls = await getLatestCallsByLead({
+        orgIds: scopedOrgIds,
+        assignedToId: req.isRestrictedRole ? req.user.id : undefined,
+      });
+      const fromBound = lastCallFrom ? new Date(lastCallFrom) : null;
+      const toBound = lastCallTo ? new Date(`${lastCallTo}T23:59:59.999Z`) : null;
+      const dateMatchedLeadIds = lastCalls
+        .filter((row) => {
+          const t = new Date(row.createdAt).getTime();
+          if (fromBound && t < fromBound.getTime()) return false;
+          if (toBound && t > toBound.getTime()) return false;
+          return true;
+        })
+        .map((row) => row.leadId);
+      where.AND = [
+        ...(where.AND || []),
+        { id: { in: dateMatchedLeadIds.length > 0 ? dateMatchedLeadIds : ['__none__'] } },
+      ];
+    }
+
     // Custom field filtering (JSON encoded)
     if (customField) {
       try {
@@ -533,11 +697,22 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
       }
     }
 
+    return { where };
+  }
+// ─── List Leads ──────────────────────────────────────────────────
+router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
+  try {
+    const { page, limit, sortBy, sortOrder } = req.validatedQuery;
+    const built = await buildLeadWhereClause(req, req.validatedQuery);
+    if (built.forbidden) return res.status(403).json({ error: 'Only admins can view blocked leads' });
+    const { where } = built;
+
     const [leads, total] = await Promise.all([
       prisma.lead.findMany({
         where,
         include: {
           assignedTo: { select: { id: true, firstName: true, lastName: true, avatar: true } },
+          lastOpenedBy: { select: { id: true, firstName: true, lastName: true } },
           stage: { select: { id: true, name: true, color: true } },
           tags: { include: { tag: true } },
           organization: { select: { id: true, name: true } },
@@ -672,6 +847,59 @@ router.get('/', validateQuery(leadFilterSchema), async (req, res, next) => {
         data: { score: 0, conversionProb: 0 },
       }).catch(() => {});
     }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Leads stats (overview + reachability), same filters as list ──
+router.get('/stats', validateQuery(leadFilterSchema), async (req, res, next) => {
+  try {
+    const built = await buildLeadWhereClause(req, req.validatedQuery);
+    if (built.forbidden) return res.status(403).json({ error: 'Only admins can view blocked leads' });
+    const { where } = built;
+
+    const NOT_REACHED_DISPOSITIONS = ['NO_ANSWER', 'BUSY', 'VOICEMAIL_LEFT', 'WRONG_NUMBER', 'GATEKEEPER'];
+    const callWhere = { lead: where };
+
+    const [
+      totalLeads, newLeads, qualifiedLeads, wonLeads, lostLeads,
+      pipelineAgg, totalCalls, notReachedCalls,
+    ] = await Promise.all([
+      prisma.lead.count({ where }),
+      prisma.lead.count({ where: { ...where, status: 'NEW' } }),
+      prisma.lead.count({ where: { ...where, status: 'QUALIFIED' } }),
+      prisma.lead.count({ where: { ...where, status: 'WON' } }),
+      prisma.lead.count({ where: { ...where, status: 'LOST' } }),
+      prisma.lead.aggregate({
+        where: { ...where, status: { notIn: ['LOST'] }, budget: { not: null } },
+        _sum: { budget: true },
+      }),
+      prisma.callLog.count({ where: callWhere }),
+      prisma.callLog.count({ where: { ...callWhere, disposition: { in: NOT_REACHED_DISPOSITIONS } } }),
+    ]);
+
+    const reachedCalls = Math.max(0, totalCalls - notReachedCalls);
+    const reachabilityRatio = totalCalls > 0 ? Math.round((reachedCalls / totalCalls) * 10000) / 100 : 0;
+    const conversionRate = totalLeads > 0 ? Math.round((wonLeads / totalLeads) * 10000) / 100 : 0;
+
+    res.json({
+      overview: {
+        totalLeads,
+        newLeads,
+        qualifiedLeads,
+        wonLeads,
+        lostLeads,
+        conversionRate,
+        pipelineValue: Number(pipelineAgg._sum.budget || 0),
+      },
+      reachability: {
+        totalCalls,
+        reachedCalls,
+        notReachedCalls,
+        reachabilityRatio,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -1004,10 +1232,7 @@ router.post('/:id/ai-summary', validate(aiSummaryRequestSchema), async (req, res
     const summaryText = insights.summary;
     const shouldPersist = force || !lead.aiSummary || String(lead.aiSummary).trim() !== String(summaryText).trim();
     if (shouldPersist) {
-      await prisma.lead.update({
-        where: { id: lead.id },
-        data: { aiSummary: summaryText },
-      });
+      await setLeadAiSummaryWithoutUpdatedAt(lead.id, summaryText);
     }
 
     res.json({
@@ -1017,6 +1242,139 @@ router.post('/:id/ai-summary', validate(aiSummaryRequestSchema), async (req, res
         summary: summaryText,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Bump lead.updatedAt (meaningful activity — e.g. opened Tasks tab) ──
+router.post('/:id/touch', async (req, res, next) => {
+  try {
+    const touchWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) touchWhere.assignedToId = req.user.id;
+    const found = await prisma.lead.findFirst({ where: touchWhere, select: { id: true } });
+    if (!found) return res.status(404).json({ error: 'Lead not found' });
+    await prisma.lead.update({
+      where: { id: found.id },
+      data: { updatedAt: new Date() },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Check-in / check-out (active work session on this lead) ──────
+const checkInBodySchema = z.object({
+  note: z.string().max(500).optional().nullable(),
+});
+
+router.post('/:id/check-in', validate(checkInBodySchema), async (req, res, next) => {
+  try {
+    const leadWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) leadWhere.assignedToId = req.user.id;
+    const lead = await prisma.lead.findFirst({
+      where: leadWhere,
+      select: { id: true, organizationId: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const existingOnLead = await prisma.leadCheckinSession.findFirst({
+      where: { leadId: lead.id, userId: req.user.id, checkedOutAt: null },
+    });
+    if (existingOnLead) {
+      return res.status(400).json({ error: 'You are already checked in on this lead. Check out first.' });
+    }
+
+    const noteTrim = req.validated?.note != null ? String(req.validated.note).trim() : '';
+    const noteToStore = noteTrim.length > 0 ? noteTrim : null;
+    const now = new Date();
+    const actorName = getDisplayName(req.user) || 'User';
+
+    const session = await prisma.$transaction(async (tx) => {
+      await tx.leadCheckinSession.updateMany({
+        where: { userId: req.user.id, checkedOutAt: null },
+        data: { checkedOutAt: now },
+      });
+      const created = await tx.leadCheckinSession.create({
+        data: {
+          leadId: lead.id,
+          userId: req.user.id,
+          checkedInAt: now,
+          note: noteToStore,
+        },
+        include: { user: { select: { id: true, firstName: true, lastName: true, avatar: true } } },
+      });
+      await tx.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          userId: req.user.id,
+          type: 'LEAD_CHECK_IN',
+          description: noteToStore
+            ? `${actorName} checked in: ${noteToStore}`
+            : `${actorName} checked in`,
+          metadata: { sessionId: created.id },
+        },
+      });
+      await tx.lead.update({
+        where: { id: lead.id },
+        data: { updatedAt: now },
+      });
+      return created;
+    });
+
+    broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
+    res.status(201).json(session);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/check-out', async (req, res, next) => {
+  try {
+    const leadWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) leadWhere.assignedToId = req.user.id;
+    const lead = await prisma.lead.findFirst({
+      where: leadWhere,
+      select: { id: true, organizationId: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const session = await prisma.leadCheckinSession.findFirst({
+      where: { leadId: lead.id, userId: req.user.id, checkedOutAt: null },
+    });
+    if (!session) {
+      return res.status(400).json({ error: 'You are not checked in on this lead.' });
+    }
+
+    const now = new Date();
+    const actorName = getDisplayName(req.user) || 'User';
+    const durationMinutes = Math.max(0, Math.round((now.getTime() - session.checkedInAt.getTime()) / 60000));
+
+    await prisma.$transaction(async (tx) => {
+      await tx.leadCheckinSession.update({
+        where: { id: session.id },
+        data: { checkedOutAt: now },
+      });
+      await tx.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          userId: req.user.id,
+          type: 'LEAD_CHECK_OUT',
+          description: `${actorName} checked out (${durationMinutes} min)`,
+          metadata: { sessionId: session.id, durationMinutes },
+        },
+      });
+      await tx.lead.update({
+        where: { id: lead.id },
+        data: { updatedAt: now },
+      });
+    });
+
+    broadcastDataChange(lead.organizationId, 'lead', 'updated', req.user.id, { entityId: lead.id }).catch(() => {});
+    refreshLeadAISummaryAsync(lead.id);
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -1032,6 +1390,7 @@ router.get('/:id', async (req, res, next) => {
       include: {
         assignedTo: { select: { id: true, firstName: true, lastName: true, email: true, avatar: true } },
         createdBy: { select: { id: true, firstName: true, lastName: true } },
+        lastOpenedBy: { select: { id: true, firstName: true, lastName: true } },
         stage: true,
         tags: { include: { tag: true } },
         activities: {
@@ -1041,7 +1400,9 @@ router.get('/:id', async (req, res, next) => {
         },
         notes: {
           orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
-          include: { user: { select: { id: true, firstName: true, lastName: true } } },
+          include: {
+            user: { select: { id: true, firstName: true, lastName: true } },
+          },
         },
         tasks: {
           orderBy: { dueAt: 'asc' },
@@ -1057,7 +1418,32 @@ router.get('/:id', async (req, res, next) => {
       return res.status(404).json({ error: 'Lead not found' });
     }
 
-    // Count unread inbound communications and fetch org settings for SLA
+    await mergeLeadNoteAttachments(lead);
+
+    // Hover-prefetch and background refetches use skipLastOpened=1 so "last opened" only updates on real detail views.
+    const skipLastOpenedRecord =
+      req.query.skipLastOpened === '1' ||
+      req.query.skipLastOpened === 'true' ||
+      req.query.prefetch === '1' ||
+      req.query.prefetch === 'true';
+
+    let lastOpenedPatch = {};
+    if (!skipLastOpenedRecord) {
+      const viewedAt = new Date();
+      try {
+        await setLeadLastOpenedWithoutUpdatedAt(lead.id, req.user.id, viewedAt);
+        lastOpenedPatch = {
+          lastOpenedAt: viewedAt,
+          lastOpenedBy: {
+            id: req.user.id,
+            firstName: req.user.firstName,
+            lastName: req.user.lastName,
+          },
+        };
+      } catch { /* non-critical */ }
+    }
+
+    // Count unread + org SLA (check-in queries isolated so a missing migration / stale client cannot 500 this route)
     const [unreadCount, orgForSLA] = await Promise.all([
       prisma.communication.count({
         where: { leadId: lead.id, isRead: false, direction: 'INBOUND' },
@@ -1067,6 +1453,31 @@ router.get('/:id', async (req, res, next) => {
         select: { settings: true },
       }),
     ]);
+
+    let activeCheckinSessions = [];
+    let myCheckinSession = null;
+    try {
+      const checkin = prisma.leadCheckinSession;
+      if (checkin && typeof checkin.findMany === 'function') {
+        [activeCheckinSessions, myCheckinSession] = await Promise.all([
+          checkin.findMany({
+            where: { leadId: lead.id, checkedOutAt: null },
+            include: { user: { select: { id: true, firstName: true, lastName: true, avatar: true } } },
+            orderBy: { checkedInAt: 'asc' },
+          }),
+          checkin.findFirst({
+            where: { leadId: lead.id, userId: req.user.id, checkedOutAt: null },
+            select: { id: true, checkedInAt: true, note: true },
+          }),
+        ]);
+      }
+    } catch (checkinErr) {
+      logger.warn('GET /leads/:id leadCheckin skipped', {
+        leadId: lead.id,
+        code: checkinErr.code,
+        message: checkinErr.message,
+      });
+    }
 
     // Fetch DNC blocker info if lead is blocked
     let doNotCallByUser = null;
@@ -1090,22 +1501,81 @@ router.get('/:id', async (req, res, next) => {
       freshConversionProb = scoreResult.conversionProb;
       // If score has drifted, silently update it
       if (scoreResult.score !== lead.score || scoreResult.conversionProb !== lead.conversionProb) {
-        await prisma.lead.update({
-          where: { id: lead.id },
-          data: { score: scoreResult.score, conversionProb: scoreResult.conversionProb },
-        });
+        await syncLeadScoreWithoutUpdatedAt(lead.id, scoreResult.score, scoreResult.conversionProb);
       }
     } catch { /* non-critical — breakdown is optional */ }
 
-    res.json({
+    const payload = {
       ...lead,
+      ...lastOpenedPatch,
+      budget: toJsonSafeBudget(lead.budget),
       score: freshScore,
       conversionProb: freshConversionProb,
       unreadCommunications: unreadCount,
       slaInfo: getLeadSLAInfo(lead, orgForSLA?.settings),
       doNotCallByUser,
       scoreBreakdown,
+      leadCheckin: {
+        activeSessions: activeCheckinSessions.map((s) => ({
+          id: s.id,
+          userId: s.userId,
+          checkedInAt: s.checkedInAt,
+          user: s.user,
+        })),
+        mySession: myCheckinSession,
+      },
+    };
+    try {
+      res.json(payload);
+    } catch (serializeErr) {
+      logger.error('GET /leads/:id response serialization failed', {
+        leadId: lead.id,
+        message: serializeErr.message,
+      });
+      next(serializeErr);
+    }
+  } catch (err) {
+    logger.error('GET /leads/:id failed', {
+      leadId: req.params?.id,
+      code: err.code,
+      meta: err.meta,
+      message: err.message,
     });
+    next(err);
+  }
+});
+
+// ─── Get Lead Offer Campaign Assignments ─────────────────────────
+router.get('/:id/campaign-offers', async (req, res, next) => {
+  try {
+    const leadWhere = { id: req.params.id, organizationId: { in: req.orgIds } };
+    if (req.isRestrictedRole) leadWhere.assignedToId = req.user.id;
+    const lead = await prisma.lead.findFirst({
+      where: leadWhere,
+      select: { id: true, organizationId: true },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const assignments = await prisma.leadCampaignAssignment.findMany({
+      where: { leadId: lead.id, organizationId: lead.organizationId },
+      orderBy: [{ status: 'asc' }, { assignedAt: 'desc' }],
+      include: {
+        campaign: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            status: true,
+            startDate: true,
+            endDate: true,
+            metadata: true,
+          },
+        },
+        assignedBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    res.json(assignments);
   } catch (err) {
     next(err);
   }
@@ -1693,12 +2163,40 @@ router.delete('/:id', async (req, res, next) => {
   }
 });
 
-// ─── Add Note ────────────────────────────────────────────────────
-router.post('/:id/notes', validate(z.object({
-  content: z.string().min(1),
-  isPinned: z.boolean().optional(),
-})), async (req, res, next) => {
+// ─── Add Note (JSON or multipart with optional `files`) ───────────
+router.post('/:id/notes', optionalLeadNoteMultipart, async (req, res, next) => {
   try {
+    const files = req.files || [];
+    const isMultipart = String(req.headers['content-type'] || '').includes('multipart/form-data');
+
+    let content;
+    let isPinned = false;
+    if (isMultipart) {
+      content = req.body?.content != null ? String(req.body.content) : '';
+      const pin = req.body?.isPinned;
+      isPinned = pin === true || pin === 'true' || pin === '1';
+    } else {
+      const parsed = z.object({
+        content: z.string().min(1),
+        isPinned: z.boolean().optional(),
+      }).safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: parsed.error.errors.map((e) => ({ field: e.path.join('.'), message: e.message })),
+        });
+      }
+      content = parsed.data.content;
+      isPinned = parsed.data.isPinned || false;
+    }
+
+    const contentTrim = String(content || '').trim();
+    if (!contentTrim && files.length === 0) {
+      return res.status(400).json({ error: 'Add note text or at least one attachment' });
+    }
+
+    const contentToSave = contentTrim || '(Attachment)';
+
     const lead = await prisma.lead.findFirst({
       where: { id: req.params.id, organizationId: { in: req.orgIds } },
     });
@@ -1706,24 +2204,80 @@ router.post('/:id/notes', validate(z.object({
 
     const note = await prisma.leadNote.create({
       data: {
-        content: req.validated.content,
-        isPinned: req.validated.isPinned || false,
+        content: contentToSave,
+        isPinned,
         leadId: lead.id,
         userId: req.user.id,
       },
       include: { user: { select: { id: true, firstName: true, lastName: true } } },
     });
 
+    const useS3 = isAttachmentObjectStorageEnabled();
+    const orgId = lead.organizationId;
+
+    for (const f of files) {
+      const base64 = `data:${f.mimetype};base64,${f.buffer.toString('base64')}`;
+      const record = await prisma.attachment.create({
+        data: {
+          leadId: lead.id,
+          leadNoteId: note.id,
+          filename: f.originalname,
+          mimeType: f.mimetype,
+          size: f.size,
+          url: '',
+          data: useS3 ? null : base64,
+          storageKey: null,
+        },
+      });
+      const url = `/inbox/attachments/file/${record.id}`;
+      let storageKey = null;
+      if (useS3) {
+        try {
+          storageKey = await uploadInboxAttachmentBuffer({
+            buffer: f.buffer,
+            mimeType: f.mimetype,
+            organizationId: orgId,
+            leadId: lead.id,
+            attachmentId: record.id,
+            filename: f.originalname,
+          });
+        } catch (s3Err) {
+          logger.error('Note attachment S3 upload failed; using database blob', { err: s3Err.message });
+          await prisma.attachment.update({
+            where: { id: record.id },
+            data: { data: base64 },
+          });
+        }
+      }
+      await prisma.attachment.update({
+        where: { id: record.id },
+        data: storageKey ? { url, storageKey } : { url },
+      });
+    }
+
+    const noteWithAttachments = await prisma.leadNote.findUnique({
+      where: { id: note.id },
+      include: {
+        user: { select: { id: true, firstName: true, lastName: true } },
+        attachments: {
+          select: { id: true, filename: true, mimeType: true, size: true, url: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    const activityDescription =
+      files.length > 0 ? `Note added (${files.length} attachment${files.length > 1 ? 's' : ''})` : 'Note added';
+
     await prisma.leadActivity.create({
       data: {
         leadId: lead.id,
         userId: req.user.id,
         type: 'NOTE_ADDED',
-        description: 'Note added',
+        description: activityDescription,
       },
     });
 
-    // Mark first response — adding a note counts as attending to the lead
     if (!lead.firstRespondedAt) {
       await prisma.lead.update({
         where: { id: lead.id },
@@ -1731,7 +2285,7 @@ router.post('/:id/notes', validate(z.object({
       });
     }
 
-    res.status(201).json(note);
+    res.status(201).json(noteWithAttachments);
 
     broadcastDataChange(lead.organizationId, 'note', 'created', req.user.id, { entityId: lead.id }).catch(() => {});
     refreshLeadAISummaryAsync(lead.id);
@@ -1961,6 +2515,80 @@ router.post('/:id/unblock', async (req, res, next) => {
 
     res.json({ success: true, message: 'Lead unblocked — restored to active leads' });
     refreshLeadAISummaryAsync(lead.id);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── WhatsApp Opt-Out ───────────────────────────────────────────
+router.post('/:id/whatsapp-opt-out', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (lead.whatsappOptOut) return res.json({ success: true, message: 'Lead is already opted out of WhatsApp broadcasts' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        whatsappOptOut: true,
+        whatsappOptOutAt: new Date(),
+        whatsappOptOutById: req.user.id,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead opted out of WhatsApp broadcasts by ${getDisplayName(req.user)}`,
+        metadata: { trigger: 'whatsapp_opt_out' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead opted out of WhatsApp broadcasts' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── WhatsApp Opt-In ────────────────────────────────────────────
+router.post('/:id/whatsapp-opt-in', async (req, res, next) => {
+  try {
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const lead = await prisma.lead.findFirst({
+      where: { id: req.params.id, organizationId: { in: req.orgIds } },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (!lead.whatsappOptOut) return res.json({ success: true, message: 'Lead is already opted in to WhatsApp broadcasts' });
+
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        whatsappOptOut: false,
+        whatsappOptOutAt: null,
+        whatsappOptOutById: null,
+      },
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        userId: req.user.id,
+        type: 'STATUS_CHANGE',
+        description: `Lead opted back in to WhatsApp broadcasts by ${getDisplayName(req.user)}`,
+        metadata: { trigger: 'whatsapp_opt_in' },
+      },
+    });
+
+    res.json({ success: true, message: 'Lead opted back in to WhatsApp broadcasts' });
   } catch (err) {
     next(err);
   }
