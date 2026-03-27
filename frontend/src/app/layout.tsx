@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { QueryProvider } from '@/components/providers/query-provider';
-import { scriptToApplyStoredTheme } from '@/lib/theme';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -19,12 +18,8 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const applyThemeScript = scriptToApplyStoredTheme();
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: applyThemeScript }} />
-      </head>
       <body className={inter.className} suppressHydrationWarning>
         <QueryProvider>{children}</QueryProvider>
       </body>

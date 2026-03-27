@@ -16,7 +16,6 @@ import ErrorBoundary from '@/components/ErrorBoundary';
 import { GlobalSearch } from './components/global-search';
 import { ACTIVE_DIVISION_CHANGED } from '@/lib/activeDivisionEvents';
 import { Bell, HelpCircle, ShieldAlert, Building2, ChevronDown, Menu, AlertTriangle, X } from 'lucide-react';
-import { ThemeSwitcher } from '@/components/ThemeSwitcher';
 
 const pageTitles: Record<string, { title: string; description: string }> = {
   '/dashboard': { title: 'Dashboard', description: 'Your lead management overview' },
@@ -411,7 +410,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="hidden sm:block">
               <GlobalSearch />
             </div>
-            <ThemeSwitcher />
             {hasNotificationAccess && (
               <button
                 ref={bellRef}
