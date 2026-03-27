@@ -1416,7 +1416,7 @@ function LeadsContent() {
       .leads-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       .leads-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
     `}</style>
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden animate-fade-in">
+    <div className="flex flex-col h-[calc(100dvh-3.5rem-1.5rem)] sm:h-[calc(100dvh-3.5rem-2rem)] md:h-[calc(100dvh-3.5rem-3rem)] overflow-hidden animate-fade-in">
       {/* Header row: [Title] [─── Team Workload · Allocation Rules ───] [Actions] */}
       <div className="flex items-center gap-4 flex-shrink-0 pt-4 px-1">
 
