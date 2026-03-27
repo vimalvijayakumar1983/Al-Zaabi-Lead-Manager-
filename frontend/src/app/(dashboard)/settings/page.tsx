@@ -2307,7 +2307,7 @@ const DEFAULT_BUILTIN_FIELDS: BuiltInField[] = [
   { key: 'campaign',       label: 'Campaign',         type: 'text',    category: 'business', locked: false, showInList: false, showInDetail: true, isRequired: false, canToggleRequired: true,  order: 17, isBuiltIn: true },
   // System
   { key: 'createdAt',      label: 'Created Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 18, isBuiltIn: true },
-  { key: 'updatedAt',      label: 'Updated Date',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 19, isBuiltIn: true },
+  { key: 'updatedAt',      label: 'Last activity',     type: 'date',    category: 'system',   locked: false, showInList: true,  showInDetail: true, isRequired: false, canToggleRequired: false, order: 19, isBuiltIn: true },
 ];
 
 /* ─── Helper: Toggle Switch ─────────────────────────────────────────── */

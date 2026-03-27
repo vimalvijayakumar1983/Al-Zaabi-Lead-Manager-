@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getBackendApiBase, isBackendSameOriginAsRequest } from '@/lib/backend-url';
 
 // App Router route segment config for large file uploads
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
-// Server-side env var (not NEXT_PUBLIC_) — only accessible on the server
-const BACKEND_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
-
 async function proxyRequest(req: NextRequest) {
+  const BACKEND_URL = getBackendApiBase();
+
+  if (isBackendSameOriginAsRequest(req, BACKEND_URL)) {
+    return NextResponse.json(
+      {
+        error: 'API proxy misconfigured',
+        details:
+          'BACKEND_URL or NEXT_PUBLIC_API_URL points at this Next.js server. Set BACKEND_URL to your Express API base, e.g. http://localhost:4000/api (see frontend/.env.example).',
+      },
+      { status: 503 }
+    );
+  }
+
   const url = new URL(req.url);
   // Strip the leading /api and forward the rest to the backend
   const path = url.pathname.replace(/^\/api/, '');
@@ -87,7 +98,7 @@ async function proxyRequest(req: NextRequest) {
     return NextResponse.json(
       {
         error: 'Backend unavailable',
-        details: error.message,
+        details: `${error.message}. Start the API (e.g. cd backend && npm run dev) and set BACKEND_URL in frontend/.env.local (see .env.example).`,
         target,
         backendUrl: BACKEND_URL,
       },

@@ -246,7 +246,7 @@ function LeadsContent() {
     (leadId: string) => {
       queryClient.prefetchQuery({
         queryKey: queryKeys.leads.detail(leadId),
-        queryFn: () => api.getLead(leadId),
+        queryFn: () => api.getLead(leadId, { skipLastOpened: true }),
         staleTime: 30_000,
       });
     },
@@ -888,6 +888,13 @@ function LeadsContent() {
             }
             case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
             case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            case 'lastOpenedAt': {
+              const lo = (l as Lead).lastOpenedAt;
+              const lob = (l as Lead).lastOpenedBy;
+              if (!lo) return '';
+              const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+              return by ? `${new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (${by})` : new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            }
             default:
               if (c.id.startsWith('cf_')) {
                 if (isAutoSerialCustomField(c)) {
@@ -1173,6 +1180,19 @@ function LeadsContent() {
             <span className="text-[10px] text-gray-400">{formatTimeAgo(lead.updatedAt)}</span>
           </div>
         );
+      case 'lastOpenedAt': {
+        const lo = (lead as Lead).lastOpenedAt;
+        const lob = (lead as Lead).lastOpenedBy;
+        if (!lo) return <span className="text-xs text-gray-400">—</span>;
+        const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+        return (
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">{new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+            {by ? <span className="text-[10px] text-gray-400">by {by}</span> : null}
+            <span className="text-[10px] text-gray-400">{formatTimeAgo(lo)}</span>
+          </div>
+        );
+      }
       case 'sla': {
         const sla = (lead as any).slaInfo;
         if (!sla || !sla.enabled) return <span className="text-xs text-gray-400">-</span>;
