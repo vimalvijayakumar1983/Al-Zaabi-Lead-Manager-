@@ -133,6 +133,25 @@ const getInitials = (lead: { firstName?: string; lastName?: string }) => {
   return (parts[0]?.[0] || '?').toUpperCase();
 };
 
+// Deterministic avatar colour from the lead id so each lead always gets the same colour
+const AVATAR_PALETTE = [
+  'from-violet-400 to-violet-600',
+  'from-blue-400 to-blue-600',
+  'from-cyan-400 to-cyan-600',
+  'from-emerald-400 to-emerald-600',
+  'from-amber-400 to-amber-600',
+  'from-rose-400 to-rose-600',
+  'from-pink-400 to-pink-600',
+  'from-indigo-400 to-indigo-600',
+  'from-teal-400 to-teal-600',
+  'from-orange-400 to-orange-600',
+];
+const getAvatarGradient = (id: string) => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+};
+
 // ─── Time Formatting ─────────────────────────────────────────────
 
 function formatTimeAgo(dateStr: string): string {
@@ -982,7 +1001,7 @@ function LeadsContent() {
             className="flex items-center gap-2.5 group"
             onMouseEnter={() => prefetchLeadDetail(lead.id)}
           >
-            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-xs font-medium text-white shadow-sm flex-shrink-0">
+            <div className={`h-9 w-9 rounded-full bg-gradient-to-br ${getAvatarGradient(lead.id)} flex items-center justify-center text-xs font-bold text-white shadow-sm flex-shrink-0`}>
               {getInitials(lead)}
             </div>
             <div className="min-w-0">
@@ -1038,8 +1057,23 @@ function LeadsContent() {
             displayClassName={`badge ${(lead as any).doNotCall ? statusColors.DO_NOT_CALL : (statusColors[lead.status] || 'bg-gray-100 text-gray-800')}`} />
         );
       }
-      case 'source':
-        return <span className="text-sm text-gray-700">{getLeadSourceLabel(lead)}</span>;
+      case 'source': {
+        const srcKey = (lead.source || '').toUpperCase();
+        const sourceIcons: Record<string, string> = {
+          WHATSAPP: '💬', FACEBOOK_ADS: '📘', GOOGLE_ADS: '🔍',
+          TIKTOK_ADS: '🎵', WEBSITE_FORM: '🌐', LANDING_PAGE: '📄',
+          LIVE_CHAT: '💭', MANUAL: '✍️', CSV_IMPORT: '📊',
+          API: '🔌', REFERRAL: '🤝', EMAIL: '📧', PHONE: '📞', OTHER: '•',
+        };
+        const icon = sourceIcons[srcKey] || '•';
+        const label = getLeadSourceLabel(lead);
+        return (
+          <span className="flex items-center gap-1.5 text-sm text-gray-700 whitespace-nowrap">
+            <span className="text-base leading-none">{icon}</span>
+            {label}
+          </span>
+        );
+      }
       case 'score':
         const score = lead.score ?? 0;
         return (
@@ -1322,13 +1356,42 @@ function LeadsContent() {
       .leads-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
     `}</style>
     <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-shrink-0 pt-4 px-1">
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Leads</h1>
-          <p className="text-text-secondary mt-0.5 text-sm">{alignedTotalLeads.toLocaleString()} leads total</p>
+      {/* Header row: [Title] [─── Team Workload · Allocation Rules ───] [Actions] */}
+      <div className="flex items-center gap-4 flex-shrink-0 pt-4 px-1">
+
+        {/* Section 1 — Title */}
+        <div className="flex-shrink-0">
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight leading-none">Leads</h1>
+          <p className="text-text-secondary mt-0.5 text-xs">{alignedTotalLeads.toLocaleString()} leads total</p>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Section 2 — Two action tabs */}
+        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border pl-4">
+          <button
+            onClick={() => setShowWorkload(!showWorkload)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+              showWorkload
+                ? 'bg-brand-50 border-brand-200 text-brand-700'
+                : 'border-border text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+            }`}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            Team Workload
+          </button>
+          <button
+            onClick={() => setShowAllocationSettings(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-text-secondary hover:bg-surface-tertiary hover:text-text-primary transition-all"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            Allocation Rules
+          </button>
+        </div>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Section 3 — Actions */}
+        <div className="flex items-center gap-2 flex-shrink-0">
           <RefreshButton onRefresh={() => { invalidateListAndDashboard(); }} />
           <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
@@ -1343,42 +1406,36 @@ function LeadsContent() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 flex-shrink-0">
-          <StatCard label="Total" value={alignedTotalLeads} color="brand" />
-          <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" />
-          <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="cyan" />
-          <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="green" />
-          <StatCard label={getStatusLabel('LOST')} value={stats.overview.lostLeads} color="red" />
-          <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="amber" />
-          {(() => {
-            const r = stats.reachability;
-            const tc = r?.totalCalls ?? 0;
-            const rr = r?.reachabilityRatio ?? 0;
-            const reachColor = tc === 0 ? 'brand' : rr >= 75 ? 'emerald' : rr >= 50 ? 'amber' : 'red';
-            return (
-              <StatCard
-                label="Reachability"
-                value={tc > 0 ? `${rr}%` : 'N/A'}
-                color={reachColor}
-                subtitle={tc > 0 ? `${r.reachedCalls}/${tc} calls reached` : 'No calls on filtered leads'}
-              />
-            );
-          })()}
-          <div className="col-span-full flex gap-2 mt-1">
-            <button onClick={() => setShowWorkload(!showWorkload)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              Team Workload
-            </button>
-            <button onClick={() => setShowAllocationSettings(true)} className="btn-secondary text-xs gap-1.5 px-3 py-1.5">
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              Allocation Rules
-            </button>
+        <div className="flex-shrink-0">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+            <StatCard label="Total" value={alignedTotalLeads} color="default" delta="+2 this week" />
+            <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" highlight subtitle="All active" dot="indigo" />
+            <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="default" dot="cyan" />
+            <StatCard label={getStatusLabel('WON')} value={stats.overview.wonLeads} color="default" dot="green" />
+            <StatCard label={getStatusLabel('LOST')} value={stats.overview.lostLeads} color="default" dot="red" />
+            <StatCard label="Pipeline" value={`AED ${Number(stats.overview.pipelineValue || 0).toLocaleString()}`} color="green" subtitle="Total value" dot="green" />
+            {(() => {
+              const r = stats.reachability;
+              const tc = r?.totalCalls ?? 0;
+              const rr = r?.reachabilityRatio ?? 0;
+              const reachColor = tc === 0 ? 'default' : rr >= 75 ? 'green' : rr >= 50 ? 'amber' : 'red';
+              return (
+                <StatCard
+                  label="Reachability"
+                  value={tc > 0 ? `${rr}%` : 'N/A'}
+                  color={reachColor}
+                  subtitle={tc > 0 ? `${r.reachedCalls}/${tc} reached` : 'No data'}
+                />
+              );
+            })()}
           </div>
         </div>
       )}
 
       {/* ─── Workload Dashboard (below stats) ─────────────────────── */}
-      <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+      <div className="py-1">
+        <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+      </div>
 
       {/* DNC Warning Banner */}
       {filters.showBlocked === 'true' && (
@@ -1661,7 +1718,7 @@ function LeadsContent() {
                     ) : (
                       leads.map((lead, rowIndex) => (
                         <tr key={lead.id}
-                          className={`table-row transition-colors cursor-pointer hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
+                          className={`group/row transition-colors cursor-pointer border-b border-gray-100 last:border-b-0 hover:bg-brand-50/30 ${selectedLeads.has(lead.id) ? 'bg-brand-50/40' : ''}`}
                           onMouseEnter={() => prefetchLeadDetail(lead.id)}
                           onClick={(e) => {
                             const target = e.target as HTMLElement;
@@ -1669,7 +1726,7 @@ function LeadsContent() {
                             router.push(`/leads/${lead.id}`);
                           }}>
                           {visibleColumns.map((col) => (
-                            <td key={col.id} className={`table-cell border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
+                            <td key={col.id} className={`table-cell py-3 border-r border-gray-100 last:border-r-0 ${col.width || ''}`}>{renderCell(col, lead, rowIndex)}</td>
                           ))}
                         </tr>
                       ))
@@ -1710,7 +1767,7 @@ function LeadsContent() {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-3">
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-sm font-medium text-white shadow-sm">
+                            <div className={`h-10 w-10 rounded-full bg-gradient-to-br ${getAvatarGradient(lead.id)} flex items-center justify-center text-sm font-bold text-white shadow-sm`}>
                               {getInitials(lead)}
                             </div>
                             <div>
@@ -1872,21 +1929,56 @@ function LeadsContent() {
 
 // ─── Sub Components ───────────────────────────────────────────────
 
-function StatCard({ label, value, color, subtitle }: { label: string; value: string | number; color: string; subtitle?: string }) {
-  const colorMap: Record<string, string> = {
-    brand: 'bg-brand-50 text-brand-700',
-    indigo: 'bg-indigo-50 text-indigo-700',
-    cyan: 'bg-cyan-50 text-cyan-700',
-    green: 'bg-green-50 text-green-700',
-    red: 'bg-red-50 text-red-700',
-    amber: 'bg-amber-50 text-amber-700',
-    emerald: 'bg-emerald-50 text-emerald-700',
+function StatCard({
+  label, value, color, subtitle, delta, highlight, dot,
+}: {
+  label: string;
+  value: string | number;
+  color: string;
+  subtitle?: string;
+  delta?: string;
+  highlight?: boolean;
+  dot?: string;
+}) {
+  const dotColors: Record<string, string> = {
+    indigo: 'bg-indigo-500', cyan: 'bg-cyan-500', green: 'bg-green-500',
+    red: 'bg-red-500', amber: 'bg-amber-500', emerald: 'bg-emerald-500',
   };
+  const valueColors: Record<string, string> = {
+    default: 'text-gray-900',
+    indigo: 'text-indigo-700',
+    green: 'text-green-700',
+    red: 'text-red-700',
+    amber: 'text-amber-700',
+    emerald: 'text-emerald-700',
+    cyan: 'text-cyan-700',
+    brand: 'text-brand-700',
+  };
+
   return (
-    <div className={`card p-3 border-transparent ${colorMap[color] || colorMap.brand}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider opacity-70">{label}</p>
-      <p className="text-lg font-bold mt-0.5">{value}</p>
-      {subtitle ? <p className="text-[10px] mt-1 opacity-80 leading-snug">{subtitle}</p> : null}
+    <div className={`relative rounded-xl border p-3 transition-all ${
+      highlight
+        ? 'bg-indigo-50 border-indigo-200 shadow-sm'
+        : 'bg-white border-gray-100 shadow-xs hover:border-gray-200'
+    }`}>
+      {/* Header row */}
+      <div className="flex items-center gap-1.5 mb-1">
+        {dot && <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${dotColors[dot] || 'bg-gray-400'}`} />}
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{label}</p>
+      </div>
+
+      {/* Value */}
+      <p className={`text-xl font-bold leading-none ${valueColors[color] || valueColors.default}`}>
+        {value}
+      </p>
+
+      {/* Delta or subtitle */}
+      {delta && (
+        <p className="text-[10px] text-emerald-600 font-medium mt-1">{delta}</p>
+      )}
+      {subtitle && !delta && (
+        <p className="text-[10px] text-gray-400 mt-1 leading-snug">{subtitle}</p>
+      )}
     </div>
   );
 }
