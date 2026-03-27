@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Database, Filter, Loader2, Pencil, Search, Trash2, X } from 'lucide-react';
+import { Database, Eye, Filter, Loader2, Pencil, Search, Trash2, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
@@ -49,6 +49,9 @@ export default function ErpDataPage() {
   const [limit, setLimit] = useState(25);
   const [editingRow, setEditingRow] = useState<ErpDataRow | null>(null);
   const [editPayloadText, setEditPayloadText] = useState('');
+  const [detailsRow, setDetailsRow] = useState<ErpDataRow | null>(null);
+  const [showPayloadInDetails, setShowPayloadInDetails] = useState(false);
+  const [showPayloadColumn, setShowPayloadColumn] = useState(false);
   const [configuredCustomEntities, setConfiguredCustomEntities] = useState<string[]>([]);
 
   const divisionsQuery = useQuery({
@@ -146,6 +149,13 @@ export default function ErpDataPage() {
 
     const known = new Set(KNOWN_FIELDS_BY_ENTITY[row.entityType] || []);
     return allEntries.filter(([k]) => !known.has(k));
+  };
+
+  const getMandatoryFieldEntries = (row: ErpDataRow): Array<[string, unknown]> => {
+    const payload = row.payload || {};
+    const mandatoryKeys = KNOWN_FIELDS_BY_ENTITY[row.entityType] || [];
+    if (mandatoryKeys.length === 0) return [];
+    return mandatoryKeys.map((k) => [k, payload[k]]);
   };
 
   const getPayloadEntries = (row: ErpDataRow): Array<[string, unknown]> =>
@@ -256,6 +266,14 @@ export default function ErpDataPage() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-end">
+          <button
+            onClick={() => setShowPayloadColumn((v) => !v)}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-gray-200 text-text-primary hover:bg-white"
+          >
+            {showPayloadColumn ? 'Hide Payload' : 'Show Payload'}
+          </button>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -265,7 +283,7 @@ export default function ErpDataPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">External ID</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">CRM ID</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Custom Fields</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Payload</th>
+                {showPayloadColumn && <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Payload</th>}
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Updated</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-text-secondary">Actions</th>
               </tr>
@@ -273,7 +291,7 @@ export default function ErpDataPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-text-secondary">
+                  <td colSpan={showPayloadColumn ? 8 : 7} className="px-4 py-10 text-center text-text-secondary">
                     <div className="inline-flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
                       Loading ERP data...
@@ -282,7 +300,7 @@ export default function ErpDataPage() {
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-text-secondary">
+                  <td colSpan={showPayloadColumn ? 8 : 7} className="px-4 py-10 text-center text-text-secondary">
                     No ERP records found.
                   </td>
                 </tr>
@@ -310,33 +328,33 @@ export default function ErpDataPage() {
                             </div>
                           ))}
                           {getCustomFieldEntries(row).length > 6 && (
-                            <div className="text-[11px] text-text-tertiary">
-                              +{getCustomFieldEntries(row).length - 6} more
-                            </div>
+                            <div className="text-[11px] text-text-tertiary">+{getCustomFieldEntries(row).length - 6} more</div>
                           )}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="max-w-[520px] space-y-1.5">
-                        {getPayloadEntries(row).length === 0 ? (
-                          <span className="text-xs text-text-tertiary">-</span>
-                        ) : (
-                          getPayloadEntries(row).slice(0, 8).map(([k, v]) => (
-                            <div
-                              key={`${row.id}-payload-${k}`}
-                              className="grid grid-cols-[140px_1fr] gap-2 text-[11px] rounded-md border border-gray-100 bg-gray-50 px-2 py-1"
-                            >
-                              <span className="font-mono text-text-secondary truncate">{k}</span>
-                              <span className="text-text-primary break-all">{formatCellValue(v)}</span>
-                            </div>
-                          ))
-                        )}
-                        {getPayloadEntries(row).length > 8 && (
-                          <div className="text-[11px] text-text-tertiary">+{getPayloadEntries(row).length - 8} more fields</div>
-                        )}
-                      </div>
-                    </td>
+                    {showPayloadColumn && (
+                      <td className="px-4 py-3">
+                        <div className="max-w-[520px] space-y-1.5">
+                          {getPayloadEntries(row).length === 0 ? (
+                            <span className="text-xs text-text-tertiary">-</span>
+                          ) : (
+                            getPayloadEntries(row).slice(0, 8).map(([k, v]) => (
+                              <div
+                                key={`${row.id}-payload-${k}`}
+                                className="grid grid-cols-[140px_1fr] gap-2 text-[11px] rounded-md border border-gray-100 bg-gray-50 px-2 py-1"
+                              >
+                                <span className="font-mono text-text-secondary truncate">{k}</span>
+                                <span className="text-text-primary break-all">{formatCellValue(v)}</span>
+                              </div>
+                            ))
+                          )}
+                          {getPayloadEntries(row).length > 8 && (
+                            <div className="text-[11px] text-text-tertiary">+{getPayloadEntries(row).length - 8} more fields</div>
+                          )}
+                        </div>
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-xs text-text-secondary">
                       {new Date(row.updatedAt).toLocaleString('en-AE')}
                     </td>
@@ -349,6 +367,18 @@ export default function ErpDataPage() {
                           <Pencil className="w-3.5 h-3.5" />
                           Edit
                         </button>
+                        {(getPayloadEntries(row).length > 8 || getCustomFieldEntries(row).length > 6) && (
+                          <button
+                            onClick={() => {
+                              setDetailsRow(row);
+                              setShowPayloadInDetails(false);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-violet-200 text-violet-700 hover:bg-violet-50"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Details
+                          </button>
+                        )}
                         <button
                           onClick={() => void handleDeleteRow(row)}
                           disabled={deleteRowMutation.isPending}
@@ -443,6 +473,107 @@ export default function ErpDataPage() {
               >
                 {updateRowMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {detailsRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-gray-100">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">ERP Row Details</h3>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  {detailsRow.entityType} / {detailsRow.externalId}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowPayloadInDetails((v) => !v)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-gray-200 text-text-primary hover:bg-gray-50"
+                >
+                  {showPayloadInDetails ? 'Show Fields' : 'Show Payload'}
+                </button>
+                <button onClick={() => setDetailsRow(null)} className="p-1.5 rounded-md hover:bg-gray-100">
+                  <X className="w-4 h-4 text-text-secondary" />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 overflow-auto space-y-5">
+              {showPayloadInDetails ? (
+                <div>
+                  <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">Full Payload</h4>
+                  {getPayloadEntries(detailsRow).length === 0 ? (
+                    <div className="text-xs text-text-tertiary">Payload is empty</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {getPayloadEntries(detailsRow).map(([k, v]) => (
+                        <div
+                          key={`details-payload-${detailsRow.id}-${k}`}
+                          className="grid grid-cols-[200px_1fr] gap-2 text-xs rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5"
+                        >
+                          <span className="font-mono text-text-secondary break-all">{k}</span>
+                          <span className="text-text-primary break-all">
+                            {typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+                              ? String(v)
+                              : JSON.stringify(v)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">Table Mandatory Fields</h4>
+                    {getMandatoryFieldEntries(detailsRow).length === 0 ? (
+                      <div className="text-xs text-text-tertiary">No mandatory field config for this entity</div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {getMandatoryFieldEntries(detailsRow).map(([k, v]) => (
+                          <div
+                            key={`details-mandatory-${detailsRow.id}-${k}`}
+                            className="grid grid-cols-[200px_1fr] gap-2 text-xs rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5"
+                          >
+                            <span className="font-mono text-text-secondary break-all">{k}</span>
+                            <span className="text-text-primary break-all">{formatCellValue(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">Custom Fields</h4>
+                    {getCustomFieldEntries(detailsRow).length === 0 ? (
+                      <div className="text-xs text-text-tertiary">No custom fields</div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {getCustomFieldEntries(detailsRow).map(([k, v]) => (
+                          <div
+                            key={`details-custom-${detailsRow.id}-${k}`}
+                            className="grid grid-cols-[200px_1fr] gap-2 text-xs rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5"
+                          >
+                            <span className="font-mono text-text-secondary break-all">{k}</span>
+                            <span className="text-text-primary break-all">
+                              {typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+                                ? String(v)
+                                : JSON.stringify(v)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="p-4 border-t border-gray-100 flex justify-end">
+              <button onClick={() => setDetailsRow(null)} className="btn-secondary text-xs px-3 py-1.5">
+                Close
               </button>
             </div>
           </div>

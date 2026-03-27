@@ -460,39 +460,44 @@ router.get('/erp-data', validateQuery(erpDataQuerySchema), async (req, res, next
         return haystack.includes(searchTerm);
       });
 
-      total = filteredLogs.length;
-      countsByEntity = filteredLogs.reduce((acc, row) => {
-        const entity =
-          actionToEntity[row.action] ||
-          (row.action.startsWith('erp_custom_') ? `custom_${row.action.slice('erp_custom_'.length)}` : 'unknown');
-        acc[entity] = (acc[entity] || 0) + 1;
-        return acc;
-      }, {});
-
-      data = filteredLogs.slice(offset, offset + limitNum).map((log) => {
+      // Keep latest row per (entityType + externalId) in fallback mode so data view
+      // remains idempotent even when only integration logs are available.
+      const dedupedMap = new Map();
+      for (const log of filteredLogs) {
         const integration = scopedIntegrations.find((i) => i.id === log.integrationId);
         const entity =
           actionToEntity[log.action] ||
           (log.action.startsWith('erp_custom_') ? `custom_${log.action.slice('erp_custom_'.length)}` : 'unknown');
         const payload = log.payload || {};
-        return {
+        const externalId =
+          payload.externalCustomerId ||
+          payload.externalSaleId ||
+          payload.externalAvailabilityId ||
+          payload.id ||
+          '-';
+        const key = `${entity}::${String(externalId)}`;
+        if (!dedupedMap.has(key)) {
+          dedupedMap.set(key, {
           id: log.id,
           integrationId: log.integrationId,
           provider: String(integration?.config?.erpProvider || '').toLowerCase() || null,
           divisionId: integration?.config?.divisionId || null,
           entityType: entity,
-          externalId:
-            payload.externalCustomerId ||
-            payload.externalSaleId ||
-            payload.externalAvailabilityId ||
-            payload.id ||
-            '-',
+          externalId,
           crmEntityId: payload.crmEntityId || '-',
           payload,
           createdAt: log.createdAt,
           updatedAt: log.createdAt,
-        };
-      });
+          });
+        }
+      }
+      const deduped = Array.from(dedupedMap.values());
+      total = deduped.length;
+      countsByEntity = deduped.reduce((acc, row) => {
+        acc[row.entityType] = (acc[row.entityType] || 0) + 1;
+        return acc;
+      }, {});
+      data = deduped.slice(offset, offset + limitNum);
     }
     const totalPages = Math.max(1, Math.ceil(total / limitNum));
     const safePage = Math.min(safePageNum, totalPages);
@@ -519,39 +524,90 @@ router.put('/erp-data/:id', validate(updateErpDataRowSchema), async (req, res, n
     const { id } = req.params;
     const { payload } = req.validated;
     const erpExternalRefModel = prisma.erpExternalRef || prisma.erpExternalRefs;
-    if (!erpExternalRefModel || typeof erpExternalRefModel.findFirst !== 'function') {
-      return res.status(400).json({ error: 'ERP data rows are unavailable in this deployment' });
+    if (erpExternalRefModel && typeof erpExternalRefModel.findFirst === 'function') {
+      const existing = await erpExternalRefModel.findFirst({
+        where: {
+          id,
+          organizationId: { in: req.orgIds },
+          integration: { platform: 'erp' },
+        },
+        include: {
+          integration: { select: { id: true } },
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: 'ERP data row not found' });
+      }
+
+      const updated = await erpExternalRefModel.update({
+        where: { id },
+        data: { externalPayload: payload },
+      });
+
+      await logIntegrationAction(existing.integration.id, 'erp_data_row_updated', { rowId: id }, 'success');
+
+      return res.json({
+        id: updated.id,
+        integrationId: updated.integrationId,
+        entityType: updated.entityType,
+        externalId: updated.externalId,
+        crmEntityId: updated.crmEntityId,
+        payload: updated.externalPayload || {},
+        updatedAt: updated.updatedAt,
+      });
     }
 
-    const existing = await erpExternalRefModel.findFirst({
-      where: {
-        id,
-        organizationId: { in: req.orgIds },
-        integration: { platform: 'erp' },
-      },
-      include: {
-        integration: { select: { id: true } },
-      },
-    });
-    if (!existing) {
-      return res.status(404).json({ error: 'ERP data row not found' });
-    }
-
-    const updated = await erpExternalRefModel.update({
+    // Fallback mode: update backing integration log row payload.
+    const logRow = await prisma.integrationLog.findFirst({
       where: { id },
-      data: { externalPayload: payload },
+      select: { id: true, integrationId: true, action: true },
     });
+    if (!logRow) return res.status(404).json({ error: 'ERP data row not found' });
 
-    await logIntegrationAction(existing.integration.id, 'erp_data_row_updated', { rowId: id }, 'success');
+    const integration = await prisma.integration.findFirst({
+      where: {
+        id: logRow.integrationId,
+        organizationId: { in: req.orgIds },
+        platform: 'erp',
+      },
+      select: { id: true, config: true },
+    });
+    if (!integration) return res.status(404).json({ error: 'ERP data row not found' });
+    if (!(logRow.action === 'erp_create_customer' || logRow.action === 'erp_customer_sales' || logRow.action === 'erp_doctor_availability' || logRow.action.startsWith('erp_custom_'))) {
+      return res.status(400).json({ error: 'Row is not an ERP data record' });
+    }
+
+    const updated = await prisma.integrationLog.update({
+      where: { id },
+      data: { payload },
+    });
+    await logIntegrationAction(integration.id, 'erp_data_row_updated', { rowId: id, source: 'integration_log' }, 'success');
+
+    const entityType =
+      updated.action === 'erp_create_customer'
+        ? 'customer'
+        : updated.action === 'erp_customer_sales'
+        ? 'sale'
+        : updated.action === 'erp_doctor_availability'
+        ? 'doctor_availability'
+        : updated.action.startsWith('erp_custom_')
+        ? `custom_${updated.action.slice('erp_custom_'.length)}`
+        : 'unknown';
+    const externalId =
+      updated.payload?.externalCustomerId ||
+      updated.payload?.externalSaleId ||
+      updated.payload?.externalAvailabilityId ||
+      updated.payload?.id ||
+      '-';
 
     return res.json({
       id: updated.id,
       integrationId: updated.integrationId,
-      entityType: updated.entityType,
-      externalId: updated.externalId,
-      crmEntityId: updated.crmEntityId,
-      payload: updated.externalPayload || {},
-      updatedAt: updated.updatedAt,
+      entityType,
+      externalId,
+      crmEntityId: updated.payload?.crmEntityId || '-',
+      payload: updated.payload || {},
+      updatedAt: updated.createdAt,
     });
   } catch (err) {
     next(err);
@@ -563,28 +619,77 @@ router.delete('/erp-data/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
     const erpExternalRefModel = prisma.erpExternalRef || prisma.erpExternalRefs;
-    if (!erpExternalRefModel || typeof erpExternalRefModel.findFirst !== 'function') {
-      return res.status(400).json({ error: 'ERP data rows are unavailable in this deployment' });
+    if (erpExternalRefModel && typeof erpExternalRefModel.findFirst === 'function') {
+      const existing = await erpExternalRefModel.findFirst({
+        where: {
+          id,
+          organizationId: { in: req.orgIds },
+          integration: { platform: 'erp' },
+        },
+        include: {
+          integration: { select: { id: true } },
+        },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: 'ERP data row not found' });
+      }
+
+      await erpExternalRefModel.delete({ where: { id } });
+      await logIntegrationAction(existing.integration.id, 'erp_data_row_deleted', { rowId: id }, 'success');
+
+      return res.json({ success: true, id });
     }
 
-    const existing = await erpExternalRefModel.findFirst({
-      where: {
-        id,
-        organizationId: { in: req.orgIds },
-        integration: { platform: 'erp' },
-      },
-      include: {
-        integration: { select: { id: true } },
-      },
+    // Fallback mode: delete all log rows that represent this same external key.
+    const logRow = await prisma.integrationLog.findFirst({
+      where: { id },
+      select: { id: true, integrationId: true, action: true, payload: true },
     });
-    if (!existing) {
-      return res.status(404).json({ error: 'ERP data row not found' });
+    if (!logRow) return res.status(404).json({ error: 'ERP data row not found' });
+    if (!(logRow.action === 'erp_create_customer' || logRow.action === 'erp_customer_sales' || logRow.action === 'erp_doctor_availability' || logRow.action.startsWith('erp_custom_'))) {
+      return res.status(400).json({ error: 'Row is not an ERP data record' });
     }
 
-    await erpExternalRefModel.delete({ where: { id } });
-    await logIntegrationAction(existing.integration.id, 'erp_data_row_deleted', { rowId: id }, 'success');
+    const integration = await prisma.integration.findFirst({
+      where: {
+        id: logRow.integrationId,
+        organizationId: { in: req.orgIds },
+        platform: 'erp',
+      },
+      select: { id: true },
+    });
+    if (!integration) return res.status(404).json({ error: 'ERP data row not found' });
 
-    return res.json({ success: true, id });
+    const targetExternalId =
+      logRow.payload?.externalCustomerId ||
+      logRow.payload?.externalSaleId ||
+      logRow.payload?.externalAvailabilityId ||
+      logRow.payload?.id ||
+      '-';
+    const siblings = await prisma.integrationLog.findMany({
+      where: {
+        integrationId: integration.id,
+        action: logRow.action,
+      },
+      select: { id: true, payload: true },
+    });
+    const idsToDelete = siblings
+      .filter((s) => {
+        const externalId =
+          s.payload?.externalCustomerId ||
+          s.payload?.externalSaleId ||
+          s.payload?.externalAvailabilityId ||
+          s.payload?.id ||
+          '-';
+        return String(externalId) === String(targetExternalId);
+      })
+      .map((s) => s.id);
+    if (idsToDelete.length === 0) idsToDelete.push(logRow.id);
+
+    await prisma.integrationLog.deleteMany({ where: { id: { in: idsToDelete } } });
+    await logIntegrationAction(integration.id, 'erp_data_row_deleted', { rowId: id, deletedCount: idsToDelete.length, source: 'integration_log' }, 'success');
+
+    return res.json({ success: true, id, deletedCount: idsToDelete.length });
   } catch (err) {
     next(err);
   }
