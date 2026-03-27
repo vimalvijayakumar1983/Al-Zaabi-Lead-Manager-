@@ -1525,10 +1525,12 @@ function LeadsContent() {
         </div>
       )}
 
-      {/* ─── Workload Dashboard (below stats) ─────────────────────── */}
-      <div className="pt-0.5">
-        <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
-      </div>
+      {/* ─── Workload Dashboard (collapsed by default to save vertical space) ─────────────────────── */}
+      {showWorkload && (
+        <div className="pt-0.5">
+          <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+        </div>
+      )}
 
       {/* DNC Warning Banner */}
       {filters.showBlocked === 'true' && (
