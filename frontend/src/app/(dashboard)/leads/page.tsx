@@ -272,10 +272,21 @@ function LeadsContent() {
     [queryClient]
   );
 
-  const divisionScope = useMemo(
-    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
-    []
+  const [divisionScope, setDivisionScope] = useState<string | null>(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null)
   );
+
+  useEffect(() => {
+    const onDivisionChanged = (e: Event) => {
+      const detail = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
+      const newDiv = detail?.divisionId ?? null;
+      setDivisionScope(newDiv);
+      setPagination((p) => ({ ...p, page: 1 }));
+      queryClient.invalidateQueries({ queryKey: queryKeys.leads.root });
+    };
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+    return () => window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+  }, [queryClient]);
 
   // ─── State ──────────────────────────────────────────────────────
   const [pagination, setPagination] = useState(() => {
@@ -291,6 +302,8 @@ function LeadsContent() {
     return { total: 0, page: 1, limit: 20, totalPages: 1 };
   });
   const [exporting, setExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
   // ─── Restore view state from sessionStorage (survives lead detail navigation) ──
   const restoredViewState = useRef<{
     filters?: FilterState; sortBy?: string; sortOrder?: 'asc' | 'desc';
@@ -364,8 +377,8 @@ function LeadsContent() {
   const callOutcomeOptions = useCallOutcomeOptions(dispositionQuery.data);
 
   const listParams = useMemo(
-    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope),
-    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]
+    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope),
+    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope]
   );
 
   const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
@@ -474,7 +487,7 @@ function LeadsContent() {
   useEffect(() => {
     const loadServerViews = async () => {
       try {
-        const divId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+        const divId = divisionScope;
         
         // 1. Fetch server-side views
         const serverViews = await api.getSavedViews(divId || undefined) as SavedView[];
@@ -522,7 +535,7 @@ function LeadsContent() {
       }
     };
     loadServerViews();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [divisionScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // One-time drill-down params should not keep applying by default
   // on subsequent division loads/navigation.
@@ -651,6 +664,17 @@ function LeadsContent() {
       window.removeEventListener('scroll', closeMenu, true);
     };
   }, [quickActionId]);
+
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showExportMenu]);
 
   // ─── Handlers ───────────────────────────────────────────────────
 
@@ -847,11 +871,97 @@ function LeadsContent() {
   /** Backend GET /leads allows at most this page size (see paginationSchema). */
   const LEADS_API_MAX_LIMIT = 100;
 
-  const exportCSV = async () => {
+  const buildCSVAndDownload = (data: Lead[], suffix: string) => {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
+    const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
+    const rows = data.map((l, rowIndex) =>
+      visibleCols.map((c) => {
+        switch (c.id) {
+          case 'name': return getDisplayName(l);
+          case 'email': return l.email || '';
+          case 'phone': return formatPhone(l.phone) || '';
+          case 'company': return l.company || '';
+          case 'jobTitle': return l.jobTitle || '';
+          case 'status': return (l as any).stage?.name || l.status;
+          case 'source': return getLeadSourceLabel(l);
+          case 'score': return (l.score ?? 0).toString();
+          case 'budget': return l.budget?.toString() || '';
+          case 'location': return l.location || '';
+          case 'productInterest': return l.productInterest || '';
+          case 'campaign': return l.campaign || '';
+          case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
+          case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
+          case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
+          case 'callCount': return String(l._count?.callLogs || 0);
+          case 'lastCallOutcome': {
+            const lco = (l as any).lastCallOutcome;
+            if (!lco) return '';
+            const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
+            const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+            return dt ? `${label} (${dt})` : label;
+          }
+          case 'channels': {
+            const ucc = l.unreadChannelCounts || {};
+            return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
+          }
+          case 'sla': {
+            const sla = (l as any).slaInfo;
+            if (!sla || !sla.enabled) return '';
+            if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
+            return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
+          }
+          case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          case 'lastOpenedAt': {
+            const lo = (l as Lead).lastOpenedAt;
+            const lob = (l as Lead).lastOpenedBy;
+            if (!lo) return '';
+            const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+            return by ? `${new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (${by})` : new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          }
+          default:
+            if (c.id.startsWith('cf_')) {
+              if (isAutoSerialCustomField(c)) return String(rowIndex + 1);
+              const fn = c.id.slice(3);
+              const cd = (l.customData || {}) as Record<string, unknown>;
+              const v = cd[fn];
+              if (v === undefined || v === null) return '';
+              if (Array.isArray(v)) return v.join(', ');
+              return String(v);
+            }
+            return '';
+        }
+      })
+    );
+    const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leads-${suffix}-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportCurrentPage = () => {
+    setShowExportMenu(false);
+    if (leads.length === 0) {
+      addToast({ type: 'info', title: 'Nothing to export', message: 'No leads on the current page.' });
+      return;
+    }
+    buildCSVAndDownload(leads, 'page');
+    addToast({
+      type: 'success',
+      title: 'Export ready',
+      message: `${leads.length} lead${leads.length !== 1 ? 's' : ''} exported (current page).`,
+    });
+  };
+
+  const exportAllRecords = async () => {
+    setShowExportMenu(false);
     setExporting(true);
     try {
-      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope);
+      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope);
       const allLeads: Lead[] = [];
       let page = 1;
       let totalPages = 1;
@@ -868,80 +978,11 @@ function LeadsContent() {
         page += 1;
       } while (page <= totalPages);
 
-      const headers = visibleCols.map((c) => customLabels[c.id] || c.label);
-      const rows = allLeads.map((l, rowIndex) =>
-        visibleCols.map((c) => {
-          switch (c.id) {
-            case 'name': return getDisplayName(l);
-            case 'email': return l.email || '';
-            case 'phone': return formatPhone(l.phone) || '';
-            case 'company': return l.company || '';
-            case 'jobTitle': return l.jobTitle || '';
-            case 'status': return (l as any).stage?.name || l.status;
-            case 'source': return getLeadSourceLabel(l);
-            case 'score': return (l.score ?? 0).toString();
-            case 'budget': return l.budget?.toString() || '';
-            case 'location': return l.location || '';
-            case 'productInterest': return l.productInterest || '';
-            case 'campaign': return l.campaign || '';
-            case 'conversionProb': return l.conversionProb ? `${Math.round(l.conversionProb * 100)}%` : '';
-            case 'assignedTo': return l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : '';
-            case 'tags': return l.tags?.map((t) => t.tag.name).join(', ') || '';
-            case 'callCount': return String(l._count?.callLogs || 0);
-            case 'lastCallOutcome': {
-              const lco = (l as any).lastCallOutcome;
-              if (!lco) return '';
-              const label = lco.dispositionLabel || dispositionLabels[lco.disposition] || lco.disposition;
-              const dt = lco.date ? new Date(lco.date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
-              return dt ? `${label} (${dt})` : label;
-            }
-            case 'channels': {
-              const ucc = l.unreadChannelCounts || {};
-              return Object.entries(ucc).filter(([, cnt]) => cnt > 0).map(([ch, cnt]) => `${ch}:${cnt}`).join(', ') || '';
-            }
-            case 'sla': {
-              const sla = (l as any).slaInfo;
-              if (!sla || !sla.enabled) return '';
-              if (sla.status === 'RESPONDED') return `Responded in ${sla.respondedInMinutes}m`;
-              return `${sla.status} (${Math.round(sla.elapsedMinutes || 0)}m)`;
-            }
-            case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-            case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-            case 'lastOpenedAt': {
-              const lo = (l as Lead).lastOpenedAt;
-              const lob = (l as Lead).lastOpenedBy;
-              if (!lo) return '';
-              const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
-              return by ? `${new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (${by})` : new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-            }
-            default:
-              if (c.id.startsWith('cf_')) {
-                if (isAutoSerialCustomField(c)) {
-                  return String(rowIndex + 1);
-                }
-                const fn = c.id.slice(3);
-                const cd = (l.customData || {}) as Record<string, unknown>;
-                const v = cd[fn];
-                if (v === undefined || v === null) return '';
-                if (Array.isArray(v)) return v.join(', ');
-                return String(v);
-              }
-              return '';
-          }
-        })
-      );
-      const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `leads-export-${new Date().toISOString().split('T')[0]}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      buildCSVAndDownload(allLeads, 'all');
       addToast({
         type: 'success',
         title: 'Export ready',
-        message: `${allLeads.length} lead${allLeads.length !== 1 ? 's' : ''} exported (current filters).`,
+        message: `${allLeads.length} lead${allLeads.length !== 1 ? 's' : ''} exported (all matching records).`,
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Could not export leads';
@@ -1375,18 +1416,18 @@ function LeadsContent() {
       .leads-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       .leads-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
     `}</style>
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden animate-fade-in">
+    <div className="flex flex-col h-[calc(100dvh-3.5rem-1.5rem)] sm:h-[calc(100dvh-3.5rem-2rem)] md:h-[calc(100dvh-3.5rem-3rem)] overflow-hidden animate-fade-in">
       {/* Header row: [Title] [─── Team Workload · Allocation Rules ───] [Actions] */}
-      <div className="flex items-center gap-4 flex-shrink-0 pt-4 px-1">
+      <div className="flex items-center gap-3 flex-shrink-0 pt-1.5 px-1">
 
         {/* Section 1 — Title */}
         <div className="flex-shrink-0">
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight leading-none">Leads</h1>
-          <p className="text-text-secondary mt-0.5 text-xs">{alignedTotalLeads.toLocaleString()} leads total</p>
+          <h1 className="text-xl font-bold text-text-primary tracking-tight leading-none">Leads</h1>
+          <p className="text-text-secondary mt-0.5 text-[11px]">{alignedTotalLeads.toLocaleString()} leads total</p>
         </div>
 
         {/* Section 2 — Two action tabs */}
-        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border pl-4">
+        <div className="flex items-center gap-1 flex-shrink-0 border-l border-border pl-3">
           <button
             onClick={() => setShowWorkload(!showWorkload)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
@@ -1413,10 +1454,42 @@ function LeadsContent() {
         {/* Section 3 — Actions */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <RefreshButton onRefresh={() => { invalidateListAndDashboard(); }} />
-          <button onClick={exportCSV} className="btn-secondary text-xs gap-1.5" title="Export visible columns as CSV">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            {exporting ? 'Exporting…' : 'Export'}
-          </button>
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              onClick={() => setShowExportMenu((v) => !v)}
+              disabled={exporting}
+              className="btn-secondary text-xs gap-1.5"
+              title="Export visible columns as CSV"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              {exporting ? 'Exporting…' : 'Export'}
+              <svg className="h-3 w-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+            {showExportMenu && (
+              <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-gray-200 bg-white shadow-lg ring-1 ring-black/5 py-1">
+                <button
+                  onClick={exportCurrentPage}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                >
+                  <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                  <div>
+                    <div className="font-medium">Current Page</div>
+                    <div className="text-xs text-gray-400">{leads.length} record{leads.length !== 1 ? 's' : ''} on screen</div>
+                  </div>
+                </button>
+                <button
+                  onClick={exportAllRecords}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                >
+                  <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7l8-4 8 4M4 7l8 4m8-4l-8 4" /></svg>
+                  <div>
+                    <div className="font-medium">All Records</div>
+                    <div className="text-xs text-gray-400">{alignedTotalLeads.toLocaleString()} total (matching filters)</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
           <button onClick={() => setShowForm(true)} className="btn-primary gap-1.5">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
             New Lead
@@ -1427,7 +1500,7 @@ function LeadsContent() {
       {/* Stats Cards */}
       {stats && (
         <div className="flex-shrink-0">
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
             <StatCard label="Total" value={alignedTotalLeads} color="default" delta="+2 this week" />
             <StatCard label={getStatusLabel('NEW')} value={stats.overview.newLeads} color="indigo" highlight subtitle="All active" dot="indigo" />
             <StatCard label={getStatusLabel('QUALIFIED')} value={stats.overview.qualifiedLeads} color="default" dot="cyan" />
@@ -1452,10 +1525,12 @@ function LeadsContent() {
         </div>
       )}
 
-      {/* ─── Workload Dashboard (below stats) ─────────────────────── */}
-      <div className="py-1">
-        <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
-      </div>
+      {/* ─── Workload Dashboard (collapsed by default to save vertical space) ─────────────────────── */}
+      {showWorkload && (
+        <div className="pt-0.5">
+          <WorkloadDashboard isOpen={showWorkload} onToggle={() => setShowWorkload(!showWorkload)} />
+        </div>
+      )}
 
       {/* DNC Warning Banner */}
       {filters.showBlocked === 'true' && (
@@ -1473,7 +1548,7 @@ function LeadsContent() {
       )}
 
       {/* Main Layout: Sidebar + Content */}
-      <div className="flex gap-4 flex-1 min-h-0">
+      <div className="flex gap-3 flex-1 min-h-0">
         {/* View Sidebar */}
         {showViewSidebar && (
           <ViewSidebar
@@ -1493,9 +1568,9 @@ function LeadsContent() {
         )}
 
         {/* Content Area */}
-        <div className="flex-1 min-w-0 flex flex-col gap-3">
+        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
           {/* Toolbar */}
-          <div className="card p-3 flex-shrink-0">
+          <div className="card p-2.5 flex-shrink-0">
             <div className="flex flex-wrap items-center gap-2">
               {/* Toggle Sidebar */}
               <button onClick={() => setShowViewSidebar(!showViewSidebar)}
@@ -1754,7 +1829,7 @@ function LeadsContent() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex-shrink-0 border-t border-gray-200">
+              <div className="flex-shrink-0 bg-white">
                 <Pagination pagination={pagination} setPagination={setPagination} pageNumbers={pageNumbers} />
               </div>
             </div>
@@ -1976,28 +2051,28 @@ function StatCard({
   };
 
   return (
-    <div className={`relative rounded-xl border p-3 transition-all ${
+    <div className={`relative rounded-xl border p-2.5 transition-all ${
       highlight
         ? 'bg-indigo-50 border-indigo-200 shadow-sm'
         : 'bg-white border-gray-100 shadow-xs hover:border-gray-200'
     }`}>
       {/* Header row */}
-      <div className="flex items-center gap-1.5 mb-1">
+      <div className="flex items-center gap-1.5 mb-0.5">
         {dot && <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${dotColors[dot] || 'bg-gray-400'}`} />}
         <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{label}</p>
       </div>
 
       {/* Value */}
-      <p className={`text-xl font-bold leading-none ${valueColors[color] || valueColors.default}`}>
+      <p className={`text-lg font-bold leading-none ${valueColors[color] || valueColors.default}`}>
         {value}
       </p>
 
       {/* Delta or subtitle */}
       {delta && (
-        <p className="text-[10px] text-emerald-600 font-medium mt-1">{delta}</p>
+        <p className="text-[10px] text-emerald-600 font-medium mt-0.5">{delta}</p>
       )}
       {subtitle && !delta && (
-        <p className="text-[10px] text-gray-400 mt-1 leading-snug">{subtitle}</p>
+        <p className="text-[10px] text-gray-400 mt-0.5 leading-snug">{subtitle}</p>
       )}
     </div>
   );
@@ -2012,8 +2087,9 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
   const start = ((pagination.page - 1) * limit) + 1;
   const end = Math.min(pagination.page * limit, pagination.total);
   return (
-    <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3">
-      <div className="flex items-center gap-3">
+    <div className="border-t border-gray-200 bg-white px-4 py-3">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         <p className="text-sm text-gray-500">
           {pagination.total > 0 ? `Showing ${start}-${end} of ${pagination.total}` : 'No leads'}
         </p>
@@ -2033,7 +2109,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
         </div>
       </div>
       {pagination.totalPages > 1 && (
-        <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
           <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page <= 1}
             onClick={() => setPagination((p: any) => ({ ...p, page: p.page - 1 }))}>
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
@@ -2052,6 +2128,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

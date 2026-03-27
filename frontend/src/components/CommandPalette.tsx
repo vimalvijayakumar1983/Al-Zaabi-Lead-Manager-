@@ -16,6 +16,7 @@ import {
   Plus,
   ArrowRight,
   Hash,
+  Compass,
 } from 'lucide-react';
 
 interface CommandItem {
@@ -48,6 +49,7 @@ export default function CommandPalette() {
     { id: 'nav-campaigns', label: 'Go to Campaigns', icon: Megaphone, action: () => router.push('/campaigns'), category: 'Navigation', shortcut: '7' },
     { id: 'nav-team', label: 'Go to Team', icon: UserCog, action: () => router.push('/team'), category: 'Navigation', shortcut: '8' },
     { id: 'nav-recycle-bin', label: 'Go to Recycle Bin', icon: Archive, action: () => router.push('/recycle-bin'), category: 'Navigation' },
+    { id: 'nav-feature-finder', label: 'Go to Feature Finder', description: 'Search CRM features and jump to exact page', icon: Compass, action: () => router.push('/feature-finder'), category: 'Navigation' },
     // Actions
     { id: 'action-new-lead', label: 'Create New Lead', description: 'Add a new lead to the system', icon: Plus, action: () => { router.push('/leads'); setTimeout(() => window.dispatchEvent(new CustomEvent('open-lead-form')), 100); }, category: 'Actions' },
     { id: 'action-new-task', label: 'Create New Task', description: 'Add a new task', icon: Plus, action: () => router.push('/tasks'), category: 'Actions' },

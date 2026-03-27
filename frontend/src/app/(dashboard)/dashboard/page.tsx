@@ -304,6 +304,7 @@ export default function DashboardPage() {
   const [activeDivisionId, setActiveDivisionId] = useState<string | undefined>(undefined);
   const [teamMembers, setTeamMembers] = useState<TeamFilterUser[]>([]);
   const [teamMemberFilter, setTeamMemberFilter] = useState<string>('all');
+  const [teamMembersLoading, setTeamMembersLoading] = useState<boolean>(false);
   const [customFrom, setCustomFrom] = useState<string>('');
   const [customTo, setCustomTo] = useState<string>('');
   const [customApplied, setCustomApplied] = useState<boolean>(false);
@@ -322,11 +323,74 @@ export default function DashboardPage() {
   });
   const divisions = divisionsQuery.data ?? [];
 
+  // Keep dashboard scope synced with sidebar active division.
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncDivision = (incomingDivisionId?: string | null) => {
+      const nextDivisionId = incomingDivisionId ?? localStorage.getItem('activeDivisionId');
+      const normalizedDivision = nextDivisionId || undefined;
+      setActiveDivisionId(normalizedDivision);
+      if (isSuperAdmin) {
+        setDivisionFilter(normalizedDivision || 'all');
+      }
+      setTeamMemberFilter('all');
+    };
+
+    syncDivision();
+
+    const handleDivisionChanged = (event: Event) => {
+      const detail = (event as CustomEvent<ActiveDivisionChangedDetail>).detail;
+      syncDivision(detail?.divisionId ?? null);
+    };
+
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, handleDivisionChanged as EventListener);
+    return () => {
+      window.removeEventListener(ACTIVE_DIVISION_CHANGED, handleDivisionChanged as EventListener);
+    };
+  }, [isSuperAdmin]);
+
+  const teamScopeDivisionId = isSuperAdmin
+    ? (divisionFilter !== 'all' ? divisionFilter : undefined)
+    : activeDivisionId;
+
+  useEffect(() => {
+    if (isSuperAdmin && !teamScopeDivisionId) {
+      setTeamMembers([]);
+      setTeamMembersLoading(false);
+      return;
+    }
+    setTeamMembersLoading(true);
+    api.getUsers(teamScopeDivisionId)
+      .then((rows: any[]) => setTeamMembers(Array.isArray(rows) ? rows : []))
+      .catch(() => setTeamMembers([]))
+      .finally(() => setTeamMembersLoading(false));
+  }, [isSuperAdmin, teamScopeDivisionId]);
+
+  useEffect(() => {
+    if (teamMemberFilter === 'all') return;
+    const stillExists = teamMembers.some((member) => member.id === teamMemberFilter);
+    if (!stillExists) {
+      setTeamMemberFilter('all');
+    }
+  }, [teamMembers, teamMemberFilter]);
+
+  const dashboardFilterKey = [
+    divisionKey,
+    teamMemberFilter,
+    period === 'custom' && customApplied ? customFrom : '',
+    period === 'custom' && customApplied ? customTo : '',
+  ].join('|');
+
   const dashboardQuery = useQuery({
-    queryKey: queryKeys.analytics.dashboardFull(period, divisionKey),
+    queryKey: queryKeys.analytics.dashboardFull(period, dashboardFilterKey),
     queryFn: async () => {
       const divId = divisionFilter !== 'all' ? divisionFilter : undefined;
-      const d = await api.getDashboardFull(period, divId);
+      const d = await api.getDashboardFull(period, divId, {
+        teamMemberId: teamMemberFilter !== 'all' ? teamMemberFilter : undefined,
+        dateFrom: period === 'custom' && customApplied ? (customFrom || undefined) : undefined,
+        dateTo: period === 'custom' && customApplied ? (customTo || undefined) : undefined,
+      });
       if (d && typeof d === 'object' && d.kpis) return d as DashboardFullData;
       throw new Error('Unexpected response format');
     },
@@ -464,6 +528,14 @@ export default function DashboardPage() {
   const scoreDistribution = data.scoreDistribution || [];
   const teamLeaderboard = data.teamLeaderboard || [];
   const recentActivities = data.recentActivities || [];
+  const teamFilterEmptyLabel = isSuperAdmin && !teamScopeDivisionId
+    ? 'Select a division in sidebar'
+    : 'No team members in this division';
+  const teamFilterTitle = isSuperAdmin && !teamScopeDivisionId
+    ? 'Select a division from the sidebar to load team members'
+    : teamMembers.length === 0
+      ? 'No team members found for current division'
+      : 'Filter by team member';
 
 
   return (
@@ -491,24 +563,29 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {teamMembers.length > 0 && (
-            <div className="relative">
-              <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
-              <select
-                className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
-                value={teamMemberFilter}
-                onChange={(e) => setTeamMemberFilter(e.target.value)}
-              >
-                <option value="all">All Team Members</option>
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {getDisplayName(member.firstName, member.lastName)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
-            </div>
-          )}
+          <div className="relative">
+            <Users className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
+            <select
+              className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-text-tertiary"
+              value={teamMemberFilter}
+              onChange={(e) => setTeamMemberFilter(e.target.value)}
+              disabled={teamMembersLoading || teamMembers.length === 0}
+              title={teamFilterTitle}
+            >
+              <option value="all">
+                {teamMembersLoading ? 'Loading team members...' : 'All Team Members'}
+              </option>
+              {!teamMembersLoading && teamMembers.length === 0 && (
+                <option value="all" disabled>{teamFilterEmptyLabel}</option>
+              )}
+              {teamMembers.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {getDisplayName(member.firstName, member.lastName)}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary pointer-events-none" />
+          </div>
           <div className="relative">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-tertiary pointer-events-none" />
             <select className="input py-2 pl-9 pr-8 text-xs w-auto bg-white appearance-none cursor-pointer"
