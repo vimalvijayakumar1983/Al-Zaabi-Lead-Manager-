@@ -485,7 +485,7 @@ function LeadsContent() {
   useEffect(() => {
     const loadServerViews = async () => {
       try {
-        const divId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+        const divId = divisionScope;
         
         // 1. Fetch server-side views
         const serverViews = await api.getSavedViews(divId || undefined) as SavedView[];
@@ -533,7 +533,7 @@ function LeadsContent() {
       }
     };
     loadServerViews();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [divisionScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // One-time drill-down params should not keep applying by default
   // on subsequent division loads/navigation.
