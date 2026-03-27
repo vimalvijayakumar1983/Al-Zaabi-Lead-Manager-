@@ -35,6 +35,7 @@ import {
   LayoutTemplate,
   Radio,
   Clock3,
+  Compass,
 } from 'lucide-react';
 
 // ─── Nav structure: grouped sections ─────────────────────────────
@@ -65,6 +66,7 @@ const NAV_GROUPS = [
       { href: '/analytics', label: 'Analytics', icon: BarChart3, shortcut: '5', permission: 'analytics' },
       { href: '/report-builder', label: 'Report Builder', icon: BarChart3, permission: 'reports' },
       { href: '/automations', label: 'Automations', icon: Zap, shortcut: '6', permission: 'automations' },
+      { href: '/feature-finder', label: 'Feature Finder', icon: Compass, permission: 'dashboard' },
     ],
   },
   {

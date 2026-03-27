@@ -37,6 +37,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/incentives': { title: 'Incentives', description: 'Attribution, earnings, and statements' },
   '/divisions': { title: 'Divisions', description: 'Manage organization divisions' },
   '/roles': { title: 'Roles & Permissions', description: 'Manage roles and access control' },
+  '/feature-finder': { title: 'Feature Finder', description: 'Search CRM features and jump directly to them' },
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -306,6 +307,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     '/integrations': 'integrations',
     '/team': 'team',
     '/roles': 'roles',
+    '/feature-finder': 'dashboard',
     '/settings': 'settings',
     '/recycle-bin': 'recycleBin',
     '/import': 'import',
