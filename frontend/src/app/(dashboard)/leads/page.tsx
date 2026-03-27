@@ -2086,7 +2086,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
   const end = Math.min(pagination.page * limit, pagination.total);
   return (
     <div className="border-t border-gray-200 bg-white px-4 py-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         <p className="text-sm text-gray-500">
           {pagination.total > 0 ? `Showing ${start}-${end} of ${pagination.total}` : 'No leads'}
@@ -2107,7 +2107,7 @@ function Pagination({ pagination, setPagination, pageNumbers }: {
         </div>
       </div>
       {pagination.totalPages > 1 && (
-          <div className="flex items-center gap-1 overflow-x-auto pb-0.5 sm:pb-0">
+          <div className="flex flex-wrap items-center gap-1">
           <button className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-30" disabled={pagination.page <= 1}
             onClick={() => setPagination((p: any) => ({ ...p, page: p.page - 1 }))}>
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
