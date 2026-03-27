@@ -9,6 +9,100 @@
     --sidebar-width: 260px;
     --sidebar-collapsed-width: 72px;
     --header-height: 56px;
+    --brand-50: #f0f0ff;
+    --brand-100: #e0e1ff;
+    --brand-200: #c7c8fe;
+    --brand-300: #a4a5fc;
+    --brand-400: #8183f8;
+    --brand-500: #6366f1;
+    --brand-600: #4f46e5;
+    --brand-700: #4338ca;
+    --brand-800: #3730a3;
+    --brand-900: #312e81;
+    --brand-950: #1e1b4b;
+    --surface: #ffffff;
+    --surface-secondary: #f8f9fc;
+    --surface-tertiary: #f1f3f9;
+    --surface-elevated: #ffffff;
+    --border: #e5e7eb;
+    --border-subtle: #f0f1f4;
+    --border-strong: #d1d5db;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --text-tertiary: #9ca3af;
+    --text-inverse: #ffffff;
+  }
+
+  :root[data-theme='dark'] {
+    --background: 10 14 26;
+    --foreground: 241 245 249;
+    --surface: #111827;
+    --surface-secondary: #0f172a;
+    --surface-tertiary: #1f2937;
+    --surface-elevated: #111827;
+    --border: #334155;
+    --border-subtle: #1e293b;
+    --border-strong: #475569;
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-tertiary: #94a3b8;
+    --text-inverse: #ffffff;
+  }
+
+  :root[data-theme-preset='royal'] {
+    --brand-50: #f0f0ff;
+    --brand-100: #e0e1ff;
+    --brand-200: #c7c8fe;
+    --brand-300: #a4a5fc;
+    --brand-400: #8183f8;
+    --brand-500: #6366f1;
+    --brand-600: #4f46e5;
+    --brand-700: #4338ca;
+    --brand-800: #3730a3;
+    --brand-900: #312e81;
+    --brand-950: #1e1b4b;
+  }
+
+  :root[data-theme-preset='emerald'] {
+    --brand-50: #ecfdf5;
+    --brand-100: #d1fae5;
+    --brand-200: #a7f3d0;
+    --brand-300: #6ee7b7;
+    --brand-400: #34d399;
+    --brand-500: #10b981;
+    --brand-600: #059669;
+    --brand-700: #047857;
+    --brand-800: #065f46;
+    --brand-900: #064e3b;
+    --brand-950: #022c22;
+  }
+
+  :root[data-theme-preset='sunset'] {
+    --brand-50: #fff7ed;
+    --brand-100: #ffedd5;
+    --brand-200: #fed7aa;
+    --brand-300: #fdba74;
+    --brand-400: #fb923c;
+    --brand-500: #f97316;
+    --brand-600: #ea580c;
+    --brand-700: #c2410c;
+    --brand-800: #9a3412;
+    --brand-900: #7c2d12;
+    --brand-950: #431407;
+  }
+
+  :root[data-theme-preset='ocean'] {
+    --brand-50: #eff6ff;
+    --brand-100: #dbeafe;
+    --brand-200: #bfdbfe;
+    --brand-300: #93c5fd;
+    --brand-400: #60a5fa;
+    --brand-500: #3b82f6;
+    --brand-600: #2563eb;
+    --brand-700: #1d4ed8;
+    --brand-800: #1e40af;
+    --brand-900: #1e3a8a;
+    --brand-950: #172554;
   }
 
   * {
@@ -28,6 +122,14 @@
 
   ::selection {
     @apply bg-brand-100 text-brand-900;
+  }
+}
+
+@layer utilities {
+  .theme-transition * {
+    transition-property: color, background-color, border-color, fill, stroke, box-shadow;
+    transition-duration: 250ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   }
 }
 
