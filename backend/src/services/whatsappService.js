@@ -2,6 +2,7 @@ const { config } = require('../config/env');
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
 const { canonicalPhoneDigitsForWhatsApp } = require('../utils/phoneWhatsApp');
+const { recordTokenOk, recordTokenError, isTokenError } = require('../utils/whatsappTokenHealth');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
@@ -109,6 +110,9 @@ async function sendText(to, body, organizationId = null) {
 
   if (!response.ok) {
     logger.error('WhatsApp send failed', { status: response.status, data, to: normalizedTo });
+    if (organizationId && isTokenError(response.status, data)) {
+      recordTokenError(organizationId, data.error?.message || `Token error (HTTP ${response.status})`).catch(() => {});
+    }
     const err = new Error(data.error?.message || `WhatsApp API error: ${response.status}`);
     err.statusCode = response.status;
     err.details = data;
@@ -118,6 +122,7 @@ async function sendText(to, body, organizationId = null) {
   const messageId = data.messages?.[0]?.id;
   if (messageId) {
     logger.info('WhatsApp message sent', { messageId, to: normalizedTo });
+    if (organizationId) recordTokenOk(organizationId).catch(() => {});
   }
   return { messageId: messageId || null, ...data };
 }
@@ -127,7 +132,7 @@ async function sendText(to, body, organizationId = null) {
  * Same format as: POST https://graph.facebook.com/v22.0/{phone-number-id}/messages
  * with type: "template", template: { name, language: { code } }.
  */
-async function sendTemplate(to, templateName, languageCode, organizationId = null) {
+async function sendTemplate(to, templateName, languageCode, organizationId = null, components = undefined) {
   const resolved = await resolveSendConfig(organizationId);
   const { phoneNumberId, token, apiUrl: resolvedApiUrl } = resolved;
   const apiUrl = trimStr(resolvedApiUrl || config.whatsapp?.apiUrl || process.env.WHATSAPP_API_URL || DEFAULT_WHATSAPP_API_URL).replace(/\/$/, '');
@@ -148,6 +153,7 @@ async function sendTemplate(to, templateName, languageCode, organizationId = nul
     template: {
       name: templateName || 'hello_world',
       language: { code: languageCode || 'en_US' },
+      ...(Array.isArray(components) && components.length > 0 ? { components } : {}),
     },
   };
 
@@ -166,6 +172,9 @@ async function sendTemplate(to, templateName, languageCode, organizationId = nul
 
   if (!response.ok) {
     logger.error('WhatsApp template send failed', { status: response.status, data, to: normalizedTo });
+    if (organizationId && isTokenError(response.status, data)) {
+      recordTokenError(organizationId, data.error?.message || `Token error (HTTP ${response.status})`).catch(() => {});
+    }
     const err = new Error(data.error?.message || `WhatsApp API error: ${response.status}`);
     err.statusCode = response.status;
     err.details = data;
@@ -175,8 +184,70 @@ async function sendTemplate(to, templateName, languageCode, organizationId = nul
   const messageId = data.messages?.[0]?.id;
   if (messageId) {
     logger.info('WhatsApp template sent', { messageId, to: normalizedTo });
+    if (organizationId) recordTokenOk(organizationId).catch(() => {});
   }
   return { messageId: messageId || null, ...data };
+}
+
+async function createMessageTemplateInMeta(organizationId, payload) {
+  const { token, apiUrl, wabaId } = await resolveWabaManagementConfig(organizationId);
+  const url = `${apiUrl}/${encodeURIComponent(wabaId)}/message_templates`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const err = new Error(data.error?.message || `WhatsApp template create failed: ${resp.status}`);
+    err.statusCode = resp.status;
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function updateMessageTemplateInMeta(organizationId, waTemplateId, payload) {
+  const { token, apiUrl } = await resolveWabaManagementConfig(organizationId);
+  const url = `${apiUrl}/${encodeURIComponent(waTemplateId)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const err = new Error(data.error?.message || `WhatsApp template update failed: ${resp.status}`);
+    err.statusCode = resp.status;
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function deleteMessageTemplateInMeta(organizationId, templateName) {
+  const { token, apiUrl, wabaId } = await resolveWabaManagementConfig(organizationId);
+  const url = `${apiUrl}/${encodeURIComponent(wabaId)}/message_templates?name=${encodeURIComponent(templateName)}`;
+  const resp = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const err = new Error(data.error?.message || `WhatsApp template delete failed: ${resp.status}`);
+    err.statusCode = resp.status;
+    err.details = data;
+    throw err;
+  }
+  return data;
 }
 
 // ─── Media helpers ──────────────────────────────────────────────────
@@ -334,6 +405,186 @@ async function uploadMedia(inputBuffer, inputMimeType, inputFilename, organizati
   return { mediaId: data.id };
 }
 
+function inferMimeFromFilenameForTemplate(filename, hintMime) {
+  const name = String(filename || '').toLowerCase();
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+  if (name.endsWith('.png')) return 'image/png';
+  if (name.endsWith('.webp')) return 'image/webp';
+  if (name.endsWith('.mp4')) return 'video/mp4';
+  if (name.endsWith('.3gp') || name.endsWith('.3gpp')) return 'video/3gpp';
+  if (name.endsWith('.pdf')) return 'application/pdf';
+  if (name.endsWith('.doc')) return 'application/msword';
+  if (name.endsWith('.docx')) {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  const h = String(hintMime || '').split(';')[0].trim().toLowerCase();
+  if (h === 'image/jpg') return 'image/jpeg';
+  return h;
+}
+
+/**
+ * Meta only allows these MIME types for Graph API resumable upload sessions
+ * (used for message template media samples).
+ * @see https://developers.facebook.com/docs/graph-api/guides/upload
+ */
+function normalizeToResumableFileType(mimeType, format, filename) {
+  const f = String(format || '').toUpperCase();
+  let m = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  m = inferMimeFromFilenameForTemplate(filename, m) || m;
+  if (m === 'image/jpg') m = 'image/jpeg';
+
+  const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png', 'video/mp4']);
+
+  if (allowed.has(m)) return m;
+
+  if (f === 'IMAGE') {
+    if (m === 'image/webp') {
+      const err = new Error(
+        'Image template samples: use JPEG or PNG. Meta resumable upload (template header examples) does not support WebP.'
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!m || m === 'application/octet-stream') return 'image/jpeg';
+    const err = new Error(`Unsupported image type for template sample (${m}). Use JPEG or PNG.`);
+    err.statusCode = 400;
+    throw err;
+  }
+  if (f === 'VIDEO') {
+    if (m === 'video/3gpp' || m === 'video/3gp') {
+      const err = new Error('Video template samples: use MP4. Meta resumable upload accepts video/mp4 only.');
+      err.statusCode = 400;
+      throw err;
+    }
+    return 'video/mp4';
+  }
+  if (f === 'DOCUMENT') {
+    if (m !== 'application/pdf') {
+      const err = new Error(
+        'Document template samples: use a PDF file. Meta resumable upload for template headers supports application/pdf only.'
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    return 'application/pdf';
+  }
+  return 'image/jpeg';
+}
+
+/**
+ * Meta App ID for Graph `/{app-id}/uploads` (template media samples). Per-division in
+ * `organization.settings.whatsappMetaAppId`, then env `META_APP_ID` / `config.whatsapp.appId`.
+ */
+async function resolveMetaAppIdForOrg(organizationId) {
+  const envFallback = trimStr(
+    config.whatsapp?.appId || process.env.META_APP_ID || process.env.WHATSAPP_META_APP_ID
+  );
+  if (!organizationId) return envFallback;
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { settings: true },
+  });
+  const settings = typeof org?.settings === 'object' && org.settings ? org.settings : {};
+  const fromSettings = trimStr(settings.whatsappMetaAppId);
+  return fromSettings || envFallback;
+}
+
+/**
+ * Upload bytes via Graph Resumable Upload API and return handle `h` for template `example.header_handle`.
+ * This is NOT the same as POST /{phone-number-id}/media (sending) — template creation rejects that id with error_subcode 2494102.
+ * @see https://developers.facebook.com/docs/graph-api/guides/upload
+ * @returns {Promise<{ handle: string }>}
+ */
+async function uploadTemplateHeaderSampleHandle(buffer, mimeType, filename, format, organizationId = null) {
+  const appId = await resolveMetaAppIdForOrg(organizationId);
+  if (!appId) {
+    const err = new Error(
+      'Meta App ID is not set. Add it in Settings → WhatsApp (Meta App ID) for this division, or set META_APP_ID in server env. Required for IMAGE/VIDEO/DOCUMENT template header samples (Graph resumable upload). Find the ID under Meta App → App settings → Basic.'
+    );
+    err.statusCode = 400;
+    err.reasonCode = 'META_APP_ID_REQUIRED';
+    throw err;
+  }
+
+  const resolved = await resolveSendConfig(organizationId);
+  const { token, apiUrl: resolvedApiUrl } = resolved;
+  const apiUrl = trimStr(resolvedApiUrl || config.whatsapp?.apiUrl || process.env.WHATSAPP_API_URL || DEFAULT_WHATSAPP_API_URL).replace(/\/$/, '');
+
+  if (!token) {
+    const err = new Error('WhatsApp access token is not configured.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const fileName = trimStr(filename) || 'template-sample.bin';
+  const fileType = normalizeToResumableFileType(mimeType, format, fileName);
+
+  const startUrl = new URL(`${apiUrl}/${encodeURIComponent(appId)}/uploads`);
+  startUrl.searchParams.set('file_name', fileName);
+  startUrl.searchParams.set('file_length', String(buffer.length));
+  startUrl.searchParams.set('file_type', fileType);
+  startUrl.searchParams.set('access_token', token);
+
+  logger.info('WhatsApp template sample: start resumable upload session', {
+    appId,
+    fileName,
+    fileType,
+    size: buffer.length,
+  });
+
+  const startResp = await fetch(startUrl.toString(), { method: 'POST' });
+  const startData = await startResp.json().catch(() => ({}));
+  if (!startResp.ok) {
+    logger.error('Resumable upload session failed', { status: startResp.status, startData });
+    const err = new Error(
+      startData.error?.message || `Could not start media upload session for template sample: ${startResp.status}`
+    );
+    err.statusCode = startResp.status >= 400 && startResp.status < 500 ? 400 : startResp.status;
+    err.details = startData;
+    throw err;
+  }
+
+  const uploadSessionId = startData.id;
+  if (!uploadSessionId || typeof uploadSessionId !== 'string') {
+    const err = new Error('Resumable upload did not return a session id');
+    err.statusCode = 500;
+    err.details = startData;
+    throw err;
+  }
+
+  const binaryBody = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const uploadUrl = `${apiUrl}/${uploadSessionId}`;
+
+  const uploadResp = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      // Graph resumable upload step 2 uses OAuth prefix per Meta docs (same access token as Bearer elsewhere).
+      Authorization: `OAuth ${token}`,
+      file_offset: '0',
+    },
+    body: binaryBody,
+  });
+  const uploadData = await uploadResp.json().catch(() => ({}));
+  if (!uploadResp.ok) {
+    logger.error('Resumable upload binary transfer failed', { status: uploadResp.status, uploadData });
+    const err = new Error(uploadData.error?.message || `Template sample upload failed: ${uploadResp.status}`);
+    err.statusCode = uploadResp.status >= 400 && uploadResp.status < 500 ? 400 : uploadResp.status;
+    err.details = uploadData;
+    throw err;
+  }
+
+  const handle = uploadData.h;
+  if (!handle || typeof handle !== 'string') {
+    const err = new Error('Media upload did not return a valid template header_handle (expected field h)');
+    err.statusCode = 500;
+    err.details = uploadData;
+    throw err;
+  }
+
+  logger.info('WhatsApp template sample: resumable upload complete', { handlePrefix: handle.slice(0, 24) });
+  return { handle };
+}
+
 /**
  * Send a media message (image, video, audio, document) via WhatsApp Cloud API.
  * @param {string} to - Recipient wa_id
@@ -469,9 +720,14 @@ module.exports = {
   sendTemplate,
   sendMedia,
   uploadMedia,
+  uploadTemplateHeaderSampleHandle,
+  resolveMetaAppIdForOrg,
   downloadMedia,
   resolveSendConfig,
   resolveWabaManagementConfig,
   fetchMessageTemplatesFromMeta,
+  createMessageTemplateInMeta,
+  updateMessageTemplateInMeta,
+  deleteMessageTemplateInMeta,
   MEDIA_MIME_MAP,
 };

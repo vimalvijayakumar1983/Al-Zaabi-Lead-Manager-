@@ -1219,6 +1219,7 @@ router.get('/sla/dashboard', async (req, res, next) => {
 
 const { testConnection, sendTestEmail } = require('../services/emailService');
 const { resolveSendConfig } = require('../services/whatsappService');
+const { recordTokenOk, recordTokenError, isTokenError } = require('../utils/whatsappTokenHealth');
 
 // Helper: resolve target organization for division-scoped settings (email, WhatsApp, etc.)
 // SUPER_ADMIN must pass ?divisionId=<uuid>; ADMIN uses their own org (division)
@@ -1305,6 +1306,15 @@ function sanitizeWhatsAppSettingsForClient(settings, revealSecrets = false) {
     hasWebhookVerifyToken: hasVerify,
     whatsappApiUrl: trimSettingStr(s.whatsappApiUrl) || '',
     whatsappBusinessAccountId: trimSettingStr(s.whatsappBusinessAccountId) || '',
+    whatsappMetaAppId: trimSettingStr(s.whatsappMetaAppId) || '',
+    // Token health status — set passively by send/sync operations
+    whatsappTokenStatus: s.whatsappTokenStatus
+      ? {
+          ok: !!s.whatsappTokenStatus.ok,
+          checkedAt: s.whatsappTokenStatus.checkedAt || null,
+          error: s.whatsappTokenStatus.error || null,
+        }
+      : null,
   };
 }
 
@@ -1371,6 +1381,12 @@ function mergeWhatsAppSettingsFromBody(existingSettings, body) {
     else delete nextSettings.whatsappBusinessAccountId;
   }
 
+  if (body.whatsappMetaAppId !== undefined && body.whatsappMetaAppId !== null) {
+    const mid = trimSettingStr(body.whatsappMetaAppId);
+    if (mid) nextSettings.whatsappMetaAppId = mid;
+    else delete nextSettings.whatsappMetaAppId;
+  }
+
   delete nextSettings.whatsappPhoneNumberId;
   delete nextSettings.whatsappToken;
 
@@ -1388,11 +1404,64 @@ const whatsAppSaveSchema = z.object({
   whatsappWebhookVerifyToken: z.string().optional().nullable(),
   whatsappApiUrl: z.string().optional().nullable(),
   whatsappBusinessAccountId: z.string().optional().nullable(),
+  /** Meta App ID (digits) for Graph resumable upload when creating templates with media headers */
+  whatsappMetaAppId: z.string().optional().nullable(),
 });
 
 const whatsAppTestSchema = z.object({
   phoneNumberId: z.string().optional().nullable(),
 });
+
+function mapWhatsAppTestError(statusCode, details) {
+  const err = details?.error || {};
+  const code = Number(err?.code || 0);
+  const subcode = Number(err?.error_subcode || 0);
+  const type = String(err?.type || '').toLowerCase();
+  const msg = String(err?.message || '').toLowerCase();
+
+  // Meta OAuth/token-expired style failures
+  if (
+    statusCode === 401 ||
+    code === 190 ||
+    subcode === 463 ||
+    msg.includes('session has expired') ||
+    msg.includes('expired')
+  ) {
+    return {
+      reasonCode: 'TOKEN_EXPIRED',
+      userMessage: 'Access token expired. Generate a fresh token and save it in WhatsApp settings.',
+    };
+  }
+
+  if (
+    statusCode === 403 ||
+    msg.includes('permission') ||
+    msg.includes('insufficient') ||
+    msg.includes('not authorized') ||
+    type.includes('oauth')
+  ) {
+    return {
+      reasonCode: 'PERMISSION_DENIED',
+      userMessage: 'Token is valid but missing required WhatsApp permissions for this business number.',
+    };
+  }
+
+  if (
+    statusCode === 404 ||
+    msg.includes('unsupported get request') ||
+    msg.includes('does not exist')
+  ) {
+    return {
+      reasonCode: 'PHONE_NUMBER_ID_INVALID',
+      userMessage: 'Phone Number ID is invalid or not accessible by this token.',
+    };
+  }
+
+  return {
+    reasonCode: 'UNKNOWN',
+    userMessage: err?.message || `WhatsApp API error (${statusCode})`,
+  };
+}
 
 router.get('/whatsapp', authorize('ADMIN'), async (req, res, next) => {
   try {
@@ -1454,8 +1523,23 @@ router.post('/whatsapp/test', authorize('ADMIN'), validate(whatsAppTestSchema), 
       return res.status(400).json({
         success: false,
         message: 'WhatsApp token and phone number ID are required. Save settings first.',
+        diagnostics: {
+          token: { ok: !!token, reasonCode: token ? null : 'MISSING', message: token ? null : 'Token not configured' },
+          phoneNumberId: {
+            ok: !!phoneNumberId,
+            reasonCode: phoneNumberId ? null : 'MISSING',
+            message: phoneNumberId ? null : 'Phone Number ID not configured',
+          },
+          waba: { checked: false, ok: null, reasonCode: null, message: 'Skipped' },
+        },
       });
     }
+
+    const diagnostics = {
+      token: { ok: true, reasonCode: null, message: 'Token accepted by Graph API.' },
+      phoneNumberId: { ok: true, reasonCode: null, message: 'Phone Number ID resolved.' },
+      waba: { checked: false, ok: null, reasonCode: null, message: 'Skipped (WABA ID not configured)' },
+    };
 
     const url = `${apiUrl.replace(/\/$/, '')}/${phoneNumberId}?fields=display_phone_number,verified_name,id`;
     const resp = await fetch(url, {
@@ -1465,9 +1549,66 @@ router.post('/whatsapp/test', authorize('ADMIN'), validate(whatsAppTestSchema), 
     const data = await resp.json().catch(() => ({}));
 
     if (!resp.ok) {
-      const message = data?.error?.message || `WhatsApp API error: ${resp.status}`;
-      return res.status(resp.status).json({ success: false, message, details: data });
+      const mapped = mapWhatsAppTestError(resp.status, data);
+      // Persist token health if this is an auth error
+      if (isTokenError(resp.status, data)) {
+        recordTokenError(targetOrgId, data.error?.message || mapped.userMessage).catch(() => {});
+      }
+      diagnostics.token = {
+        ok: mapped.reasonCode !== 'TOKEN_EXPIRED',
+        reasonCode: mapped.reasonCode === 'TOKEN_EXPIRED' ? mapped.reasonCode : null,
+        message: mapped.reasonCode === 'TOKEN_EXPIRED' ? mapped.userMessage : diagnostics.token.message,
+      };
+      diagnostics.phoneNumberId = {
+        ok: mapped.reasonCode !== 'PHONE_NUMBER_ID_INVALID',
+        reasonCode: mapped.reasonCode === 'PHONE_NUMBER_ID_INVALID' ? mapped.reasonCode : null,
+        message:
+          mapped.reasonCode === 'PHONE_NUMBER_ID_INVALID'
+            ? mapped.userMessage
+            : diagnostics.phoneNumberId.message,
+      };
+      return res.status(resp.status).json({
+        success: false,
+        message: mapped.userMessage,
+        reasonCode: mapped.reasonCode,
+        details: data,
+        diagnostics,
+      });
     }
+
+    const org = await prisma.organization.findUnique({
+      where: { id: targetOrgId },
+      select: { settings: true },
+    });
+    const settings = typeof org?.settings === 'object' ? org.settings : {};
+    const wabaId = trimSettingStr(settings?.whatsappBusinessAccountId);
+    if (wabaId) {
+      diagnostics.waba.checked = true;
+      const wabaUrl = `${apiUrl.replace(/\/$/, '')}/${wabaId}?fields=id,name`;
+      const wabaResp = await fetch(wabaUrl, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const wabaData = await wabaResp.json().catch(() => ({}));
+      if (wabaResp.ok) {
+        diagnostics.waba = {
+          checked: true,
+          ok: true,
+          reasonCode: null,
+          message: `WABA reachable (${wabaData?.name || wabaId}).`,
+        };
+      } else {
+        diagnostics.waba = {
+          checked: true,
+          ok: false,
+          reasonCode: 'WABA_UNREACHABLE',
+          message: wabaData?.error?.message || 'Unable to reach configured WABA ID',
+        };
+      }
+    }
+
+    // Test succeeded — clear any previous token error
+    recordTokenOk(targetOrgId).catch(() => {});
 
     return res.json({
       success: true,
@@ -1475,6 +1616,7 @@ router.post('/whatsapp/test', authorize('ADMIN'), validate(whatsAppTestSchema), 
       phoneNumberId: data?.id || phoneNumberId,
       displayPhoneNumber: data?.display_phone_number || null,
       verifiedName: data?.verified_name || null,
+      diagnostics,
     });
   } catch (err) {
     next(err);

@@ -25,6 +25,14 @@ const {
   startRecycleBinPurgeScheduler,
   stopRecycleBinPurgeScheduler,
 } = require('./services/recycleBinPurgeScheduler');
+const {
+  startBroadcastScheduler,
+  stopBroadcastScheduler,
+} = require('./services/broadcastScheduler');
+const {
+  startTemplateSyncScheduler,
+  stopTemplateSyncScheduler,
+} = require('./services/templateSyncScheduler');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -43,6 +51,7 @@ const webhookRoutes = require('./routes/webhooks');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 const whatsappTemplatesRoutes = require('./routes/whatsappTemplates');
 const importRoutes = require('./routes/import');
+const broadcastListsRoutes = require('./routes/broadcastLists');
 const settingsRoutes = require('./routes/settings');
 const integrationsRoutes = require('./routes/integrations');
 const publicLeadsRoutes = require('./routes/public-leads');
@@ -85,7 +94,14 @@ const corsOptions = {
   },
 };
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
+app.use(
+  express.json({
+    limit: '10mb',
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Static File Serving (uploads) ─────────────────────────────────
@@ -141,6 +157,7 @@ const routeMounts = [
   ['/whatsapp/webhook', whatsappWebhookRoutes],
   ['/whatsapp', whatsappTemplatesRoutes],
   ['/import', importRoutes],
+  ['/broadcast-lists', broadcastListsRoutes],
   ['/settings', settingsRoutes],
   ['/integrations', integrationsRoutes],
   ['/public', publicLeadsRoutes],
@@ -188,6 +205,8 @@ server.listen(PORT, () => {
     { name: 'CallbackReminder', fn: () => startCallbackReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 35000 }) },
     { name: 'TaskReminder', fn: () => startTaskReminderScheduler(undefined, { runOnStart: true, initialDelayMs: 50000 }) },
     { name: 'WillCallAgainSafetyNet', fn: () => startWillCallAgainSafetyNetScheduler(undefined, { runOnStart: true, initialDelayMs: 65000 }) },
+    { name: 'Broadcast', fn: () => startBroadcastScheduler(undefined, { runOnStart: true, initialDelayMs: 80000 }) },
+    { name: 'TemplateSync', fn: () => startTemplateSyncScheduler(undefined, { runOnStart: true, initialDelayMs: 95000 }) },
   ];
   for (const scheduler of schedulerStarts) {
     try {
@@ -231,6 +250,8 @@ const shutdown = async () => {
   stopWillCallAgainSafetyNetScheduler();
   stopNotificationEscalationScheduler();
   stopRecycleBinPurgeScheduler();
+  stopBroadcastScheduler();
+  stopTemplateSyncScheduler();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

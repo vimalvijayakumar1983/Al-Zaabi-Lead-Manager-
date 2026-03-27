@@ -48,6 +48,10 @@ const config = {
     token: process.env.WHATSAPP_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
     webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    /** Meta App secret (app-level). Used to verify webhook signatures; not a per-division runtime setting. */
+    appSecret: process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET || '',
+    /** Optional default Meta App ID when a division has no `whatsappMetaAppId` in org settings. */
+    appId: process.env.META_APP_ID || process.env.WHATSAPP_META_APP_ID || '',
     /** When no division matches webhook phone_number_id / display phone, route inbound here (dev / single-tenant). Must be a valid Organization id. */
     unmatchedFallbackOrgId: process.env.WHATSAPP_UNMATCHED_FALLBACK_ORG_ID || null,
   },

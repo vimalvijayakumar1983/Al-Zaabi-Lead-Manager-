@@ -48,6 +48,26 @@ export function patchInboxThreadAfterOutbound(
         const t = msgs.findIndex((m) => String(m.id) === tempId);
         if (t >= 0) {
           msgs[t] = serverMsg;
+          // If WS already inserted the same server message id, keep only one instance.
+          if (id) {
+            const firstServerIdx = msgs.findIndex((m) => String(m.id) === id);
+            if (firstServerIdx >= 0) {
+              const deduped: Record<string, unknown>[] = [];
+              let seen = false;
+              for (let i = 0; i < msgs.length; i++) {
+                const mid = String(msgs[i].id ?? '');
+                if (mid === id) {
+                  if (!seen) {
+                    deduped.push(msgs[i]);
+                    seen = true;
+                  }
+                } else {
+                  deduped.push(msgs[i]);
+                }
+              }
+              return { ...page, messages: deduped };
+            }
+          }
           return { ...page, messages: msgs };
         }
       }
@@ -114,7 +134,48 @@ export function upsertCommunicationInThreadCaches(
         const p0 = pages[NEWEST_PAGE_IDX];
         const msgs = [...(p0.messages || [])];
         if (!msgs.some((m) => String(m.id) === mid)) {
-          msgs.push(message);
+          // Reconcile optimistic outbound row to avoid transient duplicate bubble.
+          const isOutbound = String(message.direction || '').toUpperCase() === 'OUTBOUND';
+          const incomingChannel = String(message.channel || '').toUpperCase();
+          const incomingPlatform = String((message.platform || '')).toUpperCase();
+          const incomingBody = String(message.body || '').trim();
+          const incomingCreatedAt = Date.parse(String(message.createdAt || '')) || Date.now();
+
+          if (isOutbound) {
+            const optimisticIdx = msgs.findIndex((m) => {
+              if (!m || !m._optimistic) return false;
+              if (String(m.direction || '').toUpperCase() !== 'OUTBOUND') return false;
+              if (String(m.channel || '').toUpperCase() !== incomingChannel) return false;
+              if (String((m.platform || '')).toUpperCase() !== incomingPlatform) return false;
+
+              const msgCreatedAt = Date.parse(String(m.createdAt || '')) || 0;
+              const withinRecentWindow = Math.abs(incomingCreatedAt - msgCreatedAt) <= 20_000;
+              if (!withinRecentWindow) return false;
+
+              const tempBody = String(m.body || '').trim();
+              const bodyMatches =
+                tempBody === incomingBody ||
+                (tempBody === '(no text)' && incomingBody === '') ||
+                (tempBody === '' && incomingBody === '(no text)');
+
+              if (bodyMatches) return true;
+
+              // Attachment/voice sends may normalize body differently; use attachment presence as fallback.
+              const tempHasAttachments = Array.isArray((m.metadata as any)?.attachments) && (m.metadata as any).attachments.length > 0;
+              const incomingHasAttachments =
+                Array.isArray((message.metadata as any)?.attachments) &&
+                (message.metadata as any).attachments.length > 0;
+              return tempHasAttachments && incomingHasAttachments;
+            });
+
+            if (optimisticIdx >= 0) {
+              msgs[optimisticIdx] = message;
+            } else {
+              msgs.push(message);
+            }
+          } else {
+            msgs.push(message);
+          }
         }
         pages[NEWEST_PAGE_IDX] = { ...p0, messages: msgs };
       }
@@ -399,6 +460,16 @@ export function useInboxMessageMutations(selectedLeadId: string | null) {
     },
   });
 
+  const retryWhatsAppMessage = useMutation({
+    mutationFn: (messageId: string) => api.retryInboxWhatsAppMessage(messageId),
+    onSuccess: async (data) => {
+      await refreshInboxLists();
+      if (selectedLeadId && data && typeof data === 'object' && (data as Record<string, unknown>).id != null) {
+        upsertCommunicationInThreadCaches(queryClient, selectedLeadId, data as Record<string, unknown>);
+      }
+    },
+  });
+
   const addNote = useMutation({
     mutationFn: ({ leadId, body }: { leadId: string; body: string }) => api.addInternalNote(leadId, body),
     onSuccess: async () => {
@@ -414,6 +485,6 @@ export function useInboxMessageMutations(selectedLeadId: string | null) {
     onSuccess: refreshAllInbox,
   });
 
-  return { sendMessage, sendMessageWithAttachments, editMessage, deleteMessage, addNote, markRead };
+  return { sendMessage, sendMessageWithAttachments, editMessage, deleteMessage, retryWhatsAppMessage, addNote, markRead };
 }
 

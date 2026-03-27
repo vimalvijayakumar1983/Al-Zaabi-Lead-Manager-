@@ -252,11 +252,24 @@ router.post('/send-whatsapp', validate(z.object({
         await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
       }
     } catch (sendErr) {
+      const now = new Date();
       await prisma.communication.update({
         where: { id: communication.id },
-        data: { metadata: { ...(communication.metadata || {}), sendError: sendErr.message } },
+        data: {
+          metadata: {
+            ...(communication.metadata || {}),
+            sendError: sendErr?.message || String(sendErr),
+            waStatus: 'FAILED',
+            waStatusUpdatedAt: now.toISOString(),
+          },
+        },
       }).catch(() => {});
-      throw sendErr;
+      communication.metadata = {
+        ...(communication.metadata || {}),
+        sendError: sendErr?.message || String(sendErr),
+        waStatus: 'FAILED',
+        waStatusUpdatedAt: now.toISOString(),
+      };
     }
 
     res.status(201).json(communication);

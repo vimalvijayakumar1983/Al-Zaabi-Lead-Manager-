@@ -609,6 +609,16 @@ function OrganizationSection() {
 const WHATSAPP_TOKEN_MASK = '••••••••';
 
 type WhatsAppNumberEntry = { id: string; label: string; phoneNumberId: string; displayPhone: string; token: string };
+type WhatsAppTestResult = {
+  ok: boolean;
+  message: string;
+  reasonCode?: string;
+  diagnostics?: {
+    token?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+    phoneNumberId?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+    waba?: { checked: boolean; ok: boolean | null; reasonCode?: string | null; message?: string | null };
+  };
+};
 
 function WhatsAppSection() {
   const { user } = useAuthStore();
@@ -622,9 +632,10 @@ function WhatsAppSection() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
   const [testLoading, setTestLoading] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<WhatsAppTestResult | null>(null);
   const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
   const [whatsappBusinessAccountId, setWhatsappBusinessAccountId] = useState('');
+  const [whatsappMetaAppId, setWhatsappMetaAppId] = useState('');
   const [showWebhookVerifyToken, setShowWebhookVerifyToken] = useState(false);
   /** Per number row: reveal access token (password → text). */
   const [showAccessTokenByRowId, setShowAccessTokenByRowId] = useState<Record<string, boolean>>({});
@@ -639,6 +650,7 @@ function WhatsAppSection() {
       try {
         const data = await api.getWhatsAppSettings(effectiveDivisionId, opts?.revealSecrets);
         setWhatsappBusinessAccountId(data.whatsappBusinessAccountId || '');
+        setWhatsappMetaAppId(data.whatsappMetaAppId || '');
         setWhatsappApiUrl(data.whatsappApiUrl || '');
         setWebhookVerifyToken(data.whatsappWebhookVerifyToken || '');
         const raw = data.whatsappNumbers || [];
@@ -707,11 +719,17 @@ function WhatsAppSection() {
       setTestResult({
         ok: true,
         message: details ? `${result.message} (${details})` : result.message,
+        reasonCode: result.reasonCode,
+        diagnostics: result.diagnostics,
       });
     } catch (err: unknown) {
+      const errWithMeta = err as Error & { details?: any; reasonCode?: string; diagnostics?: WhatsAppTestResult['diagnostics'] };
+      const details = errWithMeta?.details && typeof errWithMeta.details === 'object' ? errWithMeta.details : {};
       setTestResult({
         ok: false,
         message: err instanceof Error ? err.message : 'Connection test failed',
+        reasonCode: typeof errWithMeta?.reasonCode === 'string' ? errWithMeta.reasonCode : undefined,
+        diagnostics: details?.diagnostics || errWithMeta?.diagnostics,
       });
     } finally {
       setTestLoading(false);
@@ -752,12 +770,15 @@ function WhatsAppSection() {
           whatsappWebhookVerifyToken: webhookVerifyToken.trim(),
           whatsappApiUrl: whatsappApiUrl.trim(),
           whatsappBusinessAccountId: whatsappBusinessAccountId.trim(),
+          whatsappMetaAppId: whatsappMetaAppId.trim(),
         },
         effectiveDivisionId,
       );
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
       await loadWhatsAppSettings();
+      // Notify the global layout to re-check token health immediately
+      window.dispatchEvent(new CustomEvent('whatsapp-settings-saved'));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -867,6 +888,19 @@ function WhatsAppSection() {
             <p className="text-xs text-text-tertiary mt-1">
               From Meta Business Suite → WhatsApp accounts → API setup, or Graph API. Required to sync message templates in{' '}
               <Link href="/whatsapp-templates" className="text-brand-600 hover:underline">WhatsApp → Templates</Link>.
+            </p>
+          </div>
+          <div>
+            <label className="label">Meta App ID</label>
+            <input
+              type="text"
+              className="input font-mono text-sm"
+              value={whatsappMetaAppId}
+              onChange={(e) => setWhatsappMetaAppId(e.target.value)}
+              placeholder="e.g. 123456789012345"
+            />
+            <p className="text-xs text-text-tertiary mt-1">
+              Same app as your WhatsApp product (Meta App → App settings → Basic → App ID). Required when creating templates with image, video, or document headers — sample files use Graph resumable upload. Optional server default: <code className="text-xs font-mono">META_APP_ID</code> in env.
             </p>
           </div>
           <div>
@@ -1003,14 +1037,34 @@ function WhatsAppSection() {
 
         {testResult && (
           <div
-            className={`flex items-center gap-2 p-3 rounded-lg text-sm ring-1 ${
+            className={`p-3 rounded-lg text-sm ring-1 ${
               testResult.ok
                 ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                 : 'bg-red-50 text-red-700 ring-red-200'
             }`}
           >
-            {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <XCircle className="h-4 w-4 flex-shrink-0" />}
-            {testResult.message}
+            <div className="flex items-center gap-2">
+              {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <XCircle className="h-4 w-4 flex-shrink-0" />}
+              <span>{testResult.message}</span>
+            </div>
+            {testResult.diagnostics && (
+              <div className="mt-2 grid gap-1 text-xs">
+                <div>
+                  Token: <strong>{testResult.diagnostics.token?.ok ? 'OK' : 'Failed'}</strong>
+                  {testResult.diagnostics.token?.message ? ` - ${testResult.diagnostics.token.message}` : ''}
+                </div>
+                <div>
+                  Phone number ID: <strong>{testResult.diagnostics.phoneNumberId?.ok ? 'OK' : 'Failed'}</strong>
+                  {testResult.diagnostics.phoneNumberId?.message ? ` - ${testResult.diagnostics.phoneNumberId.message}` : ''}
+                </div>
+                {testResult.diagnostics.waba?.checked && (
+                  <div>
+                    WABA reachability: <strong>{testResult.diagnostics.waba?.ok ? 'OK' : 'Failed'}</strong>
+                    {testResult.diagnostics.waba?.message ? ` - ${testResult.diagnostics.waba.message}` : ''}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

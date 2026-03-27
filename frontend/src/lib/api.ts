@@ -63,7 +63,15 @@ class ApiClient {
         Array.isArray(data.details)
           ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
           : (typeof data.details === 'string' ? data.details : '');
-      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Request failed'));
+      const err = new Error(details ? `${data.error}: ${details}` : (data.error || data.message || 'Request failed')) as Error & {
+        details?: any;
+        reasonCode?: string;
+        diagnostics?: any;
+      };
+      err.details = data;
+      if (typeof data.reasonCode === 'string') err.reasonCode = data.reasonCode;
+      if (data.diagnostics != null) err.diagnostics = data.diagnostics;
+      throw err;
     }
 
     return data;
@@ -96,7 +104,15 @@ class ApiClient {
         Array.isArray(data.details)
           ? data.details.map((d: any) => `${d.field}: ${d.message}`).join(', ')
           : (typeof data.details === 'string' ? data.details : '');
-      throw new Error(details ? `${data.error}: ${details}` : (data.error || 'Upload failed'));
+      const err = new Error(details ? `${data.error}: ${details}` : (data.error || data.message || 'Upload failed')) as Error & {
+        details?: any;
+        reasonCode?: string;
+        diagnostics?: any;
+      };
+      err.details = data;
+      if (typeof data.reasonCode === 'string') err.reasonCode = data.reasonCode;
+      if (data.diagnostics != null) err.diagnostics = data.diagnostics;
+      throw err;
     }
     return data;
   }
@@ -262,6 +278,14 @@ class ApiClient {
 
   async unblockLead(id: string) {
     return this.request<any>(`/leads/${id}/unblock`, { method: 'POST' });
+  }
+
+  async whatsappOptOutLead(id: string) {
+    return this.request<{ success: boolean; message: string }>(`/leads/${id}/whatsapp-opt-out`, { method: 'POST' });
+  }
+
+  async whatsappOptInLead(id: string) {
+    return this.request<{ success: boolean; message: string }>(`/leads/${id}/whatsapp-opt-in`, { method: 'POST' });
   }
 
   async bulkUpdateLeads(leadIds: string[], data: any) {
@@ -523,6 +547,9 @@ class ApiClient {
     defaultStatus?: string;
     defaultSource?: string;
     defaultCampaignIds?: string[];
+    broadcastListName?: string;
+    broadcastListSlug?: string;
+    divisionId?: string | null;
   }) {
     const formData = new FormData();
     formData.append('file', file);
@@ -536,6 +563,10 @@ class ApiClient {
     if (options.defaultCampaignIds && options.defaultCampaignIds.length > 0) {
       formData.append('defaultCampaignIds', JSON.stringify(options.defaultCampaignIds));
     }
+    if (options.broadcastListName) formData.append('broadcastListName', options.broadcastListName);
+    if (options.broadcastListSlug) formData.append('broadcastListSlug', options.broadcastListSlug);
+    const div = options.divisionId ?? (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null);
+    if (div) formData.append('divisionId', div);
     const token = this.getToken();
     const res = await fetch(`${API_URL}/import/execute`, {
       method: 'POST',
@@ -574,6 +605,163 @@ class ApiClient {
 
   async undoImport(id: string) {
     return this.request<any>(`/import/undo/${id}`, { method: 'POST' });
+  }
+
+  /** WhatsApp broadcast audience lists (per division via activeDivisionId for super admins). */
+  async listBroadcastLists(divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      lists: Array<{
+        id: string;
+        name: string;
+        slug: string | null;
+        memberCount: number;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }>(`/broadcast-lists${q}`);
+  }
+
+  async getBroadcastList(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      list: {
+        id: string;
+        name: string;
+        slug: string | null;
+        memberCount: number;
+        createdAt: string;
+        updatedAt: string;
+        members: Array<{
+          id: string;
+          phone: string;
+          phoneRaw: string | null;
+          displayName: string | null;
+          leadId: string | null;
+          lead: { id: string; firstName: string; lastName: string; phone: string | null; email: string | null } | null;
+        }>;
+      };
+    }>(`/broadcast-lists/${id}${q}`);
+  }
+
+  async deleteBroadcastList(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean }>(`/broadcast-lists/${id}${q}`, { method: 'DELETE' });
+  }
+
+  async sendBroadcastTemplate(
+    listId: string,
+    payload: {
+      templateId: string;
+      variables?: Record<string, string>;
+      mode?: 'now' | 'later';
+      scheduledAt?: string | null;
+    },
+    divisionId?: string | null,
+  ) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      ok: boolean;
+      mode: 'now' | 'later';
+      runId?: string;
+      total?: number;
+      sent?: number;
+      failed?: number;
+      failures?: Array<{ memberId: string; phone: string; error: string }>;
+      message?: string;
+    }>(`/broadcast-lists/${listId}/send-template${q}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listBroadcastRuns(divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      runs: Array<{
+        id: string;
+        mode: 'NOW' | 'LATER';
+        status: 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+        templateName: string;
+        templateLanguage: string;
+        list: { id: string; name: string };
+        scheduledAt: string | null;
+        totalRecipients: number;
+        sentCount: number;
+        failedCount: number;
+        deliveredCount: number;
+        readCount: number;
+        repliedCount: number;
+        startedAt: string | null;
+        completedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }>(`/broadcast-lists/runs${q}`);
+  }
+
+  async getBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{
+      run: {
+        id: string;
+        mode: 'NOW' | 'LATER';
+        status: 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+        templateName: string;
+        templateLanguage: string;
+        list: { id: string; name: string; slug: string | null };
+        scheduledAt: string | null;
+        totalRecipients: number;
+        sentCount: number;
+        failedCount: number;
+        deliveredCount: number;
+        readCount: number;
+        repliedCount: number;
+        startedAt: string | null;
+        completedAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        recipients: Array<{
+          id: string;
+          leadId: string;
+          phone: string;
+          status: 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
+          waMessageId: string | null;
+          error: string | null;
+          attemptCount: number;
+          sentAt: string | null;
+          deliveredAt: string | null;
+          readAt: string | null;
+          createdAt: string;
+          updatedAt: string;
+          lead: {
+            id: string;
+            firstName: string;
+            lastName: string;
+            phone: string | null;
+            email: string | null;
+            whatsappOptOut?: boolean;
+            whatsappOptOutAt?: string | null;
+          } | null;
+        }>;
+      };
+    }>(`/broadcast-lists/runs/${encodeURIComponent(id)}${q}`);
+  }
+
+  async cancelBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean; run: { id: string; status: string } }>(
+      `/broadcast-lists/runs/${encodeURIComponent(id)}/cancel${q}`,
+      { method: 'PATCH' },
+    );
+  }
+
+  async retryBroadcastRun(id: string, divisionId?: string | null) {
+    const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<{ ok: boolean; runId: string; retrying: number; message: string }>(
+      `/broadcast-lists/runs/${encodeURIComponent(id)}/retry${q}`,
+      { method: 'POST' },
+    );
   }
 
   private async authenticatedDownload(path: string, fallbackFilename: string) {
@@ -1058,6 +1246,8 @@ class ApiClient {
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
       whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
+      whatsappTokenStatus?: { ok: boolean; checkedAt: string | null; error: string | null } | null;
     }>(`/settings/whatsapp${qs}`);
   }
 
@@ -1067,6 +1257,7 @@ class ApiClient {
       whatsappWebhookVerifyToken?: string;
       whatsappApiUrl?: string;
       whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     },
     divisionId?: string,
   ) {
@@ -1077,6 +1268,7 @@ class ApiClient {
       hasWebhookVerifyToken?: boolean;
       whatsappApiUrl: string;
       whatsappBusinessAccountId?: string;
+      whatsappMetaAppId?: string;
     }>(`/settings/whatsapp${qs}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
@@ -1091,6 +1283,7 @@ class ApiClient {
         status: string | null;
         category: string | null;
         rejectedReason: string | null;
+        components?: any;
         lastSyncedAt: string;
       }>;
       lastSyncedAt: string | null;
@@ -1110,10 +1303,33 @@ class ApiClient {
         status: string | null;
         category: string | null;
         rejectedReason: string | null;
+        components?: any;
         lastSyncedAt: string;
       }>;
       lastSyncedAt: string;
     }>(`/whatsapp/templates/sync${qs}`, { method: 'POST' });
+  }
+
+  async createWhatsAppTemplate(
+    data: { name: string; language: string; category: string; components: Record<string, unknown>[] },
+    divisionId?: string
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates${qs}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateWhatsAppTemplate(
+    id: string,
+    data: { category?: string; components?: Record<string, unknown>[] },
+    divisionId?: string
+  ) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates/${id}${qs}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async deleteWhatsAppTemplate(id: string, divisionId?: string) {
+    const qs = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
+    return this.request<any>(`/whatsapp/templates/${id}${qs}`, { method: 'DELETE' });
   }
 
   async testWhatsAppSettings(data?: { phoneNumberId?: string }, divisionId?: string) {
@@ -1121,9 +1337,15 @@ class ApiClient {
     return this.request<{
       success: boolean;
       message: string;
+      reasonCode?: string;
       phoneNumberId?: string;
       displayPhoneNumber?: string | null;
       verifiedName?: string | null;
+      diagnostics?: {
+        token?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+        phoneNumberId?: { ok: boolean | null; reasonCode?: string | null; message?: string | null };
+        waba?: { checked: boolean; ok: boolean | null; reasonCode?: string | null; message?: string | null };
+      };
       details?: any;
     }>(`/settings/whatsapp/test${qs}`, {
       method: 'POST',
@@ -1670,7 +1892,14 @@ class ApiClient {
 
   async getInboxStats(divisionId?: string) {
     const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<any>(`/inbox/stats${q}`);
+    return this.request<{
+      totalConversations: number;
+      totalMessages: number;
+      unreadMessages: number;
+      unreadConversations: number;
+      recentInbound: number;
+      byChannel: Array<{ channel: string; count: number; label?: string; color?: string; icon?: string }>;
+    }>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {
@@ -1707,6 +1936,22 @@ class ApiClient {
   async deleteInboxMessage(messageId: string) {
     return this.request<any>(`/inbox/messages/${messageId}`, {
       method: 'DELETE',
+    });
+  }
+
+  async retryInboxWhatsAppMessage(messageId: string) {
+    return this.request<any>(`/inbox/messages/${messageId}/retry-whatsapp`, {
+      method: 'POST',
+    });
+  }
+
+  async sendInboxWhatsAppTemplateMessage(
+    leadId: string,
+    data: { templateId?: string; templateName?: string; language?: string; variables?: string[] | Record<string, string> }
+  ) {
+    return this.request<any>(`/inbox/conversations/${leadId}/send-template`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   }
 

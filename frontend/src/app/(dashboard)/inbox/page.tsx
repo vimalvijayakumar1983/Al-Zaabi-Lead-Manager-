@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Virtuoso } from 'react-virtuoso';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
@@ -243,6 +243,10 @@ export default function InboxPage() {
   );
 }
 
+// Large virtual offset — same technique as ChatWindow.js.
+// When older messages are prepended, firstItemIndex shrinks to preserve scroll position automatically.
+const INITIAL_FIRST_ITEM_INDEX = 100_000;
+
 function InboxContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -257,8 +261,15 @@ function InboxContent() {
   const [messageText, setMessageText] = useState('');
   const [sendChannel, setSendChannel] = useState('WHATSAPP');
   const [showChannelPicker, setShowChannelPicker] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateSending, setTemplateSending] = useState(false);
+  const [templateError, setTemplateError] = useState('');
+  const [templateOptions, setTemplateOptions] = useState<any[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
 
-  const [sending, setSending] = useState(false);
+  const [sendingCount, setSendingCount] = useState(0);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
   // Right panel tabs: info | notes | canned | attachments
@@ -318,9 +329,18 @@ function InboxContent() {
   const [editingBody, setEditingBody] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const threadScrollRestore = useRef<{ prevHeight: number; prevTop: number } | null>(null);
-  const lastThreadMsgIdRef = useRef<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const threadVirtuosoRef = useRef<VirtuosoHandle>(null);
+  // Scroll tracking refs — mirrors ChatWindow.js pattern exactly.
+  const firstGroupKeyRef = useRef<string | null>(null);
+  const lastGroupKeyRef = useRef<string | null>(null);
+  const prevGroupsLengthRef = useRef(0);
+  const firstPageSizeRef = useRef<number | null>(null);
+  const shouldScrollToBottomRef = useRef(false);
+  // Track previous selectedLeadId so we can reset scroll refs synchronously
+  // in the render body (not in a useEffect) — this guarantees the scroll effect
+  // sees prevLen=0 even when react-query has cached data ready immediately.
+  const prevLeadIdForScrollRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
@@ -375,6 +395,27 @@ function InboxContent() {
       .reverse()
       .flatMap((p) => (p.messages || []) as Message[]);
   }, [threadQuery.data?.pages]);
+  // Synchronously reset scroll-tracking refs when the selected conversation changes.
+  // This MUST run in the render body (not in a useEffect) so the scroll effect always
+  // sees prevLen=0 for the new conversation, even when react-query returns cached data
+  // in the same render cycle as the selectedLeadId change.
+  if (prevLeadIdForScrollRef.current !== selectedLeadId) {
+    prevLeadIdForScrollRef.current = selectedLeadId;
+    prevGroupsLengthRef.current = 0;
+    firstGroupKeyRef.current = null;
+    lastGroupKeyRef.current = null;
+    firstPageSizeRef.current = null;
+    shouldScrollToBottomRef.current = false;
+  }
+
+  // Derive firstItemIndex from flat messages.length — exactly like ChatWindow.js.
+  // When older messages are prepended, firstItemIndex shrinks by the number of new messages,
+  // giving Virtuoso the precise count it needs to lock scroll position.
+  if (messages.length > 0 && firstPageSizeRef.current === null) {
+    firstPageSizeRef.current = messages.length;
+  }
+  const threadFirstItemIndex = INITIAL_FIRST_ITEM_INDEX - Math.max(0, messages.length - (firstPageSizeRef.current ?? messages.length));
+
   const leadInfo = (threadQuery.data?.pages?.[0]?.lead ?? null) as LeadInfo | null;
   const notes = (notesQuery.data || []) as any[];
   const stats = statsQuery.data ?? null;
@@ -386,6 +427,20 @@ function InboxContent() {
     color: string;
   }[];
   const leadAttachments = (attachmentsQuery.data || []) as any[];
+  const selectedTemplate = useMemo(
+    () => templateOptions.find((t) => t.id === selectedTemplateId) || null,
+    [templateOptions, selectedTemplateId]
+  );
+  const selectedTemplateVarKeys = useMemo(() => {
+    if (!selectedTemplate?.components || !Array.isArray(selectedTemplate.components)) return [] as string[];
+    const indexes = new Set<number>();
+    for (const c of selectedTemplate.components) {
+      const text = typeof c?.text === 'string' ? c.text : '';
+      const matches = [...text.matchAll(/\{\{(\d+)\}\}/g)];
+      for (const m of matches) indexes.add(Number(m[1]));
+    }
+    return Array.from(indexes).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b).map((n) => String(n));
+  }, [selectedTemplate]);
 
   const loadingConversations = conversationsQuery.isLoading;
   const loadingMessages = !!selectedLeadId && threadQuery.isPending;
@@ -411,8 +466,13 @@ function InboxContent() {
     }
   }, [searchParams, selectedLeadId]);
 
+  // Reset all scroll refs when switching conversations.
   useEffect(() => {
-    lastThreadMsgIdRef.current = null;
+    firstGroupKeyRef.current = null;
+    lastGroupKeyRef.current = null;
+    prevGroupsLengthRef.current = 0;
+    firstPageSizeRef.current = null;
+    shouldScrollToBottomRef.current = false;
   }, [selectedLeadId]);
 
   // Map pipeline stage names to lead statuses for auto-sync
@@ -454,33 +514,72 @@ function InboxContent() {
     if (selectedLeadId) setAttachedFiles([]);
   }, [selectedLeadId]);
 
-  const handleLoadOlderMessages = useCallback(async () => {
-    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
+  // Exact ChatWindow.js scroll pattern — proven production-stable.
+  // initialTopMostItemIndex handles initial scroll-to-bottom natively (no JS needed).
+  // followOutput={true} handles new-message auto-scroll natively.
+  // This effect only fires scrollToIndex for:
+  //   (a) initial load (safety belt over initialTopMostItemIndex)
+  //   (b) new message at bottom
+  //   (c) forced scroll after sending
+  // Prepend (load-more) needs NO manual scroll — Virtuoso's firstItemIndex handles it.
+  // Native DOM scroll to absolute bottom — the only reliable mechanism
+  // for variable-height content that includes images / media.
+  const scrollToAbsoluteBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
     const el = messagesContainerRef.current;
-    if (el) {
-      threadScrollRestore.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
-    }
-    await threadQuery.fetchNextPage();
-  }, [threadQuery]);
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
 
-  useLayoutEffect(() => {
-    const el = messagesContainerRef.current;
-    const snap = threadScrollRestore.current;
-    if (!el || !snap) return;
-    el.scrollTop = snap.prevTop + (el.scrollHeight - snap.prevHeight);
-    threadScrollRestore.current = null;
-  }, [threadQuery.data?.pages]);
-
-  // Auto-scroll to latest when a new message lands (skip prepend / "load older")
   useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el || threadScrollRestore.current) return;
-    const lastId = messages.length ? messages[messages.length - 1]?.id : null;
-    const prevLast = lastThreadMsgIdRef.current;
-    lastThreadMsgIdRef.current = lastId;
-    if (prevLast !== null && lastId === prevLast) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    if (!messages?.length) return;
+
+    const currentLen = messages.length;
+    const prevLen = prevGroupsLengthRef.current;
+    const firstId = messages[0].id;
+    const lastId = messages[currentLen - 1].id;
+
+    const isInitialLoad = prevLen === 0;
+    const isNewMessageAtBottom = !isInitialLoad
+      && lastId !== lastGroupKeyRef.current
+      && firstId === firstGroupKeyRef.current;
+    const shouldForceScroll = shouldScrollToBottomRef.current;
+
+    prevGroupsLengthRef.current = currentLen;
+    firstGroupKeyRef.current = firstId;
+    lastGroupKeyRef.current = lastId;
+
+    // Prepend (load-more): firstItemIndex handles scroll preservation automatically.
+
+    if (isInitialLoad) {
+      // Conversation switch / first load.
+      // First pass: let Virtuoso render items, then native-scroll to bottom.
+      // Second pass: safety net after images/media finish loading.
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('auto'), 100);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 400);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+
+    if (shouldForceScroll) {
+      // After sending — two-pass: immediate then safety net.
+      shouldScrollToBottomRef.current = false;
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('smooth'), 50);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 350);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+
+    if (isNewMessageAtBottom) {
+      // Incoming real-time message — two-pass scroll.
+      const t1 = setTimeout(() => scrollToAbsoluteBottom('smooth'), 60);
+      const t2 = setTimeout(() => scrollToAbsoluteBottom('auto'), 350);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, scrollToAbsoluteBottom]);
+
+  const handleLoadOlderMessages = useCallback(() => {
+    if (!threadQuery.hasNextPage || threadQuery.isFetchingNextPage) return;
+    threadQuery.fetchNextPage();
+  }, [threadQuery]);
 
   useRealtimeSync(['communication'], useCallback((event) => {
     onCommunicationChanged({
@@ -518,9 +617,21 @@ function InboxContent() {
     conversationsQuery.refetch();
   }, [conversationsQuery]);
 
+  const scrollThreadToBottomSoon = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (messages.length > 0) {
+        threadVirtuosoRef.current?.scrollToIndex({
+          index: messages.length - 1,
+          align: 'end',
+          behavior: 'smooth',
+        });
+      }
+    });
+  }, [messages.length]);
+
   // ─── Send message (optimistic) ──────────────────────────────────
   const handleSend = async () => {
-    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId || sending) return;
+    if ((!messageText.trim() && attachedFiles.length === 0) || !selectedLeadId) return;
     const body = messageText.trim();
     const tempId = `temp-${Date.now()}`;
     const msgKey = queryKeys.inbox.messagesThread(selectedLeadId, threadCacheParams as Record<string, unknown>);
@@ -532,39 +643,55 @@ function InboxContent() {
       platform = sendChannel.toLowerCase();
     }
 
-    if (attachedFiles.length === 0) {
-      const optimisticMsg: Message = {
-        id: tempId,
-        direction: 'OUTBOUND',
-        channel,
-        body,
-        subject: null,
-        platform: (platform || sendChannel).toUpperCase(),
-        platformInfo: { label: PLATFORM_LABELS[sendChannel] || sendChannel, color: PLATFORM_COLORS[sendChannel] || '#6366f1', icon: '' },
-        metadata: platform ? { platform } : {},
-        createdAt: new Date().toISOString(),
-        user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
-        _optimistic: true,
-      };
-      queryClient.setQueryData(msgKey, (old: any) => {
-        if (!old?.pages?.length) {
-          return {
-            pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
-            pageParams: [1],
-          };
-        }
-        const pages = [...old.pages];
-        const newest = 0;
-        pages[newest] = {
-          ...pages[newest],
-          messages: [...(pages[newest].messages || []), optimisticMsg],
+    const optimisticAttachments =
+      attachedFiles.length > 0
+        ? attachedFiles.map((f) => ({
+            url: null,
+            filename: f.name,
+            mimeType: f.type || 'application/octet-stream',
+            size: f.size || 0,
+            _uploading: true,
+          }))
+        : [];
+    const optimisticMsg: Message = {
+      id: tempId,
+      direction: 'OUTBOUND',
+      channel,
+      body: body || (optimisticAttachments.length > 0 ? '(no text)' : ''),
+      subject: null,
+      platform: (platform || sendChannel).toUpperCase(),
+      platformInfo: {
+        label: PLATFORM_LABELS[sendChannel] || sendChannel,
+        color: PLATFORM_COLORS[sendChannel] || '#6366f1',
+        icon: '',
+      },
+      metadata: {
+        ...(platform ? { platform } : {}),
+        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+      },
+      createdAt: new Date().toISOString(),
+      user: user ? { id: user.id, firstName: user.firstName || 'You', lastName: user.lastName || '' } : null,
+      _optimistic: true,
+    };
+    queryClient.setQueryData(msgKey, (old: any) => {
+      if (!old?.pages?.length) {
+        return {
+          pages: [{ messages: [optimisticMsg], lead: null, pagination: { page: 1, totalPages: 1, hasMore: false } }],
+          pageParams: [1],
         };
-        return { ...old, pages };
-      });
-    }
+      }
+      const pages = [...old.pages];
+      const newest = 0;
+      pages[newest] = {
+        ...pages[newest],
+        messages: [...(pages[newest].messages || []), optimisticMsg],
+      };
+      return { ...old, pages };
+    });
 
     setMessageText('');
-    setSending(true);
+    setSendingCount((v) => v + 1);
+    shouldScrollToBottomRef.current = true;
 
     try {
       const threadParams = threadCacheParams as Record<string, unknown>;
@@ -576,7 +703,10 @@ function InboxContent() {
           platform,
           files: attachedFiles,
         });
-        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, { message: sent });
+        patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadParams, {
+          tempId,
+          message: sent,
+        });
         setAttachedFiles([]);
       } else {
         const sent = await inboxMutations.sendMessage.mutateAsync({
@@ -590,6 +720,7 @@ function InboxContent() {
           message: sent,
         });
       }
+      shouldScrollToBottomRef.current = true;
       inputRef.current?.focus();
     } catch (err: any) {
       queryClient.setQueryData(msgKey, (old: any) => {
@@ -604,7 +735,7 @@ function InboxContent() {
       });
       console.error('Failed to send:', err);
     } finally {
-      setSending(false);
+      setSendingCount((v) => Math.max(0, v - 1));
     }
   };
 
@@ -638,6 +769,59 @@ function InboxContent() {
       setMenuOpenMsgId(null);
     } catch (err: any) {
       console.error('Failed to delete:', err);
+    }
+  };
+
+  const handleRetryWhatsAppMessage = async (messageId: string) => {
+    try {
+      await inboxMutations.retryWhatsAppMessage.mutateAsync(messageId);
+    } catch (err: any) {
+      console.error('Failed to retry WhatsApp message:', err);
+    }
+  };
+
+  const openTemplateModal = async () => {
+    if (!selectedLeadId) return;
+    setShowTemplateModal(true);
+    setTemplateError('');
+    setTemplateSending(false);
+    setTemplateVars({});
+    setTemplateLoading(true);
+    try {
+      const list = await api.listWhatsAppTemplates(activeDivisionId || undefined);
+      const approved = (list?.templates || []).filter((t: any) => String(t.status || '').toUpperCase() === 'APPROVED');
+      setTemplateOptions(approved);
+      setSelectedTemplateId(approved[0]?.id || '');
+    } catch (err: any) {
+      setTemplateError(err?.message || 'Failed to load templates');
+      setTemplateOptions([]);
+      setSelectedTemplateId('');
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
+
+  const sendSelectedTemplate = async () => {
+    if (!selectedLeadId || !selectedTemplateId) return;
+    setTemplateSending(true);
+    setTemplateError('');
+    try {
+      for (const key of selectedTemplateVarKeys) {
+        if (!templateVars[key] || !templateVars[key].trim()) {
+          throw new Error(`Variable ${key} is required`);
+        }
+      }
+      const sent = await api.sendInboxWhatsAppTemplateMessage(selectedLeadId, {
+        templateId: selectedTemplateId,
+        variables: templateVars,
+      });
+      patchInboxThreadAfterOutbound(queryClient, selectedLeadId, threadCacheParams as Record<string, unknown>, { message: sent });
+      setShowTemplateModal(false);
+      setTemplateVars({});
+    } catch (err: any) {
+      setTemplateError(err?.message || 'Failed to send template');
+    } finally {
+      setTemplateSending(false);
     }
   };
 
@@ -704,7 +888,19 @@ function InboxContent() {
 
   function isMediaPlaceholderBody(body: string) {
     if (!body) return false;
-    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio)\]$/.test(body.trim()) || body.trim() === '(no text)';
+    return /^\[(Photo|Video|Voice message|Document|Sticker|Audio|Location)\]$/.test(body.trim()) || body.trim() === '(no text)';
+  }
+
+  function isLocationMessage(msg: Message) {
+    return msg?.metadata?.mediaType === 'location' || !!msg?.metadata?.location;
+  }
+
+  function getGoogleMapsLink(location: any) {
+    if (!location) return '';
+    const lat = Number(location.latitude);
+    const lng = Number(location.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+    return `https://maps.google.com/?q=${lat},${lng}`;
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -757,7 +953,7 @@ function InboxContent() {
         const ext = (recorder.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
         const file = new File([blob], `voice-note-${Date.now()}.${ext}`, { type: blob.type });
 
-        setSending(true);
+        setSendingCount((v) => v + 1);
         try {
           let channel = sendChannel;
           let platform: string | undefined;
@@ -778,7 +974,7 @@ function InboxContent() {
         } catch (err) {
           console.error('Failed to send voice note:', err);
         } finally {
-          setSending(false);
+          setSendingCount((v) => Math.max(0, v - 1));
         }
         resolve();
       };
@@ -1080,6 +1276,9 @@ function InboxContent() {
             <Virtuoso
               style={{ height: '100%' }}
               data={sortedConversations}
+              computeItemKey={(_, convo) => convo.leadId}
+              overscan={320}
+              increaseViewportBy={{ top: 240, bottom: 480 }}
               itemContent={(_, convo) => {
                 const isPinned = pinnedConvos.has(convo.leadId);
                 const isSelected = selectedLeadId === convo.leadId;
@@ -1349,7 +1548,7 @@ function InboxContent() {
             </div>
 
             {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
-            <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
               {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
@@ -1365,36 +1564,56 @@ function InboxContent() {
                 </div>
               ) : (
                 <>
-                  {threadQuery.hasNextPage ? (
-                    <div className="flex justify-center pb-2">
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-brand-600 hover:text-brand-700 bg-white/90 px-3 py-1.5 rounded-full shadow-sm disabled:opacity-50"
-                        onClick={handleLoadOlderMessages}
-                        disabled={threadQuery.isFetchingNextPage}
-                      >
-                        {threadQuery.isFetchingNextPage ? 'Loading older…' : 'Load older messages'}
-                      </button>
-                    </div>
-                  ) : null}
-                {groupMessagesByDate(messages).map((group, gi) => (
-                  <div key={gi}>
-                    {/* Date separator */}
-                    <div className="flex justify-center my-4">
-                      <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
-                        {group.date}
-                      </span>
-                    </div>
+                <Virtuoso
+                  ref={threadVirtuosoRef}
+                  style={{ height: '100%' }}
+                  data={messages}
+                  firstItemIndex={threadFirstItemIndex}
+                  initialTopMostItemIndex={INITIAL_FIRST_ITEM_INDEX + messages.length - 1}
+                  overscan={600}
+                  increaseViewportBy={{ top: 300, bottom: 300 }}
+                  atTopThreshold={150}
+                  startReached={() => {
+                    handleLoadOlderMessages();
+                  }}
+                  scrollerRef={(el) => {
+                    messagesContainerRef.current = (el as HTMLDivElement | null);
+                  }}
+                  components={{
+                    Header: () =>
+                      threadQuery.isFetchingNextPage ? (
+                        <div className="py-3 text-center text-xs text-text-tertiary">
+                          Loading older messages…
+                        </div>
+                      ) : null,
+                    Footer: () => <div className="h-4" />,
+                  }}
+                  itemContent={(virtualIdx, msg) => {
+                    // Map virtual index → data array index to find the previous message.
+                    // Use Math.max to guard against any transient mismatch between
+                    // firstItemIndex and virtualIdx during load-more transitions.
+                    const arrayIdx = Math.max(0, virtualIdx - threadFirstItemIndex);
+                    const prevMsg = arrayIdx > 0 && arrayIdx <= messages.length ? messages[arrayIdx - 1] : null;
+                    const msgDateKey = new Date(msg.createdAt).toDateString();
+                    const prevDateKey = prevMsg ? new Date(prevMsg.createdAt).toDateString() : null;
+                    const showDateSeparator = !prevMsg || msgDateKey !== prevDateKey;
+                    // Show platform indicator when platform changes between adjacent messages
+                    const showPlatformIndicator = !prevMsg || prevMsg.platform !== msg.platform;
 
-                    {group.messages.map((msg, mi) => {
-                      const isOutbound = msg.direction === 'OUTBOUND';
-                      const isOwnMessage = isOutbound && msg.user?.id === user?.id;
-                      const isMenuOpen = menuOpenMsgId === msg.id;
-                      const isEditing = editingMsgId === msg.id;
-
-                      return (
+                    const isOutbound = msg.direction === 'OUTBOUND';
+                    const isOwnMessage = isOutbound && msg.user?.id === user?.id;
+                    const isMenuOpen = menuOpenMsgId === msg.id;
+                    const isEditing = editingMsgId === msg.id;
+                    return (
+                      <div className="px-3 sm:px-5">
+                        {showDateSeparator && (
+                          <div className="flex justify-center my-4">
+                            <span className="text-2xs font-semibold text-text-tertiary bg-white/90 px-3 py-1 rounded-lg shadow-sm">
+                              {formatDate(msg.createdAt)}
+                            </span>
+                          </div>
+                        )}
                         <div
-                          key={msg.id}
                           className={`flex mb-1.5 ${isOutbound ? 'justify-end' : 'justify-start'} group/msg relative`}
                         >
                           {/* Action menu for own outbound messages */}
@@ -1431,7 +1650,7 @@ function InboxContent() {
 
                           <div className={`max-w-[75%] sm:max-w-[65%] relative`}>
                             {/* Channel indicator on first msg or channel change */}
-                            {(mi === 0 || group.messages[mi - 1]?.platform !== msg.platform) && (
+                            {showPlatformIndicator && (
                               <div className={`flex items-center gap-1 mb-1 ${isOutbound ? 'justify-end' : ''}`}>
                                 <PlatformIcon platform={msg.platform} size={10} />
                                 <span className="text-2xs text-text-tertiary font-medium">
@@ -1464,6 +1683,13 @@ function InboxContent() {
                                   <p className="text-xs font-semibold text-teal-700 mb-0.5">
                                     {getDisplayName(leadInfo?.firstName, leadInfo?.lastName)}
                                   </p>
+                                )}
+
+                                {(msg.metadata?.referral || msg.metadata?.adReferral) && (
+                                  <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[10px] font-semibold">
+                                    <Zap className="h-3 w-3" />
+                                    Ad Message
+                                  </div>
                                 )}
 
                                 {/* Deleted message */}
@@ -1502,8 +1728,29 @@ function InboxContent() {
                                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                                       <div className="space-y-1.5">
                                         {msg.metadata.attachments.map((att: any, ai: number) => {
-                                          const url = att.url ? `/api${att.url}` : null;
-                                          if (!url) return null;
+                                          // S3 presigned URLs are already absolute (https://...) — use directly.
+                                          // Proxy-served attachments are relative (/inbox/attachments/...) — prefix with /api.
+                                          const url = att.url
+                                            ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                                            : null;
+                                          if (!url) {
+                                            return (
+                                              <div
+                                                key={ai}
+                                                className="flex items-center gap-2 p-2 rounded-lg bg-black/5 border border-black/10 min-w-[220px] max-w-[320px]"
+                                              >
+                                                <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                                <div className="min-w-0 flex-1">
+                                                  <p className="text-2xs font-medium truncate text-gray-800">
+                                                    {att.filename || 'Attachment'}
+                                                  </p>
+                                                  <p className="text-2xs text-gray-500">
+                                                    {att.size ? formatFileSize(att.size) : ''} {att._uploading ? 'Uploading…' : ''}
+                                                  </p>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
 
                                           if (isImageOrSticker(att.mimeType)) {
                                             return (
@@ -1562,6 +1809,33 @@ function InboxContent() {
                                       </div>
                                     )}
 
+                                    {/* Location card */}
+                                    {isLocationMessage(msg) && (
+                                      <div className="mt-1 rounded-lg border border-black/10 bg-black/5 p-2 min-w-[220px]">
+                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                                          <MapPin className="h-3.5 w-3.5" />
+                                          Location
+                                        </div>
+                                        {msg.metadata?.location?.name ? (
+                                          <p className="text-xs text-gray-700 mt-1">{msg.metadata.location.name}</p>
+                                        ) : null}
+                                        {msg.metadata?.location?.address ? (
+                                          <p className="text-2xs text-gray-500 mt-0.5">{msg.metadata.location.address}</p>
+                                        ) : null}
+                                        {getGoogleMapsLink(msg.metadata?.location) ? (
+                                          <a
+                                            href={getGoogleMapsLink(msg.metadata?.location)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 text-2xs text-brand-600 hover:text-brand-700 mt-1"
+                                          >
+                                            <ExternalLink className="h-3 w-3" />
+                                            Open in Maps
+                                          </a>
+                                        ) : null}
+                                      </div>
+                                    )}
+
                                     {/* Text body — hide placeholder labels when media is present */}
                                     {msg.body && !(msg.metadata?.attachments?.length > 0 && isMediaPlaceholderBody(msg.body)) && (
                                       <p className={`whitespace-pre-wrap break-words ${msg.metadata?.attachments?.length > 0 ? 'mt-1' : ''}`}>{msg.body}</p>
@@ -1600,6 +1874,22 @@ function InboxContent() {
                                         )}
                                       </>
                                     )}
+                                    {isOutbound && msg.channel === 'WHATSAPP' && (() => {
+                                      const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                      const waStatus = typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+                                      if (waStatus !== 'FAILED') return null;
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRetryWhatsAppMessage(msg.id)}
+                                          className="text-[10px] text-red-600 hover:text-red-700 underline ml-1"
+                                          disabled={inboxMutations.retryWhatsAppMessage.isPending}
+                                          title="Retry WhatsApp send"
+                                        >
+                                          Retry
+                                        </button>
+                                      );
+                                    })()}
                                   </div>
                                 )}
                               </div>
@@ -1619,10 +1909,10 @@ function InboxContent() {
                             </div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                      </div>
+                    );
+                  }}
+                />
               </>
               )}
               <div ref={messagesEndRef} />
@@ -1710,6 +2000,15 @@ function InboxContent() {
                     </>
                   )}
                 </div>
+                {sendChannel === 'WHATSAPP' && (
+                  <button
+                    type="button"
+                    onClick={openTemplateModal}
+                    className="px-2.5 py-1 rounded-lg text-2xs font-semibold bg-surface-tertiary hover:bg-surface-secondary transition-colors text-text-secondary"
+                  >
+                    Template
+                  </button>
+                )}
 
                 <div className="flex-1" />
 
@@ -1802,7 +2101,6 @@ function InboxContent() {
                     {!messageText.trim() && attachedFiles.length === 0 ? (
                       <button
                         onClick={startRecording}
-                        disabled={sending}
                         className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-green-50 text-text-tertiary hover:text-green-600 transition-all disabled:opacity-40"
                         title="Record voice note"
                       >
@@ -1811,12 +2109,12 @@ function InboxContent() {
                     ) : (
                       <button
                         onClick={handleSend}
-                        disabled={(!messageText.trim() && attachedFiles.length === 0) || sending}
+                        disabled={(!messageText.trim() && attachedFiles.length === 0)}
                         className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
                         style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
                         title="Send"
                       >
-                        {sending ? (
+                        {sendingCount > 0 ? (
                           <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         ) : (
                           <Send className="h-4 w-4 text-white" />
@@ -1827,6 +2125,80 @@ function InboxContent() {
                 )}
               </div>
             </div>
+            {showTemplateModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-border">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <h3 className="text-sm font-semibold text-text-primary">Send WhatsApp template</h3>
+                    <button type="button" onClick={() => setShowTemplateModal(false)} className="btn-icon">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {templateLoading ? (
+                      <p className="text-sm text-text-tertiary">Loading templates...</p>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="label">Template</label>
+                          <select
+                            className="input"
+                            value={selectedTemplateId}
+                            onChange={(e) => {
+                              setSelectedTemplateId(e.target.value);
+                              setTemplateVars({});
+                            }}
+                          >
+                            <option value="">Select template</option>
+                            {templateOptions.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.language})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {selectedTemplateVarKeys.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-text-tertiary">
+                              Fill template variables:
+                            </p>
+                            {selectedTemplateVarKeys.map((key) => (
+                              <div key={key}>
+                                <label className="label">Variable {key}</label>
+                                <input
+                                  className="input"
+                                  value={templateVars[key] || ''}
+                                  onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
+                                  placeholder={`Value for {{${key}}}`}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {templateError && (
+                          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            {templateError}
+                          </div>
+                        )}
+                        <div className="flex justify-end gap-2 pt-2">
+                          <button type="button" onClick={() => setShowTemplateModal(false)} className="btn-secondary">
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={sendSelectedTemplate}
+                            className="btn-primary"
+                            disabled={!selectedTemplateId || templateSending}
+                          >
+                            {templateSending ? 'Sending...' : 'Send template'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2095,10 +2467,14 @@ function InboxContent() {
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {leadAttachments.map((att: any) => (
+                    {leadAttachments.map((att: any) => {
+                      const attUrl = att.url
+                        ? att.url.startsWith('http') ? att.url : `/api${att.url}`
+                        : '#';
+                      return (
                       <a
                         key={att.id}
-                        href={`/api${att.url}`}
+                        href={attUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border hover:border-brand-300 hover:bg-brand-50/20 transition-all group/att"
@@ -2106,7 +2482,7 @@ function InboxContent() {
                         {isImageFile(att.mimeType) ? (
                           <div className="h-10 w-10 rounded-lg overflow-hidden flex-shrink-0 bg-surface-tertiary">
                             <img
-                              src={`/api${att.url}`}
+                              src={attUrl}
                               alt={att.filename}
                               className="h-full w-full object-cover"
                             />
@@ -2126,7 +2502,8 @@ function InboxContent() {
                         </div>
                         <Download className="h-3.5 w-3.5 text-text-tertiary opacity-0 group-hover/att:opacity-100 transition-opacity flex-shrink-0" />
                       </a>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
