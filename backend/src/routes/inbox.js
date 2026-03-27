@@ -299,6 +299,25 @@ router.get('/conversations', async (req, res, next) => {
       prisma.lead.count({ where }),
     ]);
 
+    // Compute unread inbound message counts per lead for current page
+    const leadIds = leads.map((l) => l.id);
+    let unreadMap = {};
+    if (leadIds.length > 0) {
+      const unreadRows = await prisma.communication.groupBy({
+        by: ['leadId'],
+        where: {
+          leadId: { in: leadIds },
+          direction: 'INBOUND',
+          isRead: false,
+        },
+        _count: { _all: true },
+      });
+      unreadMap = unreadRows.reduce((acc, row) => {
+        acc[row.leadId] = Number(row._count?._all || 0);
+        return acc;
+      }, {});
+    }
+
     // Enrich with last message info and unread count
     const conversations = leads.map(lead => {
       const lastMsg = lead.communications[0] || null;
@@ -314,6 +333,7 @@ router.get('/conversations', async (req, res, next) => {
         source: lead.source,
         assignedTo: lead.assignedTo,
         messageCount: lead._count.communications,
+        unreadCount: Number(unreadMap[lead.id] || 0),
         lastMessage: lastMsg ? {
           id: lastMsg.id,
           body: lastMsg.body?.substring(0, 120),
@@ -1070,7 +1090,7 @@ router.get('/stats', async (req, res, next) => {
     const { divisionId } = req.query;
     const orgFilter = buildInboxOrgFilter(req, divisionId);
 
-    const [totalConversations, byChannel, recentInbound, totalMessages] = await Promise.all([
+    const [totalConversations, byChannel, recentInbound, totalMessages, unreadMessages, unreadConversations] = await Promise.all([
       prisma.lead.count({
         where: { organizationId: orgFilter, isArchived: false, communications: { some: {} } },
       }),
@@ -1089,11 +1109,27 @@ router.get('/stats', async (req, res, next) => {
       prisma.communication.count({
         where: { lead: { organizationId: orgFilter } },
       }),
+      prisma.communication.count({
+        where: {
+          lead: { organizationId: orgFilter },
+          direction: 'INBOUND',
+          isRead: false,
+        },
+      }),
+      prisma.lead.count({
+        where: {
+          organizationId: orgFilter,
+          isArchived: false,
+          communications: { some: { direction: 'INBOUND', isRead: false } },
+        },
+      }),
     ]);
 
     res.json({
       totalConversations,
       totalMessages,
+      unreadMessages,
+      unreadConversations,
       recentInbound,
       byChannel: byChannel.map(c => ({
         channel: c.channel,

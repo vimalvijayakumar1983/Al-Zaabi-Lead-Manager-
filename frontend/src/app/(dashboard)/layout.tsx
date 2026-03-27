@@ -73,6 +73,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [divisions, setDivisions] = useState<any[]>([]);
   const [activeDivisionId, setActiveDivisionId] = useState<string | null>(null);
   const [showDivisionDropdown, setShowDivisionDropdown] = useState(false);
+  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
 
   // Load branding and division data from localStorage
   useEffect(() => {
@@ -215,6 +216,33 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [waTokenBannerDismissed, setWaTokenBannerDismissed] = useState(false);
   const isAdminUser = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
 
+  const refreshInboxUnreadCount = useCallback(async () => {
+    try {
+      const divisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+      const stats = await api.getInboxStats((user?.role === 'SUPER_ADMIN' ? divisionId : undefined) || undefined);
+      const unreadConversations = Number((stats as any)?.unreadConversations || 0);
+      setInboxUnreadCount(Number.isFinite(unreadConversations) ? unreadConversations : 0);
+    } catch {
+      // Non-critical: keep sidebar usable even if stats fail
+    }
+  }, [user?.role]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    refreshInboxUnreadCount();
+    const t = setInterval(refreshInboxUnreadCount, 20000);
+    const onDivisionChanged = () => refreshInboxUnreadCount();
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged as EventListener);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged as EventListener);
+    };
+  }, [isAuthenticated, refreshInboxUnreadCount]);
+
+  useRealtimeSync(['communication', 'lead'], useCallback(() => {
+    refreshInboxUnreadCount();
+  }, [refreshInboxUnreadCount]));
+
   const checkWaTokenHealth = useCallback(async () => {
     try {
       const divisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
@@ -327,6 +355,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         showDivisionsNav={isSuperAdmin}
         mobileOpen={mobileMenuOpen}
         onMobileClose={() => setMobileMenuOpen(false)}
+        inboxUnreadCount={inboxUnreadCount}
       />
       <CommandPalette />
       {hasNotificationAccess && (

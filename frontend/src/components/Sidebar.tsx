@@ -96,9 +96,10 @@ interface SidebarProps {
   showDivisionsNav?: boolean;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  inboxUnreadCount?: number;
 }
 
-export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNav, mobileOpen, onMobileClose }: SidebarProps) {
+export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNav, mobileOpen, onMobileClose, inboxUnreadCount = 0 }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
   const { hasPermission } = usePermissionsStore();
@@ -147,6 +148,7 @@ export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNa
   }, [showUserMenu]);
 
   const handleNavClick = () => onMobileClose?.();
+  const effectiveInboxBadge = inboxUnreadCount > 0 ? String(inboxUnreadCount > 99 ? '99+' : inboxUnreadCount) : null;
 
   const navLinkClass = (isActive: boolean, extraCollapsed = false) =>
     clsx(
@@ -320,6 +322,10 @@ export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNa
                 )}
                 <div className="space-y-0.5">
                   {visibleItems.map((item) => {
+                    const displayBadge =
+                      item.href === '/inbox'
+                        ? effectiveInboxBadge
+                        : (('badge' in item) ? (item as any).badge : null);
                     const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname?.startsWith(item.href + '/'));
                     const Icon = item.icon;
                     return (
@@ -340,9 +346,9 @@ export default function Sidebar({ orgBranding, divisionSwitcher, showDivisionsNa
                         <span className={clsx('flex-1 text-sm font-medium', collapsed ? 'lg:hidden' : '')}>
                           {item.label}
                         </span>
-                        {('badge' in item) && (item as any).badge && !collapsed && (
+                        {!!displayBadge && !collapsed && (
                           <span className="h-5 min-w-[22px] px-1.5 rounded-full bg-gradient-to-r from-fuchsia-500 to-purple-500 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">
-                            {String((item as any).badge)}
+                            {String(displayBadge)}
                           </span>
                         )}
                         {('shortcut' in item) && (item as any).shortcut && !collapsed && (

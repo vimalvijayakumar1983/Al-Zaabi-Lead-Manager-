@@ -1854,7 +1854,14 @@ class ApiClient {
 
   async getInboxStats(divisionId?: string) {
     const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<any>(`/inbox/stats${q}`);
+    return this.request<{
+      totalConversations: number;
+      totalMessages: number;
+      unreadMessages: number;
+      unreadConversations: number;
+      recentInbound: number;
+      byChannel: Array<{ channel: string; count: number; label?: string; color?: string; icon?: string }>;
+    }>(`/inbox/stats${q}`);
   }
 
   async updateConversationStatus(leadId: string, status: string) {
