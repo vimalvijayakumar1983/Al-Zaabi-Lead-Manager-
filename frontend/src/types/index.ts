@@ -33,6 +33,8 @@ export interface Organization {
   _count?: { users: number; leads: number };
   settings?: {
     didNumber?: string;
+    callWebhookSecret?: string;
+    sttPreferredProvider?: 'deepgram' | 'assemblyai';
     [key: string]: unknown;
   };
   createdAt?: string;
@@ -47,6 +49,8 @@ export interface DivisionUser {
   role: 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'SALES_REP' | 'VIEWER';
   avatar?: string;
   phone?: string;
+  callCenterAgentId?: string | null;
+  callCenterExtension?: string | null;
   isActive: boolean;
   lastLoginAt?: string;
   createdAt?: string;

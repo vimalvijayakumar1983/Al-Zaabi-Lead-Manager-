@@ -41,6 +41,7 @@ import {
   CircleDot,
   Workflow,
   Info,
+  Mic,
 } from 'lucide-react';
 import { RefreshButton } from '@/components/RefreshButton';
 import { api } from '@/lib/api';
@@ -91,6 +92,7 @@ interface Integration {
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+  organizationId?: string;
   divisionId?: string;
 }
 
@@ -275,6 +277,26 @@ const PLATFORM_DEFS: PlatformDef[] = [
     color: '#0EA5E9',
     bgColor: 'bg-sky-50',
     borderColor: 'border-sky-200',
+    available: true,
+  },
+  {
+    slug: 'deepgram',
+    name: 'Deepgram',
+    description: 'Transcribe call recordings with automatic language detection',
+    icon: <Mic className="w-6 h-6" />,
+    color: '#13EF93',
+    bgColor: 'bg-emerald-50',
+    borderColor: 'border-emerald-200',
+    available: true,
+  },
+  {
+    slug: 'assemblyai',
+    name: 'AssemblyAI',
+    description: 'Alternative STT with language detection for recordings',
+    icon: <Mic className="w-6 h-6" />,
+    color: '#2563EB',
+    bgColor: 'bg-blue-50',
+    borderColor: 'border-blue-200',
     available: true,
   },
 ];
@@ -548,6 +570,11 @@ export default function IntegrationsPage() {
   const [emailBcc, setEmailBcc] = useState('');
   const [erpProvider, setErpProvider] = useState<'facts' | 'focus' | 'cortex' | 'uniqorn'>('facts');
   const [erpToken, setErpToken] = useState('');
+  const [dgApiKey, setDgApiKey] = useState('');
+  const [dgModel, setDgModel] = useState('nova-2');
+  const [dgDetectLang, setDgDetectLang] = useState(true);
+  const [aaApiKey, setAaApiKey] = useState('');
+  const [aaDetectLang, setAaDetectLang] = useState(true);
 
   // State: Webhook form
   const [webhookName, setWebhookName] = useState('');
@@ -647,12 +674,17 @@ export default function IntegrationsPage() {
   // Computed stats
   // -------------------------------------------------------------------------
   const filteredIntegrations = useMemo(() => {
-    // ERP is division-bound; only show ERP records for the active sidebar division.
-    // Keep non-ERP integrations visible as before.
+    // ERP and STT integrations are tied to a division org; scope to active sidebar division.
     return integrations.filter((i) => {
-      if (i.platform !== 'erp') return true;
-      const configDivisionId = String(i.config?.divisionId || '');
-      return !!activeDivisionId && configDivisionId === activeDivisionId;
+      if (i.platform === 'erp') {
+        const configDivisionId = String(i.config?.divisionId || '');
+        return !!activeDivisionId && configDivisionId === activeDivisionId;
+      }
+      if (i.platform === 'deepgram' || i.platform === 'assemblyai') {
+        if (!activeDivisionId) return false;
+        return String(i.organizationId || '') === activeDivisionId;
+      }
+      return true;
     });
   }, [integrations, activeDivisionId]);
 
@@ -760,6 +792,15 @@ export default function IntegrationsPage() {
         setErpProvider(((cfg.erpProvider as 'facts' | 'focus' | 'cortex' | 'uniqorn') ?? 'facts'));
         setErpToken('');
         break;
+      case 'deepgram':
+        setDgApiKey('');
+        setDgModel(String(cfg.model || 'nova-2'));
+        setDgDetectLang(cfg.detectLanguage !== false);
+        break;
+      case 'assemblyai':
+        setAaApiKey('');
+        setAaDetectLang(cfg.detectLanguage !== false);
+        break;
       default:
         break;
     }
@@ -822,6 +863,15 @@ export default function IntegrationsPage() {
       case 'erp':
         setErpProvider('facts');
         setErpToken('');
+        break;
+      case 'deepgram':
+        setDgApiKey('');
+        setDgModel('nova-2');
+        setDgDetectLang(true);
+        break;
+      case 'assemblyai':
+        setAaApiKey('');
+        setAaDetectLang(true);
         break;
       default:
         break;
@@ -936,6 +986,27 @@ export default function IntegrationsPage() {
           },
         };
         }
+      case 'deepgram':
+        return {
+          platform: 'deepgram',
+          name: 'Deepgram',
+          credentials: { apiKey: dgApiKey },
+          config: {
+            model: dgModel.trim() || 'nova-2',
+            detectLanguage: dgDetectLang,
+          },
+          organizationId: activeDivisionId || undefined,
+        };
+      case 'assemblyai':
+        return {
+          platform: 'assemblyai',
+          name: 'AssemblyAI',
+          credentials: { apiKey: aaApiKey },
+          config: {
+            detectLanguage: aaDetectLang,
+          },
+          organizationId: activeDivisionId || undefined,
+        };
       default:
         return {};
     }
@@ -1847,6 +1918,102 @@ export default function IntegrationsPage() {
               {availabilityDisabled && (
                 <p className="text-xs text-amber-700">doctor-availability is CORTEX-only.</p>
               )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'deepgram': {
+        const apiBase =
+          typeof window !== 'undefined'
+            ? window.location.origin.replace(':3000', ':4000')
+            : '';
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-text-tertiary bg-emerald-50 rounded-lg p-3">
+              Used to transcribe call recordings after the PBX webhook ingests them. The webhook URL has no division id — the
+              division is chosen from <strong>dnid/did</strong> in the payload vs division DID. Set{' '}
+              <strong>STT preference</strong> on the Divisions page if you connect both Deepgram and AssemblyAI.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">API key</label>
+              <input
+                type={showSecrets['dgApiKey'] ? 'text' : 'password'}
+                value={dgApiKey}
+                onChange={(e) => setDgApiKey(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                placeholder="Deepgram API key"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Model</label>
+              <input
+                type="text"
+                value={dgModel}
+                onChange={(e) => setDgModel(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                placeholder="nova-2"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={dgDetectLang}
+                onChange={(e) => setDgDetectLang(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Enable automatic language detection
+            </label>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs space-y-1">
+              <p className="font-medium text-text-primary">PBX webhook (POST)</p>
+              <code className="block break-all select-all bg-white border rounded px-2 py-1">
+                {apiBase}/api/call-center/webhook
+              </code>
+              <p className="text-text-tertiary">
+                Include <code className="text-[11px]">dnid</code> or <code className="text-[11px]">did</code> in the JSON body to resolve the division. Header:{' '}
+                <code className="text-[11px]">X-Webhook-Secret</code> (division Call webhook secret).
+              </p>
+            </div>
+          </div>
+        );
+      }
+
+      case 'assemblyai': {
+        const apiBase =
+          typeof window !== 'undefined'
+            ? window.location.origin.replace(':3000', ':4000')
+            : '';
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-text-tertiary bg-blue-50 rounded-lg p-3">
+              Optional second STT provider. The worker uses your division&apos;s preferred provider setting, or the first
+              connected integration.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">API key</label>
+              <input
+                type={showSecrets['aaApiKey'] ? 'text' : 'password'}
+                value={aaApiKey}
+                onChange={(e) => setAaApiKey(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                placeholder="AssemblyAI API key"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aaDetectLang}
+                onChange={(e) => setAaDetectLang(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Enable automatic language detection
+            </label>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs space-y-1">
+              <p className="font-medium text-text-primary">PBX webhook (POST)</p>
+              <code className="block break-all select-all bg-white border rounded px-2 py-1">
+                {apiBase}/api/call-center/webhook
+              </code>
+              <p className="text-text-tertiary">Same webhook as Deepgram — one ingestion pipeline (DID in body).</p>
             </div>
           </div>
         );

@@ -62,6 +62,7 @@ model Organization {
   whatsAppMessageTemplates WhatsAppMessageTemplate[]
   whatsAppBroadcastLists   WhatsAppBroadcastList[]
   whatsAppBroadcastRuns    WhatsAppBroadcastRun[]
+  callTranscriptionJobs    CallTranscriptionJob[]
 
   @@index([parentId])
   @@map("organizations")
@@ -229,6 +230,11 @@ model User {
   contactActivities     ContactActivity[]
   contactNotes          ContactNote[]
   ownedDeals            Deal[]         @relation("DealOwner")
+
+  /// PBX / call-center agent id from recordings (e.g. matches API `agentid`).
+  callCenterAgentId    String?  @map("call_center_agent_id")
+  /// PBX extension (e.g. matches API `answextn`).
+  callCenterExtension  String?  @map("call_center_extension")
 
   customRoleId         String?
   customRole           CustomRole?    @relation("UserCustomRole", fields: [customRoleId], references: [id], onDelete: SetNull)
@@ -567,9 +573,29 @@ model CallLog {
   // Auto-created follow-up task (if any)
   followUpTaskId  String?
 
+  transcriptionJobs CallTranscriptionJob[]
+
   @@index([leadId, createdAt])
   @@index([disposition])
   @@map("call_logs")
+}
+
+/// Async pipeline: download recording, STT, LLM summary/scores; one job per call log.
+model CallTranscriptionJob {
+  id             String   @id @default(uuid())
+  callLogId      String   @map("call_log_id")
+  callLog        CallLog  @relation(fields: [callLogId], references: [id], onDelete: Cascade)
+  organizationId String   @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  lastError      String?  @map("last_error")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([callLogId])
+  @@index([organizationId, status])
+  @@map("call_transcription_jobs")
 }
 
 enum CallDisposition {

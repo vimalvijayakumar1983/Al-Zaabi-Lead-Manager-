@@ -33,6 +33,10 @@ const {
   startTemplateSyncScheduler,
   stopTemplateSyncScheduler,
 } = require('./services/templateSyncScheduler');
+const {
+  startTranscriptionWorker,
+  stopTranscriptionWorker,
+} = require('./services/transcriptionWorker');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -61,6 +65,7 @@ const channelWebhookRoutes = require('./routes/channel-webhooks');
 const channelErpRoutes = require('./routes/channel-erp');
 const contactRoutes = require('./routes/contacts');
 const callLogRoutes = require('./routes/call-logs');
+const callCenterWebhookRoutes = require('./routes/call-center-webhook');
 const roleRoutes = require('./routes/roles');
 const savedViewRoutes = require('./routes/saved-views');
 const recycleBinRoutes = require('./routes/recycle-bin');
@@ -166,6 +171,7 @@ const routeMounts = [
   ['/channels', channelErpRoutes],
   ['/contacts', contactRoutes],
   ['/call-logs', callLogRoutes],
+  ['/call-center', callCenterWebhookRoutes],
   ['/roles', roleRoutes],
   ['/saved-views', savedViewRoutes],
   ['/recycle-bin', recycleBinRoutes],
@@ -215,6 +221,13 @@ server.listen(PORT, () => {
     }
   }
 
+  try {
+    startTranscriptionWorker(undefined, { runOnStart: true, initialDelayMs: 12000 });
+    logger.info('[Startup] Transcription worker initialized');
+  } catch (err) {
+    logger.error('[Startup] Failed to initialize transcription worker:', err.message);
+  }
+
   // Start unread reminder escalation monitor after core schedulers
   setTimeout(() => {
     try {
@@ -250,6 +263,7 @@ const shutdown = async () => {
   stopRecycleBinPurgeScheduler();
   stopBroadcastScheduler();
   stopTemplateSyncScheduler();
+  stopTranscriptionWorker();
   await prisma.$disconnect();
   server.close(() => {
     logger.info('Server closed');

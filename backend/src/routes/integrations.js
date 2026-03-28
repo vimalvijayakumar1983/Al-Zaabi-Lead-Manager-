@@ -102,6 +102,22 @@ const AVAILABLE_PLATFORMS = [
     status: 'available',
     requiresOAuth: false,
   },
+  {
+    id: 'deepgram',
+    name: 'Deepgram',
+    icon: 'mic',
+    description: 'Speech-to-text for call recordings (language auto-detect)',
+    status: 'available',
+    requiresOAuth: false,
+  },
+  {
+    id: 'assemblyai',
+    name: 'AssemblyAI',
+    icon: 'mic',
+    description: 'Alternative STT for call recordings (language detection)',
+    status: 'available',
+    requiresOAuth: false,
+  },
 ];
 
 // ─── Validation Schemas ────────────────────────────────────────────────────────
@@ -118,6 +134,8 @@ const platformEnum = z.enum([
   'webhook',
   'zapier',
   'erp',
+  'deepgram',
+  'assemblyai',
 ]);
 
 const createIntegrationSchema = z.object({
@@ -699,10 +717,14 @@ router.post('/', validate(createIntegrationSchema), async (req, res, next) => {
       }
     }
 
+    const sttPlatforms = ['deepgram', 'assemblyai'];
+    const hasSttKey =
+      sttPlatforms.includes(platform) && String(credentials?.apiKey || '').trim().length > 0;
+
     const integration = await prisma.integration.create({
       data: {
         platform,
-        status: 'disconnected',
+        status: hasSttKey ? 'connected' : 'disconnected',
         credentials: credentials || {},
         config: config || {},
         organizationId: targetOrgId,
@@ -758,6 +780,9 @@ router.put('/:id', validate(updateIntegrationSchema), async (req, res, next) => 
         }
       }
       updateData.credentials = newCreds;
+      if (['deepgram', 'assemblyai'].includes(existing.platform) && String(newCreds.apiKey || '').trim()) {
+        updateData.status = 'connected';
+      }
     }
     if (body.status !== undefined) updateData.status = body.status;
     if (body.campaignId !== undefined) updateData.campaignId = body.campaignId;
@@ -1019,6 +1044,45 @@ async function testPlatformConnection(integration) {
         return { success: false, message: 'ERP shared token is required' };
       }
       return { success: true, message: `ERP (${provider.toUpperCase()}) configuration verified` };
+    }
+    case 'deepgram': {
+      const apiKey = String(credentials?.apiKey || '').trim();
+      if (!apiKey) {
+        return { success: false, message: 'Deepgram API key is required' };
+      }
+      try {
+        const resp = await fetch('https://api.deepgram.com/v1/projects', {
+          headers: { Authorization: `Token ${apiKey}` },
+        });
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          return { success: false, message: `Deepgram rejected key (${resp.status}): ${body.slice(0, 120)}` };
+        }
+        return { success: true, message: 'Deepgram API key verified' };
+      } catch (e) {
+        return { success: false, message: `Deepgram check failed: ${e.message}` };
+      }
+    }
+    case 'assemblyai': {
+      const apiKey = String(credentials?.apiKey || '').trim();
+      if (!apiKey) {
+        return { success: false, message: 'AssemblyAI API key is required' };
+      }
+      try {
+        const resp = await fetch('https://api.assemblyai.com/v2/transcript?limit=1', {
+          headers: { authorization: apiKey },
+        });
+        if (resp.status === 401 || resp.status === 403) {
+          return { success: false, message: 'AssemblyAI API key invalid' };
+        }
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          return { success: false, message: `AssemblyAI check failed (${resp.status}): ${body.slice(0, 120)}` };
+        }
+        return { success: true, message: 'AssemblyAI API key verified' };
+      } catch (e) {
+        return { success: false, message: `AssemblyAI check failed: ${e.message}` };
+      }
     }
     default:
       return { success: false, message: `Platform "${platform}" is not supported yet` };

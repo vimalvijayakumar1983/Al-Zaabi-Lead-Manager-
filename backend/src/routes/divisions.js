@@ -33,6 +33,8 @@ const createDivisionSchema = z.object({
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   didNumber: z.string().trim().min(1).max(30).optional(),
+  callWebhookSecret: z.string().trim().min(8).max(200).optional(),
+  sttPreferredProvider: z.enum(['deepgram', 'assemblyai']).optional(),
   templateId: z.string().optional(),
 });
 
@@ -43,6 +45,8 @@ const updateDivisionSchema = z.object({
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   didNumber: z.string().trim().min(1).max(30).optional().or(z.literal('')).or(z.null()),
+  callWebhookSecret: z.string().trim().min(8).max(200).optional().or(z.literal('')).or(z.null()),
+  sttPreferredProvider: z.enum(['deepgram', 'assemblyai']).optional().or(z.literal('')).or(z.null()),
 });
 
 // Default pipeline stages (same as auth.js register)
@@ -104,7 +108,17 @@ router.get('/templates', authorize('SUPER_ADMIN', 'ADMIN'), (req, res) => {
 // ─── POST / — Create a new division (SUPER_ADMIN only) ─────────
 router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async (req, res, next) => {
   try {
-    const { name, tradeName, logo, primaryColor, secondaryColor, didNumber, templateId } = req.validated;
+    const {
+      name,
+      tradeName,
+      logo,
+      primaryColor,
+      secondaryColor,
+      didNumber,
+      callWebhookSecret,
+      sttPreferredProvider,
+      templateId,
+    } = req.validated;
 
     // Resolve template: use selected template or fall back to defaults
     const template = templateId ? getTemplate(templateId) : null;
@@ -124,6 +138,8 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
           settings: {
             ...(template ? { templateId: template.id, templateName: template.name } : {}),
             ...(didNumber ? { didNumber: String(didNumber).trim() } : {}),
+            ...(callWebhookSecret ? { callWebhookSecret: String(callWebhookSecret).trim() } : {}),
+            ...(sttPreferredProvider ? { sttPreferredProvider } : {}),
           },
         },
       });
@@ -259,7 +275,16 @@ router.get('/:id', async (req, res, next) => {
 router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, tradeName, logo, primaryColor, secondaryColor, didNumber } = req.validated;
+    const {
+      name,
+      tradeName,
+      logo,
+      primaryColor,
+      secondaryColor,
+      didNumber,
+      callWebhookSecret,
+      sttPreferredProvider,
+    } = req.validated;
     let existingSettings = {};
 
     if (req.user.role === 'SUPER_ADMIN') {
@@ -297,13 +322,33 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
     if (logo !== undefined) updateData.logo = logo || null;
     if (primaryColor !== undefined) updateData.primaryColor = primaryColor;
     if (secondaryColor !== undefined) updateData.secondaryColor = secondaryColor;
+    let nextSettings = { ...existingSettings };
+    let settingsTouched = false;
     if (didNumber !== undefined) {
-      const nextSettings = { ...existingSettings };
       if (didNumber === null || didNumber === '') {
         delete nextSettings.didNumber;
       } else {
         nextSettings.didNumber = String(didNumber).trim();
       }
+      settingsTouched = true;
+    }
+    if (callWebhookSecret !== undefined) {
+      if (callWebhookSecret === null || callWebhookSecret === '') {
+        delete nextSettings.callWebhookSecret;
+      } else {
+        nextSettings.callWebhookSecret = String(callWebhookSecret).trim();
+      }
+      settingsTouched = true;
+    }
+    if (sttPreferredProvider !== undefined) {
+      if (sttPreferredProvider === null || sttPreferredProvider === '') {
+        delete nextSettings.sttPreferredProvider;
+      } else {
+        nextSettings.sttPreferredProvider = sttPreferredProvider;
+      }
+      settingsTouched = true;
+    }
+    if (settingsTouched) {
       updateData.settings = nextSettings;
     }
 
@@ -608,6 +653,7 @@ router.get('/:id/users', async (req, res, next) => {
         id: true, email: true, firstName: true, lastName: true,
         role: true, isActive: true, createdAt: true, lastLoginAt: true,
         organizationId: true, avatar: true,
+        callCenterAgentId: true, callCenterExtension: true,
         _count: { select: { assignedLeads: true, tasks: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -671,10 +717,20 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
   lastName: z.string().min(1),
   role: z.enum(['ADMIN', 'MANAGER', 'SALES_REP', 'VIEWER']),
   password: z.string().min(8),
+  callCenterAgentId: z.string().trim().max(64).optional(),
+  callCenterExtension: z.string().trim().max(32).optional(),
 })), async (req, res, next) => {
   try {
     const divisionId = req.params.id;
-    const { email, firstName, lastName, role, password } = req.validated;
+    const {
+      email,
+      firstName,
+      lastName,
+      role,
+      password,
+      callCenterAgentId,
+      callCenterExtension,
+    } = req.validated;
 
     // Verify division exists and requester has access
     const division = await prisma.organization.findFirst({
@@ -690,12 +746,19 @@ router.post('/:id/users/invite', authorize('SUPER_ADMIN', 'ADMIN', 'MANAGER'), v
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
       data: {
-        email, firstName, lastName, role, passwordHash,
+        email,
+        firstName,
+        lastName,
+        role,
+        passwordHash,
         organizationId: divisionId,
+        callCenterAgentId: callCenterAgentId ? String(callCenterAgentId).trim() : null,
+        callCenterExtension: callCenterExtension ? String(callCenterExtension).trim() : null,
       },
       select: {
         id: true, email: true, firstName: true, lastName: true,
         role: true, createdAt: true, organizationId: true,
+        callCenterAgentId: true, callCenterExtension: true,
       },
     });
 
@@ -762,6 +825,8 @@ router.put('/:id/users/:userId', authorize('SUPER_ADMIN', 'ADMIN'), validate(z.o
   isActive: z.boolean().optional(),
   firstName: z.string().min(1).optional(),
   lastName: z.string().min(1).optional(),
+  callCenterAgentId: z.string().trim().max(64).optional().nullable(),
+  callCenterExtension: z.string().trim().max(32).optional().nullable(),
 })), async (req, res, next) => {
   try {
     const { id: divisionId, userId } = req.params;
@@ -771,12 +836,17 @@ router.put('/:id/users/:userId', authorize('SUPER_ADMIN', 'ADMIN'), validate(z.o
     });
     if (!user) return res.status(404).json({ error: 'User not found in this division' });
 
+    const data = { ...req.validated };
+    if (data.callCenterAgentId === '') data.callCenterAgentId = null;
+    if (data.callCenterExtension === '') data.callCenterExtension = null;
+
     const updated = await prisma.user.update({
       where: { id: userId },
-      data: req.validated,
+      data,
       select: {
         id: true, email: true, firstName: true, lastName: true,
         role: true, isActive: true, organizationId: true,
+        callCenterAgentId: true, callCenterExtension: true,
       },
     });
 

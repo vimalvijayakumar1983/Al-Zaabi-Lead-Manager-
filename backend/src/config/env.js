@@ -70,6 +70,12 @@ const config = {
     timeoutMs: parseInt(process.env.CALLLOG_API_TIMEOUT_MS || '12000', 10) || 12000,
   },
 
+  /** STT pipeline: download recording from webhook URL before transcribing. */
+  callRecording: {
+    fetchTimeoutMs:
+      parseInt(process.env.CALL_RECORDING_FETCH_TIMEOUT_MS || '120000', 10) || 120000,
+  },
+
   // Webhook
   webhookSecret: process.env.WEBHOOK_SECRET || 'webhook-secret',
 

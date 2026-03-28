@@ -18,23 +18,10 @@ const {
   labelForFieldOption,
 } = require('../services/dispositionStudio');
 const { findStageForStatus } = require('../utils/statusStageMapping');
+const { normalizeMobileForExternal } = require('../utils/callCenterPhone');
 
 const router = Router();
 router.use(authenticate, orgScope);
-
-function toDigits(value) {
-  return String(value || '').replace(/\D/g, '');
-}
-
-function normalizeMobileForExternal(phone) {
-  const digits = toDigits(phone);
-  if (!digits) return '';
-  if (digits.startsWith('00971') && digits.length >= 13) return `0${digits.slice(5)}`;
-  if (digits.startsWith('971') && digits.length >= 12) return `0${digits.slice(3)}`;
-  if (digits.startsWith('5') && digits.length === 9) return `0${digits}`;
-  if (digits.startsWith('0') && digits.length >= 10) return digits.slice(0, 10);
-  return digits;
-}
 
 function formatDateForExternal(date) {
   const dt = new Date(date);
@@ -513,6 +500,14 @@ async function executeConfiguredActions({
   return { createdTaskId, statusChangedTo };
 }
 
+const CALL_LOG_ID_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function mergeCallLogMetadata(prev, patch) {
+  const base = prev && typeof prev === 'object' && !Array.isArray(prev) ? { ...prev } : {};
+  return { ...base, ...patch };
+}
+
 const callLogSchema = z.object({
   leadId: z.string().uuid(),
   disposition: z.string().min(1),
@@ -643,6 +638,74 @@ router.get('/lead/:leadId', async (req, res, next) => {
     });
 
     res.json(merged);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Retry call transcription (failed / exhausted retries) ─────────
+router.post('/:callLogId/retry-transcription', async (req, res, next) => {
+  try {
+    const { callLogId } = req.params;
+    if (!CALL_LOG_ID_UUID.test(callLogId)) {
+      return res.status(400).json({ error: 'Invalid call log id' });
+    }
+
+    const callLog = await prisma.callLog.findFirst({
+      where: { id: callLogId },
+      include: { lead: { select: { organizationId: true } } },
+    });
+
+    if (!callLog || !req.orgIds.includes(callLog.lead.organizationId)) {
+      return res.status(404).json({ error: 'Call log not found' });
+    }
+
+    const meta =
+      callLog.metadata && typeof callLog.metadata === 'object' && !Array.isArray(callLog.metadata)
+        ? callLog.metadata
+        : {};
+    const recordingUrl = String(meta.recordingUrl || meta.filename || '').trim();
+    if (!recordingUrl) {
+      return res.status(400).json({ error: 'This call has no recording URL to transcribe' });
+    }
+
+    const existingJob = await prisma.callTranscriptionJob.findUnique({
+      where: { callLogId },
+      select: { status: true },
+    });
+    if (existingJob?.status === 'PROCESSING') {
+      return res.status(409).json({ error: 'Transcription is already in progress' });
+    }
+
+    const orgId = callLog.lead.organizationId;
+
+    await prisma.$transaction([
+      prisma.callTranscriptionJob.upsert({
+        where: { callLogId },
+        create: {
+          callLogId,
+          organizationId: orgId,
+          status: 'PENDING',
+          attempts: 0,
+        },
+        update: {
+          status: 'PENDING',
+          attempts: 0,
+          lastError: null,
+        },
+      }),
+      prisma.callLog.update({
+        where: { id: callLogId },
+        data: {
+          metadata: mergeCallLogMetadata(meta, {
+            processingStatus: 'PENDING',
+            processingError: null,
+          }),
+        },
+      }),
+    ]);
+
+    res.json({ ok: true, message: 'Transcription queued' });
   } catch (err) {
     next(err);
   }

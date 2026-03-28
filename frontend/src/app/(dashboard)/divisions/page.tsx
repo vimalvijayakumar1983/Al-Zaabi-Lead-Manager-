@@ -391,6 +391,7 @@ function UserActionMenu({
   divisionId,
   divisions,
   onEditRole,
+  onEditCallCenter,
   onResetPassword,
   onToggleActive,
   onTransfer,
@@ -399,6 +400,7 @@ function UserActionMenu({
   divisionId: string;
   divisions: Organization[];
   onEditRole: () => void;
+  onEditCallCenter: () => void;
   onResetPassword: () => void;
   onToggleActive: () => void;
   onTransfer: () => void;
@@ -442,6 +444,13 @@ function UserActionMenu({
             >
               <Shield className="h-4 w-4 text-blue-500" />
               Edit Role
+            </button>
+            <button
+              onClick={() => { setOpen(false); onEditCallCenter(); }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-primary hover:bg-surface-secondary transition-colors"
+            >
+              <Hash className="h-4 w-4 text-violet-500" />
+              Call center mapping
             </button>
             <button
               onClick={() => { setOpen(false); onResetPassword(); }}
@@ -541,6 +550,8 @@ export default function DivisionsPage() {
   const [formPrimaryColor, setFormPrimaryColor] = useState('#6366f1');
   const [formSecondaryColor, setFormSecondaryColor] = useState('#1e293b');
   const [formDidNumber, setFormDidNumber] = useState('');
+  const [formCallWebhookSecret, setFormCallWebhookSecret] = useState('');
+  const [formSttPreferred, setFormSttPreferred] = useState<'deepgram' | 'assemblyai' | ''>('');
 
   // Apply Template to Existing Division
   const [applyTemplateDivision, setApplyTemplateDivision] = useState<Organization | null>(null);
@@ -558,7 +569,15 @@ export default function DivisionsPage() {
 
   // Invite User Modal
   const [inviteDiv, setInviteDiv] = useState<string | null>(null);
-  const [inviteForm, setInviteForm] = useState({ firstName: '', lastName: '', email: '', password: '', role: 'SALES_REP' });
+  const [inviteForm, setInviteForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    password: '',
+    role: 'SALES_REP',
+    callCenterAgentId: '',
+    callCenterExtension: '',
+  });
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState('');
 
@@ -567,6 +586,12 @@ export default function DivisionsPage() {
   const [editRoleValue, setEditRoleValue] = useState('');
   const [editRoleSaving, setEditRoleSaving] = useState(false);
   const [editRoleError, setEditRoleError] = useState('');
+
+  const [editCallCenterUser, setEditCallCenterUser] = useState<{ user: DivisionUser; divisionId: string } | null>(null);
+  const [ccAgentId, setCcAgentId] = useState('');
+  const [ccExtension, setCcExtension] = useState('');
+  const [ccSaving, setCcSaving] = useState(false);
+  const [ccError, setCcError] = useState('');
 
   // Reset Password Modal
   const [resetPwUser, setResetPwUser] = useState<{ user: DivisionUser; divisionId: string } | null>(null);
@@ -770,6 +795,8 @@ export default function DivisionsPage() {
     setFormPrimaryColor('#6366f1');
     setFormSecondaryColor('#1e293b');
     setFormDidNumber('');
+    setFormCallWebhookSecret('');
+    setFormSttPreferred('');
     setModalError('');
     setSelectedTemplate(null);
     setModalStep('template');
@@ -784,6 +811,9 @@ export default function DivisionsPage() {
     setFormPrimaryColor(division.primaryColor || '#6366f1');
     setFormSecondaryColor(division.secondaryColor || '#1e293b');
     setFormDidNumber(String((division as any)?.settings?.didNumber || ''));
+    setFormCallWebhookSecret(String((division as any)?.settings?.callWebhookSecret || ''));
+    const pref = (division as any)?.settings?.sttPreferredProvider;
+    setFormSttPreferred(pref === 'assemblyai' || pref === 'deepgram' ? pref : '');
     setModalError('');
     setSelectedTemplate(null);
     setModalStep('details');
@@ -806,6 +836,20 @@ export default function DivisionsPage() {
         secondaryColor: formSecondaryColor,
         didNumber: formDidNumber.trim() || undefined,
       };
+      if (editingDivision) {
+        if (formCallWebhookSecret.trim().length >= 8) {
+          payload.callWebhookSecret = formCallWebhookSecret.trim();
+        } else if (formCallWebhookSecret.trim() === '') {
+          payload.callWebhookSecret = null;
+        }
+      } else if (formCallWebhookSecret.trim().length >= 8) {
+        payload.callWebhookSecret = formCallWebhookSecret.trim();
+      }
+      if (formSttPreferred === 'deepgram' || formSttPreferred === 'assemblyai') {
+        payload.sttPreferredProvider = formSttPreferred;
+      } else if (editingDivision) {
+        payload.sttPreferredProvider = null;
+      }
       if (editingDivision) {
         await api.updateDivision(editingDivision.id, payload as Partial<Organization>);
         showToast('Division updated successfully');
@@ -902,16 +946,45 @@ export default function DivisionsPage() {
         lastName: inviteForm.lastName.trim(),
         role: inviteForm.role,
         password: inviteForm.password,
+        callCenterAgentId: inviteForm.callCenterAgentId.trim() || undefined,
+        callCenterExtension: inviteForm.callCenterExtension.trim() || undefined,
       });
       showToast('User invited successfully');
       setInviteDiv(null);
-      setInviteForm({ firstName: '', lastName: '', email: '', password: '', role: 'SALES_REP' });
+      setInviteForm({
+        firstName: '',
+        lastName: '',
+        email: '',
+        password: '',
+        role: 'SALES_REP',
+        callCenterAgentId: '',
+        callCenterExtension: '',
+      });
       fetchDivisionUsers(inviteDiv);
       fetchDivisions();
     } catch (err: any) {
       setInviteError(err.message || 'Failed to invite user');
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleSaveCallCenterMapping = async () => {
+    if (!editCallCenterUser) return;
+    setCcSaving(true);
+    setCcError('');
+    try {
+      await api.updateDivisionUser(editCallCenterUser.divisionId, editCallCenterUser.user.id, {
+        callCenterAgentId: ccAgentId.trim() || null,
+        callCenterExtension: ccExtension.trim() || null,
+      });
+      showToast('Call center mapping saved');
+      setEditCallCenterUser(null);
+      fetchDivisionUsers(editCallCenterUser.divisionId);
+    } catch (err: any) {
+      setCcError(err.message || 'Failed to save');
+    } finally {
+      setCcSaving(false);
     }
   };
 
@@ -1652,7 +1725,15 @@ export default function DivisionsPage() {
                           <button
                             onClick={() => {
                               setInviteDiv(division.id);
-                              setInviteForm({ firstName: '', lastName: '', email: '', password: '', role: 'SALES_REP' });
+                              setInviteForm({
+                                firstName: '',
+                                lastName: '',
+                                email: '',
+                                password: '',
+                                role: 'SALES_REP',
+                                callCenterAgentId: '',
+                                callCenterExtension: '',
+                              });
                               setInviteError('');
                             }}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-brand-500 text-white hover:bg-brand-600 transition-colors"
@@ -1690,7 +1771,15 @@ export default function DivisionsPage() {
                         <button
                           onClick={() => {
                             setInviteDiv(division.id);
-                            setInviteForm({ firstName: '', lastName: '', email: '', password: '', role: 'SALES_REP' });
+                            setInviteForm({
+                              firstName: '',
+                              lastName: '',
+                              email: '',
+                              password: '',
+                              role: 'SALES_REP',
+                              callCenterAgentId: '',
+                              callCenterExtension: '',
+                            });
                             setInviteError('');
                           }}
                           className="mt-2 text-sm text-brand-600 hover:text-brand-700 font-medium"
@@ -1814,6 +1903,12 @@ export default function DivisionsPage() {
                                       setEditRoleUser({ user: u, divisionId: division.id });
                                       setEditRoleValue(u.role);
                                       setEditRoleError('');
+                                    }}
+                                    onEditCallCenter={() => {
+                                      setEditCallCenterUser({ user: u, divisionId: division.id });
+                                      setCcAgentId(u.callCenterAgentId || '');
+                                      setCcExtension(u.callCenterExtension || '');
+                                      setCcError('');
                                     }}
                                     onResetPassword={() => {
                                       setResetPwUser({ user: u, divisionId: division.id });
@@ -2014,6 +2109,37 @@ export default function DivisionsPage() {
                 <p className="text-xs text-text-tertiary mt-1">
                   Used to fetch external call recordings in lead Call Logs tab.
                 </p>
+              </div>
+              <div>
+                <label className="label">Call webhook secret</label>
+                <input
+                  type="password"
+                  className="input"
+                  value={formCallWebhookSecret}
+                  onChange={(e) => setFormCallWebhookSecret(e.target.value)}
+                  placeholder="Min 8 characters — sent as X-Webhook-Secret"
+                  autoComplete="new-password"
+                />
+                <p className="text-xs text-text-tertiary mt-1">
+                  PBX POST URL:{' '}
+                  <code className="text-[11px] bg-surface-secondary px-1 rounded">/api/call-center/webhook</code>
+                  — division is resolved from <code className="text-[11px]">dnid</code>/<code className="text-[11px]">did</code>{' '}
+                  in the body vs this division&apos;s DID. Leave secret empty when editing to clear it.
+                </p>
+              </div>
+              <div>
+                <label className="label">Preferred STT provider</label>
+                <select
+                  className="input"
+                  value={formSttPreferred}
+                  onChange={(e) =>
+                    setFormSttPreferred((e.target.value as 'deepgram' | 'assemblyai' | '') || '')
+                  }
+                >
+                  <option value="">Auto (Deepgram first, then AssemblyAI)</option>
+                  <option value="deepgram">Deepgram</option>
+                  <option value="assemblyai">AssemblyAI</option>
+                </select>
               </div>
               <div>
                 <label className="label">Division Logo</label>
@@ -2429,6 +2555,28 @@ export default function DivisionsPage() {
               ))}
             </select>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Call center agent ID</label>
+              <input
+                type="text"
+                className="input"
+                value={inviteForm.callCenterAgentId}
+                onChange={(e) => setInviteForm((p) => ({ ...p, callCenterAgentId: e.target.value }))}
+                placeholder="e.g. 5030"
+              />
+            </div>
+            <div>
+              <label className="label">Extension</label>
+              <input
+                type="text"
+                className="input"
+                value={inviteForm.callCenterExtension}
+                onChange={(e) => setInviteForm((p) => ({ ...p, callCenterExtension: e.target.value }))}
+                placeholder="e.g. 301"
+              />
+            </div>
+          </div>
           {inviteDiv && (
             <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-xs text-blue-700">
               This user will be added to:{' '}
@@ -2498,6 +2646,66 @@ export default function DivisionsPage() {
               <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</>
             ) : (
               'Update Role'
+            )}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={!!editCallCenterUser} onClose={() => setEditCallCenterUser(null)} maxWidth="max-w-sm">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+          <h3 className="text-lg font-semibold text-text-primary flex items-center gap-2">
+            <Hash className="h-5 w-5 text-violet-500" />
+            Call center mapping
+          </h3>
+          <button onClick={() => setEditCallCenterUser(null)} className="btn-icon h-8 w-8">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          {ccError && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 p-3 text-sm text-red-700">
+              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>{ccError}</span>
+            </div>
+          )}
+          {editCallCenterUser && (
+            <p className="text-sm text-text-secondary">
+              Match PBX fields <code className="text-xs">agentid</code> and <code className="text-xs">answextn</code> for{' '}
+              <strong className="text-text-primary">
+                {getDisplayName(editCallCenterUser.user.firstName, editCallCenterUser.user.lastName)}
+              </strong>
+            </p>
+          )}
+          <div>
+            <label className="label">Agent ID</label>
+            <input
+              type="text"
+              className="input"
+              value={ccAgentId}
+              onChange={(e) => setCcAgentId(e.target.value)}
+              placeholder="e.g. 5030"
+            />
+          </div>
+          <div>
+            <label className="label">Extension</label>
+            <input
+              type="text"
+              className="input"
+              value={ccExtension}
+              onChange={(e) => setCcExtension(e.target.value)}
+              placeholder="e.g. 301"
+            />
+          </div>
+        </div>
+        <div className="flex-shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle bg-surface-secondary/30">
+          <button onClick={() => setEditCallCenterUser(null)} className="btn-secondary" disabled={ccSaving}>
+            Cancel
+          </button>
+          <button onClick={handleSaveCallCenterMapping} className="btn-primary flex items-center gap-2" disabled={ccSaving}>
+            {ccSaving ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Saving...</>
+            ) : (
+              'Save'
             )}
           </button>
         </div>

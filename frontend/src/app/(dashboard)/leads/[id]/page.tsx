@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo, Fragment } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { useInboxMessagesQuery } from '@/features/inbox/hooks/useInboxQueries';
@@ -201,6 +201,23 @@ export default function LeadDetailPage() {
   });
   const callLogs = Array.isArray(callLogsQuery.data) ? callLogsQuery.data : [];
   const callLogsLoading = callLogsQuery.isLoading && activeTab === 'call_logs';
+
+  const retryTranscriptionMutation = useMutation({
+    mutationFn: (callLogId: string) => api.retryCallTranscription(callLogId),
+    onSuccess: () => {
+      addToast({ type: 'success', title: 'Transcription queued', message: 'The worker will process this call again.' });
+      if (leadIdStr) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.leads.callLogs(leadIdStr) });
+      }
+    },
+    onError: (err: Error) => {
+      addToast({
+        type: 'error',
+        title: 'Retry failed',
+        message: err?.message || 'Could not queue transcription.',
+      });
+    },
+  });
 
   const [noteContent, setNoteContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -1998,9 +2015,22 @@ export default function LeadDetailPage() {
                       <tbody className="divide-y divide-gray-100">
                         {callLogs.map((log) => {
                           const isExternal = Boolean((log.metadata as any)?.external);
-                          const recordingUrl = String((log.metadata as any)?.recordingUrl || '').trim();
+                          const meta = (log.metadata as any) || {};
+                          const procStatus = String(meta.processingStatus || '').trim();
+                          const recordingUrl = String(meta.recordingUrl || meta.filename || '').trim();
+                          const logIdStr = String(log.id);
+                          const isIngestedCallLog =
+                            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+                              logIdStr
+                            );
+                          const showTranscriptionRetry =
+                            isIngestedCallLog &&
+                            Boolean(recordingUrl) &&
+                            (procStatus === 'FAILED' || procStatus === 'PENDING_RETRY');
                           const agentExtn = String((log.metadata as any)?.answextn || '').trim();
                           const agentId = String((log.metadata as any)?.agentid || '').trim();
+                          const transcript = String(meta.transcript || '').trim();
+                          const perf = meta.callPerformance;
                           const durationLabel = log.duration
                             ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s`
                             : '-';
@@ -2011,34 +2041,120 @@ export default function LeadDetailPage() {
                             : log.user
                               ? `${log.user.firstName} ${log.user.lastName}`
                               : '-';
+                          const hasAiRow =
+                            transcript ||
+                            perf ||
+                            ['PENDING', 'PENDING_RETRY', 'DONE', 'FAILED', 'SKIPPED_NO_AUDIO'].includes(procStatus);
 
                           return (
-                            <tr key={log.id} className="hover:bg-gray-50/70 align-top">
-                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">
-                                {new Date(log.createdAt).toLocaleString()}
-                              </td>
-                              <td className="px-3 py-2 text-gray-700">{agentLabel}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">{durationLabel}</td>
-                              <td className="px-3 py-2">
-                                {recordingUrl ? (
-                                  <div className="flex items-center gap-2">
-                                    <audio controls preload="none" src={recordingUrl} className="h-8 w-44">
-                                      Your browser does not support audio playback.
-                                    </audio>
-                                    <a
-                                      href={recordingUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="text-xs text-brand-600 hover:text-brand-700 whitespace-nowrap"
-                                    >
-                                      Open
-                                    </a>
-                                  </div>
-                                ) : (
-                                  <span className="text-gray-400">-</span>
-                                )}
-                              </td>
-                            </tr>
+                            <Fragment key={log.id}>
+                              <tr className="hover:bg-gray-50/70 align-top">
+                                <td className="px-3 py-2 whitespace-nowrap text-gray-700">
+                                  {new Date(log.createdAt).toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2 text-gray-700">{agentLabel}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-gray-700">{durationLabel}</td>
+                                <td className="px-3 py-2">
+                                  {recordingUrl ? (
+                                    <div className="flex items-center gap-2">
+                                      <audio controls preload="none" src={recordingUrl} className="h-8 w-44">
+                                        Your browser does not support audio playback.
+                                      </audio>
+                                      <a
+                                        href={recordingUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-xs text-brand-600 hover:text-brand-700 whitespace-nowrap"
+                                      >
+                                        Open
+                                      </a>
+                                    </div>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </td>
+                              </tr>
+                              {hasAiRow ? (
+                                <tr className="bg-slate-50/90 border-b border-gray-100">
+                                  <td colSpan={4} className="px-3 py-2 text-xs text-gray-600">
+                                    <details className="group">
+                                      <summary className="cursor-pointer font-medium text-gray-700 list-none flex items-center gap-2">
+                                        <span className="text-[10px] text-gray-400 group-open:rotate-90 transition-transform">▸</span>
+                                        Transcript &amp; AI summary
+                                        {procStatus ? (
+                                          <span className="ml-1 rounded-full bg-gray-200 px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                            {procStatus.replace(/_/g, ' ')}
+                                          </span>
+                                        ) : null}
+                                        {meta.detectedLanguage ? (
+                                          <span className="text-[10px] text-gray-500">({meta.detectedLanguage})</span>
+                                        ) : null}
+                                      </summary>
+                                      <div className="mt-2 space-y-2 pl-4 border-l-2 border-brand-200">
+                                        {meta.processingError ? (
+                                          <div className="space-y-1">
+                                            <p className="text-red-600">{String(meta.processingError)}</p>
+                                            {/\bAudio download failed\b|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|timed out after\b/i.test(
+                                              String(meta.processingError)
+                                            ) ? (
+                                              <p className="text-gray-500 text-[11px] max-w-xl">
+                                                Transcription runs on the Lead Manager API: it must be able to HTTP GET the
+                                                recording file. URLs on office LAN (e.g. 192.168.x.x) only work if the API
+                                                process runs on that network or VPN; otherwise upload to object storage and
+                                                send a reachable URL in the webhook.
+                                              </p>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
+                                        {showTranscriptionRetry ? (
+                                          <div>
+                                            <button
+                                              type="button"
+                                              className="rounded-md border border-brand-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-700 shadow-sm hover:bg-brand-50 disabled:opacity-50"
+                                              disabled={
+                                                retryTranscriptionMutation.isPending &&
+                                                retryTranscriptionMutation.variables === log.id
+                                              }
+                                              onClick={() => retryTranscriptionMutation.mutate(log.id)}
+                                            >
+                                              {retryTranscriptionMutation.isPending &&
+                                              retryTranscriptionMutation.variables === log.id
+                                                ? 'Queuing…'
+                                                : 'Retry transcription'}
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                        {transcript ? (
+                                          <pre className="whitespace-pre-wrap text-gray-700 text-xs max-h-48 overflow-y-auto bg-white border rounded p-2">
+                                            {transcript}
+                                          </pre>
+                                        ) : (
+                                          !perf && <p className="text-gray-400 italic">No transcript yet.</p>
+                                        )}
+                                        {perf && typeof perf === 'object' ? (
+                                          <div className="space-y-1 text-gray-700">
+                                            {perf.summary ? (
+                                              <p>
+                                                <span className="font-semibold">Summary: </span>
+                                                {String(perf.summary)}
+                                              </p>
+                                            ) : null}
+                                            {perf.scores && typeof perf.scores === 'object' ? (
+                                              <p className="text-xs">
+                                                <span className="font-semibold">Scores: </span>
+                                                {Object.entries(perf.scores)
+                                                  .map(([k, v]) => `${k}: ${v}`)
+                                                  .join(' · ')}
+                                              </p>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </details>
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </Fragment>
                           );
                         })}
                       </tbody>

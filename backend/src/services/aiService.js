@@ -1,5 +1,6 @@
 const { logger } = require('../config/logger');
 const { prisma } = require('../config/database');
+const { config } = require('../config/env');
 
 /**
  * AI Service - generates lead summaries, suggestions, and scores
@@ -355,9 +356,110 @@ const buildLeadContext = (lead, activities, communications) => {
   };
 };
 
+function heuristicCallPerformanceInsights(transcript) {
+  const len = transcript.length;
+  const words = transcript.split(/\s+/).filter(Boolean).length;
+  const overall = len < 50 ? 40 : len < 200 ? 55 : 70;
+  return {
+    summary:
+      transcript.length > 400 ? `${transcript.slice(0, 400)}…` : transcript,
+    checklist: {
+      openingGreeting: words > 5,
+      identifiedCustomerNeed: null,
+      empathyShown: null,
+      complianceDisclaimer: null,
+      clearNextSteps: null,
+    },
+    scores: {
+      overall,
+      professionalism: overall,
+      empathy: overall,
+      clarity: words > 30 ? 65 : 45,
+      customerSatisfaction: overall,
+    },
+    flags: {
+      needsReview: true,
+      reasons: ['OPENAI_API_KEY not configured or LLM failed — heuristic fallback'],
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * QA summary + scores from transcript (multilingual input; English JSON output when using OpenAI).
+ */
+async function generateCallPerformanceInsights({ transcript, callMeta = {} } = {}) {
+  const transcriptText = String(transcript || '').trim();
+  if (!transcriptText) {
+    return {
+      summary: '',
+      checklist: {},
+      scores: { overall: 0, professionalism: 0, empathy: 0, clarity: 0, customerSatisfaction: 0 },
+      flags: { needsReview: true, reasons: ['Empty transcript'] },
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  const apiKey = config?.ai?.apiKey;
+  const model = config?.ai?.model || 'gpt-4o-mini';
+
+  if (!apiKey) {
+    return heuristicCallPerformanceInsights(transcriptText);
+  }
+
+  const system = `You are a call-center QA coach. Given a call transcript (may be Arabic, English, Hindi, Malayalam, or mixed), output strict JSON with keys:
+- summary: string in English, 2-4 sentences
+- checklist: object with booleans or null if unknown: openingGreeting, identifiedCustomerNeed, empathyShown, complianceDisclaimer, clearNextSteps
+- scores: integers 0-100: overall, professionalism, empathy, clarity, customerSatisfaction
+- flags: needsReview boolean, reasons string array
+
+If the transcript is too short to judge fairly, set needsReview true and explain in reasons.`;
+
+  const user = `Call context: ${JSON.stringify(callMeta)}\n\nTranscript:\n${transcriptText.slice(0, 120000)}`;
+
+  try {
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      logger.warn('OpenAI call insights failed', { status: resp.status, err: data?.error });
+      return heuristicCallPerformanceInsights(transcriptText);
+    }
+    const content = data?.choices?.[0]?.message?.content;
+    const parsed = typeof content === 'string' ? JSON.parse(content) : {};
+    return {
+      summary: String(parsed.summary || ''),
+      checklist: parsed.checklist && typeof parsed.checklist === 'object' ? parsed.checklist : {},
+      scores: parsed.scores && typeof parsed.scores === 'object' ? parsed.scores : {},
+      flags: parsed.flags && typeof parsed.flags === 'object' ? parsed.flags : { needsReview: false, reasons: [] },
+      generatedAt: new Date().toISOString(),
+      model,
+    };
+  } catch (e) {
+    logger.warn('generateCallPerformanceInsights error', { message: e.message });
+    return heuristicCallPerformanceInsights(transcriptText);
+  }
+}
+
 module.exports = {
   generateLeadSummary,
   suggestNextAction,
   generateLeadSummaryInsights,
   regenerateLeadSummaryById,
+  generateCallPerformanceInsights,
 };

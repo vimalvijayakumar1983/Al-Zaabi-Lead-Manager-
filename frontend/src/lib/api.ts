@@ -1204,6 +1204,13 @@ class ApiClient {
     return this.request<any[]>(`/call-logs/lead/${leadId}${query ? `?${query}` : ''}`);
   }
 
+  async retryCallTranscription(callLogId: string) {
+    return this.request<{ ok: boolean; message?: string }>(
+      `/call-logs/${encodeURIComponent(callLogId)}/retry-transcription`,
+      { method: 'POST' }
+    );
+  }
+
   async getDispositions(params?: { leadId?: string; divisionId?: string }) {
     const q = new URLSearchParams();
     if (params?.leadId) q.set('leadId', params.leadId);
