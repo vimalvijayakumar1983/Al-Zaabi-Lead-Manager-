@@ -62,6 +62,14 @@ const config = {
     model: process.env.AI_MODEL || 'gpt-4',
   },
 
+  // External Call Log API
+  callLogs: {
+    apiBaseUrl:
+      process.env.CALLLOG_API_BASE_URL ||
+      'http://192.168.9.18:8448/CallLogAPI/api/calls',
+    timeoutMs: parseInt(process.env.CALLLOG_API_TIMEOUT_MS || '12000', 10) || 12000,
+  },
+
   // Webhook
   webhookSecret: process.env.WEBHOOK_SECRET || 'webhook-secret',
 

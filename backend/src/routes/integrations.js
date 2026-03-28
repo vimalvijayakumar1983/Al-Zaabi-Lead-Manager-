@@ -8,6 +8,7 @@ const { validate, validateQuery } = require('../middleware/validate');
 const { paginate, paginatedResponse, paginationSchema } = require('../utils/pagination');
 
 const { validateAccessToken, subscribeToLeadgen } = require('../services/facebookLeadAds');
+const { GRAPH_API_BASE } = require('../services/facebookLeadAds');
 
 const router = Router();
 
@@ -19,6 +20,22 @@ const AVAILABLE_PLATFORMS = [
     name: 'Facebook Lead Ads',
     icon: 'facebook',
     description: 'Auto-capture leads from Facebook forms',
+    status: 'available',
+    requiresOAuth: true,
+  },
+  {
+    id: 'messenger',
+    name: 'Facebook Messenger',
+    icon: 'facebook',
+    description: 'Two-way Facebook Page messaging',
+    status: 'available',
+    requiresOAuth: true,
+  },
+  {
+    id: 'instagram',
+    name: 'Instagram Messaging',
+    icon: 'instagram',
+    description: 'Two-way Instagram DM messaging',
     status: 'available',
     requiresOAuth: true,
   },
@@ -91,6 +108,8 @@ const AVAILABLE_PLATFORMS = [
 
 const platformEnum = z.enum([
   'facebook',
+  'messenger',
+  'instagram',
   'google',
   'tiktok',
   'whatsapp',
@@ -933,6 +952,27 @@ async function testPlatformConnection(integration) {
       }
       return { success: true, message: tokenResult.message };
     }
+    case 'messenger': {
+      if (!credentials?.accessToken || !config?.pageId) {
+        return { success: false, message: 'Messenger requires Facebook Page ID and Page Access Token' };
+      }
+      return testMetaMessagingConnection({
+        accessToken: String(credentials.accessToken),
+        pageId: String(config.pageId),
+        label: 'Facebook Messenger',
+      });
+    }
+    case 'instagram': {
+      if (!credentials?.accessToken || !config?.pageId || !config?.instagramAccountId) {
+        return { success: false, message: 'Instagram requires Page ID, Instagram Account ID, and Access Token' };
+      }
+      return testMetaMessagingConnection({
+        accessToken: String(credentials.accessToken),
+        pageId: String(config.pageId),
+        instagramAccountId: String(config.instagramAccountId),
+        label: 'Instagram',
+      });
+    }
     case 'google': {
       if (!credentials?.accessToken) {
         return { success: false, message: 'Google access token is required. Please complete OAuth setup.' };
@@ -982,6 +1022,38 @@ async function testPlatformConnection(integration) {
     }
     default:
       return { success: false, message: `Platform "${platform}" is not supported yet` };
+  }
+}
+
+async function testMetaMessagingConnection({ accessToken, pageId, instagramAccountId, label }) {
+  try {
+    const pageResp = await fetch(
+      `${GRAPH_API_BASE}/${encodeURIComponent(pageId)}?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
+    );
+    const pageData = await pageResp.json().catch(() => ({}));
+    if (!pageResp.ok || pageData?.error) {
+      const msg = pageData?.error?.message || `HTTP ${pageResp.status}`;
+      return { success: false, message: `${label} connection failed: ${msg}` };
+    }
+
+    if (instagramAccountId) {
+      const igResp = await fetch(
+        `${GRAPH_API_BASE}/${encodeURIComponent(instagramAccountId)}?fields=id,username&access_token=${encodeURIComponent(accessToken)}`
+      );
+      const igData = await igResp.json().catch(() => ({}));
+      if (!igResp.ok || igData?.error) {
+        const msg = igData?.error?.message || `HTTP ${igResp.status}`;
+        return { success: false, message: `Instagram account validation failed: ${msg}` };
+      }
+      return {
+        success: true,
+        message: `Connected to Page ${pageData?.name || pageData?.id} and Instagram @${igData?.username || igData?.id}`,
+      };
+    }
+
+    return { success: true, message: `Connected to Page ${pageData?.name || pageData?.id}` };
+  } catch (err) {
+    return { success: false, message: `${label} connection failed: ${err.message}` };
   }
 }
 

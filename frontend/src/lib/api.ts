@@ -720,7 +720,14 @@ class ApiClient {
 
   async retryBroadcastRun(id: string, divisionId?: string | null) {
     const q = divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : '';
-    return this.request<{ ok: boolean; runId: string; retrying: number; message: string }>(
+    return this.request<{
+      ok: boolean;
+      runId: string;
+      retrying: number;
+      exhausted?: number;
+      maxAttempts?: number;
+      message: string;
+    }>(
       `/broadcast-lists/runs/${encodeURIComponent(id)}/retry${q}`,
       { method: 'POST' },
     );
@@ -907,6 +914,52 @@ class ApiClient {
 
   async getIntegrationPlatforms() {
     return this.request<IntegrationPlatformInfo[]>('/integrations/platforms');
+  }
+
+  async saveMessengerIntegration(data: {
+    pageId: string;
+    accessToken?: string;
+    appSecret?: string;
+    verifyToken?: string;
+    organizationId?: string;
+  }) {
+    return this.request<Integration>('/integrations', {
+      method: 'POST',
+      body: JSON.stringify({
+        platform: 'messenger',
+        credentials: { accessToken: data.accessToken || '' },
+        config: {
+          pageId: data.pageId,
+          appSecret: data.appSecret || '',
+          verifyToken: data.verifyToken || '',
+        },
+        organizationId: data.organizationId,
+      }),
+    });
+  }
+
+  async saveInstagramIntegration(data: {
+    pageId: string;
+    instagramAccountId: string;
+    accessToken?: string;
+    appSecret?: string;
+    verifyToken?: string;
+    organizationId?: string;
+  }) {
+    return this.request<Integration>('/integrations', {
+      method: 'POST',
+      body: JSON.stringify({
+        platform: 'instagram',
+        credentials: { accessToken: data.accessToken || '' },
+        config: {
+          pageId: data.pageId,
+          instagramAccountId: data.instagramAccountId,
+          appSecret: data.appSecret || '',
+          verifyToken: data.verifyToken || '',
+        },
+        organizationId: data.organizationId,
+      }),
+    });
   }
 
   async getErpData(params?: { integrationId?: string; divisionId?: string; entityType?: string; page?: number; limit?: number }) {
@@ -1140,8 +1193,15 @@ class ApiClient {
     return this.request<any>('/call-logs', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async getCallLogs(leadId: string) {
-    return this.request<any[]>(`/call-logs/lead/${leadId}`);
+  async getCallLogs(
+    leadId: string,
+    params?: { fromDate?: string; toDate?: string }
+  ) {
+    const q = new URLSearchParams();
+    if (params?.fromDate) q.set('fromDate', params.fromDate);
+    if (params?.toDate) q.set('toDate', params.toDate);
+    const query = q.toString();
+    return this.request<any[]>(`/call-logs/lead/${leadId}${query ? `?${query}` : ''}`);
   }
 
   async getDispositions(params?: { leadId?: string; divisionId?: string }) {

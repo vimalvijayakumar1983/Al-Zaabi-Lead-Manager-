@@ -31,6 +31,10 @@ export interface Organization {
   parentId?: string;
   children?: Organization[];
   _count?: { users: number; leads: number };
+  settings?: {
+    didNumber?: string;
+    [key: string]: unknown;
+  };
   createdAt?: string;
   updatedAt?: string;
 }

@@ -169,8 +169,34 @@ export default function LeadDetailPage() {
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
   const [aiSummaryCopied, setAiSummaryCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'timeline' | 'notes' | 'tasks' | 'communications' | 'call_logs'>('timeline');
+  const [callLogRange, setCallLogRange] = useState<'7d' | '30d' | '90d' | 'custom'>('30d');
+  const [callLogFromDate, setCallLogFromDate] = useState('');
+  const [callLogToDate, setCallLogToDate] = useState('');
 
-  const callLogsQuery = useLeadCallLogsQuery(leadIdStr || undefined, {
+  const callLogDateParams = useMemo(() => {
+    const to = new Date();
+    const toIso = to.toISOString();
+    if (callLogRange === 'custom') {
+      const customFrom = callLogFromDate ? new Date(`${callLogFromDate}T00:00:00`) : null;
+      const customTo = callLogToDate ? new Date(`${callLogToDate}T23:59:59`) : null;
+      return {
+        fromDate:
+          customFrom && !Number.isNaN(customFrom.getTime())
+            ? customFrom.toISOString()
+            : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        toDate:
+          customTo && !Number.isNaN(customTo.getTime())
+            ? customTo.toISOString()
+            : toIso,
+      };
+    }
+
+    const days = callLogRange === '7d' ? 7 : callLogRange === '90d' ? 90 : 30;
+    const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+    return { fromDate: from.toISOString(), toDate: toIso };
+  }, [callLogRange, callLogFromDate, callLogToDate]);
+
+  const callLogsQuery = useLeadCallLogsQuery(leadIdStr || undefined, callLogDateParams, {
     enabled: activeTab === 'call_logs' && !!leadIdStr,
   });
   const callLogs = Array.isArray(callLogsQuery.data) ? callLogsQuery.data : [];
@@ -1909,11 +1935,45 @@ export default function LeadDetailPage() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-700">Call History</h3>
-                  <button onClick={() => setShowCallLogModal(true)} className="btn-primary text-xs gap-1.5">
-                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-                    Log Call
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={callLogRange}
+                      onChange={(e) => setCallLogRange(e.target.value as '7d' | '30d' | '90d' | 'custom')}
+                      className="px-2.5 py-1.5 rounded-md border border-gray-200 text-xs bg-white"
+                    >
+                      <option value="7d">Last 7 days</option>
+                      <option value="30d">Last 30 days</option>
+                      <option value="90d">Last 90 days</option>
+                      <option value="custom">Custom range</option>
+                    </select>
+                    <button onClick={() => setShowCallLogModal(true)} className="btn-primary text-xs gap-1.5">
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                      Log Call
+                    </button>
+                  </div>
                 </div>
+                {callLogRange === 'custom' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] text-gray-500 mb-1">From</label>
+                      <input
+                        type="date"
+                        value={callLogFromDate}
+                        onChange={(e) => setCallLogFromDate(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-md border border-gray-200 text-xs bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-500 mb-1">To</label>
+                      <input
+                        type="date"
+                        value={callLogToDate}
+                        onChange={(e) => setCallLogToDate(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-md border border-gray-200 text-xs bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
                 {callLogsLoading ? (
                   <div className="flex justify-center py-8">
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-600" />
@@ -1925,82 +1985,64 @@ export default function LeadDetailPage() {
                     <button onClick={() => setShowCallLogModal(true)} className="text-sm text-brand-600 hover:text-brand-700 mt-1">Log your first call</button>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {callLogs.map((log) => {
-                      const dispositionStyles: Record<string, { bg: string; text: string; border: string }> = {
-                        CALLBACK: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
-                        CALL_LATER: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
-                        CALL_AGAIN: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
-                        WILL_CALL_US_AGAIN: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
-                        MEETING_ARRANGED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
-                        APPOINTMENT_BOOKED: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
-                        INTERESTED: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
-                        NOT_INTERESTED: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
-                        ALREADY_COMPLETED_SERVICES: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
-                        NO_ANSWER: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
-                        VOICEMAIL_LEFT: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
-                        WRONG_NUMBER: { bg: 'bg-red-50', text: 'text-red-600', border: 'border-red-200' },
-                        BUSY: { bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-200' },
-                        GATEKEEPER: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
-                        FOLLOW_UP_EMAIL: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
-                        QUALIFIED: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
-                        PROPOSAL_REQUESTED: { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
-                        DO_NOT_CALL: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
-                        OTHER: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
-                      };
-                      const style = dispositionStyles[log.disposition] || dispositionStyles.OTHER;
-                      const dispositionLabel: Record<string, string> = {
-                        CALLBACK: 'Call Back Requested', CALL_LATER: 'Call Later (Scheduled)',
-                        CALL_AGAIN: 'Call Again (Anytime)', WILL_CALL_US_AGAIN: 'Will Call Us Again',
-                        MEETING_ARRANGED: 'Meeting Arranged',
-                        APPOINTMENT_BOOKED: 'Appointment Booked', INTERESTED: 'Interested',
-                        NOT_INTERESTED: 'Not Interested', ALREADY_COMPLETED_SERVICES: 'Already Completed Services', NO_ANSWER: 'No Answer',
-                        VOICEMAIL_LEFT: 'Voicemail Left', WRONG_NUMBER: 'Wrong Number',
-                        BUSY: 'Line Busy', GATEKEEPER: 'Reached Gatekeeper',
-                        FOLLOW_UP_EMAIL: 'Follow-up Email', QUALIFIED: 'Lead Qualified',
-                        PROPOSAL_REQUESTED: 'Proposal Requested', DO_NOT_CALL: 'Do Not Call',
-                        OTHER: 'Other',
-                      };
-                      return (
-                        <div key={log.id} className={`p-4 rounded-lg border ${style.border} ${style.bg}`}>
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-center gap-2">
-                              <svg className={`h-5 w-5 ${style.text}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-                              <span className={`text-sm font-semibold ${style.text}`}>
-                                {String((log.metadata as any)?.dispositionLabel || dispositionLabel[log.disposition] || log.disposition)}
-                              </span>
-                            </div>
-                            <span className="text-xs text-gray-500">{new Date(log.createdAt).toLocaleString()}</span>
-                          </div>
-                          {log.notes && <p className="text-sm text-gray-700 mt-2">{log.notes}</p>}
-                          <div className="flex flex-wrap gap-3 mt-2 text-xs text-gray-500">
-                            {log.user && <span>By {log.user.firstName} {log.user.lastName}</span>}
-                            {log.duration && <span>Duration: {Math.floor(log.duration / 60)}m {log.duration % 60}s</span>}
-                            {log.callbackDate && <span>Callback: {new Date(log.callbackDate).toLocaleString()}</span>}
-                            {log.metadata?.expectedCallbackWindowLabel && (
-                              <span>Expected callback: {String(log.metadata.expectedCallbackWindowLabel)}</span>
-                            )}
-                            {log.metadata?.notInterestedReasonLabel && (
-                              <span>Reason: {String(log.metadata.notInterestedReasonLabel)}</span>
-                            )}
-                            {log.metadata?.notInterestedOtherText && (
-                              <span>Detail: {String(log.metadata.notInterestedOtherText)}</span>
-                            )}
-                            {log.metadata?.completedServiceLocationLabel && (
-                              <span>Completed: {String(log.metadata.completedServiceLocationLabel)}</span>
-                            )}
-                            {log.meetingDate && <span>Meeting: {new Date(log.meetingDate).toLocaleString()}</span>}
-                            {log.appointmentDate && <span>Appointment: {new Date(log.appointmentDate).toLocaleString()}</span>}
-                            {log.followUpTaskId && (
-                              <span className="text-brand-600 flex items-center gap-0.5">
-                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-                                Follow-up task created
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-50 text-gray-600">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-medium">Date</th>
+                          <th className="px-3 py-2 text-left font-medium">Agent</th>
+                          <th className="px-3 py-2 text-left font-medium">Duration</th>
+                          <th className="px-3 py-2 text-left font-medium">Recording</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {callLogs.map((log) => {
+                          const isExternal = Boolean((log.metadata as any)?.external);
+                          const recordingUrl = String((log.metadata as any)?.recordingUrl || '').trim();
+                          const agentExtn = String((log.metadata as any)?.answextn || '').trim();
+                          const agentId = String((log.metadata as any)?.agentid || '').trim();
+                          const durationLabel = log.duration
+                            ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s`
+                            : '-';
+                          const agentLabel = isExternal
+                            ? [agentExtn ? `Extn ${agentExtn}` : null, agentId ? `ID ${agentId}` : null]
+                                .filter(Boolean)
+                                .join(' · ') || '-'
+                            : log.user
+                              ? `${log.user.firstName} ${log.user.lastName}`
+                              : '-';
+
+                          return (
+                            <tr key={log.id} className="hover:bg-gray-50/70 align-top">
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">
+                                {new Date(log.createdAt).toLocaleString()}
+                              </td>
+                              <td className="px-3 py-2 text-gray-700">{agentLabel}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-700">{durationLabel}</td>
+                              <td className="px-3 py-2">
+                                {recordingUrl ? (
+                                  <div className="flex items-center gap-2">
+                                    <audio controls preload="none" src={recordingUrl} className="h-8 w-44">
+                                      Your browser does not support audio playback.
+                                    </audio>
+                                    <a
+                                      href={recordingUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-xs text-brand-600 hover:text-brand-700 whitespace-nowrap"
+                                    >
+                                      Open
+                                    </a>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>

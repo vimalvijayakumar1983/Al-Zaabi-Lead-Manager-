@@ -109,10 +109,14 @@ export function useLeadAssignmentHistoryQuery(leadId: string | undefined) {
   });
 }
 
-export function useLeadCallLogsQuery(leadId: string | undefined, options?: { enabled?: boolean }) {
+export function useLeadCallLogsQuery(
+  leadId: string | undefined,
+  params?: { fromDate?: string; toDate?: string },
+  options?: { enabled?: boolean }
+) {
   return useQuery({
-    queryKey: queryKeys.leads.callLogs(leadId!),
-    queryFn: () => api.getCallLogs(leadId!),
+    queryKey: [...queryKeys.leads.callLogs(leadId!), params || {}],
+    queryFn: () => api.getCallLogs(leadId!, params),
     enabled: !!leadId && (options?.enabled ?? true),
     staleTime: 30_000,
   });

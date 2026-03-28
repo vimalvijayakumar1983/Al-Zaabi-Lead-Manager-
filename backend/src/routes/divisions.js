@@ -32,6 +32,7 @@ const createDivisionSchema = z.object({
   logo: z.string().optional().or(z.literal('')),
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
+  didNumber: z.string().trim().min(1).max(30).optional(),
   templateId: z.string().optional(),
 });
 
@@ -41,6 +42,7 @@ const updateDivisionSchema = z.object({
   logo: z.string().optional().or(z.literal('')).or(z.null()),
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Invalid hex color').optional(),
+  didNumber: z.string().trim().min(1).max(30).optional().or(z.literal('')).or(z.null()),
 });
 
 // Default pipeline stages (same as auth.js register)
@@ -102,7 +104,7 @@ router.get('/templates', authorize('SUPER_ADMIN', 'ADMIN'), (req, res) => {
 // ─── POST / — Create a new division (SUPER_ADMIN only) ─────────
 router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async (req, res, next) => {
   try {
-    const { name, tradeName, logo, primaryColor, secondaryColor, templateId } = req.validated;
+    const { name, tradeName, logo, primaryColor, secondaryColor, didNumber, templateId } = req.validated;
 
     // Resolve template: use selected template or fall back to defaults
     const template = templateId ? getTemplate(templateId) : null;
@@ -119,7 +121,10 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
           secondaryColor: secondaryColor || '#1e293b',
           type: 'DIVISION',
           parentId: req.user.organizationId,
-          settings: template ? { templateId: template.id, templateName: template.name } : {},
+          settings: {
+            ...(template ? { templateId: template.id, templateName: template.name } : {}),
+            ...(didNumber ? { didNumber: String(didNumber).trim() } : {}),
+          },
         },
       });
 
@@ -254,7 +259,8 @@ router.get('/:id', async (req, res, next) => {
 router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, tradeName, logo, primaryColor, secondaryColor } = req.validated;
+    const { name, tradeName, logo, primaryColor, secondaryColor, didNumber } = req.validated;
+    let existingSettings = {};
 
     if (req.user.role === 'SUPER_ADMIN') {
       // SUPER_ADMIN can update any child division
@@ -269,11 +275,17 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
       if (!division) {
         return res.status(404).json({ error: 'Division not found' });
       }
+      existingSettings = division.settings && typeof division.settings === 'object' ? division.settings : {};
     } else if (req.user.role === 'ADMIN') {
       // ADMIN can only update their own org's branding
       if (id !== req.user.organizationId) {
         return res.status(403).json({ error: 'Access denied' });
       }
+      const division = await prisma.organization.findUnique({
+        where: { id },
+        select: { settings: true },
+      });
+      existingSettings = division?.settings && typeof division.settings === 'object' ? division.settings : {};
     } else {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
@@ -285,6 +297,15 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
     if (logo !== undefined) updateData.logo = logo || null;
     if (primaryColor !== undefined) updateData.primaryColor = primaryColor;
     if (secondaryColor !== undefined) updateData.secondaryColor = secondaryColor;
+    if (didNumber !== undefined) {
+      const nextSettings = { ...existingSettings };
+      if (didNumber === null || didNumber === '') {
+        delete nextSettings.didNumber;
+      } else {
+        nextSettings.didNumber = String(didNumber).trim();
+      }
+      updateData.settings = nextSettings;
+    }
 
     const updated = await prisma.organization.update({
       where: { id },

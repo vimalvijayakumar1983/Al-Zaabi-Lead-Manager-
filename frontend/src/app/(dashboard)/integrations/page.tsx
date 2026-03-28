@@ -177,6 +177,26 @@ const PLATFORM_DEFS: PlatformDef[] = [
     available: true,
   },
   {
+    slug: 'messenger',
+    name: 'Facebook Messenger',
+    description: 'Two-way Messenger DM sync to Inbox and Leads',
+    icon: <MessageSquare className="w-6 h-6" />,
+    color: '#1877F2',
+    bgColor: 'bg-blue-50',
+    borderColor: 'border-blue-200',
+    available: true,
+  },
+  {
+    slug: 'instagram',
+    name: 'Instagram Messaging',
+    description: 'Two-way Instagram DM sync to Inbox and Leads',
+    icon: <MessageSquare className="w-6 h-6" />,
+    color: '#E4405F',
+    bgColor: 'bg-pink-50',
+    borderColor: 'border-pink-200',
+    available: true,
+  },
+  {
     slug: 'google',
     name: 'Google Ads',
     description: 'Import leads from Google Ads campaigns and forms',
@@ -489,6 +509,15 @@ export default function IntegrationsPage() {
     { source: 'email', target: 'email' },
     { source: 'phone_number', target: 'phone' },
   ]);
+  const [msgPageId, setMsgPageId] = useState('');
+  const [msgAccessToken, setMsgAccessToken] = useState('');
+  const [msgAppSecret, setMsgAppSecret] = useState('');
+  const [msgVerifyToken, setMsgVerifyToken] = useState('');
+  const [igPageId, setIgPageId] = useState('');
+  const [igAccountId, setIgAccountId] = useState('');
+  const [igAccessToken, setIgAccessToken] = useState('');
+  const [igAppSecret, setIgAppSecret] = useState('');
+  const [igVerifyToken, setIgVerifyToken] = useState('');
 
   // State: Google Ads form
   const [gaCustomerId, setGaCustomerId] = useState('');
@@ -698,6 +727,19 @@ export default function IntegrationsPage() {
         setGaUtmCampaign((cfg.utmCampaign as boolean) ?? true);
         setGaFieldMapping(intg.fieldMapping ?? []);
         break;
+      case 'messenger':
+        setMsgPageId((cfg.pageId as string) ?? '');
+        setMsgAccessToken('');
+        setMsgAppSecret((cfg.appSecret as string) ?? '');
+        setMsgVerifyToken((cfg.verifyToken as string) ?? '');
+        break;
+      case 'instagram':
+        setIgPageId((cfg.pageId as string) ?? '');
+        setIgAccountId((cfg.instagramAccountId as string) ?? '');
+        setIgAccessToken('');
+        setIgAppSecret((cfg.appSecret as string) ?? '');
+        setIgVerifyToken((cfg.verifyToken as string) ?? '');
+        break;
       case 'whatsapp':
         setWaAccountId((cfg.accountId as string) ?? '');
         setWaPhoneNumberId((cfg.phoneNumberId as string) ?? '');
@@ -747,6 +789,19 @@ export default function IntegrationsPage() {
           { source: 'lead_email', target: 'email' },
           { source: 'lead_phone', target: 'phone' },
         ]);
+        break;
+      case 'messenger':
+        setMsgPageId('');
+        setMsgAccessToken('');
+        setMsgAppSecret('');
+        setMsgVerifyToken('');
+        break;
+      case 'instagram':
+        setIgPageId('');
+        setIgAccountId('');
+        setIgAccessToken('');
+        setIgAppSecret('');
+        setIgVerifyToken('');
         break;
       case 'whatsapp':
         setWaAccountId('');
@@ -804,6 +859,35 @@ export default function IntegrationsPage() {
             utmCampaign: gaUtmCampaign,
           },
           fieldMapping: gaFieldMapping,
+          divisionId: activeDivisionId || undefined,
+        };
+      case 'messenger':
+        return {
+          platform: 'messenger',
+          name: 'Facebook Messenger',
+          credentials: {
+            accessToken: msgAccessToken,
+          },
+          config: {
+            pageId: msgPageId,
+            appSecret: msgAppSecret,
+            verifyToken: msgVerifyToken,
+          },
+          divisionId: activeDivisionId || undefined,
+        };
+      case 'instagram':
+        return {
+          platform: 'instagram',
+          name: 'Instagram Messaging',
+          credentials: {
+            accessToken: igAccessToken,
+          },
+          config: {
+            pageId: igPageId,
+            instagramAccountId: igAccountId,
+            appSecret: igAppSecret,
+            verifyToken: igVerifyToken,
+          },
           divisionId: activeDivisionId || undefined,
         };
       case 'whatsapp':
@@ -1331,6 +1415,142 @@ export default function IntegrationsPage() {
               </div>
             </div>
             {renderFieldMappingTable(gaFieldMapping, setGaFieldMapping, 'Google Ads')}
+          </div>
+        );
+
+      case 'messenger':
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-text-tertiary bg-blue-50 rounded-lg p-3">
+              Connect Facebook Messenger so inbound DMs auto-create/update leads and appear in Inbox.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Facebook Page ID</label>
+              <input
+                type="text"
+                value={msgPageId}
+                onChange={(e) => setMsgPageId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                placeholder="Page ID used for Messenger"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Page Access Token</label>
+              <input
+                type={showSecrets['msgAccessToken'] ? 'text' : 'password'}
+                value={msgAccessToken}
+                onChange={(e) => setMsgAccessToken(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                placeholder="Long-lived Page Access Token"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-text-primary mb-1">App Secret</label>
+                <input
+                  type={showSecrets['msgAppSecret'] ? 'text' : 'password'}
+                  value={msgAppSecret}
+                  onChange={(e) => setMsgAppSecret(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  placeholder="For signature check"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-text-primary mb-1">Verify Token</label>
+                <input
+                  type={showSecrets['msgVerifyToken'] ? 'text' : 'password'}
+                  value={msgVerifyToken}
+                  onChange={(e) => setMsgVerifyToken(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  placeholder="Webhook verify token"
+                />
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+              <p className="text-xs text-text-tertiary">
+                Configure this URL in Meta Webhooks for <code className="bg-gray-200 px-1 rounded">messages</code>, <code className="bg-gray-200 px-1 rounded">messaging_postbacks</code>, and <code className="bg-gray-200 px-1 rounded">message_reads</code>.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 break-all select-all">
+                  {typeof window !== 'undefined'
+                    ? `${window.location.origin.replace(':3000', ':4000')}/api/channels/facebook/${user?.organizationId || '<org-id>'}`
+                    : `/api/channels/facebook/<org-id>`}
+                </code>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'instagram':
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-text-tertiary bg-pink-50 rounded-lg p-3">
+              Connect Instagram Messaging so DMs sync with Inbox and lead timelines.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Facebook Page ID</label>
+              <input
+                type="text"
+                value={igPageId}
+                onChange={(e) => setIgPageId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                placeholder="Linked Facebook Page ID"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Instagram Account ID</label>
+              <input
+                type="text"
+                value={igAccountId}
+                onChange={(e) => setIgAccountId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                placeholder="Business/Creator IG Account ID"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Access Token</label>
+              <input
+                type={showSecrets['igAccessToken'] ? 'text' : 'password'}
+                value={igAccessToken}
+                onChange={(e) => setIgAccessToken(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                placeholder="Page Access Token"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-text-primary mb-1">App Secret</label>
+                <input
+                  type={showSecrets['igAppSecret'] ? 'text' : 'password'}
+                  value={igAppSecret}
+                  onChange={(e) => setIgAppSecret(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  placeholder="For signature check"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-text-primary mb-1">Verify Token</label>
+                <input
+                  type={showSecrets['igVerifyToken'] ? 'text' : 'password'}
+                  value={igVerifyToken}
+                  onChange={(e) => setIgVerifyToken(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  placeholder="Webhook verify token"
+                />
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+              <p className="text-xs text-text-tertiary">
+                Configure this URL in Meta Webhooks for Instagram messaging events.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 break-all select-all">
+                  {typeof window !== 'undefined'
+                    ? `${window.location.origin.replace(':3000', ':4000')}/api/channels/instagram/${user?.organizationId || '<org-id>'}`
+                    : `/api/channels/instagram/<org-id>`}
+                </code>
+              </div>
+            </div>
           </div>
         );
 

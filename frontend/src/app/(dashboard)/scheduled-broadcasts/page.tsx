@@ -47,6 +47,7 @@ type BroadcastRecipient = {
 };
 
 const UAE_TZ = 'Asia/Dubai';
+const BROADCAST_RETRY_LIMIT = 3;
 function fmtUAE(iso: string) {
   try { return new Date(iso).toLocaleString('en-AE', { timeZone: UAE_TZ, day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   catch { return iso; }
@@ -136,7 +137,7 @@ export default function ScheduledBroadcastsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [recipients, setRecipients] = useState<BroadcastRecipient[]>([]);
-  const [recipientFilter, setRecipientFilter] = useState<'ALL' | 'FAILED' | 'SENT' | 'PENDING'>('ALL');
+  const [recipientFilter, setRecipientFilter] = useState<'ALL' | 'FAILED' | 'SENT' | 'PENDING' | 'EXHAUSTED'>('ALL');
   const [recipientSearch, setRecipientSearch] = useState('');
   const [actionBusy, setActionBusy] = useState<string | null>(null); // runId being actioned
   const [actionNote, setActionNote] = useState('');
@@ -212,7 +213,15 @@ export default function ScheduledBroadcastsPage() {
     setActionBusy(runId); setActionNote('');
     try {
       const out = await api.retryBroadcastRun(runId, divisionId || undefined);
-      setActionNote(out.message || 'Retry started.');
+      const exhausted = Number(out.exhausted || 0);
+      const maxAttempts = Number(out.maxAttempts || BROADCAST_RETRY_LIMIT);
+      setActionNote(
+        out.message || (
+          exhausted > 0
+            ? `Retry started. ${exhausted} recipient(s) skipped after reaching retry limit (${maxAttempts}).`
+            : 'Retry started.'
+        )
+      );
       await reloadRuns();
       // Reload recipient details
       if (selectedRunId === runId) {
@@ -220,12 +229,24 @@ export default function ScheduledBroadcastsPage() {
         setRecipients(detail.run.recipients || []);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to retry broadcast');
+      const err = e as any;
+      const details = err?.details || {};
+      const exhausted = Number(details?.exhausted || 0);
+      const maxAttempts = Number(details?.maxAttempts || BROADCAST_RETRY_LIMIT);
+      if (details?.error && exhausted > 0) {
+        setError(`${details.error} (${exhausted} recipient(s) exhausted at ${maxAttempts} attempts)`);
+      } else {
+        setError(e instanceof Error ? e.message : 'Failed to retry broadcast');
+      }
     } finally { setActionBusy(null); }
   };
 
   const shownRecipients = recipients.filter((r) => {
-    if (recipientFilter !== 'ALL' && r.status !== recipientFilter) return false;
+    if (recipientFilter === 'EXHAUSTED') {
+      if (!(r.status === 'FAILED' && r.attemptCount >= BROADCAST_RETRY_LIMIT)) return false;
+    } else if (recipientFilter !== 'ALL' && r.status !== recipientFilter) {
+      return false;
+    }
     if (!recipientSearch.trim()) return true;
     const q = recipientSearch.trim().toLowerCase();
     const name = `${r.lead?.firstName || ''} ${r.lead?.lastName || ''}`.toLowerCase();
@@ -416,6 +437,7 @@ export default function ScheduledBroadcastsPage() {
                 <option value="SENT">Sent</option>
                 <option value="PENDING">Pending</option>
                 <option value="FAILED">Failed</option>
+                <option value="EXHAUSTED">Exhausted (limit reached)</option>
               </select>
             </div>
           </div>
@@ -460,8 +482,19 @@ export default function ScheduledBroadcastsPage() {
                       <td className="px-4 py-2 text-text-tertiary text-xs whitespace-nowrap">{r.sentAt ? fmtUAE(r.sentAt) : '—'}</td>
                       <td className="px-4 py-2 text-text-tertiary text-xs whitespace-nowrap hidden lg:table-cell">{r.deliveredAt ? fmtUAE(r.deliveredAt) : '—'}</td>
                       <td className="px-4 py-2 text-text-tertiary text-xs whitespace-nowrap hidden lg:table-cell">{r.readAt ? fmtUAE(r.readAt) : '—'}</td>
-                      <td className="px-4 py-2 text-xs text-red-600 max-w-[200px] truncate">{r.error || '—'}</td>
-                      <td className="px-4 py-2 text-center text-xs">{r.attemptCount}</td>
+                      <td className="px-4 py-2 text-xs text-red-600 max-w-[260px] truncate" title={r.error || ''}>
+                        {r.error || '—'}
+                      </td>
+                      <td className="px-4 py-2 text-center text-xs">
+                        <div className="inline-flex items-center gap-1.5">
+                          <span>{r.attemptCount}</span>
+                          {r.status === 'FAILED' && r.attemptCount >= BROADCAST_RETRY_LIMIT && (
+                            <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold bg-red-100 text-red-700 border border-red-200">
+                              limit reached
+                            </span>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

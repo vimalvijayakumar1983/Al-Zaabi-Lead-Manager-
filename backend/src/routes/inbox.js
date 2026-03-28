@@ -18,6 +18,10 @@ const {
   uploadMedia: uploadWhatsAppMedia,
 } = require('../services/whatsappService');
 const {
+  sendFacebookMessage,
+  sendInstagramMessage,
+} = require('../services/metaMessagingService');
+const {
   isAttachmentObjectStorageEnabled,
   uploadInboxAttachmentBuffer,
   getInboxAttachmentReadUrl,
@@ -76,6 +80,23 @@ function resolveWhatsAppMediaType(mimeType = '') {
   if (mimeType.startsWith('video/')) return 'video';
   if (mimeType.startsWith('audio/')) return 'audio';
   return 'document';
+}
+
+function resolveSocialRecipientId(lead, platform) {
+  const social = lead?.customData?.socialIdentities;
+  if (!social || typeof social !== 'object') return '';
+  if (platform === 'facebook') return String(social?.messenger?.senderId || '').trim();
+  if (platform === 'instagram') return String(social?.instagram?.senderId || '').trim();
+  return '';
+}
+
+function inferChatPlatform(lead, platform) {
+  const normalized = String(platform || '').toLowerCase();
+  if (normalized === 'facebook' || normalized === 'instagram') return normalized;
+  const social = lead?.customData?.socialIdentities;
+  if (social?.instagram?.senderId) return 'instagram';
+  if (social?.messenger?.senderId) return 'facebook';
+  return normalized;
 }
 
 async function resolveAttachmentBinary(attachment) {
@@ -322,6 +343,9 @@ router.get('/conversations', async (req, res, next) => {
     const conversations = leads.map(lead => {
       const lastMsg = lead.communications[0] || null;
       const platform = lastMsg ? resolvePlatform(lastMsg) : 'UNKNOWN';
+      let source = lead.source;
+      if (platform === 'FACEBOOK') source = 'FACEBOOK_MESSENGER';
+      if (platform === 'INSTAGRAM') source = 'INSTAGRAM';
       return {
         leadId: lead.id,
         contactName: getDisplayName(lead),
@@ -330,7 +354,7 @@ router.get('/conversations', async (req, res, next) => {
         company: lead.company,
         leadStatus: lead.status,
         leadScore: lead.score,
-        source: lead.source,
+        source,
         assignedTo: lead.assignedTo,
         messageCount: lead._count.communications,
         unreadCount: Number(unreadMap[lead.id] || 0),
@@ -416,11 +440,18 @@ router.get('/conversations/:leadId/messages', async (req, res, next) => {
     const messages = rawMessages.reverse();
 
     const enriched = await Promise.all(messages.map((m) => enrichCommunicationForClient(m, leadId)));
+    const sourceFromMessages = enriched.length
+      ? (enriched[enriched.length - 1]?.platform === 'FACEBOOK'
+        ? 'FACEBOOK_MESSENGER'
+        : enriched[enriched.length - 1]?.platform === 'INSTAGRAM'
+          ? 'INSTAGRAM'
+          : lead.source)
+      : lead.source;
 
     const pageNum = parseInt(page, 10) || 1;
     const totalPages = Math.ceil(total / take) || 1;
     res.json({
-      lead,
+      lead: { ...lead, source: sourceFromMessages },
       messages: enriched,
       pagination: {
         total,
@@ -563,6 +594,69 @@ router.post('/send', validate(sendSchema), async (req, res, next) => {
           communicationId: communication.id,
           error: sendErr?.message || String(sendErr),
         });
+      }
+    }
+
+    if (channel === 'CHAT') {
+      const normalizedPlatform = inferChatPlatform(lead, platform);
+      try {
+        if (normalizedPlatform === 'facebook') {
+          const recipientId = resolveSocialRecipientId(lead, 'facebook');
+          if (!recipientId) {
+            throw new Error('Facebook recipient is not linked to this lead yet');
+          }
+          const sendResult = await sendFacebookMessage(lead.organizationId, recipientId, body);
+          const now = new Date();
+          const nextMeta = {
+            ...(communication.metadata || {}),
+            platform: 'facebook',
+            externalRecipientId: recipientId,
+            externalMessageId: sendResult?.messageId || null,
+            fbMessageId: sendResult?.messageId || null,
+            externalStatus: sendResult?.messageId ? 'SENT' : 'FAILED',
+            externalStatusAt: now.toISOString(),
+          };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
+        } else if (normalizedPlatform === 'instagram') {
+          const recipientId = resolveSocialRecipientId(lead, 'instagram');
+          if (!recipientId) {
+            throw new Error('Instagram recipient is not linked to this lead yet');
+          }
+          const sendResult = await sendInstagramMessage(lead.organizationId, recipientId, body);
+          const now = new Date();
+          const nextMeta = {
+            ...(communication.metadata || {}),
+            platform: 'instagram',
+            externalRecipientId: recipientId,
+            externalMessageId: sendResult?.messageId || null,
+            igMessageId: sendResult?.messageId || null,
+            externalStatus: sendResult?.messageId ? 'SENT' : 'FAILED',
+            externalStatusAt: now.toISOString(),
+          };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
+        }
+      } catch (sendErr) {
+        const now = new Date();
+        const nextMeta = {
+          ...(communication.metadata || {}),
+          platform: normalizedPlatform || (communication.metadata?.platform || 'chat'),
+          externalStatus: 'FAILED',
+          externalStatusAt: now.toISOString(),
+          sendError: sendErr?.message || String(sendErr),
+        };
+        await prisma.communication.update({
+          where: { id: communication.id },
+          data: { metadata: nextMeta },
+        }).catch(() => {});
+        communication.metadata = nextMeta;
       }
     }
 
@@ -781,6 +875,61 @@ router.post('/send-with-attachments', upload.array('files', 10), async (req, res
         const rawDigits = lead.phone?.replace(/\D/g, '') || '';
         if (rawDigits && rawDigits !== phone) {
           await prisma.lead.update({ where: { id: leadId }, data: { phone: `+${phone}` } }).catch(() => {});
+        }
+      }
+    }
+
+    if (channel === 'CHAT') {
+      const normalizedPlatform = inferChatPlatform(lead, platform);
+      const recipientId =
+        normalizedPlatform === 'facebook'
+          ? resolveSocialRecipientId(lead, 'facebook')
+          : normalizedPlatform === 'instagram'
+            ? resolveSocialRecipientId(lead, 'instagram')
+            : '';
+      if (recipientId && ['facebook', 'instagram'].includes(normalizedPlatform)) {
+        try {
+          const textChunks = [];
+          if (body) textChunks.push(String(body));
+          if (savedAttachments.length > 0) {
+            textChunks.push(...savedAttachments.map((a) => `${a.filename}: ${a.url}`));
+          }
+          const outboundText = textChunks.join('\n').trim() || '[Attachment]';
+          const sendResult =
+            normalizedPlatform === 'facebook'
+              ? await sendFacebookMessage(lead.organizationId, recipientId, outboundText)
+              : await sendInstagramMessage(lead.organizationId, recipientId, outboundText);
+          const now = new Date();
+          const nextMeta = {
+            ...(communication.metadata || {}),
+            platform: normalizedPlatform,
+            externalRecipientId: recipientId,
+            externalMessageId: sendResult?.messageId || null,
+            ...(normalizedPlatform === 'facebook'
+              ? { fbMessageId: sendResult?.messageId || null }
+              : { igMessageId: sendResult?.messageId || null }),
+            externalStatus: sendResult?.messageId ? 'SENT' : 'FAILED',
+            externalStatusAt: now.toISOString(),
+          };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
+        } catch (sendErr) {
+          const now = new Date();
+          const nextMeta = {
+            ...(communication.metadata || {}),
+            platform: normalizedPlatform,
+            externalStatus: 'FAILED',
+            externalStatusAt: now.toISOString(),
+            sendError: sendErr?.message || String(sendErr),
+          };
+          await prisma.communication.update({
+            where: { id: communication.id },
+            data: { metadata: nextMeta },
+          }).catch(() => {});
+          communication.metadata = nextMeta;
         }
       }
     }

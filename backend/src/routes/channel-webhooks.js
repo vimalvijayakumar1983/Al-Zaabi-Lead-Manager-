@@ -13,6 +13,9 @@ const {
   findFacebookIntegration,
   verifyWebhookSignature,
 } = require('../services/facebookLeadAds');
+const {
+  findConnectedIntegration,
+} = require('../services/metaMessagingService');
 
 const router = Router();
 
@@ -24,6 +27,7 @@ function isObject(v) {
 const PLATFORM_SOURCE_MAP = {
   whatsapp: 'WHATSAPP',
   facebook: 'FACEBOOK_ADS',
+  messenger: 'FACEBOOK_ADS',
   instagram: 'FACEBOOK_ADS',
   google: 'GOOGLE_ADS',
   webchat: 'LIVE_CHAT',
@@ -33,7 +37,19 @@ const PLATFORM_SOURCE_MAP = {
 };
 
 // ─── Helper: find or create lead from inbound message ──────────────
-async function findOrCreateLead(organizationId, { phone, email, name, source, platform }) {
+async function findOrCreateLead(organizationId, { phone, email, name, source, platform, externalSenderId }) {
+  const normalizedPlatform = String(platform || '').toLowerCase();
+  const externalId = externalSenderId != null ? String(externalSenderId).trim() : '';
+  if (externalId && ['messenger', 'instagram', 'facebook'].includes(normalizedPlatform)) {
+    const key = normalizedPlatform === 'instagram' ? 'instagram' : 'messenger';
+    const existingByExternalId = await prisma.lead.findFirst({
+      where: {
+        organizationId,
+        customData: { path: ['socialIdentities', key, 'senderId'], equals: externalId },
+      },
+    });
+    if (existingByExternalId) return existingByExternalId;
+  }
   // Try to match existing lead by phone or email
   const where = { organizationId };
   const orConditions = [];
@@ -44,7 +60,30 @@ async function findOrCreateLead(organizationId, { phone, email, name, source, pl
     const existing = await prisma.lead.findFirst({
       where: { ...where, OR: orConditions },
     });
-    if (existing) return existing;
+    if (existing) {
+      if (externalId && ['messenger', 'instagram', 'facebook'].includes(normalizedPlatform)) {
+        const key = normalizedPlatform === 'instagram' ? 'instagram' : 'messenger';
+        const currentCustom = isObject(existing.customData) ? existing.customData : {};
+        const nextCustom = {
+          ...currentCustom,
+          socialIdentities: {
+            ...(isObject(currentCustom.socialIdentities) ? currentCustom.socialIdentities : {}),
+            [key]: {
+              senderId: externalId,
+            },
+          },
+        };
+        await prisma.lead.update({
+          where: { id: existing.id },
+          data: {
+            customData: nextCustom,
+            sourceDetail:
+              normalizedPlatform === 'instagram' ? 'INSTAGRAM_DM' : 'FACEBOOK_MESSENGER',
+          },
+        }).catch(() => {});
+      }
+      return existing;
+    }
   }
 
   // Parse name
@@ -71,6 +110,22 @@ async function findOrCreateLead(organizationId, { phone, email, name, source, pl
     source: resolvedSource,
     status: 'NEW',
     stageId: defaultStage?.id || undefined,
+    sourceDetail:
+      normalizedPlatform === 'instagram'
+        ? 'INSTAGRAM_DM'
+        : normalizedPlatform === 'messenger' || normalizedPlatform === 'facebook'
+          ? 'FACEBOOK_MESSENGER'
+          : null,
+    customData:
+      externalId && ['messenger', 'instagram', 'facebook'].includes(normalizedPlatform)
+        ? {
+            socialIdentities: {
+              [normalizedPlatform === 'instagram' ? 'instagram' : 'messenger']: {
+                senderId: externalId,
+              },
+            },
+          }
+        : undefined,
   };
 
   // Calculate lead score
@@ -196,11 +251,42 @@ async function hasInboundByExternalMessageId(leadId, externalId) {
       OR: [
         { metadata: { path: ['waMessageId'], equals: externalId } },
         { metadata: { path: ['externalMessageId'], equals: externalId } },
+        { metadata: { path: ['fbMessageId'], equals: externalId } },
+        { metadata: { path: ['igMessageId'], equals: externalId } },
       ],
     },
     select: { id: true },
   });
   return !!existing;
+}
+
+function getMetaSignature(req) {
+  return String(req.get('x-hub-signature-256') || '').trim();
+}
+
+async function resolveWebhookVerifyToken(organizationId, platform) {
+  const integration = await findConnectedIntegration(organizationId, platform);
+  return String(integration?.config?.verifyToken || '').trim();
+}
+
+async function verifyMetaWebhookRequest(req, organizationId, platform) {
+  const integration = await findConnectedIntegration(organizationId, platform);
+  if (!integration) return true;
+  const appSecret = String(integration?.config?.appSecret || '').trim();
+  if (!appSecret) return true;
+  const signature = getMetaSignature(req);
+  if (!signature || !req.rawBody) return false;
+  return verifyWebhookSignature(req.rawBody, signature, appSecret);
+}
+
+function parseChatBody(message, fallbackText) {
+  if (!message || typeof message !== 'object') return fallbackText;
+  if (message.text) return String(message.text);
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    const types = message.attachments.map((a) => String(a?.type || 'attachment')).filter(Boolean);
+    return `[${types.join(', ')}]`;
+  }
+  return fallbackText;
 }
 
 // ─── WhatsApp Webhook ───────────────────────────────────────────────
@@ -355,33 +441,105 @@ router.get('/whatsapp/:organizationId', async (req, res) => {
 router.post('/facebook/:organizationId', async (req, res) => {
   try {
     const { organizationId } = req.params;
+    const signatureOk = await verifyMetaWebhookRequest(req, organizationId, 'messenger');
+    if (!signatureOk) {
+      logger.warn(`Facebook webhook signature verification failed for org ${organizationId}`);
+      return res.sendStatus(403);
+    }
     const payload = req.body;
 
     const entries = payload?.entry || [];
     for (const entry of entries) {
       const messaging = entry.messaging || [];
       for (const event of messaging) {
-        if (!event.message) continue; // Skip delivery receipts, etc.
+        if (event.message) {
+          const senderId = String(event.sender?.id || '').trim();
+          if (!senderId) continue;
+          const msgId = String(event.message?.mid || '').trim();
 
-        const senderId = event.sender?.id;
-        const body = event.message.text || '[Attachment]';
+          const lead = await findOrCreateLead(organizationId, {
+            phone: null,
+            name: `FB User ${senderId.slice(-4) || ''}`,
+            platform: 'messenger',
+            externalSenderId: senderId,
+          });
 
-        const lead = await findOrCreateLead(organizationId, {
-          phone: null,
-          name: `FB User ${senderId?.slice(-4) || ''}`,
-          platform: 'facebook',
-        });
+          if (msgId && await hasInboundByExternalMessageId(lead.id, msgId)) {
+            continue;
+          }
 
-        await storeInboundMessage(lead.id, {
-          channel: 'CHAT',
-          body,
-          platform: 'facebook',
-          metadata: {
-            fbSenderId: senderId,
-            fbMessageId: event.message.mid,
-            fbTimestamp: event.timestamp,
-          },
-        });
+          await storeInboundMessage(lead.id, {
+            channel: 'CHAT',
+            body: parseChatBody(event.message, '[Facebook message]'),
+            platform: 'facebook',
+            metadata: {
+              externalMessageId: msgId || undefined,
+              externalSenderId: senderId,
+              fbSenderId: senderId,
+              fbMessageId: msgId || undefined,
+              fbTimestamp: event.timestamp,
+            },
+          });
+          continue;
+        }
+
+        // Delivery and read status events for outbound messages
+        if (event.delivery && Array.isArray(event.delivery.mids)) {
+          const mids = event.delivery.mids.map((m) => String(m || '').trim()).filter(Boolean);
+          for (const mid of mids) {
+            const rows = await prisma.communication.findMany({
+              where: {
+                lead: { organizationId },
+                channel: 'CHAT',
+                direction: 'OUTBOUND',
+                metadata: { path: ['externalMessageId'], equals: mid },
+              },
+              select: { id: true, metadata: true, leadId: true, lead: { select: { organizationId: true } } },
+            });
+            for (const row of rows) {
+              const nextMeta = {
+                ...(isObject(row.metadata) ? row.metadata : {}),
+                externalStatus: 'DELIVERED',
+                externalStatusAt: new Date().toISOString(),
+                fbDeliveryWatermark: event.delivery?.watermark || null,
+              };
+              await prisma.communication.update({
+                where: { id: row.id },
+                data: { metadata: nextMeta },
+              });
+              broadcastDataChange(row.lead.organizationId, 'communication', 'updated', null, { entityId: row.leadId }).catch(() => {});
+            }
+          }
+        }
+
+        if (event.read && event.sender?.id) {
+          const senderId = String(event.sender.id);
+          const rows = await prisma.communication.findMany({
+            where: {
+              lead: {
+                organizationId,
+                customData: { path: ['socialIdentities', 'messenger', 'senderId'], equals: senderId },
+              },
+              channel: 'CHAT',
+              direction: 'OUTBOUND',
+            },
+            select: { id: true, metadata: true, leadId: true, lead: { select: { organizationId: true } } },
+          });
+          for (const row of rows) {
+            const nowIso = new Date().toISOString();
+            const nextMeta = {
+              ...(isObject(row.metadata) ? row.metadata : {}),
+              externalStatus: 'READ',
+              externalStatusAt: nowIso,
+              fbReadWatermark: event.read?.watermark || null,
+            };
+            await prisma.communication.update({
+              where: { id: row.id },
+              data: { metadata: nextMeta, isRead: true, readAt: new Date() },
+            });
+            broadcastDataChange(row.lead.organizationId, 'communication', 'updated', null, { entityId: row.leadId }).catch(() => {});
+          }
+        }
       }
     }
 
@@ -393,12 +551,14 @@ router.post('/facebook/:organizationId', async (req, res) => {
 });
 
 // Facebook verification (GET)
-router.get('/facebook/:organizationId', (req, res) => {
+router.get('/facebook/:organizationId', async (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token) {
+    const storedToken = await resolveWebhookVerifyToken(req.params.organizationId, 'messenger');
+    if (storedToken && storedToken !== token) return res.sendStatus(403);
     return res.status(200).send(challenge);
   }
   res.sendStatus(403);
@@ -578,33 +738,104 @@ async function logLeadgenEvent(integrationId, leadgenId, status, errorMessage, l
 router.post('/instagram/:organizationId', async (req, res) => {
   try {
     const { organizationId } = req.params;
+    const signatureOk = await verifyMetaWebhookRequest(req, organizationId, 'instagram');
+    if (!signatureOk) {
+      logger.warn(`Instagram webhook signature verification failed for org ${organizationId}`);
+      return res.sendStatus(403);
+    }
     const payload = req.body;
 
     const entries = payload?.entry || [];
     for (const entry of entries) {
       const messaging = entry.messaging || [];
       for (const event of messaging) {
-        if (!event.message) continue;
+        if (event.message) {
+          const senderId = String(event.sender?.id || '').trim();
+          if (!senderId) continue;
+          const msgId = String(event.message?.mid || '').trim();
 
-        const senderId = event.sender?.id;
-        const body = event.message.text || '[Media]';
+          const lead = await findOrCreateLead(organizationId, {
+            phone: null,
+            name: `IG User ${senderId.slice(-4) || ''}`,
+            platform: 'instagram',
+            externalSenderId: senderId,
+          });
 
-        const lead = await findOrCreateLead(organizationId, {
-          phone: null,
-          name: `IG User ${senderId?.slice(-4) || ''}`,
-          platform: 'instagram',
-        });
+          if (msgId && await hasInboundByExternalMessageId(lead.id, msgId)) {
+            continue;
+          }
 
-        await storeInboundMessage(lead.id, {
-          channel: 'CHAT',
-          body,
-          platform: 'instagram',
-          metadata: {
-            igSenderId: senderId,
-            igMessageId: event.message.mid,
-            igTimestamp: event.timestamp,
-          },
-        });
+          await storeInboundMessage(lead.id, {
+            channel: 'CHAT',
+            body: parseChatBody(event.message, '[Instagram message]'),
+            platform: 'instagram',
+            metadata: {
+              externalMessageId: msgId || undefined,
+              externalSenderId: senderId,
+              igSenderId: senderId,
+              igMessageId: msgId || undefined,
+              igTimestamp: event.timestamp,
+            },
+          });
+          continue;
+        }
+
+        if (event.delivery && Array.isArray(event.delivery.mids)) {
+          const mids = event.delivery.mids.map((m) => String(m || '').trim()).filter(Boolean);
+          for (const mid of mids) {
+            const rows = await prisma.communication.findMany({
+              where: {
+                lead: { organizationId },
+                channel: 'CHAT',
+                direction: 'OUTBOUND',
+                metadata: { path: ['externalMessageId'], equals: mid },
+              },
+              select: { id: true, metadata: true, leadId: true, lead: { select: { organizationId: true } } },
+            });
+            for (const row of rows) {
+              const nextMeta = {
+                ...(isObject(row.metadata) ? row.metadata : {}),
+                externalStatus: 'DELIVERED',
+                externalStatusAt: new Date().toISOString(),
+                igDeliveryWatermark: event.delivery?.watermark || null,
+              };
+              await prisma.communication.update({
+                where: { id: row.id },
+                data: { metadata: nextMeta },
+              });
+              broadcastDataChange(row.lead.organizationId, 'communication', 'updated', null, { entityId: row.leadId }).catch(() => {});
+            }
+          }
+        }
+
+        if (event.read && event.sender?.id) {
+          const senderId = String(event.sender.id);
+          const rows = await prisma.communication.findMany({
+            where: {
+              lead: {
+                organizationId,
+                customData: { path: ['socialIdentities', 'instagram', 'senderId'], equals: senderId },
+              },
+              channel: 'CHAT',
+              direction: 'OUTBOUND',
+            },
+            select: { id: true, metadata: true, leadId: true, lead: { select: { organizationId: true } } },
+          });
+          for (const row of rows) {
+            const nowIso = new Date().toISOString();
+            const nextMeta = {
+              ...(isObject(row.metadata) ? row.metadata : {}),
+              externalStatus: 'READ',
+              externalStatusAt: nowIso,
+              igReadWatermark: event.read?.watermark || null,
+            };
+            await prisma.communication.update({
+              where: { id: row.id },
+              data: { metadata: nextMeta, isRead: true, readAt: new Date() },
+            });
+            broadcastDataChange(row.lead.organizationId, 'communication', 'updated', null, { entityId: row.leadId }).catch(() => {});
+          }
+        }
       }
     }
 
@@ -616,12 +847,14 @@ router.post('/instagram/:organizationId', async (req, res) => {
 });
 
 // Instagram verification (GET)
-router.get('/instagram/:organizationId', (req, res) => {
+router.get('/instagram/:organizationId', async (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token) {
+    const storedToken = await resolveWebhookVerifyToken(req.params.organizationId, 'instagram');
+    if (storedToken && storedToken !== token) return res.sendStatus(403);
     return res.status(200).send(challenge);
   }
   res.sendStatus(403);

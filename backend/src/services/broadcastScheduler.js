@@ -5,10 +5,37 @@ const { sendTemplate: sendWhatsAppTemplate } = require('./whatsappService');
 const BROADCAST_SCHEDULER_INTERVAL_MS = 30 * 1000;
 // Keep well below Meta's ~80 msg/s soft limit. 50ms gives ~20 msg/s — safe for large lists.
 const SEND_THROTTLE_MS = 50;
+const MAX_BROADCAST_RETRY_ATTEMPTS = 3;
 let intervalRef = null;
 let isRunning = false;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function normalizeWhatsAppSendError(err) {
+  const details = err?.details?.error || err?.details || {};
+  const code = details?.code != null ? String(details.code) : null;
+  const subcode = details?.error_subcode != null ? String(details.error_subcode) : null;
+  const transient = details?.is_transient === true;
+  const title = String(details?.error_user_title || details?.type || '').trim();
+  const userMsg = String(details?.error_user_msg || '').trim();
+  const baseMessage = String(err?.message || 'Send failed').trim();
+
+  const codePart = [code, subcode].filter(Boolean).join('/');
+  const prefix = codePart ? `[WA_${codePart}] ` : '';
+  const hint = userMsg || title || '';
+  const tail = hint && hint !== baseMessage ? ` - ${hint}` : '';
+  const transientTag = transient ? ' (transient)' : '';
+  return `${prefix}${baseMessage}${tail}${transientTag}`.slice(0, 500);
+}
+
+async function claimScheduledRun(runId) {
+  const now = new Date();
+  const result = await prisma.whatsAppBroadcastRun.updateMany({
+    where: { id: runId, status: 'SCHEDULED' },
+    data: { status: 'RUNNING', startedAt: now, lastError: null },
+  });
+  return result.count > 0;
+}
 
 function buildTemplateComponentsFromVariables(variables) {
   if (!variables || typeof variables !== 'object') return [];
@@ -26,7 +53,7 @@ function buildTemplateComponentsFromVariables(variables) {
 }
 
 async function runBroadcastNow(broadcastId) {
-  const run = await prisma.whatsAppBroadcastRun.findUnique({
+  let run = await prisma.whatsAppBroadcastRun.findUnique({
     where: { id: broadcastId },
   });
   if (!run) throw new Error('Broadcast run not found');
@@ -34,10 +61,22 @@ async function runBroadcastNow(broadcastId) {
     return run;
   }
 
-  await prisma.whatsAppBroadcastRun.update({
-    where: { id: broadcastId },
-    data: { status: 'RUNNING', startedAt: run.startedAt || new Date(), lastError: null },
-  });
+  // Idempotent transition: only claim from SCHEDULED once.
+  if (run.status === 'SCHEDULED') {
+    const claimed = await claimScheduledRun(broadcastId);
+    if (!claimed) {
+      // Another worker/process claimed it first.
+      const latest = await prisma.whatsAppBroadcastRun.findUnique({ where: { id: broadcastId } });
+      return latest || run;
+    }
+    run = await prisma.whatsAppBroadcastRun.findUnique({ where: { id: broadcastId } });
+  } else if (run.status === 'RUNNING' && !run.startedAt) {
+    // Backfill startedAt when needed; keep RUNNING state untouched.
+    await prisma.whatsAppBroadcastRun.update({
+      where: { id: broadcastId },
+      data: { startedAt: new Date(), lastError: null },
+    });
+  }
 
   const recipients = await prisma.whatsAppBroadcastRecipient.findMany({
     where: { broadcastId, status: 'PENDING' },
@@ -76,7 +115,7 @@ async function runBroadcastNow(broadcastId) {
         data: {
           status: 'FAILED',
           attemptCount: { increment: 1 },
-          error: err?.message || 'Send failed',
+          error: normalizeWhatsAppSendError(err),
         },
       });
     }
@@ -95,10 +134,11 @@ async function runBroadcastNow(broadcastId) {
   const failedCount = Number(totals.find((t) => t.status === 'FAILED')?._count?._all || 0);
   const totalRecipients = sentCount + failedCount;
 
+  const finalStatus = sentCount === 0 && failedCount > 0 ? 'FAILED' : 'COMPLETED';
   return prisma.whatsAppBroadcastRun.update({
     where: { id: broadcastId },
     data: {
-      status: 'COMPLETED',
+      status: finalStatus,
       completedAt: new Date(),
       sentCount,
       failedCount,
@@ -123,6 +163,8 @@ async function runDueScheduledBroadcasts() {
     });
     for (const run of dueRuns) {
       try {
+        const claimed = await claimScheduledRun(run.id);
+        if (!claimed) continue;
         await runBroadcastNow(run.id);
       } catch (err) {
         await prisma.whatsAppBroadcastRun.update({
@@ -167,7 +209,9 @@ function stopBroadcastScheduler() {
 }
 
 module.exports = {
+  MAX_BROADCAST_RETRY_ATTEMPTS,
   buildTemplateComponentsFromVariables,
+  claimScheduledRun,
   runBroadcastNow,
   runDueScheduledBroadcasts,
   startBroadcastScheduler,

@@ -2,7 +2,7 @@ const { Router } = require('express');
 const { prisma } = require('../config/database');
 const { logger } = require('../config/logger');
 const { authenticate, authorize, orgScope } = require('../middleware/auth');
-const { runBroadcastNow } = require('../services/broadcastScheduler');
+const { runBroadcastNow, MAX_BROADCAST_RETRY_ATTEMPTS } = require('../services/broadcastScheduler');
 
 const router = Router();
 router.use(authenticate, orgScope);
@@ -21,6 +21,23 @@ async function resolveDivisionScopedOrgId(req, res, featureLabel) {
     return divisionId;
   }
   return req.orgId;
+}
+
+function parseScheduledAtUAE(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const value = raw.trim();
+  if (!value) return null;
+
+  // If timezone is already explicit (Z / +HH:mm / -HH:mm), trust it.
+  const hasExplicitTz = /(Z|[+-]\d{2}:\d{2})$/i.test(value);
+  const normalized = hasExplicitTz
+    ? value
+    // Treat timezone-less inputs as UAE local time (+04:00).
+    : `${value.replace(' ', 'T')}+04:00`;
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 /** List broadcast lists for the org (division when super admin passes divisionId). */
@@ -275,26 +292,35 @@ router.post('/:id/send-template', authorize('ADMIN', 'MANAGER'), async (req, res
       });
     }
 
-    const scheduleAtDate =
-      String(mode) === 'later'
-        ? (scheduledAt ? new Date(scheduledAt) : new Date())
-        : null;
-    if (scheduleAtDate && Number.isNaN(scheduleAtDate.getTime())) {
-      return res.status(400).json({ error: 'scheduledAt must be a valid ISO datetime' });
+    const isLaterMode = String(mode) === 'later';
+    let scheduleAtDate = null;
+    if (isLaterMode) {
+      if (!scheduledAt) {
+        return res.status(400).json({ error: 'scheduledAt is required when mode is later' });
+      }
+      scheduleAtDate = parseScheduledAtUAE(String(scheduledAt));
+      if (!scheduleAtDate) {
+        return res.status(400).json({
+          error: 'scheduledAt must be a valid datetime (ISO with timezone or UAE local datetime)',
+        });
+      }
+      if (scheduleAtDate.getTime() <= Date.now()) {
+        return res.status(400).json({ error: 'scheduledAt must be in the future' });
+      }
     }
     const run = await prisma.whatsAppBroadcastRun.create({
       data: {
         organizationId: orgId,
         listId: list.id,
         requestedById: req.user?.id || null,
-        mode: String(mode) === 'later' ? 'LATER' : 'NOW',
-        status: String(mode) === 'later' ? 'SCHEDULED' : 'RUNNING',
+        mode: isLaterMode ? 'LATER' : 'NOW',
+        status: isLaterMode ? 'SCHEDULED' : 'RUNNING',
         templateId: template.id,
         templateName: template.name,
         templateLanguage: template.language || 'en_US',
         variables: variables && typeof variables === 'object' ? variables : {},
         scheduledAt: scheduleAtDate,
-        startedAt: String(mode) === 'later' ? null : new Date(),
+        startedAt: isLaterMode ? null : new Date(),
         totalRecipients: targets.length,
       },
     });
@@ -312,7 +338,7 @@ router.post('/:id/send-template', authorize('ADMIN', 'MANAGER'), async (req, res
       });
     }
 
-    if (String(mode) === 'later') {
+    if (isLaterMode) {
       return res.status(202).json({
         ok: true,
         mode: 'later',
@@ -400,15 +426,31 @@ router.post('/runs/:runId/retry', authorize('ADMIN', 'MANAGER'), async (req, res
       return res.status(400).json({ error: 'No failed recipients to retry.' });
     }
 
-    // Reset failed recipients back to PENDING so runBroadcastNow picks them up
-    const resetResult = await prisma.whatsAppBroadcastRecipient.updateMany({
+    const failedRecipients = await prisma.whatsAppBroadcastRecipient.findMany({
       where: { broadcastId: run.id, status: 'FAILED' },
-      data: { status: 'PENDING', error: null },
+      select: { id: true, attemptCount: true, error: true },
     });
-
-    if (resetResult.count === 0) {
+    if (failedRecipients.length === 0) {
       return res.status(400).json({ error: 'No failed recipients found to retry.' });
     }
+
+    const retryableIds = failedRecipients
+      .filter((r) => Number(r.attemptCount || 0) < MAX_BROADCAST_RETRY_ATTEMPTS)
+      .map((r) => r.id);
+    const exhaustedCount = failedRecipients.length - retryableIds.length;
+    if (retryableIds.length === 0) {
+      return res.status(409).json({
+        error: `Retry limit reached. Max ${MAX_BROADCAST_RETRY_ATTEMPTS} attempts per recipient.`,
+        retrying: 0,
+        exhausted: exhaustedCount,
+      });
+    }
+
+    // Reset retryable failed recipients back to PENDING so runBroadcastNow picks them up
+    const resetResult = await prisma.whatsAppBroadcastRecipient.updateMany({
+      where: { id: { in: retryableIds } },
+      data: { status: 'PENDING', error: null },
+    });
 
     // Reset run status back to RUNNING
     await prisma.whatsAppBroadcastRun.update({
@@ -433,7 +475,9 @@ router.post('/runs/:runId/retry', authorize('ADMIN', 'MANAGER'), async (req, res
       ok: true,
       runId: run.id,
       retrying: resetResult.count,
-      message: `Retrying ${resetResult.count} failed recipient${resetResult.count !== 1 ? 's' : ''}.`,
+      exhausted: exhaustedCount,
+      maxAttempts: MAX_BROADCAST_RETRY_ATTEMPTS,
+      message: `Retrying ${resetResult.count} failed recipient${resetResult.count !== 1 ? 's' : ''}${exhaustedCount > 0 ? ` (${exhaustedCount} reached retry limit)` : ''}.`,
     });
   } catch (err) {
     next(err);

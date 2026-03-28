@@ -540,6 +540,7 @@ export default function DivisionsPage() {
   const [formLogo, setFormLogo] = useState('');
   const [formPrimaryColor, setFormPrimaryColor] = useState('#6366f1');
   const [formSecondaryColor, setFormSecondaryColor] = useState('#1e293b');
+  const [formDidNumber, setFormDidNumber] = useState('');
 
   // Apply Template to Existing Division
   const [applyTemplateDivision, setApplyTemplateDivision] = useState<Organization | null>(null);
@@ -768,6 +769,7 @@ export default function DivisionsPage() {
     setFormLogo('');
     setFormPrimaryColor('#6366f1');
     setFormSecondaryColor('#1e293b');
+    setFormDidNumber('');
     setModalError('');
     setSelectedTemplate(null);
     setModalStep('template');
@@ -781,6 +783,7 @@ export default function DivisionsPage() {
     setFormLogo(division.logo || '');
     setFormPrimaryColor(division.primaryColor || '#6366f1');
     setFormSecondaryColor(division.secondaryColor || '#1e293b');
+    setFormDidNumber(String((division as any)?.settings?.didNumber || ''));
     setModalError('');
     setSelectedTemplate(null);
     setModalStep('details');
@@ -801,6 +804,7 @@ export default function DivisionsPage() {
         logo: formLogo.trim() || undefined,
         primaryColor: formPrimaryColor,
         secondaryColor: formSecondaryColor,
+        didNumber: formDidNumber.trim() || undefined,
       };
       if (editingDivision) {
         await api.updateDivision(editingDivision.id, payload as Partial<Organization>);
@@ -1997,6 +2001,19 @@ export default function DivisionsPage() {
                   onChange={(e) => setFormTradeName(e.target.value)}
                   placeholder="e.g. Al-Zaabi Healthcare"
                 />
+              </div>
+              <div>
+                <label className="label">Call Center DID Number</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={formDidNumber}
+                  onChange={(e) => setFormDidNumber(e.target.value)}
+                  placeholder="e.g. 3071192"
+                />
+                <p className="text-xs text-text-tertiary mt-1">
+                  Used to fetch external call recordings in lead Call Logs tab.
+                </p>
               </div>
               <div>
                 <label className="label">Division Logo</label>

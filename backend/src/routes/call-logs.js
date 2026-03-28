@@ -4,6 +4,7 @@ const { prisma } = require('../config/database');
 const { authenticate, orgScope } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { logger } = require('../config/logger');
+const { config } = require('../config/env');
 const { rescoreAndPersist } = require('../utils/leadScoring');
 const { createNotification, NOTIFICATION_TYPES } = require('../services/notificationService');
 const { regenerateLeadSummaryById } = require('../services/aiService');
@@ -20,6 +21,141 @@ const { findStageForStatus } = require('../utils/statusStageMapping');
 
 const router = Router();
 router.use(authenticate, orgScope);
+
+function toDigits(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function normalizeMobileForExternal(phone) {
+  const digits = toDigits(phone);
+  if (!digits) return '';
+  if (digits.startsWith('00971') && digits.length >= 13) return `0${digits.slice(5)}`;
+  if (digits.startsWith('971') && digits.length >= 12) return `0${digits.slice(3)}`;
+  if (digits.startsWith('5') && digits.length === 9) return `0${digits}`;
+  if (digits.startsWith('0') && digits.length >= 10) return digits.slice(0, 10);
+  return digits;
+}
+
+function formatDateForExternal(date) {
+  const dt = new Date(date);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+}
+
+function parseExternalDate(value) {
+  if (!value) return null;
+  const normalized = String(value).replace(/\.\d+$/, '').replace(' ', 'T');
+  const dt = new Date(normalized);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function toDurationSeconds(startAt, endAt) {
+  if (!startAt || !endAt) return null;
+  const diff = Math.round((endAt.getTime() - startAt.getTime()) / 1000);
+  return diff > 0 ? diff : null;
+}
+
+async function fetchExternalCallLogs({ mobileNumber, didNumber, fromDate, toDate }) {
+  if (!mobileNumber || !didNumber) return [];
+  const baseUrl = String(config.callLogs?.apiBaseUrl || '').trim();
+  if (!baseUrl) return [];
+
+  const fromDateStr = formatDateForExternal(fromDate);
+  const toDateStr = formatDateForExternal(toDate);
+  // Build URL manually so datetime spaces are encoded as %20 (same as Postman/cURL sample).
+  const requestUrl =
+    `${baseUrl}` +
+    `?mobilenumber=${encodeURIComponent(mobileNumber)}` +
+    `&did=${encodeURIComponent(String(didNumber))}` +
+    `&from_date=${encodeURIComponent(fromDateStr)}` +
+    `&to_date=${encodeURIComponent(toDateStr)}`;
+  console.log('[CallLogs][ExternalAPI] Request URL:', requestUrl);
+  logger.info('[CallLogs][ExternalAPI] Request', {
+    mobileNumber,
+    didNumber: String(didNumber),
+    fromDate: fromDateStr,
+    toDate: toDateStr,
+    requestUrl,
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(config.callLogs?.timeoutMs || 12000));
+
+  try {
+    const resp = await fetch(requestUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      logger.warn('[CallLogs][ExternalAPI] Non-OK response', {
+        status: resp.status,
+        requestUrl,
+        responsePreview: body.slice(0, 500),
+      });
+      console.log('[CallLogs][ExternalAPI] Non-OK response:', resp.status, body.slice(0, 500));
+      throw new Error(`External call log API failed (${resp.status}): ${body.slice(0, 300)}`);
+    }
+    const payload = await resp.json();
+    console.log(
+      '[CallLogs][ExternalAPI] Response:',
+      Array.isArray(payload) ? `array(${payload.length})` : typeof payload
+    );
+    logger.info('[CallLogs][ExternalAPI] Response received', {
+      requestUrl,
+      isArray: Array.isArray(payload),
+      count: Array.isArray(payload) ? payload.length : 0,
+    });
+    if (!Array.isArray(payload)) return [];
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function mapExternalToCallLog(leadId, row, idx) {
+  const startAt = parseExternalDate(row?.callstarttime);
+  const answeredAt = parseExternalDate(row?.agentanswertime);
+  const endAt = parseExternalDate(row?.callendtime);
+  const createdAt = startAt || answeredAt || endAt || new Date();
+  const duration = toDurationSeconds(startAt, endAt);
+  const recordingUrl = String(row?.filename || '').trim() || null;
+  const uniqueId = String(row?.uniqueid || '').trim() || `external-${idx + 1}`;
+  const agentExtn = String(row?.answextn || '').trim();
+  const agentId = row?.agentid != null ? String(row.agentid).trim() : '';
+
+  return {
+    id: `external:${uniqueId}`,
+    leadId,
+    userId: null,
+    disposition: 'OTHER',
+    notes: recordingUrl ? 'Imported from call center API' : 'Imported from call center API (no recording URL)',
+    duration,
+    callbackDate: null,
+    meetingDate: null,
+    appointmentDate: null,
+    followUpTaskId: null,
+    createdAt: createdAt.toISOString(),
+    updatedAt: createdAt.toISOString(),
+    user: null,
+    metadata: {
+      external: true,
+      externalProvider: 'call_center_api',
+      dispositionLabel: 'External Call Recording',
+      uniqueid: uniqueId,
+      callerid: row?.callerid || null,
+      did: row?.dnid || null,
+      cliniccode: row?.cliniccode || null,
+      callstarttime: row?.callstarttime || null,
+      agentanswertime: row?.agentanswertime || null,
+      callendtime: row?.callendtime || null,
+      agentid: agentId || null,
+      answextn: agentExtn || null,
+      recordingUrl,
+    },
+  };
+}
 
 // ─── Display name helper (deduplication) ─────────────────────────
 function getDisplayName(obj) {
@@ -400,17 +536,113 @@ const callLogSchema = z.object({
 // ─── List Call Logs for a Lead ───────────────────────────────────
 router.get('/lead/:leadId', async (req, res, next) => {
   try {
+    const lead = await prisma.lead.findFirst({
+      where: {
+        id: req.params.leadId,
+        organizationId: { in: req.orgIds },
+      },
+      select: {
+        id: true,
+        phone: true,
+        organizationId: true,
+        organization: { select: { settings: true } },
+      },
+    });
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
     const callLogs = await prisma.callLog.findMany({
       where: {
         leadId: req.params.leadId,
-        lead: { organizationId: { in: req.orgIds } },
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
-    res.json(callLogs);
+
+    const settings = lead.organization?.settings && typeof lead.organization.settings === 'object'
+      ? lead.organization.settings
+      : {};
+    const didNumber = String(settings.didNumber || '').trim();
+    const normalizedPhone = normalizeMobileForExternal(lead.phone);
+    // TEMP DEBUG: hardcoded range to match manual API test exactly.
+    const fromDate = new Date('2026-03-27T00:00:00');
+    const toDate = new Date('2026-03-31T23:59:59');
+
+    let externalLogs = [];
+    logger.info('[CallLogs] Lead external fetch inputs', {
+      leadId: lead.id,
+      organizationId: lead.organizationId,
+      rawPhone: lead.phone || null,
+      normalizedPhone,
+      didNumber: didNumber || null,
+      hasDid: Boolean(didNumber),
+      hasPhone: Boolean(normalizedPhone),
+      fromDate: fromDate.toISOString(),
+      toDate: toDate.toISOString(),
+    });
+    console.log('[CallLogs] Inputs', {
+      leadId: lead.id,
+      rawPhone: lead.phone || null,
+      normalizedPhone,
+      didNumber: didNumber || null,
+      fromDate: fromDate.toISOString(),
+      toDate: toDate.toISOString(),
+    });
+    if (didNumber && normalizedPhone) {
+      try {
+        const externalRows = await fetchExternalCallLogs({
+          mobileNumber: normalizedPhone,
+          didNumber,
+          fromDate,
+          toDate,
+        });
+        externalLogs = externalRows.map((row, idx) => mapExternalToCallLog(lead.id, row, idx));
+        logger.info('[CallLogs] External rows mapped', {
+          leadId: lead.id,
+          externalCount: externalRows.length,
+          mappedCount: externalLogs.length,
+        });
+        console.log('[CallLogs] External rows mapped', externalRows.length);
+      } catch (extErr) {
+        logger.warn('External call log fetch failed', {
+          leadId: lead.id,
+          organizationId: lead.organizationId,
+          didNumber,
+          phone: normalizedPhone,
+          error: extErr.message,
+        });
+      }
+    } else {
+      logger.warn('[CallLogs] Skipping external fetch: missing DID or normalized phone', {
+        leadId: lead.id,
+        didNumber: didNumber || null,
+        normalizedPhone: normalizedPhone || null,
+      });
+      console.log('[CallLogs] Skipped external fetch', {
+        didNumber: didNumber || null,
+        normalizedPhone: normalizedPhone || null,
+      });
+    }
+
+    const merged = [...callLogs, ...externalLogs].sort((a, b) => {
+      const aTs = new Date(a.createdAt).getTime();
+      const bTs = new Date(b.createdAt).getTime();
+      return bTs - aTs;
+    });
+    logger.info('[CallLogs] Returning merged call logs', {
+      leadId: lead.id,
+      internalCount: callLogs.length,
+      externalCount: externalLogs.length,
+      mergedCount: merged.length,
+    });
+    console.log('[CallLogs] Returning counts', {
+      internal: callLogs.length,
+      external: externalLogs.length,
+      merged: merged.length,
+    });
+
+    res.json(merged);
   } catch (err) {
     next(err);
   }
