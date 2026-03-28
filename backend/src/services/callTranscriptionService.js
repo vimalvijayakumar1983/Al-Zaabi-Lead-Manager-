@@ -385,6 +385,19 @@ async function assemblyAiUpload(buffer, apiKey) {
   return uploadUrl;
 }
 
+function normalizeAssemblyAiUtterances(row) {
+  const list = row?.utterances;
+  if (!Array.isArray(list) || list.length === 0) return [];
+  return list
+    .map((u) => ({
+      speaker: String(u.speaker ?? '?').trim() || '?',
+      text: String(u.text || '').trim(),
+      start: typeof u.start === 'number' ? u.start : 0,
+    }))
+    .filter((u) => u.text.length > 0)
+    .sort((a, b) => a.start - b.start);
+}
+
 function assemblyAiSpeechModels(opts = {}) {
   const raw = String(opts.speechModel || '').trim().toLowerCase();
   if (raw === 'universal-3-pro' || raw === 'universal_3_pro') return ['universal-3-pro'];
@@ -405,9 +418,23 @@ async function transcribeAssemblyAi(buffer, apiKey, opts = {}) {
     audio_url: uploadUrl,
     speech_models: assemblyAiSpeechModels(opts),
     language_detection: fixedCode ? false : detect,
+    speaker_labels: opts.speakerLabels !== false,
+    punctuate: opts.punctuate !== false,
+    format_text: opts.formatText !== false,
   };
   if (fixedCode) {
     body.language_code = fixedCode;
+  }
+
+  if (opts.translateToEnglish === true) {
+    body.speech_understanding = {
+      request: {
+        translation: {
+          target_languages: ['en'],
+          formal: opts.translationFormal === true,
+        },
+      },
+    };
   }
 
   const createResp = await fetch('https://api.assemblyai.com/v2/transcript', {
@@ -429,6 +456,8 @@ async function transcribeAssemblyAi(buffer, apiKey, opts = {}) {
   let transcript = '';
   let detectedLanguage = null;
   let languageConfidence = null;
+  let translatedEnglish = null;
+  let utterances = [];
   let status = created.status;
 
   while (Date.now() - started < ASSEMBLYAI_POLL_MAX_MS) {
@@ -443,6 +472,11 @@ async function transcribeAssemblyAi(buffer, apiKey, opts = {}) {
       detectedLanguage = row?.language_code ? String(row.language_code) : null;
       languageConfidence =
         typeof row?.language_confidence === 'number' ? row.language_confidence : null;
+      const tt = row?.translated_texts;
+      if (tt && typeof tt === 'object' && tt.en != null) {
+        translatedEnglish = String(tt.en).trim() || null;
+      }
+      utterances = normalizeAssemblyAiUtterances(row);
       break;
     }
     if (status === 'error') {
@@ -458,6 +492,8 @@ async function transcribeAssemblyAi(buffer, apiKey, opts = {}) {
     text: transcript,
     detectedLanguage,
     languageConfidence,
+    translatedEnglish,
+    utterances,
     rawProvider: 'assemblyai',
   };
 }
@@ -539,6 +575,11 @@ async function transcribeRecordingForOrg(prisma, organizationId, recordingUrl) {
     fixedLanguage,
     speechModel: cfg.speechModel,
     speechModels: cfg.speechModels,
+    speakerLabels: cfg.speakerLabels !== false,
+    punctuate: cfg.punctuate !== false,
+    formatText: cfg.formatText !== false,
+    translateToEnglish: cfg.translateToEnglish === true,
+    translationFormal: cfg.translationFormal === true,
   });
 }
 

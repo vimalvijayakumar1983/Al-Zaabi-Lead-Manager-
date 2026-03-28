@@ -114,6 +114,9 @@ async function processOneJob() {
       transcript: stt.text,
       detectedLanguage: stt.detectedLanguage,
       languageConfidence: stt.languageConfidence,
+      transcriptTranslatedEn: stt.translatedEnglish ?? null,
+      transcriptUtterances:
+        Array.isArray(stt.utterances) && stt.utterances.length > 0 ? stt.utterances : null,
       sttProvider: stt.rawProvider,
       callPerformance: insights,
       processingStatus: 'DONE',

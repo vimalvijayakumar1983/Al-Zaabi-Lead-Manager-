@@ -272,6 +272,81 @@ function CallLogTranscriptCollapsible({
   );
 }
 
+type CallTranscriptUtterance = { speaker: string; text: string; start?: number };
+
+/** Map diarization IDs to roles: first voice = Customer, second = Agent (typical inbound). */
+function buildSpeakerRoleLabels(utterances: CallTranscriptUtterance[]): Record<string, string> {
+  const sorted = [...utterances].sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const u of sorted) {
+    if (!seen.has(u.speaker)) {
+      seen.add(u.speaker);
+      order.push(u.speaker);
+    }
+  }
+  const map: Record<string, string> = {};
+  if (order.length === 1) {
+    map[order[0]] = 'Speaker';
+  } else if (order.length === 2) {
+    map[order[0]] = 'Customer';
+    map[order[1]] = 'Agent';
+  } else {
+    for (const s of order) {
+      map[s] = `Speaker ${s}`;
+    }
+  }
+  return map;
+}
+
+const CONVERSATION_PREVIEW_TURNS = 5;
+
+function CallLogTranscriptConversation({
+  utterances,
+  expanded,
+  onToggle,
+}: {
+  utterances: CallTranscriptUtterance[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const sorted = useMemo(
+    () => [...utterances].sort((a, b) => (a.start ?? 0) - (b.start ?? 0)),
+    [utterances]
+  );
+  const roleBySpeaker = useMemo(() => buildSpeakerRoleLabels(sorted), [sorted]);
+  const needsToggle = sorted.length > CONVERSATION_PREVIEW_TURNS;
+  const visible = !needsToggle || expanded ? sorted : sorted.slice(0, CONVERSATION_PREVIEW_TURNS);
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">Transcript</p>
+      <p className="text-[10px] text-gray-500">
+        Two speakers: first voice → <strong>Customer</strong>, second → <strong>Agent</strong>. Three+ → Speaker A, B…
+      </p>
+      <div className="space-y-2 max-h-[min(28rem,55vh)] overflow-y-auto bg-white border border-gray-200 rounded-md p-2.5">
+        {visible.map((u, i) => (
+          <div key={`${u.speaker}-${u.start ?? i}-${i}`} className="text-xs leading-relaxed">
+            <span className="font-semibold text-brand-700">{roleBySpeaker[u.speaker] || u.speaker}:</span>{' '}
+            <span className="text-gray-800" dir="auto">
+              {u.text}
+            </span>
+          </div>
+        ))}
+      </div>
+      {needsToggle ? (
+        <button
+          type="button"
+          className="text-xs font-medium text-brand-600 hover:text-brand-700"
+          onClick={onToggle}
+        >
+          {expanded ? 'Show less' : 'Show full conversation'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /** After realtime lead refetches, wait this long with no further events before syncing list + dashboard. */
 const REFRESH_LEAD_LIST_DEBOUNCE_MS = 20_000;
 
@@ -2209,6 +2284,19 @@ export default function LeadDetailPage() {
                           const agentExtn = String((log.metadata as any)?.answextn || '').trim();
                           const agentId = String((log.metadata as any)?.agentid || '').trim();
                           const transcript = String(meta.transcript || '').trim();
+                          const rawUtterances = (meta as { transcriptUtterances?: unknown }).transcriptUtterances;
+                          const transcriptUtterances: CallTranscriptUtterance[] = Array.isArray(rawUtterances)
+                            ? (rawUtterances as Record<string, unknown>[])
+                                .map((u) => ({
+                                  speaker: String(u?.speaker ?? '?').trim() || '?',
+                                  text: String(u?.text ?? '').trim(),
+                                  start: typeof u?.start === 'number' ? u.start : 0,
+                                }))
+                                .filter((u) => u.text.length > 0)
+                            : [];
+                          const transcriptTranslatedEn = String(
+                            (meta as { transcriptTranslatedEn?: string }).transcriptTranslatedEn || ''
+                          ).trim();
                           const perf = meta.callPerformance;
                           const durationLabel = log.duration
                             ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s`
@@ -2222,6 +2310,8 @@ export default function LeadDetailPage() {
                               : '-';
                           const hasAiRow =
                             transcript ||
+                            transcriptUtterances.length > 0 ||
+                            transcriptTranslatedEn ||
                             perf ||
                             ['PENDING', 'PENDING_RETRY', 'DONE', 'FAILED', 'SKIPPED_NO_AUDIO'].includes(procStatus);
 
@@ -2314,7 +2404,18 @@ export default function LeadDetailPage() {
                                         {perf && typeof perf === 'object' && perf.scores && typeof perf.scores === 'object' ? (
                                           <CallScoreRingsRow scores={perf.scores as Record<string, unknown>} />
                                         ) : null}
-                                        {transcript ? (
+                                        {transcriptUtterances.length > 0 ? (
+                                          <CallLogTranscriptConversation
+                                            utterances={transcriptUtterances}
+                                            expanded={Boolean(expandedCallTranscripts[log.id])}
+                                            onToggle={() =>
+                                              setExpandedCallTranscripts((prev) => ({
+                                                ...prev,
+                                                [log.id]: !prev[log.id],
+                                              }))
+                                            }
+                                          />
+                                        ) : transcript ? (
                                           <CallLogTranscriptCollapsible
                                             transcript={transcript}
                                             expanded={Boolean(expandedCallTranscripts[log.id])}
@@ -2327,6 +2428,19 @@ export default function LeadDetailPage() {
                                           />
                                         ) : !perf ? (
                                           <p className="text-gray-400 italic">No transcript yet.</p>
+                                        ) : null}
+                                        {transcriptTranslatedEn ? (
+                                          <div className="space-y-1.5">
+                                            <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">
+                                              English translation
+                                            </p>
+                                            <p className="text-[10px] text-gray-500">
+                                              From AssemblyAI when &quot;Translate to English&quot; is enabled on the integration.
+                                            </p>
+                                            <pre className="whitespace-pre-wrap text-gray-700 text-xs leading-relaxed bg-slate-50 border border-gray-200 rounded-md p-2.5 max-h-64 overflow-y-auto">
+                                              {transcriptTranslatedEn}
+                                            </pre>
+                                          </div>
                                         ) : null}
                                       </div>
                                     </details>

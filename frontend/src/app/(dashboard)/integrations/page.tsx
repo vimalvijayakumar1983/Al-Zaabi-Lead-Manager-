@@ -577,6 +577,11 @@ export default function IntegrationsPage() {
   const [aaApiKey, setAaApiKey] = useState('');
   const [aaDetectLang, setAaDetectLang] = useState(true);
   const [aaSpeechModel, setAaSpeechModel] = useState<'universal-2' | 'universal-3-pro'>('universal-2');
+  const [aaSpeakerLabels, setAaSpeakerLabels] = useState(true);
+  const [aaPunctuate, setAaPunctuate] = useState(true);
+  const [aaFormatText, setAaFormatText] = useState(true);
+  const [aaTranslateEn, setAaTranslateEn] = useState(false);
+  const [aaTranslationFormal, setAaTranslationFormal] = useState(false);
 
   // State: Webhook form
   const [webhookName, setWebhookName] = useState('');
@@ -807,6 +812,11 @@ export default function IntegrationsPage() {
           const sm = String((cfg as { speechModel?: string }).speechModel || '').trim();
           setAaSpeechModel(sm === 'universal-3-pro' ? 'universal-3-pro' : 'universal-2');
         }
+        setAaSpeakerLabels((cfg as { speakerLabels?: boolean }).speakerLabels !== false);
+        setAaPunctuate((cfg as { punctuate?: boolean }).punctuate !== false);
+        setAaFormatText((cfg as { formatText?: boolean }).formatText !== false);
+        setAaTranslateEn((cfg as { translateToEnglish?: boolean }).translateToEnglish === true);
+        setAaTranslationFormal((cfg as { translationFormal?: boolean }).translationFormal === true);
         break;
       default:
         break;
@@ -881,6 +891,11 @@ export default function IntegrationsPage() {
         setAaApiKey('');
         setAaDetectLang(true);
         setAaSpeechModel('universal-2');
+        setAaSpeakerLabels(true);
+        setAaPunctuate(true);
+        setAaFormatText(true);
+        setAaTranslateEn(false);
+        setAaTranslationFormal(false);
         break;
       default:
         break;
@@ -1016,6 +1031,11 @@ export default function IntegrationsPage() {
           config: {
             detectLanguage: aaDetectLang,
             speechModel: aaSpeechModel,
+            speakerLabels: aaSpeakerLabels,
+            punctuate: aaPunctuate,
+            formatText: aaFormatText,
+            translateToEnglish: aaTranslateEn,
+            translationFormal: aaTranslationFormal,
           },
           organizationId: activeDivisionId || undefined,
         };
@@ -2048,8 +2068,56 @@ export default function IntegrationsPage() {
                 onChange={(e) => setAaDetectLang(e.target.checked)}
                 className="rounded border-gray-300"
               />
-              Enable automatic language detection
+              Language detection (<code className="text-[11px]">language_detection</code>) — off if division forces a
+              language
             </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aaSpeakerLabels}
+                onChange={(e) => setAaSpeakerLabels(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Speaker labels / diarization (<code className="text-[11px]">speaker_labels</code>)
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aaPunctuate}
+                onChange={(e) => setAaPunctuate(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Punctuation &amp; casing (<code className="text-[11px]">punctuate</code>)
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aaFormatText}
+                onChange={(e) => setAaFormatText(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Text formatting (<code className="text-[11px]">format_text</code>)
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aaTranslateEn}
+                onChange={(e) => setAaTranslateEn(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Translate transcript to English (AssemblyAI Speech Understanding — shows under call transcript)
+            </label>
+            {aaTranslateEn ? (
+              <label className="flex items-center gap-2 text-sm cursor-pointer ml-6">
+                <input
+                  type="checkbox"
+                  checked={aaTranslationFormal}
+                  onChange={(e) => setAaTranslationFormal(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Use formal English style for translation
+              </label>
+            ) : null}
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs space-y-1">
               <p className="font-medium text-text-primary">PBX webhook (POST)</p>
               <code className="block break-all select-all bg-white border rounded px-2 py-1">
