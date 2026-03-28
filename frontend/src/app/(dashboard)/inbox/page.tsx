@@ -30,7 +30,7 @@ import {
   Archive, Tag, Filter, MoreHorizontal, Bookmark, Pin,
   ChevronRight, AlertCircle, UserPlus, Hash, AtSign, Briefcase, Paperclip,
   Calendar, DollarSign, MapPin, Link2, Copy, CornerUpLeft, FileText, Image, Download,
-  Pencil, Trash2, Ban, ArrowUpDown, Mic, Square,
+  Pencil, Trash2, Ban, ArrowUpDown, Mic, Square, TrendingUp,
 } from 'lucide-react';
 
 // ─── Platform Icons (SVG) ───────────────────────────────────────────
@@ -272,13 +272,15 @@ function InboxContent() {
   const [sendingCount, setSendingCount] = useState(0);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
 
-  // Right panel tabs: info | notes | canned | attachments
-  const [rightTab, setRightTab] = useState<'info' | 'notes' | 'canned' | 'attachments'>('info');
+  // Right panel tabs: info | notes | attachments (quick replies open from composer popover)
+  const [rightTab, setRightTab] = useState<'info' | 'notes' | 'attachments'>('info');
 
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  const [showChatHeaderMenu, setShowChatHeaderMenu] = useState(false);
+  const [showQuickRepliesPopover, setShowQuickRepliesPopover] = useState(false);
   const [showConvoActions, setShowConvoActions] = useState<string | null>(null);
   const [pinnedConvos, setPinnedConvos] = useState<Set<string>>(new Set());
   const [inboxSortBy, setInboxSortBy] = useState<'latest' | 'oldest' | 'unread' | 'name'>('latest');
@@ -1029,6 +1031,7 @@ function InboxContent() {
   // ─── Insert canned response ───────────────────────────────────────
   const insertCanned = (response: CannedResponse) => {
     setMessageText(response.body);
+    setShowQuickRepliesPopover(false);
     setRightTab('info');
     inputRef.current?.focus();
   };
@@ -1478,77 +1481,93 @@ function InboxContent() {
         ) : (
           <>
             {/* ── Chat header ───────────────────────────────────────── */}
-            <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 border-b border-border bg-white shadow-xs z-10">
-              <button className="btn-icon md:hidden -ml-1 flex-shrink-0" onClick={() => setMobileView('list')}>
+            <div className="relative z-10 flex items-center gap-3 border-b border-slate-200/80 bg-white px-4 py-3 sm:px-5">
+              <button className="btn-icon md:hidden -ml-1 flex-shrink-0 rounded-full hover:bg-slate-100" onClick={() => setMobileView('list')}>
                 <ArrowLeft className="h-5 w-5" />
               </button>
 
-              {/* Contact avatar */}
               <div
-                className="h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-sm"
-                style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
+                className="h-11 w-11 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-md ring-2 ring-white"
+                style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'WHATSAPP'] || '#25D366' }}
               >
                 {getDisplayInitials(leadInfo?.firstName, leadInfo?.lastName)}
               </div>
 
-              {/* Contact info */}
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-text-primary truncate">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[15px] font-bold text-slate-900 truncate tracking-tight">
                     {leadInfo ? getDisplayName(leadInfo.firstName, leadInfo.lastName) : 'Loading...'}
                   </h3>
-                  {/* Status badge with dropdown */}
-                  {leadInfo && (
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowStatusDropdown(!showStatusDropdown)}
-                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium transition-colors ${
-                          STATUS_COLORS[leadInfo.status]?.bg || 'bg-gray-50'
-                        } ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}
-                      >
-                        <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {getStatusLabel(leadInfo.status || 'NEW')}
-                        <ChevronDown className="h-2.5 w-2.5" />
-                      </button>
-
-                      {showStatusDropdown && (
-                        <div className="absolute top-full left-0 mt-1 bg-white border border-border rounded-lg shadow-modal py-1 z-20 min-w-[140px]">
-                          {Object.entries(STATUS_COLORS).map(([status, style]) => (
-                            <button
-                              key={status}
-                              onClick={() => handleStatusUpdate(status)}
-                              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-surface-secondary transition-colors ${
-                                leadInfo.status === status ? 'bg-surface-tertiary font-medium' : ''
-                              }`}
-                            >
-                              <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-                              {getStatusLabel(status)}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                  {leadInfo?.status === 'NEW' && (
+                    <span className="inline-flex items-center rounded-full bg-pink-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-pink-700">
+                      New
+                    </span>
                   )}
                 </div>
-                <div className="flex items-center gap-2 text-2xs text-text-tertiary">
-                  {leadInfo?.company && <span className="truncate">{leadInfo.company}</span>}
-                  {leadInfo?.email && <span className="truncate hidden sm:inline">&middot; {leadInfo.email}</span>}
-                </div>
+                {(leadInfo?.company || leadInfo?.email) && (
+                  <p className="mt-0.5 text-xs text-slate-500 truncate">
+                    {[leadInfo?.company, leadInfo?.email].filter(Boolean).join(' · ')}
+                  </p>
+                )}
               </div>
 
-              {/* Header actions */}
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <button onClick={() => router.push(`/leads/${selectedLeadId}`)} className="btn-icon" title="View lead">
-                  <ExternalLink className="h-4 w-4" />
-                </button>
-                <button onClick={() => setShowRightPanel(!showRightPanel)} className="btn-icon hidden lg:flex" title="Toggle panel">
-                  <User className="h-4 w-4" />
-                </button>
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                {leadInfo?.phone && (
+                  <a
+                    href={`tel:${formatPhone(leadInfo.phone).replace(/\s/g, '')}`}
+                    className="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                    title="Call"
+                  >
+                    <Phone className="h-[18px] w-[18px]" />
+                  </a>
+                )}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowChatHeaderMenu((v) => !v)}
+                    className="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                    title="More"
+                  >
+                    <MoreHorizontal className="h-[18px] w-[18px]" />
+                  </button>
+                  {showChatHeaderMenu && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowChatHeaderMenu(false)} />
+                      <div
+                        className="absolute right-0 top-full z-50 mt-1 min-w-[200px] rounded-xl border border-slate-200 bg-white py-1 shadow-lg"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+                          onClick={() => {
+                            setShowChatHeaderMenu(false);
+                            router.push(`/leads/${selectedLeadId}`);
+                          }}
+                        >
+                          <ExternalLink className="h-4 w-4 text-slate-500" />
+                          View lead
+                        </button>
+                        <button
+                          type="button"
+                          className="hidden w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 lg:flex"
+                          onClick={() => {
+                            setShowChatHeaderMenu(false);
+                            setShowRightPanel((v) => !v);
+                          }}
+                        >
+                          <User className="h-4 w-4 text-slate-500" />
+                          {showRightPanel ? 'Hide sidebar' : 'Show sidebar'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
             {/* ── Messages area (full loading only when no messages yet; refresh in place for real-time feel) ─────────────────────────────────────── */}
-            <div className="flex-1 min-h-0 overflow-hidden bg-[#e5ddd5]" onClick={() => setMenuOpenMsgId(null)}>
+            <div className="flex-1 min-h-0 overflow-hidden bg-slate-100/90" onClick={() => { setMenuOpenMsgId(null); setShowQuickRepliesPopover(false); }}>
               {loadingMessages && messages.length === 0 ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="flex flex-col items-center gap-2">
@@ -1604,6 +1623,8 @@ function InboxContent() {
                     const isOwnMessage = isOutbound && msg.user?.id === user?.id;
                     const isMenuOpen = menuOpenMsgId === msg.id;
                     const isEditing = editingMsgId === msg.id;
+                    const attachmentCount = msg.metadata?.attachments?.length ?? 0;
+                    const hasAttachments = attachmentCount > 0;
                     return (
                       <div className="px-3 sm:px-5">
                         {showDateSeparator && (
@@ -1659,48 +1680,42 @@ function InboxContent() {
                               </div>
                             )}
 
-                            {/* WhatsApp-style bubble */}
+                            {/* Message card */}
                             <div className="relative group/bubble">
                               <div
-                                className={`rounded-lg px-3 py-2 text-[13px] leading-relaxed relative ${
-                                  isOutbound
-                                    ? 'bg-[#d9fdd3] text-gray-900 rounded-tr-none'
-                                    : 'bg-white text-gray-900 rounded-tl-none shadow-sm'
+                                className={`relative overflow-hidden rounded-2xl border border-slate-200/90 bg-white text-[13px] leading-relaxed text-slate-900 shadow-sm ${
+                                  isOutbound ? 'rounded-tr-md' : 'rounded-tl-md'
                                 } ${msg._optimistic ? 'opacity-70' : ''}`}
                               >
-                                {/* WhatsApp tail */}
-                                <div className={`absolute top-0 w-2 h-3 overflow-hidden ${isOutbound ? '-right-2' : '-left-2'}`}>
-                                  <div className={`w-4 h-4 transform rotate-45 ${isOutbound ? 'bg-[#d9fdd3] -translate-x-2' : 'bg-white translate-x-0'}`} />
-                                </div>
-
-                                {/* Sender name */}
-                                {isOutbound && msg.user && (
-                                  <p className="text-xs font-semibold text-indigo-700 mb-0.5">
-                                    {getDisplayName(msg.user.firstName, msg.user.lastName)}
-                                  </p>
-                                )}
-                                {!isOutbound && (
-                                  <p className="text-xs font-semibold text-teal-700 mb-0.5">
-                                    {getDisplayName(leadInfo?.firstName, leadInfo?.lastName)}
-                                  </p>
-                                )}
-
-                                {(msg.metadata?.referral || msg.metadata?.adReferral) && (
-                                  <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-[10px] font-semibold">
-                                    <Zap className="h-3 w-3" />
-                                    Ad Message
+                                {!msg.isDeleted && !isEditing && (
+                                  <div className="px-3.5 pt-2.5 pb-1">
+                                    {isOutbound && msg.user && (
+                                      <p className="mb-0.5 flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                                        {getDisplayName(msg.user.firstName, msg.user.lastName)}
+                                        <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 ring-2 ring-emerald-100" title="Active" />
+                                      </p>
+                                    )}
+                                    {!isOutbound && (
+                                      <p className="mb-0.5 text-xs font-semibold text-slate-700">
+                                        {getDisplayName(leadInfo?.firstName, leadInfo?.lastName)}
+                                      </p>
+                                    )}
+                                    {(msg.metadata?.referral || msg.metadata?.adReferral) && (
+                                      <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                                        <Zap className="h-3 w-3" />
+                                        Ad Message
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
-                                {/* Deleted message */}
                                 {msg.isDeleted ? (
-                                  <p className="text-sm italic text-gray-400 flex items-center gap-1">
+                                  <div className="flex items-center gap-1 px-3.5 py-3 text-sm italic text-slate-400">
                                     <Ban className="h-3.5 w-3.5" />
                                     This message was deleted
-                                  </p>
+                                  </div>
                                 ) : isEditing ? (
-                                  /* Inline edit */
-                                  <div className="space-y-1.5">
+                                  <div className="space-y-1.5 px-3.5 pb-3">
                                     <textarea
                                       ref={editInputRef}
                                       value={editingBody}
@@ -1709,27 +1724,24 @@ function InboxContent() {
                                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditMessage(msg.id); }
                                         if (e.key === 'Escape') { setEditingMsgId(null); setEditingBody(''); }
                                       }}
-                                      className="w-full text-sm border rounded-md px-2 py-1 resize-none focus:ring-1 focus:ring-brand-500 focus:border-brand-500 bg-white"
+                                      className="w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
                                       rows={2}
                                     />
                                     <div className="flex justify-end gap-1">
-                                      <button onClick={() => { setEditingMsgId(null); setEditingBody(''); }} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-0.5 rounded hover:bg-gray-100">Cancel</button>
-                                      <button onClick={() => handleEditMessage(msg.id)} className="text-xs text-white bg-brand-600 hover:bg-brand-700 px-2 py-0.5 rounded" disabled={!editingBody.trim()}>Save</button>
+                                      <button type="button" onClick={() => { setEditingMsgId(null); setEditingBody(''); }} className="rounded px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-700">Cancel</button>
+                                      <button type="button" onClick={() => handleEditMessage(msg.id)} className="rounded bg-brand-600 px-2 py-0.5 text-xs text-white hover:bg-brand-700" disabled={!editingBody.trim()}>Save</button>
                                     </div>
                                   </div>
                                 ) : (
                                   <>
                                     {msg.subject && (
-                                      <p className="text-2xs font-bold mb-1 text-gray-500">
+                                      <p className="px-3.5 text-2xs font-bold text-slate-500">
                                         Re: {msg.subject}
                                       </p>
                                     )}
-                                    {/* Media attachments (images, audio, video, documents) */}
                                     {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
                                       <div className="space-y-1.5">
                                         {msg.metadata.attachments.map((att: any, ai: number) => {
-                                          // S3 presigned URLs are already absolute (https://...) — use directly.
-                                          // Proxy-served attachments are relative (/inbox/attachments/...) — prefix with /api.
                                           const url = att.url
                                             ? att.url.startsWith('http') ? att.url : `/api${att.url}`
                                             : null;
@@ -1737,14 +1749,14 @@ function InboxContent() {
                                             return (
                                               <div
                                                 key={ai}
-                                                className="flex items-center gap-2 p-2 rounded-lg bg-black/5 border border-black/10 min-w-[220px] max-w-[320px]"
+                                                className="mx-3.5 flex min-w-[220px] max-w-[320px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2"
                                               >
-                                                <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                                <span className="flex-shrink-0 text-lg">{getFileIcon(att.mimeType)}</span>
                                                 <div className="min-w-0 flex-1">
-                                                  <p className="text-2xs font-medium truncate text-gray-800">
+                                                  <p className="truncate text-2xs font-medium text-slate-800">
                                                     {att.filename || 'Attachment'}
                                                   </p>
-                                                  <p className="text-2xs text-gray-500">
+                                                  <p className="text-2xs text-slate-500">
                                                     {att.size ? formatFileSize(att.size) : ''} {att._uploading ? 'Uploading…' : ''}
                                                   </p>
                                                 </div>
@@ -1754,11 +1766,11 @@ function InboxContent() {
 
                                           if (isImageOrSticker(att.mimeType)) {
                                             return (
-                                              <a key={ai} href={url} target="_blank" rel="noopener noreferrer" className="block">
+                                              <a key={ai} href={url} target="_blank" rel="noopener noreferrer" className="block bg-slate-100">
                                                 <img
                                                   src={url}
                                                   alt={att.filename || 'Image'}
-                                                  className="max-w-[280px] max-h-[300px] rounded-lg object-contain cursor-pointer"
+                                                  className="max-h-[300px] w-full cursor-pointer object-contain"
                                                   loading="lazy"
                                                 />
                                               </a>
@@ -1767,8 +1779,8 @@ function InboxContent() {
 
                                           if (isAudioFile(att.mimeType)) {
                                             return (
-                                              <div key={ai} className="flex items-center gap-2 min-w-[200px] max-w-[300px]">
-                                                <audio controls preload="none" className="w-full h-8 [&::-webkit-media-controls-panel]:bg-transparent">
+                                              <div key={ai} className="mx-3.5 flex min-w-[200px] max-w-[300px] items-center gap-2">
+                                                <audio controls preload="none" className="h-8 w-full [&::-webkit-media-controls-panel]:bg-transparent">
                                                   <source src={url} type={att.mimeType} />
                                                 </audio>
                                               </div>
@@ -1777,11 +1789,11 @@ function InboxContent() {
 
                                           if (isVideoFile(att.mimeType)) {
                                             return (
-                                              <div key={ai} className="max-w-[300px]">
+                                              <div key={ai} className="mx-3.5 max-w-[300px]">
                                                 <video
                                                   controls
                                                   preload="metadata"
-                                                  className="rounded-lg max-w-full max-h-[240px]"
+                                                  className="max-h-[240px] w-full rounded-lg"
                                                 >
                                                   <source src={url} type={att.mimeType} />
                                                 </video>
@@ -1795,39 +1807,38 @@ function InboxContent() {
                                               href={url}
                                               target="_blank"
                                               rel="noopener noreferrer"
-                                              className="flex items-center gap-2 p-2 rounded-lg transition-colors bg-black/5 hover:bg-black/10"
+                                              className="mx-3.5 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2 transition-colors hover:bg-slate-100"
                                             >
-                                              <span className="text-lg flex-shrink-0">{getFileIcon(att.mimeType)}</span>
+                                              <span className="flex-shrink-0 text-lg">{getFileIcon(att.mimeType)}</span>
                                               <div className="min-w-0 flex-1">
-                                                <p className="text-2xs font-medium truncate text-gray-800">{att.filename}</p>
-                                                <p className="text-2xs text-gray-500">{formatFileSize(att.size)}</p>
+                                                <p className="truncate text-2xs font-medium text-slate-800">{att.filename}</p>
+                                                <p className="text-2xs text-slate-500">{formatFileSize(att.size)}</p>
                                               </div>
-                                              <Download className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                                              <Download className="h-3 w-3 flex-shrink-0 text-slate-400" />
                                             </a>
                                           );
                                         })}
                                       </div>
                                     )}
 
-                                    {/* Location card */}
                                     {isLocationMessage(msg) && (
-                                      <div className="mt-1 rounded-lg border border-black/10 bg-black/5 p-2 min-w-[220px]">
-                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-700">
-                                          <MapPin className="h-3.5 w-3.5" />
+                                      <div className="mx-3.5 mb-1 min-w-[220px] rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                                          <MapPin className="h-3.5 w-3.5 text-emerald-600" />
                                           Location
                                         </div>
                                         {msg.metadata?.location?.name ? (
-                                          <p className="text-xs text-gray-700 mt-1">{msg.metadata.location.name}</p>
+                                          <p className="mt-1 text-xs text-slate-700">{msg.metadata.location.name}</p>
                                         ) : null}
                                         {msg.metadata?.location?.address ? (
-                                          <p className="text-2xs text-gray-500 mt-0.5">{msg.metadata.location.address}</p>
+                                          <p className="mt-0.5 text-2xs text-slate-500">{msg.metadata.location.address}</p>
                                         ) : null}
                                         {getGoogleMapsLink(msg.metadata?.location) ? (
                                           <a
                                             href={getGoogleMapsLink(msg.metadata?.location)}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-1 text-2xs text-brand-600 hover:text-brand-700 mt-1"
+                                            className="mt-2 inline-flex items-center gap-1 text-2xs font-medium text-blue-600 hover:text-blue-700"
                                           >
                                             <ExternalLink className="h-3 w-3" />
                                             Open in Maps
@@ -1836,61 +1847,111 @@ function InboxContent() {
                                       </div>
                                     )}
 
-                                    {/* Text body — hide placeholder labels when media is present */}
                                     {msg.body && !(msg.metadata?.attachments?.length > 0 && isMediaPlaceholderBody(msg.body)) && (
-                                      <p className={`whitespace-pre-wrap break-words ${msg.metadata?.attachments?.length > 0 ? 'mt-1' : ''}`}>{msg.body}</p>
+                                      <p className={`whitespace-pre-wrap break-words px-3.5 ${hasAttachments || isLocationMessage(msg) ? 'pb-2 pt-1' : 'pb-1'}`}>{msg.body}</p>
+                                    )}
+
+                                    {!isEditing && !msg.isDeleted && !hasAttachments && (
+                                      <div className="flex items-center justify-end gap-1 border-t border-slate-100/80 px-3.5 py-2">
+                                        {msg.isEdited && (
+                                          <span className="text-[10px] italic text-slate-400">edited</span>
+                                        )}
+                                        <span className="text-[10px] text-slate-400">
+                                          {formatTime(msg.createdAt)}
+                                        </span>
+                                        {isOutbound && (
+                                          <>
+                                            {msg._optimistic ? (
+                                              <Check className="h-3 w-3 text-slate-400" />
+                                            ) : msg.channel === 'WHATSAPP' ? (
+                                              (() => {
+                                                const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                                const waStatus =
+                                                  typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+
+                                                if (waStatus === 'READ') return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                                if (waStatus === 'DELIVERED')
+                                                  return <CheckCheck className="h-3 w-3 text-slate-400" />;
+                                                if (waStatus === 'SENT') return <Check className="h-3 w-3 text-slate-400" />;
+                                                if (waStatus === 'FAILED') return <AlertCircle className="h-3 w-3 text-red-500" />;
+                                                return <CheckCheck className="h-3 w-3 text-blue-500" />;
+                                              })()
+                                            ) : (
+                                              <CheckCheck className="h-3 w-3 text-blue-500" />
+                                            )}
+                                          </>
+                                        )}
+                                        {isOutbound && msg.channel === 'WHATSAPP' && (() => {
+                                          const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                          const waStatus = typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+                                          if (waStatus !== 'FAILED') return null;
+                                          return (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRetryWhatsAppMessage(msg.id)}
+                                              className="ml-1 text-[10px] text-red-600 underline hover:text-red-700"
+                                              disabled={inboxMutations.retryWhatsAppMessage.isPending}
+                                              title="Retry WhatsApp send"
+                                            >
+                                              Retry
+                                            </button>
+                                          );
+                                        })()}
+                                      </div>
+                                    )}
+
+                                    {!isEditing && !msg.isDeleted && hasAttachments && (
+                                      <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-violet-600 via-fuchsia-500 to-pink-500 px-3 py-2 text-[11px] font-medium text-white">
+                                        <span>
+                                          [{attachmentCount} attachment{attachmentCount !== 1 ? 's' : ''}]
+                                        </span>
+                                        <span className="flex flex-shrink-0 items-center gap-1">
+                                          {msg.isEdited && (
+                                            <span className="text-[10px] italic text-white/80">edited</span>
+                                          )}
+                                          <span className="tabular-nums text-white/95">{formatTime(msg.createdAt)}</span>
+                                          {isOutbound && (
+                                            <>
+                                              {msg._optimistic ? (
+                                                <Check className="h-3 w-3 text-white/80" />
+                                              ) : msg.channel === 'WHATSAPP' ? (
+                                                (() => {
+                                                  const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                                  const waStatus =
+                                                    typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+
+                                                  if (waStatus === 'READ') return <CheckCheck className="h-3 w-3 text-sky-200" />;
+                                                  if (waStatus === 'DELIVERED')
+                                                    return <CheckCheck className="h-3 w-3 text-white/70" />;
+                                                  if (waStatus === 'SENT') return <Check className="h-3 w-3 text-white/70" />;
+                                                  if (waStatus === 'FAILED') return <AlertCircle className="h-3 w-3 text-amber-200" />;
+                                                  return <CheckCheck className="h-3 w-3 text-sky-200" />;
+                                                })()
+                                              ) : (
+                                                <CheckCheck className="h-3 w-3 text-sky-200" />
+                                              )}
+                                            </>
+                                          )}
+                                          {isOutbound && msg.channel === 'WHATSAPP' && (() => {
+                                            const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
+                                            const waStatus = typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
+                                            if (waStatus !== 'FAILED') return null;
+                                            return (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleRetryWhatsAppMessage(msg.id)}
+                                                className="ml-1 text-[10px] font-semibold text-white underline hover:text-white/90"
+                                                disabled={inboxMutations.retryWhatsAppMessage.isPending}
+                                                title="Retry WhatsApp send"
+                                              >
+                                                Retry
+                                              </button>
+                                            );
+                                          })()}
+                                        </span>
+                                      </div>
                                     )}
                                   </>
-                                )}
-
-                                {/* Footer: time, edited, ticks */}
-                                {!isEditing && (
-                                  <div className="flex items-center gap-1 mt-1 justify-end">
-                                    {msg.isEdited && !msg.isDeleted && (
-                                      <span className="text-[10px] text-gray-400 italic">edited</span>
-                                    )}
-                                    <span className="text-[10px] text-gray-400">
-                                      {formatTime(msg.createdAt)}
-                                    </span>
-                                    {isOutbound && (
-                                      <>
-                                        {msg._optimistic ? (
-                                          <Check className="h-3 w-3 text-gray-400" />
-                                        ) : msg.channel === 'WHATSAPP' ? (
-                                          (() => {
-                                            const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
-                                            const waStatus =
-                                              typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
-
-                                            if (waStatus === 'READ') return <CheckCheck className="h-3 w-3 text-blue-500" />;
-                                            if (waStatus === 'DELIVERED')
-                                              return <CheckCheck className="h-3 w-3 text-gray-400" />;
-                                            if (waStatus === 'SENT') return <Check className="h-3 w-3 text-gray-400" />;
-                                            if (waStatus === 'FAILED') return <AlertCircle className="h-3 w-3 text-red-500" />;
-                                            return <CheckCheck className="h-3 w-3 text-blue-500" />;
-                                          })()
-                                        ) : (
-                                          <CheckCheck className="h-3 w-3 text-blue-500" />
-                                        )}
-                                      </>
-                                    )}
-                                    {isOutbound && msg.channel === 'WHATSAPP' && (() => {
-                                      const waStatusRaw = msg.metadata?.waStatus ?? msg.metadata?.waStatusRaw;
-                                      const waStatus = typeof waStatusRaw === 'string' ? waStatusRaw.toUpperCase() : '';
-                                      if (waStatus !== 'FAILED') return null;
-                                      return (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleRetryWhatsAppMessage(msg.id)}
-                                          className="text-[10px] text-red-600 hover:text-red-700 underline ml-1"
-                                          disabled={inboxMutations.retryWhatsAppMessage.isPending}
-                                          title="Retry WhatsApp send"
-                                        >
-                                          Retry
-                                        </button>
-                                      );
-                                    })()}
-                                  </div>
                                 )}
                               </div>
 
@@ -1920,7 +1981,7 @@ function InboxContent() {
 
             {/* ── Message composer ───────────────────────────────────── */}
             <div
-              className={`border-t bg-white transition-colors ${isDragging ? 'border-brand-400 bg-brand-50/30' : 'border-border'}`}
+              className={`border-t border-slate-200/90 bg-gradient-to-b from-white to-slate-50/90 transition-colors ${isDragging ? 'border-emerald-300 bg-emerald-50/40' : ''}`}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
@@ -1965,23 +2026,54 @@ function InboxContent() {
                 </div>
               )}
 
+              <div className="relative px-4 pb-3 pt-2.5">
+                {showQuickRepliesPopover && (
+                  <>
+                    <div className="fixed inset-0 z-[35]" onClick={() => setShowQuickRepliesPopover(false)} />
+                    <div className="absolute bottom-full left-0 right-0 z-[45] mb-2 max-h-64 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl sm:left-auto sm:right-0 sm:w-[min(100%,360px)]">
+                      <p className="px-2 py-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400">Quick replies</p>
+                      {cannedResponses.length === 0 ? (
+                        <p className="px-2 py-4 text-center text-xs text-slate-500">No quick replies configured</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {cannedResponses.map((cr) => (
+                            <button
+                              key={cr.id}
+                              type="button"
+                              onClick={() => insertCanned(cr)}
+                              className="w-full rounded-xl border border-transparent p-3 text-left transition-colors hover:border-slate-200 hover:bg-slate-50"
+                            >
+                              <span className="text-xs font-semibold text-slate-800">{cr.title}</span>
+                              <p className="mt-0.5 line-clamp-2 text-2xs text-slate-500">{cr.body}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
               {/* Channel bar */}
-              <div className="flex items-center gap-2 px-3 sm:px-4 pt-2.5 pb-1">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <button
-                    onClick={() => setShowChannelPicker(!showChannelPicker)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-2xs font-semibold bg-surface-tertiary hover:bg-surface-secondary transition-colors"
+                    type="button"
+                    onClick={() => {
+                      setShowQuickRepliesPopover(false);
+                      setShowChannelPicker(!showChannelPicker);
+                    }}
+                    className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-2xs font-semibold shadow-sm transition-colors hover:bg-slate-50"
                     style={{ color: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
                   >
                     <PlatformIcon platform={sendChannel} size={12} />
                     {PLATFORM_LABELS[sendChannel]?.split(' ')[0] || sendChannel}
-                    <ChevronDown className="h-3 w-3 text-text-tertiary" />
+                    <ChevronDown className="h-3 w-3 text-slate-400" />
                   </button>
 
                   {showChannelPicker && (
                     <>
-                      <div className="fixed inset-0 z-10" onClick={() => setShowChannelPicker(false)} />
-                      <div className="absolute bottom-full left-0 mb-1.5 bg-white border border-border rounded-xl shadow-modal py-1.5 z-20 min-w-[180px]">
+                      <div className="fixed inset-0 z-[35]" onClick={() => setShowChannelPicker(false)} />
+                      <div className="absolute bottom-full left-0 z-[45] mb-1.5 min-w-[180px] rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl">
                         <p className="px-3 py-1 text-2xs font-semibold text-text-tertiary uppercase tracking-wider">Reply via</p>
                         {CHANNEL_FILTERS.filter(f => f.key !== 'ALL').map(f => (
                           <button
@@ -2003,38 +2095,56 @@ function InboxContent() {
                 {sendChannel === 'WHATSAPP' && (
                   <button
                     type="button"
-                    onClick={openTemplateModal}
-                    className="px-2.5 py-1 rounded-lg text-2xs font-semibold bg-surface-tertiary hover:bg-surface-secondary transition-colors text-text-secondary"
+                    onClick={() => {
+                      setShowQuickRepliesPopover(false);
+                      openTemplateModal();
+                    }}
+                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-2xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
                   >
                     Template
                   </button>
                 )}
 
-                <div className="flex-1" />
+                <div className="min-w-[8px] flex-1" />
 
-                {/* Quick actions */}
                 <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-2xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
+                  type="button"
+                  onClick={() => {
+                    setShowChannelPicker(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="flex items-center gap-1.5 rounded-full px-2 py-1.5 text-2xs font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-800"
                   title="Attach files"
                 >
-                  <Paperclip className="h-3 w-3" />
+                  <Paperclip className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Attach</span>
                 </button>
                 <button
-                  onClick={() => setRightTab('canned')}
-                  className="text-2xs text-text-tertiary hover:text-brand-600 flex items-center gap-1 transition-colors"
-                  title="Canned responses"
+                  type="button"
+                  onClick={() => {
+                    setShowChannelPicker(false);
+                    setShowQuickRepliesPopover((v) => !v);
+                  }}
+                  className={`flex items-center gap-1.5 rounded-full px-2 py-1.5 text-2xs font-medium transition-colors ${
+                    showQuickRepliesPopover ? 'bg-violet-100 text-violet-800' : 'text-slate-500 hover:bg-white hover:text-violet-700'
+                  }`}
+                  title="Quick replies"
                 >
-                  <Zap className="h-3 w-3" />
+                  <Zap className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Quick Replies</span>
                 </button>
                 <button
-                  onClick={() => setRightTab('notes')}
-                  className="text-2xs text-text-tertiary hover:text-amber-600 flex items-center gap-1 transition-colors"
+                  type="button"
+                  onClick={() => {
+                    setShowChannelPicker(false);
+                    setShowQuickRepliesPopover(false);
+                    setShowRightPanel(true);
+                    setRightTab('notes');
+                  }}
+                  className="flex items-center gap-1.5 rounded-full px-2 py-1.5 text-2xs font-medium text-slate-500 transition-colors hover:bg-white hover:text-amber-700"
                   title="Internal notes"
                 >
-                  <StickyNote className="h-3 w-3" />
+                  <StickyNote className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Notes</span>
                 </button>
               </div>
@@ -2050,7 +2160,7 @@ function InboxContent() {
               />
 
               {/* Input area */}
-              <div className="flex items-end gap-2 px-3 sm:px-4 pb-3">
+              <div className="flex items-end gap-2">
                 {isRecording ? (
                   <>
                     <button
@@ -2076,22 +2186,21 @@ function InboxContent() {
                 ) : (
                   <>
                     <button
+                      type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-surface-secondary text-text-tertiary hover:text-text-primary transition-all"
+                      className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-800"
                       title="Attach file"
                     >
-                      <Paperclip className="h-4 w-4" />
+                      <Paperclip className="h-[18px] w-[18px]" />
                     </button>
                     <textarea
                       ref={inputRef}
                       value={messageText}
                       onChange={(e) => setMessageText(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      placeholder={`Message via ${PLATFORM_LABELS[sendChannel]?.split(' ')[0] || sendChannel}...`}
+                      placeholder={`Message via ${PLATFORM_LABELS[sendChannel] || sendChannel}...`}
                       rows={1}
-                      className="flex-1 resize-none rounded-xl border border-border bg-surface-secondary/50 px-3.5 py-2.5 text-sm
-                        placeholder:text-text-tertiary focus:bg-white focus:border-brand-400 focus:ring-2 focus:ring-brand-500/15
-                        focus:outline-none transition-all max-h-28 min-h-[40px]"
+                      className="min-h-[44px] max-h-28 flex-1 resize-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm placeholder:text-slate-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
                       onInput={(e) => {
                         const el = e.target as HTMLTextAreaElement;
                         el.style.height = 'auto';
@@ -2100,29 +2209,34 @@ function InboxContent() {
                     />
                     {!messageText.trim() && attachedFiles.length === 0 ? (
                       <button
+                        type="button"
                         onClick={startRecording}
-                        className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-tertiary hover:bg-green-50 text-text-tertiary hover:text-green-600 transition-all disabled:opacity-40"
+                        className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm transition-all hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40"
                         title="Record voice note"
                       >
-                        <Mic className="h-4 w-4" />
+                        <Mic className="h-[18px] w-[18px]" />
                       </button>
                     ) : (
                       <button
+                        type="button"
                         onClick={handleSend}
                         disabled={(!messageText.trim() && attachedFiles.length === 0)}
-                        className="h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-40"
-                        style={{ backgroundColor: PLATFORM_COLORS[sendChannel] || '#6366f1' }}
+                        className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl text-white shadow-md transition-all disabled:opacity-40 disabled:shadow-none"
+                        style={{
+                          background: `linear-gradient(135deg, ${PLATFORM_COLORS[sendChannel] || '#6366f1'} 0%, #a855f7 100%)`,
+                        }}
                         title="Send"
                       >
                         {sendingCount > 0 ? (
-                          <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
                         ) : (
-                          <Send className="h-4 w-4 text-white" />
+                          <Send className="h-[18px] w-[18px]" />
                         )}
                       </button>
                     )}
                   </>
                 )}
+              </div>
               </div>
             </div>
             {showTemplateModal && (
@@ -2204,28 +2318,26 @@ function InboxContent() {
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* RIGHT: Lead Info / Notes / Canned Responses                    */}
+      {/* RIGHT: Lead sidebar (Contact / Notes / Files)                   */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {selectedLeadId && showRightPanel && leadInfo && (
-        <div className="hidden lg:flex flex-col w-72 xl:w-80 border-l border-border bg-white overflow-hidden">
-          {/* Tab bar */}
-          <div className="flex border-b border-border">
+        <div className="hidden lg:flex min-w-[300px] max-w-[400px] w-[min(100%,380px)] flex-shrink-0 flex-col overflow-hidden border-l border-slate-200/90 bg-gradient-to-b from-white to-slate-50/80">
+          <div className="flex gap-1 border-b border-slate-200/80 bg-white px-3 py-3">
             {([
-              { key: 'info', label: 'Contact', icon: User },
-              { key: 'notes', label: 'Notes', icon: StickyNote },
-              { key: 'attachments', label: 'Files', icon: Paperclip },
-              { key: 'canned', label: 'Quick Replies', icon: Zap },
-            ] as const).map(tab => (
+              { key: 'info' as const, label: 'Contact' },
+              { key: 'notes' as const, label: 'Notes' },
+              { key: 'attachments' as const, label: 'Files' },
+            ]).map((tab) => (
               <button
                 key={tab.key}
+                type="button"
                 onClick={() => setRightTab(tab.key)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-2xs font-semibold transition-colors ${
+                className={`flex-1 rounded-full px-3 py-2 text-center text-2xs font-semibold transition-all ${
                   rightTab === tab.key
-                    ? 'text-brand-600 border-b-2 border-brand-600'
-                    : 'text-text-tertiary hover:text-text-secondary'
+                    ? 'bg-slate-900 text-white shadow-md shadow-slate-900/15'
+                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
                 }`}
               >
-                <tab.icon className="h-3.5 w-3.5" />
                 {tab.label}
               </button>
             ))}
@@ -2234,139 +2346,184 @@ function InboxContent() {
           <div className="flex-1 overflow-y-auto">
             {/* ── Contact Info Tab ──────────────────────────────────── */}
             {rightTab === 'info' && (
-              <div className="p-4">
-                {/* Contact card */}
-                <div className="flex flex-col items-center text-center mb-5">
+              <div className="flex h-full flex-col p-4">
+                <div className="mb-5 flex flex-col items-center text-center">
                   <div
-                    className="h-16 w-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-3 shadow-md"
-                    style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'CHAT'] || '#6366f1' }}
+                    className="mb-3 flex h-20 w-20 items-center justify-center rounded-full text-2xl font-bold text-white shadow-lg ring-4 ring-white"
+                    style={{ backgroundColor: PLATFORM_COLORS[selectedConvo?.lastMessage?.platform || 'WHATSAPP'] || '#25D366' }}
                   >
                     {getDisplayInitials(leadInfo.firstName, leadInfo.lastName)}
                   </div>
-                  <p className="text-sm font-bold text-text-primary">
+                  <p className="text-base font-bold text-slate-900">
                     {getDisplayName(leadInfo.firstName, leadInfo.lastName)}
                   </p>
                   {leadInfo.jobTitle && (
-                    <p className="text-xs text-text-tertiary mt-0.5">{leadInfo.jobTitle}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">{leadInfo.jobTitle}</p>
                   )}
                   {leadInfo.company && (
-                    <p className="text-xs text-text-secondary flex items-center gap-1 mt-0.5">
-                      <Building2 className="h-3 w-3" /> {leadInfo.company}
+                    <p className="mt-0.5 flex items-center justify-center gap-1 text-xs text-slate-600">
+                      <Building2 className="h-3 w-3 shrink-0" /> {leadInfo.company}
                     </p>
                   )}
 
-                  {/* Score ring + View Lead link */}
-                  <div className="mt-3 flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold">
-                      <Star className="h-3.5 w-3.5" />
-                      Score: {leadInfo.score}/100
-                    </div>
+                  <div className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-pink-100 bg-pink-50 px-3 py-1.5 text-xs font-semibold text-pink-900">
+                    <TrendingUp className="h-3.5 w-3.5 text-pink-600" />
+                    Score: {leadInfo.score}/100
                   </div>
                   <button
+                    type="button"
                     onClick={() => router.push(`/leads/${leadInfo.id}`)}
-                    className="mt-2 text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+                    className="mt-2 text-xs font-semibold text-blue-600 transition-colors hover:text-blue-800"
                   >
-                    <ExternalLink className="h-3 w-3" />
-                    View Lead Details
+                    View Lead Details →
                   </button>
                 </div>
 
-                {/* Contact details */}
-                <div className="space-y-0.5 mb-4">
-                  <p className="text-2xs font-bold text-text-tertiary uppercase tracking-wider mb-2">Contact Details</p>
+                <div className="mb-4 space-y-0.5">
+                  <p className="mb-2 text-2xs font-bold uppercase tracking-wider text-slate-400">Contact details</p>
                   {[
                     { icon: Mail, label: 'Email', value: leadInfo.email },
                     { icon: Phone, label: 'Phone', value: formatPhone(leadInfo.phone) },
                     { icon: Building2, label: 'Company', value: leadInfo.company },
                     { icon: Briefcase, label: 'Job Title', value: leadInfo.jobTitle },
                   ].filter(d => d.value).map(d => (
-                    <div key={d.label} className="flex items-center gap-2.5 py-1.5 px-2 rounded-lg hover:bg-surface-secondary transition-colors group/detail">
-                      <d.icon className="h-3.5 w-3.5 text-text-tertiary flex-shrink-0" />
+                    <div key={d.label} className="group/detail flex items-center gap-2.5 rounded-xl px-2 py-2 transition-colors hover:bg-white">
+                      <d.icon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-2xs text-text-tertiary">{d.label}</p>
-                        <p className="text-xs text-text-primary truncate">{d.value}</p>
+                        <p className="text-2xs text-slate-400">{d.label}</p>
+                        <p className="truncate text-xs font-medium text-slate-800">{d.value}</p>
                       </div>
                       <button
+                        type="button"
                         onClick={() => navigator.clipboard.writeText(d.value || '')}
-                        className="opacity-0 group-hover/detail:opacity-100 transition-opacity"
+                        className="opacity-0 transition-opacity group-hover/detail:opacity-100"
                         title="Copy"
                       >
-                        <Copy className="h-3 w-3 text-text-tertiary" />
+                        <Copy className="h-3 w-3 text-slate-400" />
                       </button>
                     </div>
                   ))}
                 </div>
 
-                <div className="h-px bg-border-subtle my-3" />
+                <div className="my-3 h-px bg-slate-200/80" />
 
-                {/* Lead properties */}
-                <div className="space-y-0.5">
-                  <p className="text-2xs font-bold text-text-tertiary uppercase tracking-wider mb-2">Lead Properties</p>
+                <div className="min-h-0 flex-1 space-y-0.5">
+                  <p className="mb-2 text-2xs font-bold uppercase tracking-wider text-slate-400">Lead properties</p>
 
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="p-2 rounded-lg bg-surface-secondary/50 relative">
-                      <p className="text-2xs text-text-tertiary mb-0.5">Stage</p>
+                    <div className="relative col-span-2 rounded-xl bg-white/80 p-2.5 shadow-sm ring-1 ring-slate-200/60">
+                      <p className="mb-1 text-2xs text-slate-500">Status</p>
                       <button
-                        onClick={() => setShowStageDropdown(!showStageDropdown)}
-                        disabled={updatingStage}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-semibold text-white cursor-pointer hover:opacity-90 transition-opacity"
-                        style={{ backgroundColor: leadInfo.stage?.color || '#6366f1' }}
+                        type="button"
+                        onClick={() => {
+                          setShowStageDropdown(false);
+                          setShowStatusDropdown(!showStatusDropdown);
+                        }}
+                        className={`inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-semibold ${
+                          leadInfo.status === 'NEW'
+                            ? 'bg-pink-100 text-pink-800'
+                            : `${STATUS_COLORS[leadInfo.status]?.bg || 'bg-slate-100'} ${STATUS_COLORS[leadInfo.status]?.text || 'text-slate-700'}`
+                        }`}
                       >
-                        {updatingStage ? 'Updating...' : (leadInfo.stage?.name || 'No Stage')}
-                        <ChevronDown className="h-3 w-3" />
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-slate-500'}`} />
+                        <span className="truncate">{getStatusLabel(leadInfo.status || 'NEW')}</span>
+                        <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
                       </button>
-                      {showStageDropdown && (
+                      {showStatusDropdown && (
                         <>
-                        <div className="fixed inset-0 z-40" onClick={() => setShowStageDropdown(false)} />
-                        <div className="absolute top-full left-0 mt-1 z-50 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-border-subtle py-1 min-w-[160px] max-h-48 overflow-y-auto">
-                          {pipelineStages.map(stage => (
-                            <button
-                              key={stage.id}
-                              onClick={() => handleStageChange(stage.id)}
-                              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-surface-secondary flex items-center gap-2 ${leadInfo.stage?.id === stage.id ? 'font-bold' : ''}`}
-                            >
-                              <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: stage.color || '#6366f1' }} />
-                              {stage.name}
-                              {leadInfo.stage?.id === stage.id && <Check className="h-3 w-3 ml-auto text-brand-600" />}
-                            </button>
-                          ))}
-                        </div>
+                          <div className="fixed inset-0 z-40" onClick={() => setShowStatusDropdown(false)} />
+                          <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                            {Object.entries(STATUS_COLORS).map(([status, style]) => (
+                              <button
+                                key={status}
+                                type="button"
+                                onClick={() => handleStatusUpdate(status)}
+                                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-slate-50 ${
+                                  leadInfo.status === status ? 'bg-slate-50 font-medium' : ''
+                                }`}
+                              >
+                                <span className={`h-2 w-2 rounded-full ${style.dot}`} />
+                                {getStatusLabel(status)}
+                              </button>
+                            ))}
+                          </div>
                         </>
                       )}
                     </div>
-                    <div className="p-2 rounded-lg bg-surface-secondary/50">
-                      <p className="text-2xs text-text-tertiary mb-0.5">Status</p>
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium ${STATUS_COLORS[leadInfo.status]?.bg || 'bg-gray-50'} ${STATUS_COLORS[leadInfo.status]?.text || 'text-gray-700'}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${STATUS_COLORS[leadInfo.status]?.dot || 'bg-gray-500'}`} />
-                        {getStatusLabel(leadInfo.status || 'NEW')}
+
+                    <div className="col-span-2 rounded-xl bg-white/80 p-2.5 shadow-sm ring-1 ring-slate-200/60">
+                      <p className="mb-1 text-2xs text-slate-500">Activity</p>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-pink-200/80 bg-pink-50 px-2.5 py-0.5 text-2xs font-medium text-pink-900">
+                        <Star className="h-3 w-3 text-pink-600" />
+                        {leadInfo.stage?.name || getStatusLabel(leadInfo.status || 'NEW')}
                       </span>
                     </div>
-                    <div className="p-2 rounded-lg bg-surface-secondary/50">
-                      <p className="text-2xs text-text-tertiary mb-0.5">Source</p>
-                      <p className="text-xs font-medium text-text-primary">{leadInfo.source}</p>
+
+                    <div className={`relative rounded-xl bg-white/80 p-2.5 shadow-sm ring-1 ring-slate-200/60 ${leadInfo.budget > 0 ? '' : 'col-span-2'}`}>
+                      <p className="mb-1 text-2xs text-slate-500">Stage</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowStatusDropdown(false);
+                          setShowStageDropdown(!showStageDropdown);
+                        }}
+                        disabled={updatingStage}
+                        className="inline-flex max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-2xs font-semibold text-white"
+                        style={{ backgroundColor: leadInfo.stage?.color || '#6366f1' }}
+                      >
+                        {updatingStage ? '...' : (leadInfo.stage?.name || 'No stage')}
+                        <ChevronDown className="h-3 w-3 shrink-0" />
+                      </button>
+                      {showStageDropdown && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setShowStageDropdown(false)} />
+                          <div className="absolute left-0 top-full z-50 mt-1 max-h-48 min-w-[160px] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                            {pipelineStages.map((stage) => (
+                              <button
+                                key={stage.id}
+                                type="button"
+                                onClick={() => handleStageChange(stage.id)}
+                                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${leadInfo.stage?.id === stage.id ? 'font-bold' : ''}`}
+                              >
+                                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: stage.color || '#6366f1' }} />
+                                {stage.name}
+                                {leadInfo.stage?.id === stage.id && <Check className="ml-auto h-3 w-3 text-violet-600" />}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
                     </div>
+
                     {leadInfo.budget > 0 && (
-                      <div className="p-2 rounded-lg bg-surface-secondary/50">
-                        <p className="text-2xs text-text-tertiary mb-0.5">Budget</p>
+                      <div className="rounded-xl bg-white/80 p-2.5 shadow-sm ring-1 ring-slate-200/60">
+                        <p className="mb-1 text-2xs text-slate-500">Budget</p>
                         <p className="text-xs font-bold text-emerald-600">${leadInfo.budget.toLocaleString()}</p>
                       </div>
                     )}
-                    <div className="p-2 rounded-lg bg-surface-secondary/50">
-                      <p className="text-2xs text-text-tertiary mb-0.5">Created</p>
-                      <p className="text-xs font-medium text-text-primary">
+
+                    <div className="rounded-xl bg-white/80 p-2.5 shadow-sm ring-1 ring-slate-200/60">
+                      <p className="mb-1 text-2xs text-slate-500">Source</p>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-800">
+                        {(leadInfo.source || '—').replace(/_/g, ' ')}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-white/80 p-2.5 shadow-sm ring-1 ring-slate-200/60">
+                      <p className="mb-1 text-2xs text-slate-500">Created</p>
+                      <p className="text-xs font-medium text-slate-800">
                         {new Date(leadInfo.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     </div>
                   </div>
 
                   {leadInfo.assignedTo && (
-                    <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-brand-50/50">
-                      <div className="h-6 w-6 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-2xs font-bold">
+                    <div className="mt-2 flex items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/50 p-2.5">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-200 text-2xs font-bold text-violet-800">
                         {getDisplayInitials(leadInfo.assignedTo.firstName, leadInfo.assignedTo.lastName)}
                       </div>
                       <div>
-                        <p className="text-2xs text-text-tertiary">Assigned to</p>
-                        <p className="text-xs font-medium text-text-primary">
+                        <p className="text-2xs text-slate-500">Assigned to</p>
+                        <p className="text-xs font-medium text-slate-800">
                           {getDisplayName(leadInfo.assignedTo.firstName, leadInfo.assignedTo.lastName)}
                         </p>
                       </div>
@@ -2374,15 +2531,18 @@ function InboxContent() {
                   )}
                 </div>
 
-                <div className="h-px bg-border-subtle my-3" />
-
-                <button
-                  onClick={() => router.push(`/leads/${selectedLeadId}`)}
-                  className="btn-secondary w-full text-xs"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Open Full Profile
-                </button>
+                <div className="mt-auto shrink-0 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/leads/${selectedLeadId}`)}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-95"
+                    style={{
+                      background: 'linear-gradient(90deg, #2563eb 0%, #7c3aed 45%, #ec4899 100%)',
+                    }}
+                  >
+                    Open Full Profile
+                  </button>
+                </div>
               </div>
             )}
 
@@ -2441,8 +2601,6 @@ function InboxContent() {
               </div>
             )}
 
-            {/* ── Canned Responses Tab ──────────────────────────────── */}
-            {/* ── Attachments Tab ──────────────────────────────────── */}
             {rightTab === 'attachments' && (
               <div className="p-4">
                 <div className="flex items-center justify-between mb-3">
@@ -2509,40 +2667,6 @@ function InboxContent() {
               </div>
             )}
 
-            {rightTab === 'canned' && (
-              <div className="p-4">
-                <p className="text-xs font-semibold text-text-primary mb-1">Quick Replies</p>
-                <p className="text-2xs text-text-tertiary mb-3">Click to insert into message</p>
-
-                <div className="space-y-2">
-                  {cannedResponses.map(cr => (
-                    <button
-                      key={cr.id}
-                      onClick={() => insertCanned(cr)}
-                      className="w-full text-left p-3 rounded-lg border border-border hover:border-brand-300 hover:bg-brand-50/30 transition-all group/canned"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-semibold text-text-primary">{cr.title}</span>
-                        <span className={`text-2xs px-1.5 py-0.5 rounded font-medium ${
-                          cr.category === 'sales' ? 'bg-emerald-50 text-emerald-700' :
-                          cr.category === 'support' ? 'bg-blue-50 text-blue-700' :
-                          cr.category === 'meeting' ? 'bg-purple-50 text-purple-700' :
-                          cr.category === 'follow-up' ? 'bg-amber-50 text-amber-700' :
-                          'bg-gray-50 text-gray-700'
-                        }`}>
-                          {cr.category}
-                        </span>
-                      </div>
-                      <p className="text-2xs text-text-secondary line-clamp-2">{cr.body}</p>
-                      <div className="flex items-center gap-1 mt-1.5 text-2xs text-brand-600 opacity-0 group-hover/canned:opacity-100 transition-opacity">
-                        <Zap className="h-3 w-3" />
-                        Click to use
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
