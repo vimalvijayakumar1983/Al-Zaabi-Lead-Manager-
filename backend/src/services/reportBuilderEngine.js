@@ -210,6 +210,102 @@ const DATASET_DEFINITIONS = {
       { key: 'createdAt', label: 'Stage Created At', kind: 'dimension', dataType: 'date' },
     ],
   },
+  incentive_events: {
+    key: 'incentive_events',
+    label: 'Incentive Events',
+    defaultSortField: 'occurredAt',
+    fields: [
+      { key: 'id', label: 'Event ID', kind: 'dimension', dataType: 'string' },
+      { key: 'eventType', label: 'Event Type', kind: 'dimension', dataType: 'string' },
+      { key: 'processingStatus', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'occurredAt', label: 'Occurred At', kind: 'dimension', dataType: 'date' },
+      { key: 'amount', label: 'Amount', kind: 'measure', dataType: 'number' },
+      { key: 'leadId', label: 'Lead ID', kind: 'dimension', dataType: 'string' },
+      { key: 'sourceSystem', label: 'Source', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  incentive_attributions: {
+    key: 'incentive_attributions',
+    label: 'Incentive Attributions',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Attribution ID', kind: 'dimension', dataType: 'string' },
+      { key: 'userId', label: 'User ID', kind: 'dimension', dataType: 'string' },
+      { key: 'weight', label: 'Weight', kind: 'measure', dataType: 'number' },
+      { key: 'strategy', label: 'Strategy', kind: 'dimension', dataType: 'string' },
+      { key: 'eventId', label: 'Event ID', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  incentive_earnings: {
+    key: 'incentive_earnings',
+    label: 'Incentive Earnings',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Earning ID', kind: 'dimension', dataType: 'string' },
+      { key: 'userId', label: 'User ID', kind: 'dimension', dataType: 'string' },
+      { key: 'amount', label: 'Amount', kind: 'measure', dataType: 'number' },
+      { key: 'currency', label: 'Currency', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'eventId', label: 'Event ID', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  incentive_adjustments: {
+    key: 'incentive_adjustments',
+    label: 'Incentive Adjustments',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Adjustment ID', kind: 'dimension', dataType: 'string' },
+      { key: 'type', label: 'Type', kind: 'dimension', dataType: 'string' },
+      { key: 'workflowStatus', label: 'Workflow Status', kind: 'dimension', dataType: 'string' },
+      { key: 'amount', label: 'Amount', kind: 'measure', dataType: 'number' },
+      { key: 'currency', label: 'Currency', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  incentive_statements: {
+    key: 'incentive_statements',
+    label: 'Incentive Statements',
+    defaultSortField: 'periodEnd',
+    fields: [
+      { key: 'id', label: 'Statement ID', kind: 'dimension', dataType: 'string' },
+      { key: 'userId', label: 'Payee User ID', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'totalAmount', label: 'Total Amount', kind: 'measure', dataType: 'number' },
+      { key: 'currency', label: 'Currency', kind: 'dimension', dataType: 'string' },
+      { key: 'periodStart', label: 'Period Start', kind: 'dimension', dataType: 'date' },
+      { key: 'periodEnd', label: 'Period End', kind: 'dimension', dataType: 'date' },
+      { key: 'paidAt', label: 'Paid At', kind: 'dimension', dataType: 'date' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  incentive_disputes: {
+    key: 'incentive_disputes',
+    label: 'Incentive Disputes',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Dispute ID', kind: 'dimension', dataType: 'string' },
+      { key: 'statementId', label: 'Statement ID', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'reason', label: 'Reason', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
+  incentive_exceptions: {
+    key: 'incentive_exceptions',
+    label: 'Incentive Exceptions',
+    defaultSortField: 'createdAt',
+    fields: [
+      { key: 'id', label: 'Exception ID', kind: 'dimension', dataType: 'string' },
+      { key: 'reasonCode', label: 'Reason Code', kind: 'dimension', dataType: 'string' },
+      { key: 'status', label: 'Status', kind: 'dimension', dataType: 'string' },
+      { key: 'message', label: 'Message', kind: 'dimension', dataType: 'string' },
+      { key: 'eventId', label: 'Event ID', kind: 'dimension', dataType: 'string' },
+      { key: 'createdAt', label: 'Created At', kind: 'dimension', dataType: 'date' },
+    ],
+  },
 };
 
 const SUPPORTED_OPERATORS = new Set([
@@ -755,6 +851,38 @@ function buildWhereForDataset(dataset, req, divisionId) {
       ...(req.isRestrictedRole ? { lead: { assignedToId: req.user.id } } : {}),
     };
   }
+  if (dataset === 'incentive_events') {
+    return { organizationId: scopedOrg, divisionId: scopedOrg };
+  }
+  if (dataset === 'incentive_attributions' || dataset === 'incentive_earnings') {
+    return {
+      organizationId: scopedOrg,
+      divisionId: scopedOrg,
+      ...(req.isRestrictedRole ? { userId: req.user.id } : {}),
+    };
+  }
+  if (dataset === 'incentive_adjustments') {
+    return { organizationId: scopedOrg, divisionId: scopedOrg };
+  }
+  if (dataset === 'incentive_statements') {
+    return {
+      organizationId: scopedOrg,
+      divisionId: scopedOrg,
+      ...(req.isRestrictedRole ? { userId: req.user.id } : {}),
+    };
+  }
+  if (dataset === 'incentive_disputes') {
+    return {
+      statement: {
+        organizationId: scopedOrg,
+        divisionId: scopedOrg,
+        ...(req.isRestrictedRole ? { userId: req.user.id } : {}),
+      },
+    };
+  }
+  if (dataset === 'incentive_exceptions') {
+    return { organizationId: scopedOrg, divisionId: scopedOrg };
+  }
   return {
     organizationId: scopedOrg,
     isArchived: false,
@@ -776,7 +904,11 @@ function applyDateWhere(baseWhere, config, dataset) {
       || f.field === 'assignedAt'
       || f.field === 'expiresAt'
       || f.field === 'discussedAt'
-      || f.field === 'redeemedAt'
+      ||       f.field === 'redeemedAt'
+      || f.field === 'occurredAt'
+      || f.field === 'periodStart'
+      || f.field === 'periodEnd'
+      || f.field === 'paidAt'
     ));
   if (dateFilters.length === 0) return where;
 
@@ -792,6 +924,10 @@ function applyDateWhere(baseWhere, config, dataset) {
     if (filter.field === 'expiresAt') targetField = 'expiresAt';
     if (filter.field === 'discussedAt') targetField = 'discussedAt';
     if (filter.field === 'redeemedAt') targetField = 'redeemedAt';
+    if (filter.field === 'occurredAt') targetField = 'occurredAt';
+    if (filter.field === 'periodStart') targetField = 'periodStart';
+    if (filter.field === 'periodEnd') targetField = 'periodEnd';
+    if (filter.field === 'paidAt') targetField = 'paidAt';
   }
 
   const dateWhere = {};
@@ -827,7 +963,7 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
   const limit = Math.min(Math.max(Number(config.rawLimit || 2000), 100), 5000);
   const baseWhere = buildWhereForDataset(dataset, req, divisionId);
   const where = applyDateWhere(baseWhere, config, dataset);
-  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt', 'startDate', 'endDate', 'order', 'assignedAt', 'expiresAt', 'discussedAt', 'redeemedAt'].includes(config?.rawSort?.field)
+  const orderByField = ['createdAt', 'updatedAt', 'dueAt', 'closeDate', 'lastContactedAt', 'startDate', 'endDate', 'order', 'assignedAt', 'expiresAt', 'discussedAt', 'redeemedAt', 'occurredAt', 'periodStart', 'periodEnd', 'paidAt'].includes(config?.rawSort?.field)
     ? config.rawSort.field
     : getDatasetDefinition(dataset).defaultSortField;
   const orderByDirection = String(config?.rawSort?.direction || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
@@ -1093,6 +1229,28 @@ async function fetchDatasetRows(dataset, req, config = {}, divisionId) {
         createdAt: stage.createdAt,
       };
     });
+  }
+
+  if (dataset === 'incentive_events') {
+    return prisma.incentiveEvent.findMany({ where, orderBy, take: limit });
+  }
+  if (dataset === 'incentive_attributions') {
+    return prisma.incentiveAttribution.findMany({ where, orderBy, take: limit });
+  }
+  if (dataset === 'incentive_earnings') {
+    return prisma.incentiveEarning.findMany({ where, orderBy, take: limit });
+  }
+  if (dataset === 'incentive_adjustments') {
+    return prisma.incentiveAdjustment.findMany({ where, orderBy, take: limit });
+  }
+  if (dataset === 'incentive_statements') {
+    return prisma.incentiveStatement.findMany({ where, orderBy, take: limit });
+  }
+  if (dataset === 'incentive_disputes') {
+    return prisma.incentiveDispute.findMany({ where, orderBy, take: limit });
+  }
+  if (dataset === 'incentive_exceptions') {
+    return prisma.incentiveException.findMany({ where, orderBy, take: limit });
   }
 
   return prisma.lead.findMany({

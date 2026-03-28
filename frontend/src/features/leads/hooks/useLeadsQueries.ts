@@ -7,14 +7,17 @@ import { queryKeys } from '@/lib/query-keys';
 import type { FilterState } from '@/app/(dashboard)/leads/components/advanced-filters';
 import type { Lead, User } from '@/types';
 
-/** Build GET /leads query params (must match previous fetchLeads behavior). */
+/** Build GET /leads query params (must match previous fetchLeads behavior).
+ *  `activeDivisionId` should be the reactive value from state, not a fresh localStorage read,
+ *  so that useMemo / query keys update when the division switcher fires. */
 export function buildLeadsListParams(
   pagination: { page: number; limit: number },
   filters: FilterState,
   sortBy: string,
   sortOrder: 'asc' | 'desc',
   currentUser: User | null,
-  analyticsScope: string | null
+  analyticsScope: string | null,
+  activeDivisionId?: string | null,
 ): Record<string, string | number> {
   const params: Record<string, string | number> = {
     page: pagination.page,
@@ -22,11 +25,12 @@ export function buildLeadsListParams(
     sortBy,
     sortOrder,
   };
-  const activeDivisionId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+  const effectiveDivisionId = activeDivisionId ??
+    (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null);
   if (filters.divisionId && filters.divisionId !== 'all') {
     params.divisionId = filters.divisionId;
-  } else if (activeDivisionId && analyticsScope !== 'all') {
-    params.divisionId = activeDivisionId;
+  } else if (effectiveDivisionId && analyticsScope !== 'all') {
+    params.divisionId = effectiveDivisionId;
   }
   if (filters.search) params.search = filters.search;
   if (filters.status) params.status = filters.status;
@@ -64,6 +68,8 @@ export function buildLeadsListParams(
   if (filters.maxCallCount) params.maxCallCount = filters.maxCallCount;
   if (filters.updatedFrom) params.updatedFrom = filters.updatedFrom;
   if (filters.updatedTo) params.updatedTo = filters.updatedTo;
+  if (filters.lastOpenedFrom) params.lastOpenedFrom = filters.lastOpenedFrom;
+  if (filters.lastOpenedTo) params.lastOpenedTo = filters.lastOpenedTo;
   if (filters.divisionId) params.divisionId = filters.divisionId;
   if (filters.showBlocked) params.showBlocked = filters.showBlocked;
   return params;
@@ -86,9 +92,11 @@ export function useLeadsListQuery(
 export function useLeadDetailQuery(leadId: string | undefined) {
   return useQuery<Lead>({
     queryKey: queryKeys.leads.detail(leadId!),
+    /** Real open must hit the API without skipLastOpened so "last opened" is recorded (list hover prefetch uses skip). */
     queryFn: () => api.getLead(leadId!) as Promise<Lead>,
     enabled: !!leadId,
     staleTime: 5_000,
+    refetchOnMount: 'always',
   });
 }
 

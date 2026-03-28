@@ -70,6 +70,7 @@ const roleRoutes = require('./routes/roles');
 const savedViewRoutes = require('./routes/saved-views');
 const recycleBinRoutes = require('./routes/recycle-bin');
 const reportBuilderRoutes = require('./routes/report-builder');
+const incentiveRoutes = require('./routes/incentives');
 
 const app = express();
 const server = createServer(app);
@@ -176,6 +177,7 @@ const routeMounts = [
   ['/saved-views', savedViewRoutes],
   ['/recycle-bin', recycleBinRoutes],
   ['/report-builder', reportBuilderRoutes],
+  ['/incentives', incentiveRoutes],
 ];
 
 for (const [path, handler] of routeMounts) {

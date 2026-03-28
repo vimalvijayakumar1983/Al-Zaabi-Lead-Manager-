@@ -6,6 +6,7 @@ import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { useLeadsFieldConfigQuery } from '@/features/leads/hooks/useLeadsQueries';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { ACTIVE_DIVISION_CHANGED, type ActiveDivisionChangedDetail } from '@/lib/activeDivisionEvents';
 import {
   useInboxAttachmentsQuery,
   useInboxBootstrapQuery,
@@ -300,10 +301,17 @@ function InboxContent() {
     };
     read();
     window.addEventListener('focus', read);
-    const onChanged = () => read();
-    window.addEventListener('active-division-changed', onChanged as any);
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
+      setActiveDivisionId(detail?.divisionId ?? null);
+    };
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onChanged);
     document.addEventListener('visibilitychange', read);
-    return () => window.removeEventListener('focus', read);
+    return () => {
+      window.removeEventListener('focus', read);
+      window.removeEventListener(ACTIVE_DIVISION_CHANGED, onChanged);
+      document.removeEventListener('visibilitychange', read);
+    };
   }, []);
 
   // When division changes, force-refresh inbox queries so the menu/list reflects the new scope.

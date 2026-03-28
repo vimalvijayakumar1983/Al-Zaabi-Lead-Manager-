@@ -3,17 +3,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import type { ReportBuilderDataset } from '@/types/report-builder';
 
-export type ReportBuilderDataset =
-  | 'leads'
-  | 'tasks'
-  | 'call_logs'
-  | 'contacts'
-  | 'deals'
-  | 'campaigns'
-  | 'campaign_assignments'
-  | 'lead_activities'
-  | 'pipelines';
+export type { ReportBuilderDataset };
 
 export function useReportCatalogQuery(dataset: ReportBuilderDataset, divisionId?: string) {
   return useQuery({

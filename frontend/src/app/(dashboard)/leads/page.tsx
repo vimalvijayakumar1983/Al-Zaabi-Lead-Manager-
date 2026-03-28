@@ -265,17 +265,28 @@ function LeadsContent() {
     (leadId: string) => {
       queryClient.prefetchQuery({
         queryKey: queryKeys.leads.detail(leadId),
-        queryFn: () => api.getLead(leadId),
+        queryFn: () => api.getLead(leadId, { skipLastOpened: true }),
         staleTime: 30_000,
       });
     },
     [queryClient]
   );
 
-  const divisionScope = useMemo(
-    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null),
-    []
+  const [divisionScope, setDivisionScope] = useState<string | null>(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null)
   );
+
+  useEffect(() => {
+    const onDivisionChanged = (e: Event) => {
+      const detail = (e as CustomEvent<ActiveDivisionChangedDetail>).detail;
+      const newDiv = detail?.divisionId ?? null;
+      setDivisionScope(newDiv);
+      setPagination((p) => ({ ...p, page: 1 }));
+      queryClient.invalidateQueries({ queryKey: queryKeys.leads.root });
+    };
+    window.addEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+    return () => window.removeEventListener(ACTIVE_DIVISION_CHANGED, onDivisionChanged);
+  }, [queryClient]);
 
   // ─── State ──────────────────────────────────────────────────────
   const [pagination, setPagination] = useState(() => {
@@ -364,8 +375,8 @@ function LeadsContent() {
   const callOutcomeOptions = useCallOutcomeOptions(dispositionQuery.data);
 
   const listParams = useMemo(
-    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope),
-    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope]
+    () => buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope),
+    [pagination.page, pagination.limit, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope]
   );
 
   const leadsQuery = useLeadsListQuery(listParams, { enabled: meReady });
@@ -474,7 +485,7 @@ function LeadsContent() {
   useEffect(() => {
     const loadServerViews = async () => {
       try {
-        const divId = typeof window !== 'undefined' ? localStorage.getItem('activeDivisionId') : null;
+        const divId = divisionScope;
         
         // 1. Fetch server-side views
         const serverViews = await api.getSavedViews(divId || undefined) as SavedView[];
@@ -522,7 +533,7 @@ function LeadsContent() {
       }
     };
     loadServerViews();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [divisionScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // One-time drill-down params should not keep applying by default
   // on subsequent division loads/navigation.
@@ -851,7 +862,7 @@ function LeadsContent() {
     const visibleCols = columns.filter((c) => c.visible && c.id !== 'select' && c.id !== 'actions');
     setExporting(true);
     try {
-      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope);
+      const base = buildLeadsListParams(pagination, filters, sortBy, sortOrder, currentUser, analyticsScope, divisionScope);
       const allLeads: Lead[] = [];
       let page = 1;
       let totalPages = 1;
@@ -907,6 +918,13 @@ function LeadsContent() {
             }
             case 'createdAt': return new Date(l.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
             case 'updatedAt': return new Date(l.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            case 'lastOpenedAt': {
+              const lo = (l as Lead).lastOpenedAt;
+              const lob = (l as Lead).lastOpenedBy;
+              if (!lo) return '';
+              const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+              return by ? `${new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (${by})` : new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+            }
             default:
               if (c.id.startsWith('cf_')) {
                 if (isAutoSerialCustomField(c)) {
@@ -1207,6 +1225,19 @@ function LeadsContent() {
             <span className="text-[10px] text-gray-400">{formatTimeAgo(lead.updatedAt)}</span>
           </div>
         );
+      case 'lastOpenedAt': {
+        const lo = (lead as Lead).lastOpenedAt;
+        const lob = (lead as Lead).lastOpenedBy;
+        if (!lo) return <span className="text-xs text-gray-400">—</span>;
+        const by = lob ? `${lob.firstName || ''} ${lob.lastName || ''}`.trim() : '';
+        return (
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">{new Date(lo).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+            {by ? <span className="text-[10px] text-gray-400">by {by}</span> : null}
+            <span className="text-[10px] text-gray-400">{formatTimeAgo(lo)}</span>
+          </div>
+        );
+      }
       case 'sla': {
         const sla = (lead as any).slaInfo;
         if (!sla || !sla.enabled) return <span className="text-xs text-gray-400">-</span>;

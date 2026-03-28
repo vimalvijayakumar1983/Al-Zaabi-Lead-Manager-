@@ -2,8 +2,10 @@ const LEAD_STATUS_VALUES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL_SENT', 'N
 
 const STATUS_TO_KEYWORDS = {
   NEW: ['new', 'untouched', 'fresh', 'incoming', 'inquiry'],
-  CONTACTED: ['contact', 'touched', 'follow', 'reach', 'called', 'engaged', 'assessment', 'inspect', 'evaluat'],
-  QUALIFIED: ['qualif', 'interested', 'hot', 'warm', 'ready', 'service', 'sale', 'confirm', 'active', 'pending'],
+  // Do not use "assessment" / "inspect" here: stages like "Vehicle assessment" are later pipeline steps
+  // and must not be chosen when the *lead status* is only CONTACTED (e.g. after a call log).
+  CONTACTED: ['contact', 'touched', 'follow', 'reach', 'called', 'engaged'],
+  QUALIFIED: ['qualif', 'interested', 'hot', 'warm', 'ready', 'service', 'sale', 'confirm', 'active', 'pending', 'assessment', 'inspect', 'evaluat'],
   PROPOSAL_SENT: ['proposal', 'quote', 'offer', 'sent', 'quotation'],
   NEGOTIATION: ['negotiation', 'negotiat', 'counter', 'terms', 'bargain'],
   WON: ['won', 'converted', 'signed', 'closed won', 'completed', 'done', 'finished'],
@@ -35,10 +37,11 @@ function mapStageToStatusByFallback(stageName, isWonStage, isLostStage, currentS
   const name = (stageName || '').toLowerCase().trim();
 
   if (/\bnew\b|untouched|fresh|incoming|unassigned|inquiry/.test(name)) return 'NEW';
-  if (/contact|touched|follow[\s-]?up|reach|called|responded|engaged|attempt|assessment|inspect|evaluat/.test(name)) return 'CONTACTED';
+  // "Assessment" / inspection-style stages align with QUALIFIED, not first contact (CONTACTED).
+  if (/contact|touched|follow[\s-]?up|reach|called|responded|engaged|attempt/.test(name)) return 'CONTACTED';
   if (/proposal|quote|offer|sent|quotation/.test(name)) return 'PROPOSAL_SENT';
   if (/negotiation|negotiat|counter|terms|bargain/.test(name)) return 'NEGOTIATION';
-  if (/qualif|interested|hot|warm|ready|present|demo|trial|review|meeting|scheduled|in[\s-]?progress|processing|working|active|pending|deliver|visit|booked|service|sale|confirm/.test(name)) return 'QUALIFIED';
+  if (/qualif|interested|hot|warm|ready|present|demo|trial|review|meeting|scheduled|in[\s-]?progress|processing|working|active|pending|deliver|visit|booked|service|sale|confirm|assessment|inspect|evaluat/.test(name)) return 'QUALIFIED';
   if (/\bwon\b|closed[\s-]?won|deal[\s-]?won|converted|signed|completed|done|finished/.test(name)) return 'WON';
   if (/\blost\b|closed[\s-]?lost|dead|rejected|disqualif|churned|cancelled|canceled/.test(name)) return 'LOST';
 

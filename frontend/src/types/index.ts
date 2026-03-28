@@ -173,6 +173,18 @@ export interface Lead {
   organization?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
+  lastOpenedAt?: string | null;
+  lastOpenedBy?: Pick<User, 'id' | 'firstName' | 'lastName'> | null;
+  /** Present on lead detail: who is actively checked in and the current user's session. */
+  leadCheckin?: {
+    activeSessions: Array<{
+      id: string;
+      userId: string;
+      checkedInAt: string;
+      user: Pick<User, 'id' | 'firstName' | 'lastName' | 'avatar'>;
+    }>;
+    mySession: { id: string; checkedInAt: string; note?: string | null } | null;
+  };
 }
 
 // ─── Pipeline ────────────────────────────────────────────────────
@@ -200,12 +212,21 @@ export interface LeadActivity {
 }
 
 // ─── Notes ───────────────────────────────────────────────────────
+export interface LeadNoteAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  url: string;
+}
+
 export interface LeadNote {
   id: string;
   content: string;
   isPinned: boolean;
   createdAt: string;
   user: Pick<User, 'id' | 'firstName' | 'lastName'>;
+  attachments?: LeadNoteAttachment[];
 }
 
 // ─── Tasks ───────────────────────────────────────────────────────

@@ -114,7 +114,8 @@ export function LogCallModalDynamic({
   leadName: string;
   leadId: string;
 }) {
-  const [catalog, setCatalog] = useState<any[]>([]);
+  /** Start with fallback outcomes so the grid is never empty while dispositions load from the API. */
+  const [catalog, setCatalog] = useState<any[]>(FALLBACK_OPTIONS);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     disposition: '',
@@ -125,9 +126,19 @@ export function LogCallModalDynamic({
   });
 
   useEffect(() => {
-    api.getDispositions({ leadId })
-      .then((rows) => setCatalog(Array.isArray(rows) && rows.length > 0 ? rows : FALLBACK_OPTIONS))
-      .catch(() => setCatalog(FALLBACK_OPTIONS));
+    let cancelled = false;
+    api
+      .getDispositions({ leadId })
+      .then((rows) => {
+        if (cancelled) return;
+        setCatalog(Array.isArray(rows) && rows.length > 0 ? rows : FALLBACK_OPTIONS);
+      })
+      .catch(() => {
+        if (!cancelled) setCatalog(FALLBACK_OPTIONS);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [leadId]);
 
   const selected = catalog.find((x: any) => x.value === form.disposition);

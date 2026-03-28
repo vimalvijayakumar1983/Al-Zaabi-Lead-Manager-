@@ -18,6 +18,8 @@ export interface SavedView {
     dateTo?: string;
     updatedFrom?: string;
     updatedTo?: string;
+    lastOpenedFrom?: string;
+    lastOpenedTo?: string;
     tags?: string;
     stageId?: string;
     divisionId?: string;
