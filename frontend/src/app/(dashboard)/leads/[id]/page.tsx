@@ -95,6 +95,183 @@ function sortCommunicationsByDate(comms: { createdAt?: string | Date }[]) {
   );
 }
 
+const CALL_SCORE_RING_ORDER = [
+  'overall',
+  'professionalism',
+  'empathy',
+  'clarity',
+  'customerSatisfaction',
+] as const;
+
+function callScoreLabel(key: string): string {
+  const map: Record<string, string> = {
+    overall: 'Overall',
+    professionalism: 'Professionalism',
+    empathy: 'Empathy',
+    clarity: 'Clarity',
+    customerSatisfaction: 'Satisfaction',
+  };
+  if (map[key]) return map[key];
+  return key
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (c) => c.toUpperCase())
+    .trim();
+}
+
+function clampScore(n: unknown): number {
+  const v = Math.round(Number(n));
+  if (Number.isNaN(v)) return 0;
+  return Math.max(0, Math.min(100, v));
+}
+
+function scoreRingTone(score: number): string {
+  if (score >= 72) return 'text-emerald-600';
+  if (score >= 48) return 'text-amber-600';
+  return 'text-rose-600';
+}
+
+function transcriptPreviewAndNeedsToggle(full: string): { preview: string; needsToggle: boolean } {
+  const t = full.trim();
+  if (!t) return { preview: '', needsToggle: false };
+
+  const parts = t.split(/(?<=[.!?।؟])\s+/).map((s) => s.trim()).filter(Boolean);
+  let preview: string;
+  if (parts.length >= 2) {
+    preview = parts.slice(0, 2).join(' ');
+  } else if (parts.length === 1 && parts[0].length > 240) {
+    const one = parts[0];
+    const cut = one.slice(0, 240).trimEnd();
+    const sp = cut.lastIndexOf(' ');
+    preview = `${sp > 80 ? cut.slice(0, sp) : cut}…`;
+    return { preview, needsToggle: true };
+  } else {
+    preview = t;
+  }
+
+  const MAX = 380;
+  if (preview.length > MAX) {
+    let cut = preview.slice(0, MAX).trimEnd();
+    const sp = cut.lastIndexOf(' ');
+    if (sp > 50) cut = cut.slice(0, sp);
+    preview = `${cut}…`;
+  }
+
+  if (preview === t) return { preview: t, needsToggle: false };
+  return { preview, needsToggle: true };
+}
+
+function CallScoreRing({ label, score, size = 52 }: { label: string; score: number; size?: number }) {
+  const stroke = 3.5;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const pct = clampScore(score) / 100;
+  const offset = c * (1 - pct);
+  const tone = scoreRingTone(clampScore(score));
+
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.5rem]">
+      <div className="relative text-gray-200" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="block rotate-[-90deg] text-gray-200">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={c}
+            strokeDashoffset={offset}
+            className={tone}
+          />
+        </svg>
+        <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold text-gray-800 pointer-events-none">
+          {clampScore(score)}
+        </span>
+      </div>
+      <span className="text-[9px] text-gray-500 text-center leading-tight max-w-[4.25rem]">{label}</span>
+    </div>
+  );
+}
+
+function CallScoreRingsRow({ scores }: { scores: Record<string, unknown> }) {
+  const seen = new Set<string>();
+  const items: { key: string; label: string; value: number }[] = [];
+  for (const k of CALL_SCORE_RING_ORDER) {
+    if (scores[k] === undefined || scores[k] === null || scores[k] === '') continue;
+    items.push({ key: k, label: callScoreLabel(k), value: clampScore(scores[k]) });
+    seen.add(k);
+  }
+  for (const k of Object.keys(scores)) {
+    if (seen.has(k)) continue;
+    const v = scores[k];
+    if (typeof v !== 'number' && typeof v !== 'string') continue;
+    const num = Number(v);
+    if (Number.isNaN(num)) continue;
+    items.push({ key: k, label: callScoreLabel(k), value: clampScore(v) });
+  }
+  if (!items.length) return null;
+  const overall = items.find((i) => i.key === 'overall');
+  const rest = items.filter((i) => i.key !== 'overall');
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">Scores</p>
+      <div className="flex flex-wrap items-end gap-4">
+        {overall ? (
+          <div className="flex flex-col items-center gap-1 pr-2 border-r border-gray-200">
+            <CallScoreRing label={overall.label} score={overall.value} size={64} />
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-3">
+          {(overall ? rest : items).map((item) => (
+            <CallScoreRing key={item.key} label={item.label} score={item.value} size={52} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CallLogTranscriptCollapsible({
+  transcript,
+  expanded,
+  onToggle,
+}: {
+  transcript: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { preview, needsToggle } = transcriptPreviewAndNeedsToggle(transcript);
+  const showFull = !needsToggle || expanded;
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">Transcript</p>
+      <pre className="whitespace-pre-wrap text-gray-700 text-xs leading-relaxed bg-white border border-gray-200 rounded-md p-2.5 max-h-[min(24rem,50vh)] overflow-y-auto">
+        {showFull ? transcript : preview}
+      </pre>
+      {needsToggle ? (
+        <button
+          type="button"
+          className="text-xs font-medium text-brand-600 hover:text-brand-700"
+          onClick={onToggle}
+        >
+          {expanded ? 'Show less' : 'Show full transcript'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /** After realtime lead refetches, wait this long with no further events before syncing list + dashboard. */
 const REFRESH_LEAD_LIST_DEBOUNCE_MS = 20_000;
 
@@ -230,6 +407,8 @@ export default function LeadDetailPage() {
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showConvertToContact, setShowConvertToContact] = useState(false);
   const [convertingToContact, setConvertingToContact] = useState(false);
+  /** Per call log: full transcript expanded in Call Logs AI panel */
+  const [expandedCallTranscripts, setExpandedCallTranscripts] = useState<Record<string, boolean>>({});
   const [tagInput, setTagInput] = useState('');
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
@@ -2090,7 +2269,7 @@ export default function LeadDetailPage() {
                                           <span className="text-[10px] text-gray-500">({meta.detectedLanguage})</span>
                                         ) : null}
                                       </summary>
-                                      <div className="mt-2 space-y-2 pl-4 border-l-2 border-brand-200">
+                                      <div className="mt-2 space-y-4 pl-4 border-l-2 border-brand-200">
                                         {meta.processingError ? (
                                           <div className="space-y-1">
                                             <p className="text-red-600">{String(meta.processingError)}</p>
@@ -2124,30 +2303,30 @@ export default function LeadDetailPage() {
                                             </button>
                                           </div>
                                         ) : null}
-                                        {transcript ? (
-                                          <pre className="whitespace-pre-wrap text-gray-700 text-xs max-h-48 overflow-y-auto bg-white border rounded p-2">
-                                            {transcript}
-                                          </pre>
-                                        ) : (
-                                          !perf && <p className="text-gray-400 italic">No transcript yet.</p>
-                                        )}
-                                        {perf && typeof perf === 'object' ? (
-                                          <div className="space-y-1 text-gray-700">
-                                            {perf.summary ? (
-                                              <p>
-                                                <span className="font-semibold">Summary: </span>
-                                                {String(perf.summary)}
-                                              </p>
-                                            ) : null}
-                                            {perf.scores && typeof perf.scores === 'object' ? (
-                                              <p className="text-xs">
-                                                <span className="font-semibold">Scores: </span>
-                                                {Object.entries(perf.scores)
-                                                  .map(([k, v]) => `${k}: ${v}`)
-                                                  .join(' · ')}
-                                              </p>
-                                            ) : null}
+                                        {perf && typeof perf === 'object' && perf.summary ? (
+                                          <div className="space-y-1">
+                                            <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">
+                                              Call summary
+                                            </p>
+                                            <p className="text-sm text-gray-800 leading-relaxed">{String(perf.summary)}</p>
                                           </div>
+                                        ) : null}
+                                        {perf && typeof perf === 'object' && perf.scores && typeof perf.scores === 'object' ? (
+                                          <CallScoreRingsRow scores={perf.scores as Record<string, unknown>} />
+                                        ) : null}
+                                        {transcript ? (
+                                          <CallLogTranscriptCollapsible
+                                            transcript={transcript}
+                                            expanded={Boolean(expandedCallTranscripts[log.id])}
+                                            onToggle={() =>
+                                              setExpandedCallTranscripts((prev) => ({
+                                                ...prev,
+                                                [log.id]: !prev[log.id],
+                                              }))
+                                            }
+                                          />
+                                        ) : !perf ? (
+                                          <p className="text-gray-400 italic">No transcript yet.</p>
                                         ) : null}
                                       </div>
                                     </details>

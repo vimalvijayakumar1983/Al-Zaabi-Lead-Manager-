@@ -35,6 +35,8 @@ export interface Organization {
     didNumber?: string;
     callWebhookSecret?: string;
     sttPreferredProvider?: 'deepgram' | 'assemblyai';
+    /** Optional STT language (e.g. ar, ar-ae). Empty = multilingual / auto. */
+    sttDefaultLanguage?: string;
     [key: string]: unknown;
   };
   createdAt?: string;

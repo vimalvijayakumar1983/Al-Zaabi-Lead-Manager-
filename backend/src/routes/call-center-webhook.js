@@ -92,6 +92,42 @@ async function findLeadIdByCaller(organizationId, callerid) {
 }
 
 /**
+ * Match existing lead by normalized caller id, or create a minimal lead in the division (PHONE source).
+ */
+async function findOrCreateLeadForCaller(organizationId, callerid, uniqueid) {
+  const normalized = normalizeMobileForExternal(callerid);
+  if (!normalized) {
+    return { leadId: null, leadCreated: false };
+  }
+
+  const existingId = await findLeadIdByCaller(organizationId, callerid);
+  if (existingId) {
+    return { leadId: existingId, leadCreated: false };
+  }
+
+  const lead = await prisma.lead.create({
+    data: {
+      organizationId,
+      firstName: 'Inbound',
+      lastName: 'Call',
+      phone: normalized,
+      source: 'PHONE',
+      sourceDetail: `call_center_webhook uniqueid=${String(uniqueid || '').slice(0, 120)}`,
+      status: 'NEW',
+    },
+  });
+
+  logger.info('[CallCenterWebhook] Created lead for unknown caller', {
+    organizationId,
+    leadId: lead.id,
+    phone: normalized,
+    uniqueid: String(uniqueid || '').slice(0, 80),
+  });
+
+  return { leadId: lead.id, leadCreated: true };
+}
+
+/**
  * Find division orgs whose settings.didNumber matches the PBX DID (normalized).
  */
 async function findDivisionsByDid(normalizedDid) {
@@ -111,6 +147,7 @@ async function findDivisionsByDid(normalizedDid) {
  * POST /call-center/webhook
  * Resolves division from payload dnid/did ↔ Organization.settings.didNumber.
  * Header: X-Webhook-Secret must match that division's settings.callWebhookSecret
+ * If callerid does not match an existing lead, a new lead is created (PHONE source) when the number normalizes.
  *
  * Optional legacy: POST /call-center/webhook/:organizationId — URL id must match the division resolved by DID.
  */
@@ -175,11 +212,15 @@ async function processCallCenterWebhook(req, res, next, { urlOrganizationId } = 
       return res.status(400).json({ error: 'DID mismatch', detail: 'Body dnid/did inconsistent' });
     }
 
-    const leadId = await findLeadIdByCaller(organizationId, row.callerid);
+    const { leadId, leadCreated } = await findOrCreateLeadForCaller(
+      organizationId,
+      row.callerid,
+      uniqueId
+    );
     if (!leadId) {
-      return res.status(404).json({
-        error: 'Lead not found',
-        detail: 'No lead with matching phone for this division',
+      return res.status(400).json({
+        error: 'Invalid caller id',
+        detail: 'callerid could not be normalized to a phone number for this division',
       });
     }
 
@@ -198,6 +239,7 @@ async function processCallCenterWebhook(req, res, next, { urlOrganizationId } = 
         ok: true,
         duplicate: true,
         callLogId: existing.id,
+        leadId,
         organizationId,
         message: 'Call log already ingested for this uniqueid',
       });
@@ -263,6 +305,8 @@ async function processCallCenterWebhook(req, res, next, { urlOrganizationId } = 
     return res.status(202).json({
       ok: true,
       organizationId,
+      leadId,
+      leadCreated,
       callLogId: callLog.id,
       transcriptionQueued: Boolean(recordingUrl),
     });

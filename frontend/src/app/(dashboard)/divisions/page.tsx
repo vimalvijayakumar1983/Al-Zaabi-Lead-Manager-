@@ -552,6 +552,7 @@ export default function DivisionsPage() {
   const [formDidNumber, setFormDidNumber] = useState('');
   const [formCallWebhookSecret, setFormCallWebhookSecret] = useState('');
   const [formSttPreferred, setFormSttPreferred] = useState<'deepgram' | 'assemblyai' | ''>('');
+  const [formSttDefaultLanguage, setFormSttDefaultLanguage] = useState('');
 
   // Apply Template to Existing Division
   const [applyTemplateDivision, setApplyTemplateDivision] = useState<Organization | null>(null);
@@ -797,6 +798,7 @@ export default function DivisionsPage() {
     setFormDidNumber('');
     setFormCallWebhookSecret('');
     setFormSttPreferred('');
+    setFormSttDefaultLanguage('');
     setModalError('');
     setSelectedTemplate(null);
     setModalStep('template');
@@ -814,6 +816,7 @@ export default function DivisionsPage() {
     setFormCallWebhookSecret(String((division as any)?.settings?.callWebhookSecret || ''));
     const pref = (division as any)?.settings?.sttPreferredProvider;
     setFormSttPreferred(pref === 'assemblyai' || pref === 'deepgram' ? pref : '');
+    setFormSttDefaultLanguage(String((division as any)?.settings?.sttDefaultLanguage || ''));
     setModalError('');
     setSelectedTemplate(null);
     setModalStep('details');
@@ -849,6 +852,11 @@ export default function DivisionsPage() {
         payload.sttPreferredProvider = formSttPreferred;
       } else if (editingDivision) {
         payload.sttPreferredProvider = null;
+      }
+      if (formSttDefaultLanguage.trim()) {
+        payload.sttDefaultLanguage = formSttDefaultLanguage.trim().toLowerCase();
+      } else if (editingDivision) {
+        payload.sttDefaultLanguage = null;
       }
       if (editingDivision) {
         await api.updateDivision(editingDivision.id, payload as Partial<Organization>);
@@ -2140,6 +2148,20 @@ export default function DivisionsPage() {
                   <option value="deepgram">Deepgram</option>
                   <option value="assemblyai">AssemblyAI</option>
                 </select>
+              </div>
+              <div>
+                <label className="label">Default STT language (optional)</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={formSttDefaultLanguage}
+                  onChange={(e) => setFormSttDefaultLanguage(e.target.value)}
+                  placeholder="e.g. ar or ar-ae — leave empty for multilingual (Arabic + English)"
+                />
+                <p className="text-xs text-text-tertiary mt-1">
+                  When set, forces that language for call transcription. Leave empty to use Deepgram multilingual mode
+                  (recommended for mixed Arabic/English).
+                </p>
               </div>
               <div>
                 <label className="label">Division Logo</label>

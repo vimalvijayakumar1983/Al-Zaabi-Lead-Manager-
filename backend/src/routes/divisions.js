@@ -35,6 +35,8 @@ const createDivisionSchema = z.object({
   didNumber: z.string().trim().min(1).max(30).optional(),
   callWebhookSecret: z.string().trim().min(8).max(200).optional(),
   sttPreferredProvider: z.enum(['deepgram', 'assemblyai']).optional(),
+  /** BCP-47 e.g. ar, ar-ae — forces STT language; leave empty for multilingual auto (Deepgram language=multi). */
+  sttDefaultLanguage: z.string().trim().max(20).optional(),
   templateId: z.string().optional(),
 });
 
@@ -47,6 +49,7 @@ const updateDivisionSchema = z.object({
   didNumber: z.string().trim().min(1).max(30).optional().or(z.literal('')).or(z.null()),
   callWebhookSecret: z.string().trim().min(8).max(200).optional().or(z.literal('')).or(z.null()),
   sttPreferredProvider: z.enum(['deepgram', 'assemblyai']).optional().or(z.literal('')).or(z.null()),
+  sttDefaultLanguage: z.string().trim().max(20).optional().or(z.literal('')).or(z.null()),
 });
 
 // Default pipeline stages (same as auth.js register)
@@ -117,6 +120,7 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
       didNumber,
       callWebhookSecret,
       sttPreferredProvider,
+      sttDefaultLanguage,
       templateId,
     } = req.validated;
 
@@ -140,6 +144,9 @@ router.post('/', authorize('SUPER_ADMIN'), validate(createDivisionSchema), async
             ...(didNumber ? { didNumber: String(didNumber).trim() } : {}),
             ...(callWebhookSecret ? { callWebhookSecret: String(callWebhookSecret).trim() } : {}),
             ...(sttPreferredProvider ? { sttPreferredProvider } : {}),
+            ...(String(sttDefaultLanguage || '').trim()
+              ? { sttDefaultLanguage: String(sttDefaultLanguage).trim().toLowerCase() }
+              : {}),
           },
         },
       });
@@ -284,6 +291,7 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
       didNumber,
       callWebhookSecret,
       sttPreferredProvider,
+      sttDefaultLanguage,
     } = req.validated;
     let existingSettings = {};
 
@@ -345,6 +353,14 @@ router.put('/:id', validate(updateDivisionSchema), async (req, res, next) => {
         delete nextSettings.sttPreferredProvider;
       } else {
         nextSettings.sttPreferredProvider = sttPreferredProvider;
+      }
+      settingsTouched = true;
+    }
+    if (sttDefaultLanguage !== undefined) {
+      if (sttDefaultLanguage === null || sttDefaultLanguage === '') {
+        delete nextSettings.sttDefaultLanguage;
+      } else {
+        nextSettings.sttDefaultLanguage = String(sttDefaultLanguage).trim().toLowerCase();
       }
       settingsTouched = true;
     }

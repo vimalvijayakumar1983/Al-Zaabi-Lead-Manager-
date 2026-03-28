@@ -74,6 +74,13 @@ const config = {
   callRecording: {
     fetchTimeoutMs:
       parseInt(process.env.CALL_RECORDING_FETCH_TIMEOUT_MS || '120000', 10) || 120000,
+    /**
+     * Non-production only: HTTPS recording downloads skip TLS certificate verification
+     * (expired/self-signed LAN certs). Never set in production.
+     */
+    fetchTlsInsecure:
+      process.env.NODE_ENV !== 'production' &&
+      process.env.CALL_RECORDING_FETCH_TLS_INSECURE === 'true',
   },
 
   // Webhook

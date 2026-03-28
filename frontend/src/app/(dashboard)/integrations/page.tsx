@@ -571,10 +571,12 @@ export default function IntegrationsPage() {
   const [erpProvider, setErpProvider] = useState<'facts' | 'focus' | 'cortex' | 'uniqorn'>('facts');
   const [erpToken, setErpToken] = useState('');
   const [dgApiKey, setDgApiKey] = useState('');
-  const [dgModel, setDgModel] = useState('nova-2');
-  const [dgDetectLang, setDgDetectLang] = useState(true);
+  const [dgModel, setDgModel] = useState('nova-2-general');
+  const [dgTranscribeMode, setDgTranscribeMode] = useState<'multilingual' | 'detect'>('multilingual');
+  const [dgLanguageCode, setDgLanguageCode] = useState('');
   const [aaApiKey, setAaApiKey] = useState('');
   const [aaDetectLang, setAaDetectLang] = useState(true);
+  const [aaSpeechModel, setAaSpeechModel] = useState<'universal-2' | 'universal-3-pro'>('universal-2');
 
   // State: Webhook form
   const [webhookName, setWebhookName] = useState('');
@@ -794,12 +796,17 @@ export default function IntegrationsPage() {
         break;
       case 'deepgram':
         setDgApiKey('');
-        setDgModel(String(cfg.model || 'nova-2'));
-        setDgDetectLang(cfg.detectLanguage !== false);
+        setDgModel(String(cfg.model || 'nova-2-general'));
+        setDgTranscribeMode(cfg.transcribeMode === 'detect' ? 'detect' : 'multilingual');
+        setDgLanguageCode(String((cfg as { language?: string }).language || ''));
         break;
       case 'assemblyai':
         setAaApiKey('');
         setAaDetectLang(cfg.detectLanguage !== false);
+        {
+          const sm = String((cfg as { speechModel?: string }).speechModel || '').trim();
+          setAaSpeechModel(sm === 'universal-3-pro' ? 'universal-3-pro' : 'universal-2');
+        }
         break;
       default:
         break;
@@ -866,12 +873,14 @@ export default function IntegrationsPage() {
         break;
       case 'deepgram':
         setDgApiKey('');
-        setDgModel('nova-2');
-        setDgDetectLang(true);
+        setDgModel('nova-2-general');
+        setDgTranscribeMode('multilingual');
+        setDgLanguageCode('');
         break;
       case 'assemblyai':
         setAaApiKey('');
         setAaDetectLang(true);
+        setAaSpeechModel('universal-2');
         break;
       default:
         break;
@@ -992,8 +1001,10 @@ export default function IntegrationsPage() {
           name: 'Deepgram',
           credentials: { apiKey: dgApiKey },
           config: {
-            model: dgModel.trim() || 'nova-2',
-            detectLanguage: dgDetectLang,
+            model: dgModel.trim() || 'nova-2-general',
+            transcribeMode: dgTranscribeMode,
+            detectLanguage: false,
+            ...(dgLanguageCode.trim() ? { language: dgLanguageCode.trim().toLowerCase() } : {}),
           },
           organizationId: activeDivisionId || undefined,
         };
@@ -1004,6 +1015,7 @@ export default function IntegrationsPage() {
           credentials: { apiKey: aaApiKey },
           config: {
             detectLanguage: aaDetectLang,
+            speechModel: aaSpeechModel,
           },
           organizationId: activeDivisionId || undefined,
         };
@@ -1952,18 +1964,32 @@ export default function IntegrationsPage() {
                 value={dgModel}
                 onChange={(e) => setDgModel(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                placeholder="nova-2"
+                placeholder="nova-2-general"
               />
             </div>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Transcription mode</label>
+              <select
+                value={dgTranscribeMode}
+                onChange={(e) => setDgTranscribeMode(e.target.value as 'multilingual' | 'detect')}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+              >
+                <option value="multilingual">Multilingual (Arabic / English / mixed — recommended)</option>
+                <option value="detect">Legacy: Deepgram language-detection API (35 languages; Arabic not in detect list)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">
+                Force language (optional)
+              </label>
               <input
-                type="checkbox"
-                checked={dgDetectLang}
-                onChange={(e) => setDgDetectLang(e.target.checked)}
-                className="rounded border-gray-300"
+                type="text"
+                value={dgLanguageCode}
+                onChange={(e) => setDgLanguageCode(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                placeholder="e.g. ar — overrides mode; division “Default STT language” wins if set"
               />
-              Enable automatic language detection
-            </label>
+            </div>
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs space-y-1">
               <p className="font-medium text-text-primary">PBX webhook (POST)</p>
               <code className="block break-all select-all bg-white border rounded px-2 py-1">
@@ -1998,6 +2024,22 @@ export default function IntegrationsPage() {
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                 placeholder="AssemblyAI API key"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-primary mb-1">Speech model</label>
+              <select
+                value={aaSpeechModel}
+                onChange={(e) =>
+                  setAaSpeechModel(e.target.value as 'universal-2' | 'universal-3-pro')
+                }
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+              >
+                <option value="universal-2">Universal-2</option>
+                <option value="universal-3-pro">Universal-3 Pro (higher quality)</option>
+              </select>
+              <p className="text-xs text-text-tertiary mt-1">
+                AssemblyAI requires a speech model on each transcript request.
+              </p>
             </div>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
